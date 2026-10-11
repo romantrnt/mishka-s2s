@@ -25,7 +25,7 @@ def test_silero_package_fallback_keeps_model_when_to_returns_none(tmp_path):
 
         def apply_tts(self, **kwargs):
             import torch
-            assert kwargs["speaker"] == "aidar"
+            assert kwargs["speaker"] == "kseniya"
             return torch.tensor([0.1, -0.1], dtype=torch.float32)
 
     engine = SileroTTSEngine(cache_path=str(tmp_path / "silero.pt"), device="cpu")

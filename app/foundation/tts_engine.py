@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from app.foundation.voice_pipeline import normalize_text, prepend_pre_roll
+from app.foundation.voice_pipeline import normalize_text, peak_normalize, prepend_pre_roll
 
 SILERO_MODEL_URL = "https://models.silero.ai/models/tts/ru/v5_5_ru.pt"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -18,15 +18,15 @@ class SileroTTSLoadError(RuntimeError):
 
 class SileroTTSEngine:
     """Lazy, process-local Silero v5.5 Russian synthesizer."""
-    def __init__(self, *, language="ru", model_name="v5_5_ru", speaker="aidar",
+    def __init__(self, *, language="ru", model_name="v5_5_ru", speaker="kseniya",
                  sample_rate=48000, cache_path=PROJECT_ROOT / "runtime/cache/silero/v5_5_ru.pt", device=None,
                  leading_silence_ms=150):
         if language != "ru":
             raise ValueError("Silero v5.5 production engine supports only language=ru")
         if model_name != "v5_5_ru":
             raise ValueError("Silero production engine requires model=v5_5_ru")
-        if speaker != "aidar":
-            raise ValueError("Silero speaker must be aidar")
+        if speaker != "kseniya":
+            raise ValueError("Silero speaker must be kseniya")
         if sample_rate not in {8000, 24000, 48000}:
             raise ValueError("Silero sample rate must be 8000, 24000, or 48000")
         if leading_silence_ms < 0:
@@ -117,7 +117,7 @@ class SileroTTSEngine:
         with self._synthesis_lock, torch.inference_mode():
             audio = model.apply_tts(text=self.normalize(text), speaker=self.speaker,
                                      sample_rate=self.sample_rate, put_accent=True, put_yo=True)
-            values = tuple(float(value) for value in audio.detach().to("cpu").float().reshape(-1).tolist())
+            values = peak_normalize(audio.detach().to("cpu").float().reshape(-1).tolist())
         if not values:
             raise RuntimeError("Silero produced no audio")
         leading_ms = int(leading_silence_ms)
