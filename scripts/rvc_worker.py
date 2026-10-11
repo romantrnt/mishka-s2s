@@ -55,7 +55,7 @@ def main() -> int:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
     with contextlib.redirect_stdout(sys.stderr):
-        # ContentVec is audio-only. The base RunPod image carries a
+        # ContentVec is audio-only. The base runtime image carries a
         # torchvision build for a different torch ABI; prevent Transformers'
         # optional vision branch from importing it into this audio worker.
         import transformers.utils.import_utils as _transformers_imports

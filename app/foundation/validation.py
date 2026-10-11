@@ -12,8 +12,8 @@ import os
 import re
 import time
 import urllib.request
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Iterable, Protocol
+from dataclasses import dataclass
+from typing import Any, Iterable
 
 
 @dataclass(frozen=True)

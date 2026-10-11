@@ -1,10 +1,20 @@
 import json
+import logging
 import queue
 import threading
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+
+logger = logging.getLogger("mishka.metrics.latency")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _project_path(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 @dataclass
@@ -95,12 +105,12 @@ class LatencyTracker:
     audio pipeline while writer failures remain visible in snapshots.
     """
 
-    def __init__(self, log_path: str = "logs/latency.jsonl", *, queue_limit: int = 128,
+    def __init__(self, log_path: str | Path = PROJECT_ROOT / "runtime/logs/latency.jsonl", *, queue_limit: int = 128,
                  max_bytes: int = 4 * 1024 * 1024, max_rotated_files: int = 3,
                  status_limit: int = 256, writer_factory=None):
         if queue_limit <= 0 or max_bytes <= 0 or max_rotated_files < 0 or status_limit <= 0:
             raise ValueError("latency writer limits must be positive")
-        self.log_path = Path(log_path)
+        self.log_path = _project_path(log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.queue_limit = int(queue_limit)
         self.max_bytes = int(max_bytes)
@@ -124,12 +134,16 @@ class LatencyTracker:
 
     def record(self, turn: TurnLatency) -> dict:
         """Queue one report without performing file I/O on the caller thread."""
-        print(
-            f"[LATENCY] vad={turn.vad_ms:.1f}ms stt={turn.stt_ms:.1f}ms "
-            f"llm_ttft={self._fmt(turn.llm_ttft_ms)} "
-            f"llm_prompt_eval={turn.llm_prompt_eval_count}tok/{self._fmt(turn.llm_prompt_eval_ms)} "
-            f"tts_ttfa={self._fmt(turn.tts_ttfa_ms)} total={self._fmt(turn.total_ms)}",
-            flush=True,
+        logger.info(
+            "voice latency vad=%.1fms stt=%.1fms llm_ttft=%s "
+            "llm_prompt_eval=%stok/%s tts_ttfa=%s total=%s",
+            turn.vad_ms,
+            turn.stt_ms,
+            self._fmt(turn.llm_ttft_ms),
+            turn.llm_prompt_eval_count,
+            self._fmt(turn.llm_prompt_eval_ms),
+            self._fmt(turn.tts_ttfa_ms),
+            self._fmt(turn.total_ms),
         )
         data = asdict(turn)
         data.pop("start_time", None)

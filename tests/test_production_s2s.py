@@ -14,7 +14,7 @@ from app.foundation.validation import OllamaMiniLLMValidator
 from app.foundation.s2s import (
     AudioChunk, BoundedConversationEngine, ConversationContext, MockLLMProvider,
     MockPlaybackController, MockTTSProvider, OllamaLLMProvider,
-    PassthroughVoiceProvider, RVCProvider, RVCV2Provider, VLLMLLMProvider,
+    PassthroughVoiceProvider, ResilientVoiceProvider, RVCProvider, RVCV2Provider, VLLMLLMProvider,
 )
 
 
@@ -89,6 +89,22 @@ def test_rvc_v2_in_memory_adapter_and_cancellation():
         except asyncio.CancelledError: return True
         return False
     assert asyncio.run(cancelled()) is True
+
+
+def test_rvc_failure_returns_original_silero_audio_without_blocking():
+    class BrokenVoice:
+        def readiness(self):
+            return {"ready": False, "reason": "worker_not_alive"}
+
+        async def convert(self, _audio, _cancelled):
+            raise RuntimeError("worker unavailable")
+
+    original = AudioChunk((0.1, -0.2), 24000, 7)
+    provider = ResilientVoiceProvider(BrokenVoice())
+    result = asyncio.run(provider.convert(original, lambda: False))
+    assert result is original
+    assert provider.readiness()["ready"] is True
+    assert provider.readiness()["fallback"] == "passthrough"
 
 
 def test_rvc_v2_persistent_worker_is_reused_and_closed(tmp_path):
@@ -186,7 +202,7 @@ def test_rvc_request_is_fail_closed_when_assets_are_unavailable(monkeypatch):
                 rvc_model="/missing/model.pth",
                 rvc_index="/missing/model.index",
             ),
-            Path("/workspace/mishka/content"),
+            Path(__file__).resolve().parents[1] / "content",
         )
 
 
@@ -194,4 +210,4 @@ def test_unknown_voice_mode_is_rejected(monkeypatch):
     from app.foundation import api as api_module
     monkeypatch.setenv("MISHKA_VOICE_CONVERSION", "mystery_voice")
     with pytest.raises(ValueError, match="unsupported MISHKA_VOICE_CONVERSION"):
-        api_module._build_s2s(production_settings(profile="production_candidate"), Path("/workspace/mishka/content"))
+        api_module._build_s2s(production_settings(profile="production_candidate"), Path(__file__).resolve().parents[1] / "content")

@@ -5,7 +5,7 @@ import json
 import math
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from typing import Any, Protocol
+from typing import Any
 
 
 class ScheduleWeatherProviderError(RuntimeError):

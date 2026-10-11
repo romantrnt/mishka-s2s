@@ -31,13 +31,13 @@ class WeatherConfiguration:
 
 @dataclass(frozen=True)
 class DeploymentPolicy:
-    """Versioned canonical deployment policy for the RunPod profile."""
+    """Versioned canonical deployment policy for the production profile."""
 
     version: str = "mishka-deployment/v1"
     profile: str = "production_candidate"
     min_available_ram_gb: float = 12.0
     min_available_vram_gb: float = 8.0
-    provenance: str = "RunPod .env.runpod + canonical 8GB acceptance artifacts"
+    provenance: str = "canonical project-relative runtime configuration"
     benchmark_status: str = "benchmark_pending"
 
 
@@ -132,7 +132,7 @@ class Settings:
     policy_version: str = CANONICAL_POLICY.version
     no_voice_recording: bool = True
     content_root: str = "content"
-    profile_db: str = ""
+    profile_db: str = "runtime/data/profiles.sqlite3"
     stand_access_token: str = ""
     allow_query_token: bool = False
     audio_output_device: str = ""
@@ -160,23 +160,23 @@ class Settings:
     silero_language: str = "ru"
     silero_speaker: str = "aidar"
     silero_sample_rate: int = 48_000
-    silero_cache_path: str = "/workspace/.cache/mishka/silero/v5_5_ru.pt"
+    silero_cache_path: str = "runtime/cache/silero/v5_5_ru.pt"
     silero_leading_silence_ms: int = 150
     voice_conversion: str = "rvc_v2"
     fast_audio_ack: bool = False
     fast_audio_ack_cooldown_s: float = 4.0
 
     rvc_project_root: str = "vendor/rvc"
-    rvc_python: str = "python3"
-    rvc_model: str = "models/rvc/mishka_rvc_v2_e250_2250s.pth"
-    rvc_index: str = "models/rvc/mishka_rvc_v2_e250_2250s.index"
+    rvc_python: str = ".venv/bin/python"
+    rvc_model: str = "models/rvc/mishka-rvc-v2.pth"
+    rvc_index: str = "models/rvc/mishka-rvc-v2.index"
     rvc_f0_method: str = "rmvpe"
     rvc_filter_radius: float = 3.0
     rvc_index_rate: float = 0.0
     rvc_protect: float = 0.33
-    rvc_tmp_dir: str = "/workspace/.cache/mishka/rvc-tmp"
+    rvc_tmp_dir: str = "runtime/cache/rvc-tmp"
     rvc_f0_up_key: int = 0
-    rvc_fallback_mode: str = "fail_closed"
+    rvc_fallback_mode: str = "passthrough"
 
     min_available_ram_gb: float = CANONICAL_POLICY.min_available_ram_gb
     min_available_vram_gb: float = CANONICAL_POLICY.min_available_vram_gb
@@ -270,8 +270,8 @@ class Settings:
             raise SettingsError("production profile cannot use demo weather")
         if self.voice_conversion not in {"rvc_v2", "off", "disabled"}:
             raise SettingsError("unsupported MISHKA_VOICE_CONVERSION")
-        if self.rvc_fallback_mode not in {"fail_closed", "controlled_passthrough"}:
-            raise SettingsError("RVC_FALLBACK_MODE must be fail_closed or controlled_passthrough")
+        if self.rvc_fallback_mode not in {"passthrough", "controlled_passthrough"}:
+            raise SettingsError("RVC_FALLBACK_MODE must be passthrough")
         if not -24 <= self.rvc_f0_up_key <= 24:
             raise SettingsError("RVC_F0_UP_KEY is out of range")
         if self.rvc_f0_method != "rmvpe":
@@ -370,7 +370,7 @@ class Settings:
             profile=profile, host=_text("MISHKA_HOST", "0.0.0.0"), port=_int("MISHKA_PORT", 8000),
             policy_version=_text("MISHKA_POLICY_VERSION", CANONICAL_POLICY.version),
             no_voice_recording=_bool("NO_VOICE_RECORDING", True), content_root=_text("MISHKA_CONTENT_ROOT", "content"),
-            profile_db=_text("MISHKA_PROFILE_DB", ""), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False),
+            profile_db=_text("MISHKA_PROFILE_DB", "runtime/data/profiles.sqlite3"), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False),
             audio_output_device=_text("AUDIO_OUTPUT_DEVICE", ""), vad_device=_text("MISHKA_VAD_DEVICE", "cpu").lower(),
             max_input_chars=_int("MAX_INPUT_CHARS", 512), session_timeout_s=_int("MISHKA_MAX_SESSION_SECONDS", 1200),
             session_idle_timeout_s=_int("MISHKA_SESSION_IDLE_TTL_SECONDS", 300), confidence_threshold=_float("INTENT_CONFIDENCE_THRESHOLD", 0.6),
@@ -381,9 +381,9 @@ class Settings:
             llm_think=_bool("LLM_THINK", False), llm_warmup_timeout_s=_float("LLM_WARMUP_TIMEOUT_SECONDS", 120),
             ollama_base_url=_text("OLLAMA_BASE_URL", "http://127.0.0.1:11434"), vllm_base_url=_text("VLLM_BASE_URL", "http://127.0.0.1:8001"),
             stt_model=_text("WHISPER_MODEL", "large-v3-turbo"),
-            silero_model=_text("SILERO_MODEL", "v5_5_ru"), silero_language=_text("SILERO_LANGUAGE", "ru"), silero_speaker=_text("SILERO_SPEAKER", "aidar").lower(), silero_sample_rate=_int("SILERO_SAMPLE_RATE", 48000), silero_cache_path=_text("SILERO_CACHE_PATH", "/workspace/.cache/mishka/silero/v5_5_ru.pt"), silero_leading_silence_ms=_int("SILERO_LEADING_SILENCE_MS", 150),
+            silero_model=_text("SILERO_MODEL", "v5_5_ru"), silero_language=_text("SILERO_LANGUAGE", "ru"), silero_speaker=_text("SILERO_SPEAKER", "aidar").lower(), silero_sample_rate=_int("SILERO_SAMPLE_RATE", 48000), silero_cache_path=_text("SILERO_CACHE_PATH", "runtime/cache/silero/v5_5_ru.pt"), silero_leading_silence_ms=_int("SILERO_LEADING_SILENCE_MS", 150),
             voice_conversion=_text("MISHKA_VOICE_CONVERSION", "rvc_v2").lower(), fast_audio_ack=_bool("FAST_AUDIO_ACK", False), fast_audio_ack_cooldown_s=_float("FAST_AUDIO_ACK_COOLDOWN_S", 4),
-            rvc_project_root=_text("RVC_PROJECT_ROOT", "vendor/rvc"), rvc_python=_text("RVC_PYTHON", "python3"), rvc_model=_text("RVC_MODEL", "models/rvc/mishka_rvc_v2_e250_2250s.pth"), rvc_index=_text("RVC_INDEX", "models/rvc/mishka_rvc_v2_e250_2250s.index"), rvc_f0_method=_text("RVC_F0_METHOD", "rmvpe"), rvc_filter_radius=_float("RVC_FILTER_RADIUS", 3), rvc_f0_up_key=_int("RVC_F0_UP_KEY", 0), rvc_index_rate=_float("RVC_INDEX_RATE", 0.0), rvc_protect=_float("RVC_PROTECT", .33), rvc_tmp_dir=_text("RVC_TMP_DIR", "/workspace/.cache/mishka/rvc-tmp"), rvc_startup_timeout_s=_float("RVC_STARTUP_TIMEOUT_SECONDS", 60), rvc_fallback_mode=_text("RVC_FALLBACK_MODE", "fail_closed").lower(),
+            rvc_project_root=_text("RVC_PROJECT_ROOT", "vendor/rvc"), rvc_python=_text("RVC_PYTHON", ".venv/bin/python"), rvc_model=_text("RVC_MODEL_PATH", "models/rvc/mishka-rvc-v2.pth"), rvc_index=_text("RVC_INDEX_PATH", "models/rvc/mishka-rvc-v2.index"), rvc_f0_method=_text("RVC_F0_METHOD", "rmvpe"), rvc_filter_radius=_float("RVC_FILTER_RADIUS", 3), rvc_f0_up_key=_int("RVC_F0_UP_KEY", 0), rvc_index_rate=_float("RVC_INDEX_RATE", 0.0), rvc_protect=_float("RVC_PROTECT", .33), rvc_tmp_dir=_text("RVC_TMP_DIR", "runtime/cache/rvc-tmp"), rvc_startup_timeout_s=_float("RVC_STARTUP_TIMEOUT_SECONDS", 60), rvc_fallback_mode=_text("RVC_FALLBACK_MODE", "passthrough").lower(),
             min_available_ram_gb=_float("MIN_AVAILABLE_RAM_GB", CANONICAL_POLICY.min_available_ram_gb), min_available_vram_gb=_float("MIN_AVAILABLE_VRAM_GB", CANONICAL_POLICY.min_available_vram_gb),
             audio_sample_rate=_int("AUDIO_SAMPLE_RATE", 16000), audio_channels=_int("AUDIO_CHANNELS", 1), audio_format=_text("AUDIO_FORMAT", "float32"), vad_threshold=_float("VAD_THRESHOLD", .35), vad_continue_threshold=_float("VAD_CONTINUE_THRESHOLD", .20), vad_preroll_ms=_int("VAD_PREROLL_MS", 320), vad_silence_ms=_int("VAD_SILENCE_MS", 200), min_speech_ms=_int("MIN_SPEECH_MS", 300), max_speech_ms=_int("MAX_SPEECH_MS", 12000), max_audio_buffer_seconds=_int("MAX_AUDIO_BUFFER_SECONDS", 15), stt_timeout_s=_float("STT_TIMEOUT_SECONDS", 8), llm_timeout_s=_float("LLM_TIMEOUT_SECONDS", 10), tts_timeout_s=_float("TTS_TIMEOUT_SECONDS", 10), rvc_timeout_s=_float("RVC_TIMEOUT_SECONDS", 45), playback_timeout_s=_float("PLAYBACK_TIMEOUT_SECONDS", 60), max_response_chars=_int("MAX_RESPONSE_CHARS", 320), max_tts_chunk_chars=_int("MAX_TTS_CHUNK_CHARS", 72), max_tts_first_chunk_chars=_int("MAX_TTS_FIRST_CHUNK_CHARS", 12), tts_queue_size=_int("TTS_QUEUE_SIZE", 4), tts_queue_put_timeout_s=_float("TTS_QUEUE_PUT_TIMEOUT_SECONDS", 2), stt_confidence_threshold=_float("STT_CONFIDENCE_THRESHOLD", .45), stt_beam_size=_int("STT_BEAM_SIZE", 3), max_turn_seconds=_float("MISHKA_MAX_TURN_SECONDS", 60), max_tts_queue_bytes=_int("MAX_TTS_QUEUE_BYTES", 256*1024), max_tts_chunks_per_generation=_int("MAX_TTS_CHUNKS_PER_GENERATION", 32), max_history_entries=_int("MAX_HISTORY_ENTRIES", 20), max_history_chars=_int("MAX_HISTORY_CHARS", 8192),
             validation_provider=_text("VALIDATION_PROVIDER", validation_default).lower(), validation_model=_text("VALIDATION_MODEL", "qwen3:0.6b"), validation_timeout_ms=_int("VALIDATION_TIMEOUT_MS", 120 if profile == "mock" else 10000), validation_keep_alive=_text("VALIDATION_KEEP_ALIVE", "-1"), validation_num_ctx=_int("VALIDATION_NUM_CTX", 1024), validation_fail_closed=_bool("VALIDATION_FAIL_CLOSED", True),

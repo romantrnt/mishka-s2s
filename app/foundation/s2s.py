@@ -29,6 +29,12 @@ from typing import Any, Protocol
 
 
 logger = logging.getLogger("uvicorn.error")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _project_path(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 from app.metrics.latency import VoiceTurnTrace
 from app.foundation.voice_pipeline import RVC_SAMPLE_RATE, peak_normalize, prepend_pre_roll, resample_mono
@@ -1233,37 +1239,6 @@ class SileroTTSProvider:
         return AudioChunk(samples, sample_rate, token)
 
 
-class XTTSProvider:
-    """Legacy/alternative adapter only. Production composition never selects it."""
-
-    def __init__(self, synthesize_callable): self.callable=synthesize_callable
-    async def synthesize(self,text,token,cancelled):
-        samples,rate=await asyncio.to_thread(self.callable,text)
-        if cancelled(): raise asyncio.CancelledError
-        return AudioChunk(tuple(samples),rate,token)
-
-
-class LazyXTTSProvider:
-    """Legacy lazy bridge retained for migration; not a Silero/RVC substitute."""
-
-    def __init__(self, reference_audio: str, device: str):
-        self.reference_audio=reference_audio; self.device=device; self._model=None
-
-    def _load(self):
-        if self._model is None:
-            from app.models.tts import MishkaVoiceTTS
-            self._model=MishkaVoiceTTS(self.reference_audio,device=self.device)
-        return self._model
-
-    async def synthesize(self,text,token,cancelled):
-        if cancelled(): raise asyncio.CancelledError
-        model=await asyncio.to_thread(self._load)
-        result=await asyncio.to_thread(model.synthesize,text)
-        if cancelled(): raise asyncio.CancelledError
-        samples=result[0]
-        return AudioChunk(tuple(float(item) for item in samples),int(model.sample_rate),token)
-
-
 class CachedTTSProvider:
     """Bounded in-memory cache for generated bear speech; no child input is stored."""
 
@@ -1302,12 +1277,13 @@ class RVCV2Provider:
     surrounding audio queue remains the bounded owner of pending chunks.
     """
 
-    def __init__(self, converter=None, *, project_root: str = "", python: str = "python3", model_path: str = "", index_path: str = "", f0_method: str = "rmvpe", filter_radius: float = 3.0, f0_up_key: int = 0, index_rate: float = 0.0, protect: float = 0.33, tmp_dir: str = "/workspace/.cache/mishka/rvc-tmp", startup_timeout_s: float = 60.0, worker_script: str = ""):
-        self.converter=converter; self.project_root=Path(project_root) if project_root else None; self.python=python
-        self.model_path=Path(model_path) if model_path else None; self.index_path=Path(index_path) if index_path else None
-        self.f0_method=f0_method; self.filter_radius=filter_radius; self.f0_up_key=f0_up_key; self.index_rate=index_rate; self.protect=protect; self.startup_timeout_s=float(startup_timeout_s); self.tmp_dir=Path(tmp_dir)
-        default_worker=Path(__file__).resolve().parents[2]/"scripts"/"rvc_worker.py"
-        self.worker_script=Path(worker_script) if worker_script else default_worker
+    def __init__(self, converter=None, *, project_root: str = "", python: str = "python3", model_path: str = "", index_path: str = "", f0_method: str = "rmvpe", filter_radius: float = 3.0, f0_up_key: int = 0, index_rate: float = 0.0, protect: float = 0.33, tmp_dir: str = "runtime/cache/rvc-tmp", startup_timeout_s: float = 60.0, worker_script: str = ""):
+        self.converter=converter; self.project_root=_project_path(project_root) if project_root else None
+        python_path = _project_path(python) if not Path(python).is_absolute() and _project_path(python).is_file() else Path(python)
+        self.python=str(python_path); self.model_path=_project_path(model_path) if model_path else None; self.index_path=_project_path(index_path) if index_path else None
+        self.f0_method=f0_method; self.filter_radius=filter_radius; self.f0_up_key=f0_up_key; self.index_rate=index_rate; self.protect=protect; self.startup_timeout_s=float(startup_timeout_s); self.tmp_dir=_project_path(tmp_dir)
+        default_worker=PROJECT_ROOT/"scripts"/"rvc_worker.py"
+        self.worker_script=_project_path(worker_script) if worker_script else default_worker
         self._process: asyncio.subprocess.Process | None=None
         self._start_lock=asyncio.Lock(); self._job_lock=asyncio.Lock()
         self._stderr_task: asyncio.Task | None=None; self._stderr_tail: deque[str]=deque(maxlen=20)
@@ -1519,6 +1495,50 @@ class PassthroughVoiceProvider:
         return audio
 
 
+class ResilientVoiceProvider:
+    """Make optional RVC degradation local to one audio chunk.
+
+    RVC is a quality enhancement, not a prerequisite for a usable call.  The
+    wrapper exposes a healthy user-facing provider while retaining the primary
+    adapter diagnostics for /health and emitting a warning on each transition
+    to passthrough.
+    """
+
+    def __init__(self, primary: RVCV2Provider):
+        self.primary = primary
+        self.last_fallback_reason: str | None = None
+
+    def configuration_readiness(self) -> dict[str, Any]:
+        return self.primary.configuration_readiness()
+
+    def readiness(self) -> dict[str, Any]:
+        primary = self.primary.readiness()
+        return {
+            "ready": True,
+            "provider": "rvc_v2+passthrough",
+            "degraded": not bool(primary.get("ready")),
+            "fallback": "passthrough",
+            "primary": primary,
+        }
+
+    async def convert(self, audio, cancelled):
+        if cancelled():
+            raise asyncio.CancelledError
+        try:
+            result = await self.primary.convert(audio, cancelled)
+            self.last_fallback_reason = getattr(self.primary, "last_fallback_reason", None)
+            return result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.last_fallback_reason = f"{type(exc).__name__}: {str(exc)[:160]}"
+            logger.warning("RVC conversion unavailable; returning clean Silero audio: %s", self.last_fallback_reason)
+            return audio
+
+    async def close(self) -> None:
+        await self.primary.close()
+
+
 class MockPlaybackController:
     def __init__(self): self.played=[]; self.stops=0; self.active_token=0
     async def play(self,audio):
@@ -1615,7 +1635,7 @@ class _AudioOwnership:
 class AudioSynthesisQueue:
     _TERMINAL_STATES = frozenset({"finished", "cancelled", "failed"})
 
-    def __init__(self,tts,voice,playback,cancel,config,metrics,trace_generation_id=None,voice_mode="rvc_v2",fallback_mode="fail_closed"):
+    def __init__(self,tts,voice,playback,cancel,config,metrics,trace_generation_id=None,voice_mode="rvc_v2",fallback_mode="passthrough"):
         self.tts,self.voice,self.playback,self.cancel,self.config=tts,voice,playback,cancel,config
         self.metrics=metrics
         self.trace_generation_id=trace_generation_id
@@ -1623,7 +1643,7 @@ class AudioSynthesisQueue:
         # the actual user-turn boundary; relying on an absent ``settings``
         # attribute here silently defaulted every production turn to the legacy voice path.
         self.voice_mode=(voice_mode or "rvc_v2").strip().lower()
-        self.fallback_mode=(fallback_mode or "fail_closed").strip().lower()
+        self.fallback_mode=(fallback_mode or "passthrough").strip().lower()
         self.last_fallback_reason=None
         self.queue: asyncio.Queue[tuple[int, str] | None]=asyncio.Queue(config.queue_size)
         self.worker: asyncio.Task[None] | None=None
@@ -1844,12 +1864,13 @@ class AudioSynthesisQueue:
                     stage="rvc_v2"; started=time.perf_counter(); original_audio=audio
                     try:
                         audio=await asyncio.wait_for(self.voice.convert(audio,cancelled), self.config.rvc_timeout_s)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as exc:
-                        if self.fallback_mode != "controlled_passthrough":
-                            raise
                         self.last_fallback_reason=f"{type(exc).__name__}: {str(exc)[:160]}"
                         audio=original_audio
-                        self.metrics.event("rvc_v2_fallback", reason=self.last_fallback_reason, provider="passthrough", policy=self.fallback_mode)
+                        logger.warning("RVC chunk failed; returning clean Silero audio: %s", self.last_fallback_reason)
+                        self.metrics.event("rvc_v2_fallback", reason=self.last_fallback_reason, provider="passthrough", policy="passthrough")
                     self.metrics.observe(stage,started)
                     fallback_reason=getattr(self.voice,"last_fallback_reason",None)
                     if fallback_reason: self.metrics.event("rvc_v2_fallback",reason=fallback_reason,provider="passthrough")
@@ -2138,7 +2159,7 @@ class BoundedConversationEngine:
             self.playback, self.cancel, self.config, self.metrics,
             trace_generation_id=token,
             voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"),
-            fallback_mode=getattr(self.settings, "rvc_fallback_mode", "fail_closed"),
+            fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"),
         )
         await queue.start(session_id, token)
         self.active_queues[session_id] = queue
@@ -2205,7 +2226,7 @@ class BoundedConversationEngine:
             trace_generation_id = token
         self.metrics.begin_voice_turn(context.session_id, generation_id=trace_generation_id)
         self.metrics.mark_voice(context.session_id, "llm_request", generation_id=trace_generation_id)
-        queue=AudioSynthesisQueue(self.tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "fail_closed"))
+        queue=AudioSynthesisQueue(self.tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"))
         queue_started=time.perf_counter(); await queue.start(context.session_id,token)
         task = current
         if task is not None:

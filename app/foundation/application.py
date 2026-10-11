@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-import os
+import logging
 import time
 import uuid
 from collections import deque
@@ -16,6 +16,8 @@ from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .adapters import ProfileProviderError
 from ..scenarios.langgraph_runtime import LangGraphRuntime
 from .config import settings_from_compat_env
+
+logger = logging.getLogger("mishka.application")
 
 
 class ScenarioApplication:
@@ -254,6 +256,7 @@ class ScenarioApplication:
             self._watchdog_record(event)
             if lifecycle is not None and hasattr(lifecycle, "observe_noncritical"):
                 lifecycle.observe_noncritical("watchdog_check_failed", {"error": event["error"]})
+            logger.warning("watchdog check failed; continuing without lifecycle degradation: %s", event["error"])
             return {"stale_tasks": [], "stale_playback": [], "stale_queue_generations": [], "error": event["error"]}
         conditions = (
             [("stale_task", key) for key in check.get("stale_tasks", [])]
@@ -279,13 +282,15 @@ class ScenarioApplication:
                     await self._cleanup_session_resources(session_id)
                     action, outcome = "session_cleanup", "cleaned"
                 elif lifecycle is not None:
-                    lifecycle.degrade("watchdog_" + condition, {"key": key})
-                    action, outcome = "degrade", "degraded"
+                    lifecycle.observe_noncritical("watchdog_" + condition, {"key": key})
+                    action, outcome = "observe", "noncritical"
+                    logger.warning("watchdog observed noncritical condition=%s key=%s", condition, key)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {str(exc)[:160]}"
-                action, outcome = "degrade", "cleanup_failed"
+                action, outcome = "observe", "cleanup_failed"
                 if lifecycle is not None:
-                    lifecycle.degrade("watchdog_cleanup_failed", {"condition": condition, "session_id": session_id, "error": error})
+                    lifecycle.observe_noncritical("watchdog_cleanup_failed", {"condition": condition, "session_id": session_id, "error": error})
+                logger.warning("watchdog cleanup failed; continuing without degrading runtime: %s", error)
             state = lifecycle.snapshot() if lifecycle is not None else {}
             event = {"at_monotonic": now, "condition": condition, "session_id": session_id,
                      "generation": state.get("generation"), "action": action,

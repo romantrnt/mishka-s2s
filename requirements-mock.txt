@@ -1,8 +1,0 @@
-# DEPRECATED: test/mock profile only; never use for production or migration.
-# Canonical production uses requirements-production.lock.
-
-fastapi>=0.115,<1
-uvicorn>=0.30,<1
-pytest>=8,<10
-httpx>=0.27,<1
-websockets>=14,<18

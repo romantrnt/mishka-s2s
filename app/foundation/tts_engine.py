@@ -6,14 +6,12 @@ load or synthesize, the caller receives a bounded, diagnosable failure.
 """
 from __future__ import annotations
 
-import re
 import threading
 from pathlib import Path
-from typing import Any
-
 from app.foundation.voice_pipeline import normalize_text, prepend_pre_roll
 
 SILERO_MODEL_URL = "https://models.silero.ai/models/tts/ru/v5_5_ru.pt"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 class SileroTTSLoadError(RuntimeError):
     """The configured Silero model could not be loaded."""
@@ -21,7 +19,7 @@ class SileroTTSLoadError(RuntimeError):
 class SileroTTSEngine:
     """Lazy, process-local Silero v5.5 Russian synthesizer."""
     def __init__(self, *, language="ru", model_name="v5_5_ru", speaker="aidar",
-                 sample_rate=48000, cache_path="/workspace/.cache/mishka/silero/v5_5_ru.pt", device=None,
+                 sample_rate=48000, cache_path=PROJECT_ROOT / "runtime/cache/silero/v5_5_ru.pt", device=None,
                  leading_silence_ms=150):
         if language != "ru":
             raise ValueError("Silero v5.5 production engine supports only language=ru")
@@ -36,7 +34,8 @@ class SileroTTSEngine:
         self.language, self.model_name, self.speaker = language, model_name, speaker
         self.sample_rate = sample_rate
         self.leading_silence_ms = int(leading_silence_ms)
-        self.cache_path = Path(cache_path).expanduser()
+        cache = Path(cache_path).expanduser()
+        self.cache_path = cache if cache.is_absolute() else PROJECT_ROOT / cache
         self.device_name = device
         self._model = None
         self._device = None

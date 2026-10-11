@@ -19,6 +19,7 @@ let mic = null;
 let ws = null;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
+let reconnectDelayOverride = 0;
 let audioContext = null;
 let audioReady = false;
 let nextAudioTime = 0;
@@ -287,10 +288,12 @@ function showError(error) {
   $('fallback').textContent = String(error.message || error);
 }
 
-function scheduleReconnect() {
+function scheduleReconnect(delayOverrideMs = 0) {
   if (reconnectTimer !== null) return;
   const exponential = Math.min(30000, 1200 * (2 ** Math.min(reconnectAttempt, 5)));
-  const jitter = exponential * (0.8 + Math.random() * 0.4);
+  const base = Math.max(exponential, Number(delayOverrideMs) || reconnectDelayOverride || 0);
+  reconnectDelayOverride = 0;
+  const jitter = base * (0.8 + Math.random() * 0.4);
   reconnectAttempt += 1;
   reconnectTimer = window.setTimeout(() => { reconnectTimer = null; connect(); }, jitter);
 }
@@ -329,12 +332,24 @@ function connect() {
     scheduleReconnect();
   };
   ws.onmessage = event => {
-    const message = parseMessage(event.data);
+    try {
+      const message = parseMessage(event.data);
     if (!message) { showError("WebSocket sent invalid JSON"); return; }
+    if (message.type === "admission_error") {
+      const error = message.error || {};
+      reconnectDelayOverride = Math.min(60000, Math.max(5000, Number(error.retry_after_ms) || 30000));
+      showError(`Сервис временно недоступен: ${error.reason || "runtime_unavailable"}. Повтор через несколько секунд.`);
+      return;
+    }
     if (message.type === "stand_state") {
       const state = normalizeState(message.state);
       if (!state) { showError("WebSocket sent invalid stand state"); return; }
-      render(state);
+      try {
+        render(state);
+      } catch (error) {
+        console.warn('Invalid stand snapshot', error);
+        showError('Invalid stand snapshot: ' + (error.message || error));
+      }
       if (mic && message.audio_completion) {
         const failed = message.audio_completion.reason === "audio_retry";
         $("mic-state").textContent = failed ? "Речь не распознана · попробуйте ещё раз" : "Ответ получен · микрофон слушает";
@@ -348,6 +363,10 @@ function connect() {
       audioGeneration += 1; storySpeechGeneration += 1; pendingPCM.length = 0;
       for (const source of activeSources) { try { source.stop(); } catch (_) {} }
       activeSources.clear(); nextAudioTime = audioContext.currentTime;
+    }
+    } catch (error) {
+      console.warn('WebSocket message handling failed', error);
+      showError('WebSocket message failed: ' + (error.message || error));
     }
   };
 }
@@ -449,7 +468,15 @@ function render(state) {
   current = state;
   const contract = validateButtonContract(state.button_contract);
   renderButtonLegend(contract);
-  $('pipeline-profile').textContent = state.pipeline_metrics?.pipeline?.label || 'runtime';
+  const pipeline = state.pipeline_metrics?.pipeline || {};
+  const fallbackEvent = (state.pipeline_metrics?.events || []).some(item => item?.event === 'rvc_v2_fallback');
+  const conversion = String(pipeline.voice_conversion || 'rvc_v2').toLowerCase();
+  const mode = conversion === 'off' || conversion === 'disabled'
+    ? 'silero+off'
+    : fallbackEvent ? 'passthrough' : 'silero+rvc';
+  const modeLabel = { 'silero+rvc': 'SILERO + RVC', 'silero+off': 'SILERO + OFF', passthrough: 'PASSTHROUGH' }[mode] || mode.toUpperCase();
+  $('pipeline-profile').textContent = modeLabel;
+  $('pipeline-profile').dataset.mode = mode;
   const sessionState = String(state.session?.state || '').trim().toUpperCase();
   if (mic && ['NONE', 'IDLE', 'ENDING', 'ENDED'].includes(sessionState)) clearMic();
   $('profile-label').textContent = state.session.anonymous === null ? 'NO PROFILE' : state.session.scenario === 'dev_core' ? 'DEV MODE' : state.session.anonymous ? 'ANONYMOUS' : 'RFID PROFILE';

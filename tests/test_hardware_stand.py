@@ -15,7 +15,30 @@ from fastapi import WebSocketDisconnect
 from app.foundation.stand import HardwareIntegrationStand, create_stand_app, decode_wav
 from app.foundation.led_contract import BUTTON_LED_COLORS, button_contract, canonical_led_state, validate_button_contract
 from app.foundation.config import Settings
-from scripts.stand_stream_smoke import decode_output_pcm, websocket_address
+def websocket_address(base: str, token: str = "") -> str:
+    if base.startswith("https://"):
+        return "wss://" + base[len("https://"):] + "/stand/ws"
+    if base.startswith("http://"):
+        return "ws://" + base[len("http://"):] + "/stand/ws"
+    raise ValueError("--url must start with http:// or https://")
+
+
+def decode_output_pcm(message: dict) -> tuple[tuple[int, ...], int, int]:
+    if message.get("type") != "audio_pcm_output":
+        raise ValueError("not an audio_pcm_output frame")
+    try:
+        sample_rate = int(message["sample_rate"])
+        token = int(message["token"])
+        raw = base64.b64decode(str(message["data_b64"]), validate=True)
+    except (KeyError, TypeError, ValueError, base64.binascii.Error) as exc:
+        raise ValueError("malformed audio PCM output") from exc
+    if sample_rate <= 0 or not raw or len(raw) % 2:
+        raise ValueError("audio output must be non-empty little-endian PCM16")
+    samples = struct.unpack("<" + "h" * (len(raw) // 2), raw)
+    if not all(math.isfinite(value) and -32768 <= value <= 32767 for value in samples):
+        raise ValueError("audio output contains invalid PCM samples")
+    return samples, sample_rate, token
+
 
 pytestmark = pytest.mark.hardware
 CHILD_TAG = "mock-child-001"
@@ -459,6 +482,7 @@ def test_stand_websocket_requires_auth_and_accepts_authorized_handshake(monkeypa
                     "reason": "invalid_token",
                     "state": "AUTH_REQUIRED",
                     "user_available": False,
+                    "retry_after_ms": 30000,
                 },
             }
             with pytest.raises(WebSocketDisconnect) as failure:

@@ -49,7 +49,9 @@ class StandAccessLogRedactionFilter(logging.Filter):
         return True
 
 def _load_runtime_env():
-    env_file = PROJECT_ROOT / ".env.runpod"
+    # Runtime secrets are injected by the process manager.  A local .env is
+    # optional for development; the repository only ships .env.example.
+    env_file = PROJECT_ROOT / ".env"
     if not env_file.is_file():
         return
     for raw in env_file.read_text(encoding="utf-8").splitlines():

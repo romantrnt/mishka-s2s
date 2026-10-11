@@ -1,8 +1,0 @@
-# Regression-suite overlay for requirements-production.lock.
-# Install production lock first; this file contains only test-runner packages.
-# Versions are from the verified regression environment on 2026-10-03.
-iniconfig==2.3.0
-packaging==25.0
-pluggy==1.6.0
-pygments==2.19.2
-pytest==9.1.1

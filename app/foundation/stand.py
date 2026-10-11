@@ -4,10 +4,8 @@ import base64
 import binascii
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-import contextlib
 import json
 import math
-import os
 import numpy as np
 import secrets
 import struct
@@ -135,6 +133,7 @@ async def _reject_websocket_admission(websocket, *, code: int, error_code: str, 
                 "reason": reason,
                 "state": state,
                 "user_available": False,
+                "retry_after_ms": 5000 if reason in {"booting", "warming_up"} else 30000,
             },
         })
         await websocket.close(code=code, reason=reason)
@@ -256,7 +255,9 @@ class HardwareIntegrationStand:
         return await loop.run_in_executor(self._audio_executor, fn, *args)
 
     def _load_content(self, content_root):
-        root=Path(content_root) if content_root else Path(__file__).resolve().parents[2]/"content"
+        project_root = Path(__file__).resolve().parents[2]
+        candidate = Path(content_root).expanduser() if content_root else project_root / "content"
+        root = candidate if candidate.is_absolute() else project_root / candidate
         def load(folder: str, key: str) -> dict[str, Any]:
             try:
                 value=json.loads((root/folder).read_text(encoding="utf-8"))[key]

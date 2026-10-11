@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import struct
 import time
 import uuid
@@ -84,9 +83,10 @@ class ProductionE2EWarmupProbe:
         settings = self.manager.settings
         total_timeout = float(getattr(settings, "e2e_warmup_timeout_s", 90.0))
         stage_timeout = float(getattr(settings, "e2e_stage_timeout_s", 20.0))
-        pcm_path = Path(getattr(settings, "warmup_pcm_path", compatibility_env_value("MISHKA_WARMUP_PCM_PATH", "assets/reference/mishka_24k_mono.wav")))
+        project_root = Path(__file__).resolve().parents[2]
+        pcm_path = Path(getattr(settings, "warmup_pcm_path", compatibility_env_value("MISHKA_WARMUP_PCM_PATH", "assets/reference/mishka_24k_mono.wav"))).expanduser()
         if not pcm_path.is_absolute():
-            pcm_path = Path.cwd() / pcm_path
+            pcm_path = project_root / pcm_path
 
         async def run_inner() -> dict[str, Any]:
             if self.manager.settings.profile == "mock":

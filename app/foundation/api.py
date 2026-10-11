@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -22,6 +23,7 @@ from .s2s import (BoundedConversationEngine, CachedTTSProvider, EnergyVADAdapter
                   FasterWhisperRecognizer, LocalS2SPipeline,
                   OllamaLLMProvider, SileroTTSProvider,
                   PassthroughVoiceProvider, RVCProvider, RVCV2Provider, S2SConfig,
+                  ResilientVoiceProvider,
                   SileroVADAdapter, SoundDevicePlaybackController,
                   LLMProvider, PlaybackController, TTSProvider,
                   SpeechRecognizer, VADAdapter, VLLMLLMProvider, RetryingLLMProvider,
@@ -116,8 +118,10 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
         )
         status = primary_voice.configuration_readiness()
         if not status.get("configuration_ready"):
-            raise RuntimeError("RVC v2 requested but adapter/models are unavailable")
-        voice = primary_voice
+            logging.getLogger("mishka.voice").warning(
+                "RVC configuration is unavailable; using passthrough until it recovers"
+            )
+        voice = ResilientVoiceProvider(primary_voice)
     else:
         raise ValueError(f"unsupported MISHKA_VOICE_CONVERSION: {voice_mode}")
     engine=BoundedConversationEngine(
@@ -240,7 +244,7 @@ def create_app(application=None, *, include_test_routes: bool = False):
         return await application.receive_async(event, payload.get("text"))
     @api.get("/")
     def root():
-        """Lightweight probe for reverse proxies and RunPod HTTP services."""
+        """Lightweight probe for reverse proxies and reverse-proxy HTTP services."""
         return {"service": "mishka", "status": "ok", "health": "/health", "ready": "/ready"}
     def dependency_identity(profile_status, runtime):
         settings = getattr(application, "settings", None)
@@ -303,7 +307,7 @@ def create_app(application=None, *, include_test_routes: bool = False):
         lifecycle_status = lifecycle.snapshot()
         runtime_ready = bool(runtime.get("ready"))
         if lifecycle_status["ready"] and not runtime_ready:
-            lifecycle.degrade(f"runtime:{runtime.get('reason') or 'not_ready'}", {"source": "readiness", "runtime_reason": runtime.get("reason")})
+            lifecycle.observe_noncritical("runtime_not_ready", {"source": "readiness", "runtime_reason": runtime.get("reason")})
             lifecycle_status = lifecycle.snapshot()
         return {"ready":lifecycle_status["ready"] and content_ready and runtime_ready and bool(profile_status.get("ready")) and bool(history_status.get("ready")), "lifecycle":lifecycle_status, "content":scenarios.report() if scenarios else {"external":True}, "metrics":metrics.snapshot(), "dependencies":{"s2s":runtime,"profile":profile_status,"history":history_status,"langgraph":graph_status, **dependency_identity(profile_status, runtime)}}
     @api.post("/internal/s2s/warmup")
@@ -353,6 +357,7 @@ def create_app(application=None, *, include_test_routes: bool = False):
                     "reason": reason,
                     "state": state,
                     "user_available": False,
+                    "retry_after_ms": 5000 if reason in {"booting", "warming_up"} else 30000,
                 },
             })
             await websocket.close(code=1013, reason=reason)

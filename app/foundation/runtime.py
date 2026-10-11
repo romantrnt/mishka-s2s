@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import os
+import logging
 import shutil
 import time
 import uuid
@@ -11,6 +11,9 @@ from typing import Any
 
 from .config import Settings
 from .s2s import AudioChunk, BoundedConversationEngine
+
+
+logger = logging.getLogger("mishka.runtime")
 
 
 class ResourceProbe:
@@ -209,11 +212,35 @@ class S2SRuntimeManager:
                 converted = audio
                 stages["rvc_v2"] = {"ok":True,"provider":"passthrough","bypassed":True,"sample_rate":converted.sample_rate,"samples":len(converted.samples)}
             else:
-                rvc_started=time.perf_counter(); converted=await asyncio.wait_for(self.voice.convert(audio,cancelled), self.settings.e2e_stage_timeout_s); self.engine.metrics.observe("warmup_rvc_v2",rvc_started)
-                stages["rvc_v2"]={"ok":True,"sample_rate":converted.sample_rate,"samples":len(converted.samples)}
-                if getattr(self.voice,"last_fallback_reason",None):
-                    stages["rvc_v2"]["fallback"]="passthrough"
-                    stages["rvc_v2"]["primary_error"]=self.voice.last_fallback_reason
+                rvc_started = time.perf_counter()
+                try:
+                    converted = await asyncio.wait_for(
+                        self.voice.convert(audio, cancelled),
+                        self.settings.e2e_stage_timeout_s,
+                    )
+                    self.engine.metrics.observe("warmup_rvc_v2", rvc_started)
+                    stages["rvc_v2"] = {
+                        "ok": True,
+                        "sample_rate": converted.sample_rate,
+                        "samples": len(converted.samples),
+                    }
+                    if getattr(self.voice, "last_fallback_reason", None):
+                        stages["rvc_v2"]["fallback"] = "passthrough"
+                        stages["rvc_v2"]["primary_error"] = self.voice.last_fallback_reason
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    converted = audio
+                    reason = f"{type(exc).__name__}: {str(exc)[:160]}"
+                    logger.warning("RVC warmup unavailable; continuing with clean Silero audio: %s", reason)
+                    self.engine.metrics.observe("warmup_rvc_v2", rvc_started, success=False)
+                    stages["rvc_v2"] = {
+                        "ok": True,
+                        "fallback": "passthrough",
+                        "primary_error": reason,
+                        "sample_rate": converted.sample_rate,
+                        "samples": len(converted.samples),
+                    }
             playback_status=self.playback.readiness() if hasattr(self.playback,"readiness") else {"ready":False}
             stages["playback"]=playback_status
             if not playback_status.get("ready"): raise RuntimeError("playback warmup failed")

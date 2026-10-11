@@ -9,11 +9,11 @@ echo "=========================================="
 echo "Mishka AI - starting container"
 echo "=========================================="
 
-# Docker images use the same canonical launcher as RunPod.  This entrypoint is
+# Docker images use the same canonical launcher as production.  This entrypoint is
 # retained as a thin compatibility wrapper; it must not select app.main or a
 # mock app based on an environment switch.
-ROOT="${MISHKA_ROOT:-/workspace/mishka}"
-CANONICAL="$ROOT/scripts/runpod_start.sh"
+ROOT="${MISHKA_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
+CANONICAL="$ROOT/start.sh"
 if [ ! -x "$CANONICAL" ]; then
     echo "Canonical launcher is missing: $CANONICAL" >&2
     exit 1
