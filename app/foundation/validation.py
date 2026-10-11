@@ -13,7 +13,7 @@ import re
 import time
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol
 
 
 @dataclass(frozen=True)
