@@ -68,7 +68,7 @@ def resample_mono(samples: Iterable[float], source_rate: int, target_rate: int) 
 
 
 def peak_normalize(samples: Iterable[float], safe_peak: float = SAFE_PEAK) -> tuple[float, ...]:
-    """Normalize only the final RVC output to a safe peak."""
+    """Normalize audio to a safe peak."""
     values = tuple(float(value) for value in samples)
     if not values:
         return values
