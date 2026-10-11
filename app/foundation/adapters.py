@@ -3,6 +3,7 @@ from __future__ import annotations
 import re, time
 import json
 import sqlite3
+from pathlib import Path
 from .domain import Intent
 
 class RuleBasedIntentClassifier:
@@ -30,6 +31,21 @@ class MockProfileProvider:
 class SQLiteProfileProvider:
     """SQLite profile provider with explicit schema and operational states."""
     REQUIRED_COLUMNS = {"tag_id", "payload"}
+    DEFAULT_PROFILES = (
+        ("test-child-001", json.dumps({
+            "child_id": "test-child-001",
+            "display_name": "Тестовый ребёнок",
+            "available_scenarios": ["fixture_core"],
+            "profile_type": "child",
+        }, ensure_ascii=False)),
+        ("test-adult-dev-001", json.dumps({
+            "child_id": None,
+            "display_name": "Developer",
+            "available_scenarios": ["dev_core"],
+            "profile_type": "adult_dev",
+            "dev_mode": True,
+        }, ensure_ascii=False)),
+    )
 
     def __init__(self, path: str, *, initialize_schema: bool = True):
         if not path:
@@ -38,9 +54,14 @@ class SQLiteProfileProvider:
         self.db = None
         self.last_error = None
         try:
+            if path != ":memory:":
+                Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
             self.db = sqlite3.connect(path, check_same_thread=False)
             if initialize_schema:
                 self.db.execute("CREATE TABLE IF NOT EXISTS profiles (tag_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+                has_profiles = self.db.execute("SELECT 1 FROM profiles LIMIT 1").fetchone() is not None
+                if not has_profiles:
+                    self.db.executemany("INSERT OR IGNORE INTO profiles(tag_id, payload) VALUES (?, ?)", self.DEFAULT_PROFILES)
                 self.db.commit()
         except (OSError, sqlite3.Error) as exc:
             self.last_error = {"reason": "database_unreadable", "error_class": type(exc).__name__}

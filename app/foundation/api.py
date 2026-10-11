@@ -45,8 +45,26 @@ def _normalize_paths(settings: Settings) -> Settings:
         if values.get(field):
             values[field] = _project_path(str(values[field]))
     if values.get("rvc_python"):
-        values["rvc_python"] = _project_path(str(values["rvc_python"]), keep_bare_command=True)
+        python_path = Path(str(values["rvc_python"]))
+        if not python_path.is_absolute():
+            python_path = PROJECT_ROOT / python_path
+        values["rvc_python"] = str(python_path)
     return Settings(**values)
+
+
+def _prepare_runtime_dirs(settings: Settings) -> None:
+    """Create only bounded runtime state directories owned by the app."""
+    paths = {
+        PROJECT_ROOT / "runtime",
+        PROJECT_ROOT / "runtime" / "rvc",
+        PROJECT_ROOT / "logs",
+        PROJECT_ROOT / "data",
+        Path(settings.profile_db).parent,
+        Path(settings.rvc_tmp_dir),
+        Path(settings.silero_cache_path).parent,
+    }
+    for path in paths:
+        path.mkdir(parents=True, exist_ok=True)
 
 
 def _silero_loader(settings: Settings):
@@ -139,6 +157,7 @@ def build_application(content_root: str | Path | None = None, settings: Settings
     settings=settings or Settings.from_env()
     settings = settings_with_compat_env(settings, ("MISHKA_PROFILE_DB", "MISHKA_CONTENT_ROOT"))
     settings = _normalize_paths(settings).validate()
+    _prepare_runtime_dirs(settings)
     root = Path(content_root).resolve() if content_root is not None else Path(settings.content_root).resolve()
     scenarios = FileScenarioRepository(root, strict=settings.profile != "mock"); metrics = Metrics(latency_limit=settings.observability_latency_limit, event_limit=settings.observability_event_limit, watchdog_limit=settings.observability_watchdog_limit); publisher = StructuredEventPublisher()
     s2s,audio_pipeline,runtime_manager=_build_s2s(settings,root,playback_override)

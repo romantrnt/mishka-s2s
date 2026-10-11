@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
+from pathlib import Path
 
 from .domain import Lifecycle, SessionRecord
 
@@ -44,6 +45,8 @@ class SQLiteRepository(InMemorySessionRepository):
     def __init__(self, path=":memory:"):
         super().__init__(); self.path = str(path); self.db = None; self.last_error = None
         try:
+            if self.path != ":memory:":
+                Path(self.path).expanduser().parent.mkdir(parents=True, exist_ok=True)
             self.db = sqlite3.connect(self.path, check_same_thread=False)
             self.db.execute("PRAGMA foreign_keys=ON")
             self.db.executescript(MIGRATION_SQL); self.db.commit()
