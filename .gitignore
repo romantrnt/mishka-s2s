@@ -1,0 +1,42 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.sqlite3
+*.sqlite3-*
+
+# Python environments, caches and build output
+.venv/
+vendor/rvc/.venv/
+.test-venv-*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Runtime state and generated evidence
+runtime/
+logs/
+acceptance/
+runpid
+*.orig
+
+# Downloaded model/cache data. Release provenance is tracked separately.
+models/whisper/
+models/torch-cache/
+models/ollama/
+models/silero/*.pt
+models/rvc/*.pth
+models/rvc/*.index
+models/rvc/*.test*
+
+# Keep the canonical model manifest and human documentation in source control.
+!.bootstrap-contract.example
+!models/rvc/*.json
+!models/rvc/*.md
+!models/rvc/*.sha256
+vendor/rvc/

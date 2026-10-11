@@ -1,0 +1,473 @@
+{
+  "id": "fixture_core",
+  "start": "fixture_welcome",
+  "metadata": {
+    "id": "fixture_core",
+    "version": "1.2.1",
+    "language": "ru-RU",
+    "status": "demo_test_only",
+    "source": "engineering_fixture",
+    "author": "repository",
+    "updated_at": "2026-09-22",
+    "approval_status": "not_for_child_use",
+    "compatibility": "1.0",
+    "content_type": "scenario",
+    "fallback": "fixture_fallback"
+  },
+  "nodes": [
+    {
+      "id": "fixture_welcome",
+      "type": "say",
+      "prompt": "welcome_anonymous",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "next": "fixture_choose"
+      },
+      "timeout": 0,
+      "fallback": "fixture_fallback",
+      "actions": [
+        {
+          "type": "led_pattern",
+          "pattern": "fixture_ready",
+          "color": "yellow",
+          "duration_ms": 300
+        },
+        {
+          "type": "display",
+          "asset_id": "welcome",
+          "text": "МИШКА"
+        }
+      ],
+      "metadata": {
+        "fixture": true,
+        "personalized_response": "welcome_named"
+      }
+    },
+    {
+      "id": "fixture_choose",
+      "type": "button_choice",
+      "prompt": "game_menu",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_1": "fixture_game_menu",
+        "button_2": "fixture_story_menu",
+        "button_3": "fixture_free",
+        "button_4": "fixture_led_mix",
+        "button_7": "fixture_schedule_weather",
+        "want_exit": "fixture_end",
+        "button_5": "fixture_game_repeat_pattern",
+        "button_6": "fixture_free"
+      },
+      "timeout": 30,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true
+      }
+    },
+    {
+      "id": "fixture_led_mix",
+      "type": "wait",
+      "prompt": "led_check",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_1": "fixture_choose",
+        "button_2": "fixture_choose",
+        "button_3": "fixture_choose",
+        "button_4": "fixture_choose",
+        "button_5": "fixture_choose",
+        "button_6": "fixture_choose",
+        "button_7": "fixture_choose"
+      },
+      "timeout": 30,
+      "fallback": "fixture_fallback",
+      "actions": [
+        {
+          "type": "led_pattern",
+          "pattern": "button_color_contract",
+          "colors": {
+            "1": "red",
+            "2": "orange",
+            "3": "yellow",
+            "4": "green",
+            "5": "cyan",
+            "6": "blue",
+            "7": "purple"
+          },
+          "duration_ms": 500
+        }
+      ],
+      "metadata": {
+        "fixture": true,
+        "engineering_only": true
+      }
+    },
+    {
+      "id": "fixture_game_menu",
+      "type": "button_choice",
+      "prompt": "game_menu",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_1": "fixture_game_one",
+        "button_2": "fixture_game_two",
+        "button_3": "fixture_game_ladder",
+        "button_4": "fixture_game_repeat_pattern",
+        "button_5": "fixture_led_mix"
+      },
+      "timeout": 30,
+      "fallback": "fixture_fallback",
+      "actions": [
+        {
+          "type": "led_pattern",
+          "pattern": "game_menu",
+          "color": "blue",
+          "duration_ms": 500
+        }
+      ],
+      "metadata": {
+        "fixture": true
+      }
+    },
+    {
+      "id": "fixture_game_one",
+      "type": "game",
+      "prompt": "game_press",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "success": "fixture_game_done",
+        "failure": "fixture_game_done",
+        "timeout": "fixture_game_done"
+      },
+      "timeout": 20,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "game_id": "press_one"
+      }
+    },
+    {
+      "id": "fixture_game_two",
+      "type": "game",
+      "prompt": "game_sequence",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "success": "fixture_game_done",
+        "failure": "fixture_game_done",
+        "timeout": "fixture_game_done"
+      },
+      "timeout": 30,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "game_id": "two_buttons"
+      }
+    },
+    {
+      "id": "fixture_game_ladder",
+      "type": "game",
+      "prompt": "game_ladder",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "success": "fixture_game_done",
+        "failure": "fixture_game_done",
+        "timeout": "fixture_game_done"
+      },
+      "timeout": 45,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "game_id": "ladder"
+      }
+    },
+    {
+      "id": "fixture_game_repeat_pattern",
+      "type": "game",
+      "prompt": "game_repeat_pattern",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "success": "fixture_game_done",
+        "failure": "fixture_game_done",
+        "timeout": "fixture_game_done"
+      },
+      "timeout": 30,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "game_id": "repeat_pattern_7",
+        "led_sequence": [
+          2,
+          5,
+          1,
+          7
+        ]
+      }
+    },
+    {
+      "id": "fixture_game_done",
+      "type": "say",
+      "prompt": "game_done",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "next": "fixture_choose"
+      },
+      "timeout": 0,
+      "fallback": "fixture_fallback",
+      "actions": [
+        {
+          "type": "led_pattern",
+          "pattern": "game_complete",
+          "color": "white",
+          "duration_ms": 500
+        }
+      ],
+      "metadata": {
+        "fixture": true
+      }
+    },
+    {
+      "id": "fixture_story_menu",
+      "type": "button_choice",
+      "prompt": "story_menu",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_1": "fixture_story_1",
+        "button_2": "fixture_story_2",
+        "button_3": "fixture_story_3",
+        "button_4": "fixture_story_4",
+        "button_5": "fixture_story_5"
+      },
+      "timeout": 30,
+      "fallback": "fixture_fallback",
+      "actions": [
+        {
+          "type": "led_pattern",
+          "pattern": "story_menu",
+          "color": "purple",
+          "duration_ms": 500
+        }
+      ],
+      "metadata": {
+        "fixture": true
+      }
+    },
+    {
+      "id": "fixture_story_1",
+      "type": "story",
+      "prompt": "",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_7": "fixture_story_done"
+      },
+      "timeout": 120,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "story_id": "story_1"
+      }
+    },
+    {
+      "id": "fixture_story_2",
+      "type": "story",
+      "prompt": "",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_7": "fixture_story_done"
+      },
+      "timeout": 120,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "story_id": "story_2"
+      }
+    },
+    {
+      "id": "fixture_story_3",
+      "type": "story",
+      "prompt": "",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_7": "fixture_story_done"
+      },
+      "timeout": 120,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "story_id": "story_3"
+      }
+    },
+    {
+      "id": "fixture_story_4",
+      "type": "story",
+      "prompt": "",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_7": "fixture_story_done"
+      },
+      "timeout": 120,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "story_id": "story_4"
+      }
+    },
+    {
+      "id": "fixture_story_5",
+      "type": "story",
+      "prompt": "",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_7": "fixture_story_done"
+      },
+      "timeout": 120,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "story_id": "story_5"
+      }
+    },
+    {
+      "id": "fixture_story_done",
+      "type": "say",
+      "prompt": "story_done",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "next": "fixture_choose"
+      },
+      "timeout": 0,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true
+      }
+    },
+    {
+      "id": "fixture_free",
+      "type": "bounded_free_conversation",
+      "prompt": "",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_1": "fixture_game_menu",
+        "button_2": "fixture_story_menu",
+        "button_3": "fixture_free",
+        "button_4": "fixture_led_mix",
+        "button_5": "fixture_game_repeat_pattern",
+        "button_7": "fixture_schedule_weather",
+        "return": "fixture_choose",
+        "timeout": "fixture_end",
+        "safety": "fixture_fallback"
+      },
+      "timeout": 180,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "fixture": true,
+        "tester_prompt": "Скажи «Привет», спроси «Как настроение?» или «Расскажи сказку». Кнопки 1/2 переключают игру/сказку, 3 оставляет разговор."
+      },
+      "max_duration_seconds": 180,
+      "max_turns": 4,
+      "allowed_topics": [
+        "fixture_neutral",
+        "greetings",
+        "feelings",
+        "games",
+        "stories",
+        "questions"
+      ],
+      "forbidden_topics": [
+        "diagnosis",
+        "medicine",
+        "treatment",
+        "personal_data",
+        "unsafe_advice"
+      ],
+      "context_window": 3,
+      "fallback_node": "fixture_fallback",
+      "timeout_node": "fixture_end",
+      "on_handset_down": "fixture_end",
+      "on_barge_in": "fixture_choose",
+      "on_safety_signal": "fixture_fallback",
+      "return_node": "fixture_choose"
+    },
+    {
+      "id": "fixture_fallback",
+      "type": "fallback",
+      "prompt": "fallback_repeat",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_1": "fixture_choose",
+        "timeout": "fixture_end"
+      },
+      "timeout": 10,
+      "fallback": "fixture_end",
+      "actions": [],
+      "metadata": {
+        "fixture": true
+      }
+    },
+    {
+      "id": "fixture_end",
+      "type": "end",
+      "prompt": "ending",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {},
+      "timeout": 0,
+      "fallback": null,
+      "actions": [],
+      "metadata": {
+        "fixture": true
+      }
+    },
+    {
+      "id": "fixture_schedule_weather",
+      "type": "wait",
+      "prompt": "schedule_weather",
+      "audio_asset": null,
+      "allowed_intents": [],
+      "transitions": {
+        "button_1": "fixture_choose",
+        "button_2": "fixture_choose",
+        "button_3": "fixture_choose",
+        "button_4": "fixture_choose",
+        "button_5": "fixture_choose",
+        "button_6": "fixture_choose",
+        "button_7": "fixture_choose",
+        "timeout": "fixture_choose"
+      },
+      "timeout": 30,
+      "fallback": "fixture_fallback",
+      "actions": [],
+      "metadata": {
+        "demo": true,
+        "network": "weather_only"
+      }
+    }
+  ]
+}

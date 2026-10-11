@@ -1,0 +1,11 @@
+{
+  "id": "dev_core",
+  "start": "dev_welcome",
+  "metadata": {"id":"dev_core","version":"1.0.0","language":"ru-RU","status":"engineering_dev_only","source":"engineering_fixture","author":"repository","updated_at":"2026-09-22","approval_status":"not_for_child_use","compatibility":"1.0","content_type":"scenario","fallback":"dev_fallback"},
+  "nodes": [
+    {"id":"dev_welcome","type":"say","prompt":"dev_welcome","audio_asset":null,"allowed_intents":[],"transitions":{"next":"dev_dialogue"},"timeout":0,"fallback":"dev_fallback","actions":[],"metadata":{"dev_mode":true}},
+    {"id":"dev_dialogue","type":"bounded_free_conversation","prompt":"","audio_asset":null,"allowed_intents":[],"transitions":{"return":"dev_end","timeout":"dev_end","safety":"dev_fallback"},"timeout":900,"fallback":"dev_fallback","actions":[],"metadata":{"dev_mode":true,"tester_prompt":"Свободный инженерный диалог без тематического whitelist."},"max_duration_seconds":900,"max_turns":40,"allowed_topics":["__all__"],"forbidden_topics":["диагноз","лекарство","лечение","diagnosis","medicine","treatment","personal_data","unsafe_advice"],"context_window":8,"fallback_node":"dev_fallback","timeout_node":"dev_end","on_handset_down":"dev_end","on_barge_in":"dev_dialogue","on_safety_signal":"dev_fallback","return_node":"dev_end"},
+    {"id":"dev_fallback","type":"fallback","prompt":"dev_fallback","audio_asset":null,"allowed_intents":[],"transitions":{"button_1":"dev_dialogue","timeout":"dev_end"},"timeout":20,"fallback":"dev_end","actions":[],"metadata":{"dev_mode":true}},
+    {"id":"dev_end","type":"end","prompt":"ending","audio_asset":null,"allowed_intents":[],"transitions":{},"timeout":0,"fallback":null,"actions":[],"metadata":{"dev_mode":true}}
+  ]
+}

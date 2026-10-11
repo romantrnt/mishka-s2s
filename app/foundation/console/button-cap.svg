@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="translucent button cap">
+  <defs>
+    <radialGradient id="cap" cx="34%" cy="24%" r="72%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".40"/>
+      <stop offset=".20" stop-color="#eaf1f0" stop-opacity=".18"/>
+      <stop offset=".58" stop-color="#c5d0cf" stop-opacity=".08"/>
+      <stop offset="1" stop-color="#071011" stop-opacity=".34"/>
+    </radialGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".44"/>
+      <stop offset=".45" stop-color="#dce6e5" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#050808" stop-opacity=".55"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="48" fill="url(#cap)"/>
+  <ellipse cx="34" cy="22" rx="19" ry="8" transform="rotate(-25 34 22)" fill="#fff" opacity=".22"/>
+  <circle cx="50" cy="50" r="46.5" fill="none" stroke="url(#edge)" stroke-width="2"/>
+  <circle cx="50" cy="50" r="41" fill="none" stroke="#ffffff" stroke-opacity=".10"/>
+</svg>

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mishka.local/schemas/scenario-v1.json",
+  "title": "Mishka deterministic scenario v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "start", "metadata", "nodes"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"},
+    "start": {"type": "string", "minLength": 1},
+    "metadata": {"$ref": "#/$defs/metadata"},
+    "nodes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/node"}}
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "required": ["id", "version", "language", "status", "source", "author", "updated_at", "approval_status", "compatibility", "content_type", "fallback"],
+      "properties": {
+        "id": {"type": "string"}, "version": {"type": "string"}, "language": {"type": "string"},
+        "status": {"type": "string"}, "source": {"type": "string"}, "author": {"type": "string"},
+        "updated_at": {"type": "string"}, "approval_status": {"type": "string"},
+        "compatibility": {"const": "1.0"}, "content_type": {"type": "string"}, "fallback": {"type": "string"}
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"enum": ["led_pattern", "led_clear", "display"]}, "pattern": {"type": "string"},
+        "color": {"type": "string"}, "colors": {"type": "object", "additionalProperties": {"type": "string"}}, "duration_ms": {"type": "integer", "minimum": 0, "maximum": 120000}
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "type", "prompt", "audio_asset", "allowed_intents", "transitions", "timeout", "fallback", "actions", "metadata"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"},
+        "type": {"enum": ["say", "listen", "intent", "button_choice", "led_pattern", "game", "story", "wait", "end", "fallback", "subscenario", "bounded_free_conversation"]},
+        "prompt": {"type": "string"}, "audio_asset": {"type": ["string", "null"]},
+        "allowed_intents": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "transitions": {"type": "object", "additionalProperties": {"type": "string"}},
+        "timeout": {"type": "number", "minimum": 0}, "fallback": {"type": ["string", "null"]},
+        "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}}, "metadata": {"type": "object"},
+        "max_duration_seconds": {"type": "integer", "minimum": 1}, "max_turns": {"type": "integer", "minimum": 1},
+        "allowed_topics": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+        "forbidden_topics": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+        "context_window": {"type": "integer", "minimum": 1},
+        "fallback_node": {"type": "string"}, "timeout_node": {"type": "string"},
+        "on_handset_down": {"type": "string"}, "on_barge_in": {"type": "string"},
+        "on_safety_signal": {"type": "string"}, "return_node": {"type": "string"}
+      },
+      "allOf": [{
+        "if": {"properties": {"type": {"const": "bounded_free_conversation"}}, "required": ["type"]},
+        "then": {"required": ["max_duration_seconds", "max_turns", "allowed_topics", "forbidden_topics", "context_window", "fallback_node", "timeout_node", "on_handset_down", "on_barge_in", "on_safety_signal", "return_node"]}
+      }]
+    }
+  }
+}

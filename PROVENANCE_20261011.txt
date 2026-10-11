@@ -1,0 +1,12 @@
+# Runtime provenance snapshot (non-secret)
+date=2026-10-11
+project_root=/workspace/mishka
+vendor_rvc_commit=e64eb5fd7f1d50f00c7bff4727001c16ecfda0be
+rvc_model=models/rvc/mishka_rvc_v2_e250_2250s.pth
+rvc_model_sha256=160daf2120b461b257b76e4fb9b94b3b8f586b81611a2337533a8d4e213fa1d2
+rvc_index=models/rvc/mishka_rvc_v2_e250_2250s.index
+rvc_index_sha256=6a6dec7908090fbf8c330167379a624d0b008d28cea054734e6d5ba5e80e7cbe
+secrets=/workspace/.config/mishka/.env.runpod
+data=/workspace/.data/mishka
+cache=/workspace/.cache/mishka
+archive=/workspace/mishka-archive-20261011

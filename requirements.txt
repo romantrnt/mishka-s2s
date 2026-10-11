@@ -1,0 +1,22 @@
+# Canonical Mishka production runtime dependencies.
+# The legacy XTTS/Coqui/8015 stack is intentionally not included.
+# Install a hardware-matched PyTorch build (CUDA or CPU) before this file.
+fastapi==0.141.1
+faster-whisper==1.2.1
+httpx==0.28.1
+langgraph==1.2.2
+num2words==0.5.14
+docopt==0.6.2
+numpy==2.1.2
+omegaconf==2.4.0
+onnxruntime-gpu==1.22.0
+psutil==7.1.0
+pydantic==2.13.4
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+PyYAML==6.0.3
+silero-vad==6.2.1
+sounddevice==0.5.6
+soundfile==0.14.0
+uvicorn==0.52.4
+websockets==17.0.1

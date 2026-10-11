@@ -1,0 +1,135 @@
+{
+  "responses": {
+    "welcome_named": {
+      "text": "Привет, {name}! Я рад тебя слышать.",
+      "audio_asset": "welcome_named"
+    },
+    "welcome_anonymous": {
+      "text": "Привет! Я рад тебя слышать.",
+      "audio_asset": "welcome_anonymous"
+    },
+    "mode_prompt": {
+      "text": "Нажми один для игры, два для сказки, три для разговора, четыре для проверки подсветки или семь для завершения.",
+      "audio_asset": "mode_prompt"
+    },
+    "mood_prompt": {
+      "text": "Как у тебя настроение сегодня?",
+      "audio_asset": "mood_prompt"
+    },
+    "mood_positive": {
+      "text": "Здорово! Давай сохраним это хорошее настроение.",
+      "audio_asset": "mood_positive"
+    },
+    "mood_neutral": {
+      "text": "Спасибо, что рассказал. Можем выбрать спокойную игру.",
+      "audio_asset": "mood_neutral"
+    },
+    "mood_negative": {
+      "text": "Понимаю. Рядом может быть взрослый, которому можно сказать об этом.",
+      "audio_asset": "mood_negative"
+    },
+    "comfort": {
+      "text": "Мне жаль, что тебе нелегко. Давай позовём взрослого рядом.",
+      "audio_asset": "comfort"
+    },
+    "question_safe": {
+      "text": "Я лучше предложу игру или сказку. Что выберем?",
+      "audio_asset": "question_safe"
+    },
+    "game_menu": {
+      "text": "Выбери действие: 1 — игра, 2 — сказка, 3 — разговор, 4 — LED, 5 — повтори паттерн, 6 — разговор с Мишкой, 7 — расписание и погода.",
+      "audio_asset": "game_menu"
+    },
+    "game_press": {
+      "text": "Нажми кнопку один.",
+      "audio_asset": "game_press"
+    },
+    "game_sequence": {
+      "text": "Повтори светящуюся последовательность: один, затем три.",
+      "audio_asset": "game_sequence"
+    },
+    "game_ladder": {
+      "text": "Нажимай от одного до семи и обратно.",
+      "audio_asset": "game_ladder"
+    },
+    "game_repeat_pattern": {
+      "text": "Повтори световой паттерн: два, пять, один, семь.",
+      "audio_asset": "game_repeat_pattern"
+    },
+    "correct": {
+      "text": "Верно! Отличная работа.",
+      "audio_asset": "correct"
+    },
+    "incorrect": {
+      "text": "Почти. Давай попробуем ещё раз.",
+      "audio_asset": "incorrect"
+    },
+    "game_done": {
+      "text": "Игра закончилась. Можно выбрать ещё одну игру, сказку или разговор.",
+      "audio_asset": "game_done"
+    },
+    "story_menu": {
+      "text": "Выбери сказку кнопкой от одного до пяти.",
+      "audio_asset": "story_menu"
+    },
+    "story_done": {
+      "text": "Сказка закончилась. Можно выбрать ещё одну игру или завершить.",
+      "audio_asset": "story_done"
+    },
+    "fallback_repeat": {
+      "text": "Я не понял. Скажи ещё раз или нажми один для повтора, два для выбора режима.",
+      "audio_asset": "fallback_repeat"
+    },
+    "ending": {
+      "text": "Спасибо за игру. До новых встреч!",
+      "audio_asset": "ending"
+    },
+    "timeout": {
+      "text": "Я немного подожду. Нажми кнопку, когда будешь готов.",
+      "audio_asset": "timeout"
+    },
+    "anonymous": {
+      "text": "Будем играть без имени. Выбери игру или сказку.",
+      "audio_asset": "anonymous"
+    },
+    "led_check": {
+      "text": "Проверяем подсветку. Каждый цвет должен загореться внутри своей кнопки.",
+      "audio_asset": "led_check"
+    },
+    "dev_welcome": {
+      "text": "Dev-режим включён. Можно задавать свободные вопросы и проверять диалог.",
+      "audio_asset": "dev_welcome"
+    },
+    "dev_fallback": {
+      "text": "Ответ не удалось безопасно подготовить. Можно попробовать другую формулировку.",
+      "audio_asset": "dev_fallback"
+    },
+    "quick_greeting": {
+      "text": "Привет! Я рядом. Как у тебя настроение?",
+      "audio_asset": "quick_greeting"
+    },
+    "quick_mood": {
+      "text": "У меня всё спокойно. А у тебя как настроение?",
+      "audio_asset": "quick_mood"
+    },
+    "quick_sad": {
+      "text": "Жаль это слышать. Можно поговорить со взрослым, которому ты доверяешь.",
+      "audio_asset": "quick_sad"
+    },
+    "quick_capabilities": {
+      "text": "Я могу поговорить, сыграть в игру или рассказать сказку.",
+      "audio_asset": "quick_capabilities"
+    },
+    "quick_story_prompt": {
+      "text": "Выбери сказку кнопкой от одного до пяти.",
+      "audio_asset": "quick_story_prompt"
+    },
+    "ack_listening": {
+      "text": "Секундочку.",
+      "audio_asset": "ack_listening"
+    },
+    "schedule_weather": {
+      "text": "Сейчас расскажу расписание и погоду."
+    }
+  }
+}
