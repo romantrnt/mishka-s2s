@@ -18,15 +18,15 @@ class SileroTTSLoadError(RuntimeError):
 
 class SileroTTSEngine:
     """Lazy, process-local Silero v5.5 Russian synthesizer."""
-    def __init__(self, *, language="ru", model_name="v5_5_ru", speaker="aidar",
+    def __init__(self, *, language="ru", model_name="v5_5_ru", speaker="kseniya",
                  sample_rate=48000, cache_path=PROJECT_ROOT / "runtime/cache/silero/v5_5_ru.pt", device=None,
                  leading_silence_ms=150):
         if language != "ru":
             raise ValueError("Silero v5.5 production engine supports only language=ru")
         if model_name != "v5_5_ru":
             raise ValueError("Silero production engine requires model=v5_5_ru")
-        if speaker != "aidar":
-            raise ValueError("Silero speaker must be aidar")
+        if speaker != "kseniya":
+            raise ValueError("Silero speaker must be kseniya")
         if sample_rate not in {8000, 24000, 48000}:
             raise ValueError("Silero sample rate must be 8000, 24000, or 48000")
         if leading_silence_ms < 0:

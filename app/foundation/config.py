@@ -174,7 +174,7 @@ class Settings:
     stt_model: str = "large-v3-turbo"
     silero_model: str = "v5_5_ru"
     silero_language: str = "ru"
-    silero_speaker: str = "aidar"
+    silero_speaker: str = "kseniya"
     silero_sample_rate: int = 48_000
     silero_cache_path: str = "runtime/cache/silero/v5_5_ru.pt"
     silero_leading_silence_ms: int = 150
@@ -436,7 +436,7 @@ class Settings:
             llm_think=_bool("LLM_THINK", False), llm_warmup_timeout_s=_float("LLM_WARMUP_TIMEOUT_SECONDS", 120),
             ollama_base_url=_text("OLLAMA_BASE_URL", "http://127.0.0.1:11434"), vllm_base_url=_text("VLLM_BASE_URL", "http://127.0.0.1:8001"),
             stt_model=_text("WHISPER_MODEL", "large-v3-turbo"),
-            silero_model=_text("SILERO_MODEL", "v5_5_ru"), silero_language=_text("SILERO_LANGUAGE", "ru"), silero_speaker=_text("SILERO_SPEAKER", "aidar").lower(), silero_sample_rate=_int("SILERO_SAMPLE_RATE", 48000), silero_cache_path=_text("SILERO_CACHE_PATH", "runtime/cache/silero/v5_5_ru.pt"), silero_leading_silence_ms=_int("SILERO_LEADING_SILENCE_MS", 150),
+            silero_model=_text("SILERO_MODEL", "v5_5_ru"), silero_language=_text("SILERO_LANGUAGE", "ru"), silero_speaker=_text("SILERO_SPEAKER", "kseniya").lower(), silero_sample_rate=_int("SILERO_SAMPLE_RATE", 48000), silero_cache_path=_text("SILERO_CACHE_PATH", "runtime/cache/silero/v5_5_ru.pt"), silero_leading_silence_ms=_int("SILERO_LEADING_SILENCE_MS", 150),
             voice_conversion=_text("MISHKA_VOICE_CONVERSION", "rvc_v2").lower(), fast_audio_ack=_bool("FAST_AUDIO_ACK", False), fast_audio_ack_cooldown_s=_float("FAST_AUDIO_ACK_COOLDOWN_S", 4),
             rvc_project_root=_text("RVC_PROJECT_ROOT", "vendor/rvc"), rvc_python=_text("RVC_PYTHON", ".venv/bin/python"), rvc_model=_text("RVC_MODEL_PATH", "models/rvc/mishka-rvc-v2.pth"), rvc_index=_text("RVC_INDEX_PATH", "models/rvc/mishka-rvc-v2.index"), rvc_f0_method=_text("RVC_F0_METHOD", "rmvpe"), rvc_filter_radius=_float("RVC_FILTER_RADIUS", 3), rvc_f0_up_key=_int("RVC_F0_UP_KEY", 0), rvc_index_rate=_float("RVC_INDEX_RATE", 0.0), rvc_protect=_float("RVC_PROTECT", .33), rvc_tmp_dir=_text("RVC_TMP_DIR", "runtime/cache/rvc-tmp"), rvc_startup_timeout_s=_float("RVC_STARTUP_TIMEOUT_SECONDS", 60), rvc_fallback_mode=_text("RVC_FALLBACK_MODE", "passthrough").lower(),
             min_available_ram_gb=_float("MIN_AVAILABLE_RAM_GB", CANONICAL_POLICY.min_available_ram_gb), min_available_vram_gb=_float("MIN_AVAILABLE_VRAM_GB", CANONICAL_POLICY.min_available_vram_gb),
