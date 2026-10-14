@@ -30,7 +30,7 @@ BUTTON_MODES = {
     4: "personal_story_theme", 5: "wellbeing_check", 6: "bear_dialogue",
     7: "schedule_weather",
 }
-LIGHTING_ELEMENT_IDS = (10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 62, 70, 71, 72)
+LIGHTING_ELEMENT_IDS = tuple(range(19))
 GAME_CATALOG = (
     {"game_id": "catch_light", "level": 0, "input": "button"},
     {"game_id": "find_pair", "level": 2, "input": "button"},
@@ -1019,14 +1019,14 @@ class CanonicalRuntime:
             )
             reason = "rfid_identified" if known_profile else "unknown_tag"
             return self._decision(state, [
-                {"type": "lighting", "elements": [62], "state": 1},
+                {"type": "lighting", "elements": [15], "state": 1},
                 {"type": "visual", "view": "handset_invitation"},
                 {"type": "lighting_preset", "preset": "ALL_ON"},
             ], reason)
         if event.event_type == "AnonymousStart":
             state.profile_ref, state.profile_status, state.age_band, state.age_band_source = None, "anonymous", "3-5", "anonymous_default"
             state.mode, state.state_version = "anonymous_visual", state.state_version + 1
-            return self._decision(state, [{"type": "lighting", "elements": [62], "state": 1}], "anonymous_started")
+            return self._decision(state, [{"type": "lighting", "elements": [15], "state": 1}], "anonymous_started")
         if event.event_type == "HandsetPlaced":
             if self.exhibition_mode:
                 # Exhibition handset-down is a hard physical-session boundary.
@@ -1242,7 +1242,7 @@ class CanonicalRuntime:
                     state.pending_mode = mode
                     state.mode, state.state_version = "awaiting_handset", state.state_version + 1
                 # Safety/help remains a global escape from active play.\n                # The root-menu map is contextual, but in-game help must win.\n                "game_active",
-                    return self._decision(state, [{"type": "lighting", "elements": [62], "state": 1}, {"type": "visual", "view": "lift_handset"}], "handset_required")
+                    return self._decision(state, [{"type": "lighting", "elements": [15], "state": 1}, {"type": "visual", "view": "lift_handset"}], "handset_required")
                 state.mode, state.state_version = mode, state.state_version + 1
                 state.expected_inputs = ["button", "speech"] if state.handset == "up" else ["button"]
                 preset = {
@@ -1316,7 +1316,7 @@ class CanonicalRuntime:
                 if state.handset != "up":
                     state.pending_mode = "fixed_story_playing"
                     state.mode = "awaiting_handset"
-                    return self._decision(state, [{"type": "lighting", "elements": [62], "state": 1}, {"type": "visual", "view": "lift_handset"}], "story_handset_required")
+                    return self._decision(state, [{"type": "lighting", "elements": [15], "state": 1}, {"type": "visual", "view": "lift_handset"}], "story_handset_required")
                 state.mode = "fixed_story_playing"
                 if verified is not None:
                     return self._decision(state, [{"type": "lighting_preset", "preset": "STORY_PLAYBACK"}, {"type": "play_fixed_story", "story_id": story_id, "asset": verified["audio_file"]}], "fixed_story_started")

@@ -3,6 +3,7 @@ from typing import Any, Iterable
 
 from .lighting import (
     BUTTON_DIGIT_ELEMENTS,
+    BUTTON_FILL_ELEMENTS,
     BUTTON_OUTPUT_ELEMENTS,
     ELEMENT_TO_BUTTON,
     FakeLightingOutput,
@@ -111,10 +112,7 @@ def canonical_led_state_from_lighting(lighting: dict[str, int] | None):
     source = lighting if isinstance(lighting, dict) else {}
     targets = []
     colors = {}
-    for button_id, (fill_id, _digit_id) in {
-        1: (10, 11), 2: (20, 21), 3: (30, 31), 4: (40, 41),
-        5: (50, 51), 6: (60, 61), 7: (70, 71),
-    }.items():
+    for button_id, fill_id in BUTTON_FILL_ELEMENTS.items():
         if int(source.get(str(fill_id), source.get(fill_id, 0))) == 1:
             targets.append(button_id)
             colors[str(button_id)] = BUTTON_LED_COLORS[button_id]

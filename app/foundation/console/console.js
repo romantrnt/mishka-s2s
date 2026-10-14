@@ -1,16 +1,19 @@
 const $ = id => document.getElementById(id);
 const BUTTON_IDS = [1, 2, 3, 4, 5, 6, 7];
-const LIGHTING_ELEMENT_IDS = [10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 62, 70, 71, 72];
+const LIGHTING_ELEMENT_IDS = Array.from({ length: 19 }, (_, id) => id);
 const ELEMENT_PRESENTATION = {
-  10: { kind: 'fill', buttonId: 1, color: 'red' }, 11: { kind: 'digit', buttonId: 1, color: 'white' },
-  20: { kind: 'fill', buttonId: 2, color: 'orange' }, 21: { kind: 'digit', buttonId: 2, color: 'white' },
-  30: { kind: 'fill', buttonId: 3, color: 'yellow' }, 31: { kind: 'digit', buttonId: 3, color: 'white' },
-  40: { kind: 'fill', buttonId: 4, color: 'green' }, 41: { kind: 'digit', buttonId: 4, color: 'white' },
-  50: { kind: 'fill', buttonId: 5, color: 'cyan' }, 51: { kind: 'digit', buttonId: 5, color: 'white' },
-  60: { kind: 'fill', buttonId: 6, color: 'blue' }, 61: { kind: 'digit', buttonId: 6, color: 'white' },
-  62: { kind: 'symbol', buttonId: 6, symbol: 'bear', color: 'brown' },
-  70: { kind: 'fill', buttonId: 7, color: 'purple' }, 71: { kind: 'digit', buttonId: 7, color: 'white' },
-  72: { kind: 'symbol', buttonId: 7, symbol: 'weather', color: 'skyblue' },
+  0: { kind: 'fill', buttonId: 1, color: 'red' }, 8: { kind: 'digit', buttonId: 1, color: 'white' },
+  1: { kind: 'fill', buttonId: 2, color: 'orange' }, 9: { kind: 'digit', buttonId: 2, color: 'white' },
+  2: { kind: 'fill', buttonId: 3, color: 'yellow' }, 10: { kind: 'digit', buttonId: 3, color: 'white' },
+  3: { kind: 'fill', buttonId: 4, color: 'green' }, 11: { kind: 'digit', buttonId: 4, color: 'white' },
+  4: { kind: 'fill', buttonId: 5, color: 'cyan' }, 12: { kind: 'digit', buttonId: 5, color: 'white' },
+  5: { kind: 'fill', buttonId: 6, color: 'blue' }, 13: { kind: 'digit', buttonId: 6, color: 'white' },
+  6: { kind: 'fill', buttonId: 7, color: 'purple' }, 14: { kind: 'digit', buttonId: 7, color: 'white' },
+  7: { kind: 'reserved', color: 'unknown' },
+  15: { kind: 'symbol', buttonId: 6, symbol: 'bear', color: 'brown' },
+  16: { kind: 'symbol', buttonId: 7, symbol: 'weather', color: 'skyblue' },
+  17: { kind: 'compensation', buttonId: 6, symbol: 'bear', color: 'blue' },
+  18: { kind: 'compensation', buttonId: 7, symbol: 'weather', color: 'purple' },
 };
 const LED_COLORS = {
   off: { label: 'OFF', className: 'led-off', css: '#8f999a' },
@@ -739,12 +742,14 @@ function renderButtons(state, led, contract, lighting) {
     const enabled = Boolean(session.visual_only) ? guestButtons.has(id) : (guestMode ? guestButtons.has(id) : (sessionActive && (enabledButtons === null || enabledButtons.has(id))));
     const button = buttonRefs.get(id);
     if (!button) continue;
-    const fillId = id * 10;
-    const digitId = fillId + 1;
-    const symbolId = id === 6 ? 62 : id === 7 ? 72 : null;
+    const fillId = id - 1;
+    const digitId = 7 + id;
+    const symbolId = id === 6 ? 15 : id === 7 ? 16 : null;
+    const compensationId = id === 6 ? 17 : id === 7 ? 18 : null;
     const fillOn = lighting[fillId] === 1;
     const digitOn = lighting[digitId] === 1;
     const symbolOn = symbolId !== null && lighting[symbolId] === 1;
+    const compensationOn = compensationId !== null && lighting[compensationId] === 1;
     const fillPresentation = Object.values(ELEMENT_PRESENTATION).find(item => item.buttonId === id && item.kind === 'fill');
     const colorDef = LED_COLORS[fillPresentation?.color] || LED_COLORS.invalid;
     const buttonLabel = contract.valid ? contract.labels[id] : colorDef.label;
@@ -756,6 +761,7 @@ function renderButtons(state, led, contract, lighting) {
     button.classList.toggle('led-off', !fillOn);
     button.classList.toggle('digit-on', digitOn);
     button.classList.toggle('symbol-on', symbolOn);
+    button.classList.toggle('compensation-on', compensationOn);
     button.classList.toggle('pressed', buttonInputs[id] === 'pressed');
     button.classList.toggle('disabled', !enabled);
     button.disabled = !enabled;
@@ -770,7 +776,7 @@ function renderButtons(state, led, contract, lighting) {
     const enabledCell = document.querySelector('#button-enabled-' + id);
     if (inputCell) inputCell.textContent = buttonInputs[id].toUpperCase();
     if (ledCell) {
-      ledCell.textContent = String(fillId) + ':' + (fillOn ? 1 : 0) + ' · ' + String(digitId) + ':' + (digitOn ? 1 : 0) + (symbolId ? ' · ' + symbolId + ':' + (symbolOn ? 1 : 0) : '');
+      ledCell.textContent = String(fillId) + ':' + (fillOn ? 1 : 0) + ' · ' + String(digitId) + ':' + (digitOn ? 1 : 0) + (symbolId !== null ? ' · ' + symbolId + ':' + (symbolOn ? 1 : 0) : '') + (compensationId !== null ? ' · ' + compensationId + ':' + (compensationOn ? 1 : 0) : '');
       ledCell.className = 'diag-color ' + (fillOn ? '' : 'off');
       ledCell.style.setProperty('--diag-color', colorDef.css);
     }

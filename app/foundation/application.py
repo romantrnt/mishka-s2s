@@ -1502,7 +1502,7 @@ class ScenarioApplication:
         session.cancellation_token += 1
         self.audio.cancel(session.cancellation_token)
         # Session termination is also a device-state transition. Do not use
-        # the legacy pattern projection here: clear canonical 16-element
+        # the legacy pattern projection here: clear canonical 19-element
         # lighting directly.
         clear_all = getattr(self.led, "clear_all", None)
         if callable(clear_all):

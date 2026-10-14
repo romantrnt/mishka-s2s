@@ -319,29 +319,31 @@ button:hover { background: #f0f2f1; }
 }
 
 
-/* P2-R1 lighting-order correction: visual-only logical LED grid. */
+/* Flat physical channel order: element IDs are shown exactly as sent over serial. */
 .led-elements {
   grid-template-columns: repeat(8, minmax(0, 1fr));
   grid-auto-flow: row;
 }
 
-/* Existing cards keep their DOM identity; CSS order controls presentation only. */
-.led-element:nth-child(1) { order: 1; }   /* 10 */
-.led-element:nth-child(2) { order: 9; }   /* 11 */
-.led-element:nth-child(3) { order: 2; }   /* 20 */
-.led-element:nth-child(4) { order: 10; }  /* 21 */
-.led-element:nth-child(5) { order: 3; }   /* 30 */
-.led-element:nth-child(6) { order: 11; }  /* 31 */
-.led-element:nth-child(7) { order: 4; }   /* 40 */
-.led-element:nth-child(8) { order: 12; }  /* 41 */
-.led-element:nth-child(9) { order: 5; }   /* 50 */
-.led-element:nth-child(10) { order: 13; } /* 51 */
-.led-element:nth-child(11) { order: 6; }  /* 60 */
-.led-element:nth-child(12) { order: 14; } /* 61 */
-.led-element:nth-child(13) { order: 8; }  /* 62 */
-.led-element:nth-child(14) { order: 7; }  /* 70 */
-.led-element:nth-child(15) { order: 15; } /* 71 */
-.led-element:nth-child(16) { order: 16; } /* 72 */
+.led-element:nth-child(1) { order: 1; }   /* 0 */
+.led-element:nth-child(2) { order: 2; }   /* 1 */
+.led-element:nth-child(3) { order: 3; }   /* 2 */
+.led-element:nth-child(4) { order: 4; }   /* 3 */
+.led-element:nth-child(5) { order: 5; }   /* 4 */
+.led-element:nth-child(6) { order: 6; }   /* 5 */
+.led-element:nth-child(7) { order: 7; }   /* 6 */
+.led-element:nth-child(8) { order: 8; }   /* 7 reserved */
+.led-element:nth-child(9) { order: 9; }   /* 8 */
+.led-element:nth-child(10) { order: 10; } /* 9 */
+.led-element:nth-child(11) { order: 11; } /* 10 */
+.led-element:nth-child(12) { order: 12; } /* 11 */
+.led-element:nth-child(13) { order: 13; } /* 12 */
+.led-element:nth-child(14) { order: 14; } /* 13 */
+.led-element:nth-child(15) { order: 15; } /* 14 */
+.led-element:nth-child(16) { order: 16; } /* 15 */
+.led-element:nth-child(17) { order: 17; } /* 16 */
+.led-element:nth-child(18) { order: 18; } /* 17 */
+.led-element:nth-child(19) { order: 19; } /* 18 */
 
 @media (max-width: 900px) {
   .led-elements {

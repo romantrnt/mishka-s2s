@@ -10,19 +10,25 @@ from dataclasses import dataclass, field
 from typing import Mapping, Protocol, Sequence
 
 
-LIGHTING_ELEMENT_IDS: tuple[int, ...] = (
-    10, 11, 20, 21, 30, 31, 40, 41,
-    50, 51, 60, 61, 62, 70, 71, 72,
-)
+LIGHTING_ELEMENT_IDS: tuple[int, ...] = tuple(range(19))
 
-BUTTON_DIGIT_ELEMENTS: Mapping[int, tuple[int, int]] = {
-    1: (10, 11), 2: (20, 21), 3: (30, 31), 4: (40, 41),
-    5: (50, 51), 6: (60, 61), 7: (70, 71),
+# Physical channel names are flat. The product still has seven logical
+# buttons; channel 7 is reserved until the controller firmware documents its
+# eighth button channel.
+BUTTON_FILL_ELEMENTS: Mapping[int, int] = {
+    1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6,
 }
+BUTTON_DIGIT_ELEMENTS: Mapping[int, tuple[int, int]] = {
+    button_id: (fill_id, 7 + button_id)
+    for button_id, fill_id in BUTTON_FILL_ELEMENTS.items()
+}
+PICTOGRAM_ELEMENTS: Mapping[int, int] = {6: 15, 7: 16}
+COMPENSATION_ELEMENTS: Mapping[int, int] = {6: 17, 7: 18}
 
 BUTTON_OUTPUT_ELEMENTS: Mapping[int, tuple[int, ...]] = {
-    1: (10, 11), 2: (20, 21), 3: (30, 31), 4: (40, 41),
-    5: (50, 51), 6: (60, 61, 62), 7: (70, 71, 72),
+    button_id: BUTTON_DIGIT_ELEMENTS[button_id]
+    + ((PICTOGRAM_ELEMENTS[button_id],) if button_id in PICTOGRAM_ELEMENTS else ())
+    for button_id in BUTTON_FILL_ELEMENTS
 }
 
 ELEMENT_TO_BUTTON: Mapping[int, int] = {
@@ -30,10 +36,15 @@ ELEMENT_TO_BUTTON: Mapping[int, int] = {
     for button_id, element_ids in BUTTON_OUTPUT_ELEMENTS.items()
     for element_id in element_ids
 }
+ELEMENT_TO_BUTTON = {
+    **ELEMENT_TO_BUTTON,
+    **{element_id: button_id for button_id, element_id in COMPENSATION_ELEMENTS.items()},
+}
 
 READINESS_WAVE_GROUPS: tuple[tuple[int, ...], ...] = (
-    (10, 11), (20, 21), (30, 31), (40, 41),
-    (50, 51), (60, 61, 62), (70, 71, 72),
+    BUTTON_OUTPUT_ELEMENTS[1], BUTTON_OUTPUT_ELEMENTS[2], BUTTON_OUTPUT_ELEMENTS[3],
+    BUTTON_OUTPUT_ELEMENTS[4], BUTTON_OUTPUT_ELEMENTS[5], BUTTON_OUTPUT_ELEMENTS[6],
+    BUTTON_OUTPUT_ELEMENTS[7],
 )
 READINESS_WAVE_DURATION_MS = 1200
 

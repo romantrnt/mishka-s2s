@@ -1517,7 +1517,7 @@ class HardwareIntegrationStand:
         lighting = self.lighting_output.snapshot()
         # Lossless physical projection. The led field below is intentionally
         # only a UI/menu compatibility projection and must not be used as
-        # hardware state because it aggregates away central elements 62 and 72.
+        # hardware state because it aggregates away the physical channel layout.
         physical_lighting = {str(element_id): int(lighting[str(element_id)]) for element_id in LIGHTING_ELEMENT_IDS}
         led_projection = canonical_led_state_from_lighting(lighting)
         # Explicit compatibility calls made through the old diagnostic helper

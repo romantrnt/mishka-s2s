@@ -9,35 +9,52 @@ from typing import Any, Mapping
 
 from .canonical_contract import PERSONA_FORBIDDEN, VoiceManifest
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
+from .lighting import (
+    BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, BUTTON_OUTPUT_ELEMENTS,
+    COMPENSATION_ELEMENTS, PICTOGRAM_ELEMENTS, LIGHTING_ELEMENT_IDS,
+)
+
+
+def _button_lights(*button_ids: int, digits: bool = False, pictograms: bool = False) -> tuple[tuple[int, int], ...]:
+    """Expand logical buttons to flat channels, including conditional fillers."""
+    commands: list[tuple[int, int]] = []
+    for button_id in button_ids:
+        commands.append((BUTTON_FILL_ELEMENTS[button_id], 1))
+        if digits:
+            commands.append((BUTTON_DIGIT_ELEMENTS[button_id][1], 1))
+        if button_id in PICTOGRAM_ELEMENTS:
+            element_id = PICTOGRAM_ELEMENTS[button_id] if pictograms else COMPENSATION_ELEMENTS[button_id]
+            commands.append((element_id, 1))
+    return tuple(commands)
 
 LED_PRESETS = {
     # READY is deliberately attract-light only; menu controls are enabled
     # by ROOT_MENU after the physical session has entered the menu.
-    "READY": ((62, 1),),
-    "ALL_ON": tuple((element_id, 1) for element_id in (10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 62, 70, 71, 72)),
-    "ROOT_MENU": ((10, 1), (20, 1), (30, 1), (40, 1), (50, 1), (60, 1), (70, 1)),
-    "GAME_MENU": ((10, 1), (20, 1), (30, 1), (40, 1), (50, 1), (60, 1), (70, 1)),
-    "STORY_MENU": ((10, 1), (20, 1), (30, 1), (40, 1), (50, 1), (70, 1)),
-    "STORY_PLAYBACK": ((62, 1),),
-    "SUPPORT": ((30, 1), (62, 1)),
-    "PERSONAL_STORY": ((40, 1), (62, 1)),
-    "BEAR_DIALOGUE": ((62, 1),),
-    "SCHEDULE_WEATHER": ((70, 1), (72, 1)),
-    "MOOD_CHOICES": ((10, 1), (20, 1), (30, 1), (40, 1), (50, 1), (60, 1), (70, 1)),
-    "LISTENING": ((62, 1),),
-    "EXHIBITION_AGE_CHOICES": ((10, 1), (20, 1), (30, 1)),
+    "READY": ((15, 1),),
+    "ALL_ON": tuple((element_id, 1) for element_id in LIGHTING_ELEMENT_IDS),
+    "ROOT_MENU": _button_lights(1, 2, 3, 4, 5, 6, 7),
+    "GAME_MENU": _button_lights(1, 2, 3, 4, 5, 6, 7),
+    "STORY_MENU": _button_lights(1, 2, 3, 4, 5, 7),
+    "STORY_PLAYBACK": ((15, 1),),
+    "SUPPORT": ((2, 1), (15, 1)),
+    "PERSONAL_STORY": ((3, 1), (15, 1)),
+    "BEAR_DIALOGUE": ((15, 1),),
+    "SCHEDULE_WEATHER": ((6, 1), (16, 1)),
+    "MOOD_CHOICES": _button_lights(1, 2, 3, 4, 5, 6, 7),
+    "LISTENING": ((15, 1),),
+    "EXHIBITION_AGE_CHOICES": _button_lights(1, 2, 3),
     "EXHIBITION_MENU_TUTORIAL": (),
-    "THINKING": ((62, 1),),
-    "PAUSED": ((60, 1), (61, 1), (70, 1), (71, 1)),
+    "THINKING": ((15, 1),),
+    "PAUSED": _button_lights(6, 7, digits=True),
     "RETRY": (),
     "HINT": (),
     # HELP is the non-verbal yes/no contract: 1 = no, 7 = yes/help.
-    "HELP": ((10, 1), (70, 1)),
-    "SAFE_STOP": ((62, 1),), "SUCCESS": ((10, 1), (11, 1)),
-    "ERROR_RECOVERABLE": ((62, 1), (70, 1), (71, 1)),
+    "HELP": _button_lights(1, 7),
+    "SAFE_STOP": ((15, 1),),
+    "SUCCESS": ((0, 1), (8, 1)),
+    "ERROR_RECOVERABLE": ((15, 1), (6, 1), (14, 1), (18, 1)),
 }
-BUTTON_ELEMENTS = {1: (10, 11), 2: (20, 21), 3: (30, 31), 4: (40, 41),
-                   5: (50, 51), 6: (60, 61), 7: (70, 71, 72)}
+BUTTON_ELEMENTS = dict(BUTTON_OUTPUT_ELEMENTS)
 
 @dataclass(frozen=True)
 class SafetyClassification:
