@@ -539,6 +539,9 @@ class SerialLightingAdapter:
         self._failed = 0
         self._last_error: dict | None = None
         self._last_open_at: float | None = None
+        self._drain_stop = threading.Event()
+        self._drain_thread: threading.Thread | None = None
+        self._drained_bytes = 0
 
     def _make_transport(self):
         if self.transport is not None:
@@ -557,11 +560,35 @@ class SerialLightingAdapter:
             self._closed = False
             self._last_error = None
             self._last_open_at = time.time()
+            self._drain_stop.clear()
+            self._drain_thread = threading.Thread(
+                target=self._drain_loop,
+                name="mishka-lighting-rx-drain",
+                daemon=True,
+            )
+            self._drain_thread.start()
+
+    def _drain_loop(self) -> None:
+        while not self._drain_stop.is_set():
+            try:
+                read_available = getattr(self.transport, "read_available", None)
+                if callable(read_available):
+                    self._drained_bytes += len(read_available() or b"")
+                else:
+                    self._drain_stop.wait(0.02)
+            except Exception:
+                if self._drain_stop.is_set():
+                    return
+                self._drain_stop.wait(0.02)
 
     def close(self) -> None:
         with self._lock:
             self._ready = False
             self._closed = True
+            self._drain_stop.set()
+            thread, self._drain_thread = self._drain_thread, None
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=0.25)
             if self.transport is not None:
                 try:
                     self.transport.close()
@@ -634,6 +661,8 @@ class SerialLightingAdapter:
             "failed_commands": self._failed,
             "last_error": self._last_error,
             "last_open_at": self._last_open_at,
+            "drained_bytes": self._drained_bytes,
+            "drain_alive": bool(self._drain_thread and self._drain_thread.is_alive()),
         }
 
 
