@@ -1427,6 +1427,17 @@ class HardwareIntegrationStand:
         if self.hardware_mode != "physical":
             hid_state = "simulated"
         lighting_state = str(getattr(self, "_lighting_status", {}).get("state") or "unavailable")
+        lighting_runtime = (
+            self.lighting_serial.diagnostics()
+            if self.lighting_serial is not None
+            else dict(getattr(self, "_lighting_status", {}))
+        )
+        if self.hardware_mode == "physical" and self.lighting_serial is not None and not lighting_runtime.get("ready", False):
+            # A serial adapter can open successfully and fail later while a
+            # USB CDC device is busy.  Readiness must reflect the live
+            # transport, otherwise the panel claims production readiness
+            # while effects are only being retained in memory.
+            lighting_state = "unavailable"
         report = self.scenarios.report() if hasattr(self, "scenarios") else {}
         voice = report.get("voice", {}) if isinstance(report, dict) else {}
         errors = int(voice.get("summary", {}).get("error_count", 0)) if isinstance(voice, dict) else 0
@@ -1438,6 +1449,8 @@ class HardwareIntegrationStand:
             last_error = self._startup_diagnostics[-1].get("code")
         if last_error is None and self.errors:
             last_error = self.errors[-1].get("error_code") or self.errors[-1].get("stage")
+        if last_error is None and lighting_state == "unavailable" and self.hardware_mode == "physical":
+            last_error = "lighting_unavailable"
         return {
             "status": "degraded" if degraded else "ready",
             "mode": "exhibition",
@@ -1490,6 +1503,11 @@ class HardwareIntegrationStand:
             "health": self.health_snapshot(),
             "trace": list(reversed(trace)),
             "diagnostics": diagnostic_items,
+            "lighting_hardware": (
+                self.lighting_serial.diagnostics()
+                if self.lighting_serial is not None
+                else dict(getattr(self, "_lighting_status", {}))
+            ),
             # Bounded and redacted, but lossless for every physical lighting ID.
             "physical_lighting": dict(self.lighting_output.snapshot()),
         }
@@ -1624,6 +1642,7 @@ class HardwareIntegrationStand:
             "results": [result_item(item) for item in source.get("results", [])[-50:]],
             "lighting": dict(source.get("lighting") or {}),
             "physical_lighting": dict(source.get("physical_lighting") or source.get("lighting") or {}),
+            "lighting_hardware": dict((source.get("hardware") or {}).get("lighting") or {}),
             "audio_input": dict((source.get("hardware") or {}).get("audio_input") or {}),
             "lighting_wave": dict(source.get("lighting_wave") or {}),
             "lighting_effects": dict(source.get("lighting_effects") or {}),

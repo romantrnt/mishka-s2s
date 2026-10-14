@@ -578,13 +578,35 @@ class SerialLightingAdapter:
                     self.transport.write(command.to_wire())
                     self._sent += 1
             except Exception as exc:
-                self._failed += 1
-                self._ready = False
-                self._last_error = {
+                first_error = {
                     "exception_type": type(exc).__name__,
                     "detail": str(exc)[:200],
                 }
-                raise ConnectionError("lighting serial write failed") from exc
+                self._failed += 1
+                self._ready = False
+                self._last_error = {**first_error, "attempt": 1}
+                # USB-serial CDC devices can transiently stop accepting a
+                # burst while the firmware is consuming the previous line.
+                # LED writes are idempotent, so reconnect and retry the full
+                # batch once.  This keeps a single transient write failure
+                # from killing the canonical breathing/wave task.
+                try:
+                    self.transport.close()
+                    self.transport.open()
+                    self._ready = True
+                    for command in validated:
+                        self.transport.write(command.to_wire())
+                        self._sent += 1
+                    self._last_error = None
+                except Exception as retry_exc:
+                    self._ready = False
+                    self._last_error = {
+                        "exception_type": type(retry_exc).__name__,
+                        "detail": str(retry_exc)[:200],
+                        "attempt": 2,
+                        "first_error": first_error,
+                    }
+                    raise ConnectionError("lighting serial write failed") from retry_exc
 
     def reconnect(self) -> None:
         self.close()

@@ -44,6 +44,18 @@ class _RecordingLightingTransport:
         self.writes.append(payload)
 
 
+class _FailOnceLightingTransport(_RecordingLightingTransport):
+    def __init__(self):
+        super().__init__()
+        self.failures_left = 1
+
+    def write(self, payload):
+        if self.failures_left:
+            self.failures_left -= 1
+            raise TimeoutError("UART write timed out")
+        super().write(payload)
+
+
 def test_physical_lighting_serial_writes_only_canonical_csv_lines():
     transport = _RecordingLightingTransport()
     adapter = SerialLightingAdapter("/dev/test-lighting", transport=transport)
@@ -80,6 +92,20 @@ def test_physical_lighting_reconnects_before_next_command_after_transport_loss()
     output.set_element(10, 1, 100)
     assert transport.writes == [b"10,1,100\n"]
     adapter.close()
+
+
+def test_physical_lighting_retries_idempotent_batch_after_transient_transport_loss():
+    transport = _FailOnceLightingTransport()
+    adapter = SerialLightingAdapter("/dev/test-lighting", transport=transport)
+    adapter.open()
+    try:
+        adapter.send_batch((LightingCommand(10, 1, 100),))
+        assert transport.writes == [b"10,1,100\n"]
+        assert adapter.is_ready()
+        assert adapter.diagnostics()["last_error"] is None
+        assert adapter.diagnostics()["failed_commands"] == 1
+    finally:
+        adapter.close()
 
 
 def test_background_lighting_failure_is_recorded_without_unhandled_task_exception():

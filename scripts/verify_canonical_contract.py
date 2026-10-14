@@ -56,7 +56,9 @@ def main() -> None:
     menu = fixed.handle(CanonicalEvent("ButtonPressed", "fixed", 2, 1, "test", {"button_id": 2}), None)
     blocked = fixed.handle(CanonicalEvent("ButtonPressed", "fixed", 3, 2, "test", {"button_id": 1}), None)
     assert menu["state"]["mode"] == "fixed_story_menu" and blocked["reason"] == "fixed_story_blocked"
-    assert not VoiceManifest("content/audio/voice_manifest.json").readiness()["ready"]
+    voice_readiness = VoiceManifest("content/audio/voice_manifest.json").readiness()
+    assert voice_readiness["ready"]
+    assert voice_readiness["approved_recorded_count"] == 108
     graph_status = CanonicalLangGraphAuthorizer().status()
     assert graph_status["scenario_id"] == "canonical_product" and graph_status["topology"][0] == "ingress"
     game_resume = CanonicalRuntime(stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
@@ -82,4 +84,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
