@@ -17,4 +17,11 @@ export MISHKA_ENV_FILE="${MISHKA_ENV_FILE:-$ROOT/.env}"
 export MISHKA_PORT="${MISHKA_PORT:-8000}"
 export OLLAMA_MODELS="${OLLAMA_MODELS:-$MISHKA_CACHE_ROOT/ollama}"
 
+# WSLg does not export its PulseAudio endpoint into non-interactive SSH
+# sessions. PortAudio/sounddevice otherwise starts with no host API and the
+# physical headless runtime cannot open the default microphone or sink.
+if [[ -z "${PULSE_SERVER:-}" && -S /mnt/wslg/PulseServer ]]; then
+  export PULSE_SERVER="unix:/mnt/wslg/PulseServer"
+fi
+
 exec "$ROOT/.venv/bin/python" "$ROOT/scripts/run_stand.py"
