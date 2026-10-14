@@ -30,29 +30,29 @@ def _button_lights(*button_ids: int, digits: bool = False, pictograms: bool = Fa
 LED_PRESETS = {
     # READY is deliberately attract-light only; menu controls are enabled
     # by ROOT_MENU after the physical session has entered the menu.
-    "READY": ((15, 1),),
+    "READY": ((14, 1),),
     "ALL_ON": tuple((element_id, 1) for element_id in LIGHTING_ELEMENT_IDS),
     "ROOT_MENU": _button_lights(1, 2, 3, 4, 5, 6, 7),
     "GAME_MENU": _button_lights(1, 2, 3, 4, 5, 6, 7),
     "STORY_MENU": _button_lights(1, 2, 3, 4, 5, 7),
-    "STORY_PLAYBACK": ((15, 1),),
-    "SUPPORT": ((2, 1), (15, 1)),
-    "PERSONAL_STORY": ((3, 1), (15, 1)),
-    "BEAR_DIALOGUE": ((15, 1),),
-    "SCHEDULE_WEATHER": ((6, 1), (16, 1)),
+    "STORY_PLAYBACK": ((14, 1),),
+    "SUPPORT": ((2, 1), (14, 1)),
+    "PERSONAL_STORY": ((3, 1), (14, 1)),
+    "BEAR_DIALOGUE": ((14, 1),),
+    "SCHEDULE_WEATHER": ((6, 1), (15, 1)),
     "MOOD_CHOICES": _button_lights(1, 2, 3, 4, 5, 6, 7),
-    "LISTENING": ((15, 1),),
+    "LISTENING": ((14, 1),),
     "EXHIBITION_AGE_CHOICES": _button_lights(1, 2, 3),
     "EXHIBITION_MENU_TUTORIAL": (),
-    "THINKING": ((15, 1),),
+    "THINKING": ((14, 1),),
     "PAUSED": _button_lights(6, 7, digits=True),
     "RETRY": (),
     "HINT": (),
     # HELP is the non-verbal yes/no contract: 1 = no, 7 = yes/help.
     "HELP": _button_lights(1, 7),
-    "SAFE_STOP": ((15, 1),),
+    "SAFE_STOP": ((14, 1),),
     "SUCCESS": ((0, 1), (8, 1)),
-    "ERROR_RECOVERABLE": ((15, 1), (6, 1), (14, 1), (18, 1)),
+    "ERROR_RECOVERABLE": ((14, 1), (6, 1), (13, 1), (17, 1)),
 }
 BUTTON_ELEMENTS = dict(BUTTON_OUTPUT_ELEMENTS)
 

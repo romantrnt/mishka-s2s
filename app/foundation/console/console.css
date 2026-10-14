@@ -343,7 +343,6 @@ button:hover { background: #f0f2f1; }
 .led-element:nth-child(16) { order: 16; } /* 15 */
 .led-element:nth-child(17) { order: 17; } /* 16 */
 .led-element:nth-child(18) { order: 18; } /* 17 */
-.led-element:nth-child(19) { order: 19; } /* 18 */
 
 @media (max-width: 900px) {
   .led-elements {

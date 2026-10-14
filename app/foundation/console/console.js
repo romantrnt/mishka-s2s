@@ -1,19 +1,18 @@
 const $ = id => document.getElementById(id);
 const BUTTON_IDS = [1, 2, 3, 4, 5, 6, 7];
-const LIGHTING_ELEMENT_IDS = Array.from({ length: 19 }, (_, id) => id);
+const LIGHTING_ELEMENT_IDS = Array.from({ length: 18 }, (_, id) => id);
 const ELEMENT_PRESENTATION = {
-  0: { kind: 'fill', buttonId: 1, color: 'red' }, 8: { kind: 'digit', buttonId: 1, color: 'white' },
-  1: { kind: 'fill', buttonId: 2, color: 'orange' }, 9: { kind: 'digit', buttonId: 2, color: 'white' },
-  2: { kind: 'fill', buttonId: 3, color: 'yellow' }, 10: { kind: 'digit', buttonId: 3, color: 'white' },
-  3: { kind: 'fill', buttonId: 4, color: 'green' }, 11: { kind: 'digit', buttonId: 4, color: 'white' },
-  4: { kind: 'fill', buttonId: 5, color: 'cyan' }, 12: { kind: 'digit', buttonId: 5, color: 'white' },
-  5: { kind: 'fill', buttonId: 6, color: 'blue' }, 13: { kind: 'digit', buttonId: 6, color: 'white' },
-  6: { kind: 'fill', buttonId: 7, color: 'purple' }, 14: { kind: 'digit', buttonId: 7, color: 'white' },
-  7: { kind: 'reserved', color: 'unknown' },
-  15: { kind: 'symbol', buttonId: 6, symbol: 'bear', color: 'brown' },
-  16: { kind: 'symbol', buttonId: 7, symbol: 'weather', color: 'skyblue' },
-  17: { kind: 'compensation', buttonId: 6, symbol: 'bear', color: 'blue' },
-  18: { kind: 'compensation', buttonId: 7, symbol: 'weather', color: 'purple' },
+  0: { kind: 'fill', buttonId: 1, color: 'red' }, 7: { kind: 'digit', buttonId: 1, color: 'white' },
+  1: { kind: 'fill', buttonId: 2, color: 'orange' }, 8: { kind: 'digit', buttonId: 2, color: 'white' },
+  2: { kind: 'fill', buttonId: 3, color: 'yellow' }, 9: { kind: 'digit', buttonId: 3, color: 'white' },
+  3: { kind: 'fill', buttonId: 4, color: 'green' }, 10: { kind: 'digit', buttonId: 4, color: 'white' },
+  4: { kind: 'fill', buttonId: 5, color: 'cyan' }, 11: { kind: 'digit', buttonId: 5, color: 'white' },
+  5: { kind: 'fill', buttonId: 6, color: 'blue' }, 12: { kind: 'digit', buttonId: 6, color: 'white' },
+  6: { kind: 'fill', buttonId: 7, color: 'purple' }, 13: { kind: 'digit', buttonId: 7, color: 'white' },
+  14: { kind: 'symbol', buttonId: 6, symbol: 'bear', color: 'brown' },
+  15: { kind: 'symbol', buttonId: 7, symbol: 'weather', color: 'skyblue' },
+  16: { kind: 'compensation', buttonId: 6, symbol: 'bear', color: 'blue' },
+  17: { kind: 'compensation', buttonId: 7, symbol: 'weather', color: 'purple' },
 };
 const LED_COLORS = {
   off: { label: 'OFF', className: 'led-off', css: '#8f999a' },
@@ -681,7 +680,7 @@ function render(state) {
   const lightingResult = normalizeLightingState(state.lighting);
   const lighting = lightingResult.state;
   $('device-led').textContent = lightingResult.valid
-    ? '19 ELEMENTS / ' + Object.values(lighting).filter(Boolean).length + ' ON'
+    ? '18 ELEMENTS / ' + Object.values(lighting).filter(Boolean).length + ' ON'
     : 'INVALID LIGHTING SNAPSHOT: ' + lightingResult.issues.join('; ');
   if (!lightingResult.valid) showError(new Error(lightingResult.issues.join('; ')));
   else renderButtons(state, led, contract, lighting);
@@ -743,9 +742,9 @@ function renderButtons(state, led, contract, lighting) {
     const button = buttonRefs.get(id);
     if (!button) continue;
     const fillId = id - 1;
-    const digitId = 7 + id;
-    const symbolId = id === 6 ? 15 : id === 7 ? 16 : null;
-    const compensationId = id === 6 ? 17 : id === 7 ? 18 : null;
+    const digitId = 6 + id;
+    const symbolId = id === 6 ? 14 : id === 7 ? 15 : null;
+    const compensationId = id === 6 ? 16 : id === 7 ? 17 : null;
     const fillOn = lighting[fillId] === 1;
     const digitOn = lighting[digitId] === 1;
     const symbolOn = symbolId !== null && lighting[symbolId] === 1;

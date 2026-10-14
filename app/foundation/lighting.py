@@ -10,20 +10,18 @@ from dataclasses import dataclass, field
 from typing import Mapping, Protocol, Sequence
 
 
-LIGHTING_ELEMENT_IDS: tuple[int, ...] = tuple(range(19))
+LIGHTING_ELEMENT_IDS: tuple[int, ...] = tuple(range(18))
 
-# Physical channel names are flat. The product still has seven logical
-# buttons; channel 7 is reserved until the controller firmware documents its
-# eighth button channel.
+# Physical channel names are flat: 18 LED channels, IDs 0..17.
 BUTTON_FILL_ELEMENTS: Mapping[int, int] = {
     1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6,
 }
 BUTTON_DIGIT_ELEMENTS: Mapping[int, tuple[int, int]] = {
-    button_id: (fill_id, 7 + button_id)
+    button_id: (fill_id, 6 + button_id)
     for button_id, fill_id in BUTTON_FILL_ELEMENTS.items()
 }
-PICTOGRAM_ELEMENTS: Mapping[int, int] = {6: 15, 7: 16}
-COMPENSATION_ELEMENTS: Mapping[int, int] = {6: 17, 7: 18}
+PICTOGRAM_ELEMENTS: Mapping[int, int] = {6: 14, 7: 15}
+COMPENSATION_ELEMENTS: Mapping[int, int] = {6: 16, 7: 17}
 
 BUTTON_OUTPUT_ELEMENTS: Mapping[int, tuple[int, ...]] = {
     button_id: BUTTON_DIGIT_ELEMENTS[button_id]
