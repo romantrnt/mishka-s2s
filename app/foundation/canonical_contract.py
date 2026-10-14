@@ -315,6 +315,7 @@ class VoiceManifest:
         self.allow_development_assets = bool(allow_development_assets)
         self.document = self._load()
         self._validated_cache: list[dict[str, Any]] | None = None
+        self._validation_report_cache: dict[str, Any] | None = None
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -402,6 +403,8 @@ class VoiceManifest:
 
     def validation_report(self) -> dict[str, Any]:
         """Return deterministic content diagnostics for simulator/release review."""
+        if self._validation_report_cache is not None:
+            return dict(self._validation_report_cache)
         raw = [item for item in self.document.get("assets", []) if isinstance(item, dict)]
         errors, warnings, blockers = [], [], []
         ids = [str(item.get("phrase_id") or "") for item in raw]
@@ -528,7 +531,7 @@ class VoiceManifest:
         required_approved = int(self.document.get("required_approved_count", self.document.get("required_recorded_count", 106)))
         if approved < required_approved:
             blockers.append({"code": "approved_audio_below_required", "approved_count": approved, "required_count": required_approved})
-        return {
+        result = {
             "catalog_version": str(self.document.get("catalog_version") or self.document.get("contract") or self.CATALOG_VERSION),
             "validator_version": self.VALIDATOR_VERSION,
             "errors": errors, "warnings": warnings, "production_blockers": blockers,
@@ -541,6 +544,9 @@ class VoiceManifest:
                         "production_blocker_count": len(blockers)},
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
+
+        self._validation_report_cache = dict(result)
+        return result
 
     def diagnose(self, phrase_id: str, content_hash: str = "") -> dict[str, Any]:
         item = next((entry for entry in self.document.get("assets", [])

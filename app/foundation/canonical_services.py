@@ -198,6 +198,7 @@ class CanonicalContentCatalog:
         self.stories = FixedStoryManifest(self.root / "stories" / "fixed_manifest.json", self.root.parent)
         self.nodes = canonical_state_nodes()
         self.games = {str(item["game_id"]): dict(item) for item in GAME_CATALOG}
+        self._report_cache: dict[str, Any] | None = None
         self.scenario = load_canonical_scenario_document(
             self.root / "scenarios" / "canonical_product_v1.json"
         )
@@ -207,10 +208,12 @@ class CanonicalContentCatalog:
         return not self.voice.readiness()["ready"] or set(self.scenario.get("states", {})) != set(self.nodes)
 
     def report(self) -> dict[str, Any]:
+        if self._report_cache is not None:
+            return dict(self._report_cache)
         fixed = {story_id: bool(self.stories.get_verified(story_id)) for story_id in self.STORY_IDS}
         placeholder = bool(self.stories.get_development_placeholder()) if self.allow_development_assets else False
         effective_fixed = all(fixed.values()) or (self.allow_development_assets and placeholder)
-        return {
+        result = {
             "contract": self.scenario.get("contract"),
             "scenario_id": self.scenario.get("scenario_id"),
             "scenario_version": self.scenario.get("version"),
@@ -221,6 +224,8 @@ class CanonicalContentCatalog:
             "development_placeholder_available": placeholder,
             "ready": not self.has_errors and effective_fixed,
         }
+        self._report_cache = dict(result)
+        return result
 
     def get(self, scenario_id: str) -> dict[str, Any]:
         if str(scenario_id) != str(self.scenario.get("scenario_id")):
