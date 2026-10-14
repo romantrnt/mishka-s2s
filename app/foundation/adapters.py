@@ -20,33 +20,27 @@ class ProfileProviderError(RuntimeError):
     """The configured production profile store could not be queried."""
 
 
+class ExhibitionProfileProvider:
+    """Explicit no-profile boundary for the exhibition runtime."""
+    def resolve(self, tag_id):
+        return None
+
+    def readiness(self):
+        return {"ready": True, "provider": type(self).__name__,
+                "provider_state": "not_configured", "schema_state": "not_applicable",
+                "profile_availability": "not_applicable", "reason": "exhibition_profile_disabled"}
+
+
 class MockProfileProvider:
     def __init__(self):
         self.data={
-            "mock-child-001":{"child_id":"fixture-child-001", "display_name":"Fixture", "available_scenarios":["fixture_core"], "profile_type":"child"},
-            "mock-adult-dev-001":{"child_id":None, "display_name":"Developer", "available_scenarios":["dev_core"], "profile_type":"adult_dev", "dev_mode":True},
+            "mock-child-001":{"profile_ref":"mock-child-001", "child_id":"mock-child-001", "display_name":"Миша", "date_of_birth":"2021-01-01", "timezone":"Europe/Moscow", "profile_type":"child", "schedule":[{"time":"09:00", "title":"Занятие"}]},
         }
     def resolve(self, tag_id): return self.data.get(tag_id)
 
 class SQLiteProfileProvider:
     """SQLite profile provider with explicit schema and operational states."""
     REQUIRED_COLUMNS = {"tag_id", "payload"}
-    DEFAULT_PROFILES = (
-        ("test-child-001", json.dumps({
-            "child_id": "test-child-001",
-            "display_name": "Тестовый ребёнок",
-            "available_scenarios": ["fixture_core"],
-            "profile_type": "child",
-        }, ensure_ascii=False)),
-        ("test-adult-dev-001", json.dumps({
-            "child_id": None,
-            "display_name": "Developer",
-            "available_scenarios": ["dev_core"],
-            "profile_type": "adult_dev",
-            "dev_mode": True,
-        }, ensure_ascii=False)),
-    )
-
     def __init__(self, path: str, *, initialize_schema: bool = True):
         if not path:
             raise ValueError("profile database path is required")
@@ -59,9 +53,9 @@ class SQLiteProfileProvider:
             self.db = sqlite3.connect(path, check_same_thread=False)
             if initialize_schema:
                 self.db.execute("CREATE TABLE IF NOT EXISTS profiles (tag_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
-                has_profiles = self.db.execute("SELECT 1 FROM profiles LIMIT 1").fetchone() is not None
-                if not has_profiles:
-                    self.db.executemany("INSERT OR IGNORE INTO profiles(tag_id, payload) VALUES (?, ?)", self.DEFAULT_PROFILES)
+                # Production profile storage starts empty unless the care
+                # system explicitly provisions records. Never seed a child or
+                # demo identity during application startup.
                 self.db.commit()
         except (OSError, sqlite3.Error) as exc:
             self.last_error = {"reason": "database_unreadable", "error_class": type(exc).__name__}
@@ -106,7 +100,10 @@ class SQLiteProfileProvider:
             self.db.execute("SELECT tag_id, payload FROM profiles LIMIT 1").fetchone()
             count = int(self.db.execute("SELECT COUNT(*) FROM profiles").fetchone()[0])
             return {"ready": True, "provider": type(self).__name__, "provider_state": "operational", "schema_state": "valid", "profile_availability": "with_profiles" if count else "empty", "reason": None if count else "operational_empty", "details": {"profile_count": count}}
-        except sqlite3.Error as exc:
+        except Exception as exc:
+            # SQLite connections are shared by read-only readiness probes and
+            # the event writer. Any transient driver failure is a bounded
+            # health result, never an ASGI traceback.
             self.last_error = {"reason": "provider_unavailable", "error_class": type(exc).__name__}
             return {"ready": False, **base, "reason": "provider_unavailable", "details": dict(self.last_error)}
 
@@ -149,6 +146,26 @@ class RecordingAudio:
             self.commands.append({"response_id":response_id,"resolved_text":text,"content_kind":"action","token":token})
     def cancel(self, token): self.token=token; self.commands.clear()
 class RecordingLED:
-    def __init__(self): self.commands=[]
-    def pattern(self, pattern_id, color, duration_ms, token): self.commands.append({"pattern":pattern_id,"color":color,"duration_ms":duration_ms,"token":token})
-    def pattern_map(self, pattern_id, colors, duration_ms, token): self.commands.append({"pattern":pattern_id,"colors":colors,"duration_ms":duration_ms,"token":token})
+    def __init__(self):
+        from .lighting import FakeLightingOutput
+        self.output = FakeLightingOutput()
+        self.commands = []
+
+    def set_element(self, element_id, state, transition_ms=0):
+        self.output.set_element(element_id, state, transition_ms)
+
+    def set_elements(self, commands):
+        self.output.set_elements(commands)
+
+    def clear_all(self, transition_ms=0):
+        self.output.clear_all(transition_ms)
+
+    def readiness_wave(self, total_duration_ms=1200):
+        from .lighting import LightingController
+        return LightingController(self.output).readiness_wave(total_duration_ms)
+
+    def pattern(self, pattern_id, color, duration_ms, token):
+        self.commands.append({"pattern":pattern_id,"color":color,"duration_ms":duration_ms,"token":token})
+
+    def pattern_map(self, pattern_id, colors, duration_ms, token):
+        self.commands.append({"pattern":pattern_id,"colors":colors,"duration_ms":duration_ms,"token":token})

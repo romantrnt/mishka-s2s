@@ -1,4 +1,5 @@
 import json
+import hashlib
 import logging
 import time
 from pathlib import Path
@@ -29,13 +30,16 @@ class IncidentLogger:
         text: str,
     ) -> None:
 
+        normalized = text if isinstance(text, str) else str(text)
         entry = {
             "time": time.time(),
             "session_id": session_id,
             "direction": direction,  # "input" или "output"
             "action": action,        # "block", "log_only" или "fallback"
             "category": category,
-            "text": text,
+            # Persistent incident logs retain only bounded metadata.
+            "text_length": len(normalized),
+            "text_sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
         }
 
         logger.warning("safety incident direction=%s action=%s category=%s", direction, action, category)

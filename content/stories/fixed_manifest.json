@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "status": "blocked_pending_owner_assets_and_rights",
+  "stories": {
+    "fixed_aibolit_v1": {
+      "display_title": "Айболит",
+      "rights_status": "blocked",
+      "version": 1,
+      "availability": "blocked_rights",
+      "content_status": "missing_owner_approved_exact_text",
+      "audio_status": "missing",
+      "parts": [],
+      "eligible_age_bands": [
+        "1-3",
+        "3-5",
+        "5-7"
+      ],
+      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+    },
+    "fixed_squirrel_v1": {
+      "display_title": "Про Белочку",
+      "rights_status": "blocked",
+      "version": 1,
+      "availability": "blocked_rights",
+      "content_status": "missing_owner_approved_exact_text",
+      "audio_status": "missing",
+      "parts": [],
+      "eligible_age_bands": [
+        "1-3",
+        "3-5",
+        "5-7"
+      ],
+      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+    },
+    "fixed_lukomorye_v1": {
+      "display_title": "У Лукоморья",
+      "rights_status": "blocked",
+      "version": 1,
+      "availability": "blocked_rights",
+      "content_status": "missing_owner_approved_exact_text",
+      "audio_status": "missing",
+      "parts": [],
+      "eligible_age_bands": [
+        "1-3",
+        "3-5",
+        "5-7"
+      ],
+      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+    },
+    "fixed_soft_paws_star_v1": {
+      "display_title": "Кролик по имени Мягкие Лапки и про Звезду",
+      "rights_status": "blocked",
+      "version": 1,
+      "availability": "blocked_rights",
+      "content_status": "missing_owner_approved_exact_text",
+      "audio_status": "missing",
+      "parts": [],
+      "eligible_age_bands": [
+        "1-3",
+        "3-5",
+        "5-7"
+      ],
+      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+    },
+    "fixed_neznayka_v1": {
+      "display_title": "Про Незнайку",
+      "rights_status": "blocked",
+      "version": 1,
+      "availability": "blocked_rights",
+      "content_status": "missing_owner_approved_exact_text",
+      "audio_status": "missing",
+      "parts": [],
+      "eligible_age_bands": [
+        "1-3",
+        "3-5",
+        "5-7"
+      ],
+      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+    }
+  },
+  "development_placeholder": {
+    "audio_file": "content/audio/placeholders/fixed_story_unavailable.wav",
+    "audio_sha256": "64fcca8cb36015c21d41e58ff2e22b97ea7c329276cc621a08ce489fd36b047c",
+    "kind": "silence_no_content_rights",
+    "development_only": true
+  },
+  "availability_policy": "fixed_story_structure_is_present_but_unavailable_until_exact_text_audio_and_rights_are_verified"
+}

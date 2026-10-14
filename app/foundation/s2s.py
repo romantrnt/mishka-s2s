@@ -300,9 +300,9 @@ class PipelineMetrics:
         self.pipeline = {
             "label": "Silero v5.5 + RVC" if tts_provider == "silero" and voice_conversion == "rvc_v2" else f"{tts_provider} + {voice_conversion}",
             "tts_provider": tts_provider,
-            "tts_model": getattr(settings, "silero_model", "v5_5_ru") if tts_provider == "silero" else "fixture",
-            "tts_language": getattr(settings, "silero_language", "ru") if tts_provider == "silero" else "fixture",
-            "tts_speaker": getattr(settings, "silero_speaker", "kseniya") if tts_provider == "silero" else "fixture",
+            "tts_model": getattr(settings, "silero_model", "v5_5_ru") if tts_provider == "silero" else "mock",
+            "tts_language": getattr(settings, "silero_language", "ru") if tts_provider == "silero" else "mock",
+            "tts_speaker": getattr(settings, "silero_speaker", "aidar") if tts_provider == "silero" else "mock",
             "tts_sample_rate": getattr(settings, "silero_sample_rate", 48000) if tts_provider == "silero" else 24000,
             "voice_conversion": voice_conversion,
             "stream_preroll_ms": getattr(settings, "silero_leading_silence_ms", 150) if tts_provider == "silero" else 0,
@@ -479,23 +479,25 @@ class PipelineMetrics:
 
 @dataclass(frozen=True)
 class ProfileContext:
-    """The deliberately small subset of a profile that may reach the model."""
-
+    """Bounded, age-aware profile context allowed to reach the model."""
     display_name: str | None = None
     age: int | None = None
+    age_band: str = "3-5"
+    age_source: str = "anonymous_default"
+    language: str = "ru-RU"
+    accessibility: tuple[str, ...] = ()
 
     @classmethod
     def from_profile(cls, profile: dict[str, Any] | None) -> "ProfileContext":
         profile = profile or {}
+        from .age_policy import age_details
+        details = age_details(profile)
         age = profile.get("age")
-        return cls(
-            display_name=str(profile["display_name"])[:64] if profile.get("display_name") else None,
-            age=int(age) if isinstance(age, int) and 0 <= age <= 18 else None,
-        )
+        flags = tuple(str(item)[:40] for key in ("motor_flags", "sensory_flags", "communication_flags") for item in (profile.get(key) or [])[:4])
+        return cls(display_name=str(profile["display_name"])[:64] if profile.get("display_name") else None, age=int(age) if isinstance(age, int) and 0 <= age <= 18 else details.get("age_years"), age_band=str(details.get("age_band") or "3-5"), age_source=str(details.get("age_band_source") or "anonymous_default"), language=str(profile.get("language") or "ru-RU"), accessibility=flags)
 
     def prompt_fields(self) -> dict[str, Any]:
-        return {key: value for key, value in (("display_name", self.display_name), ("age", self.age)) if value is not None}
-
+        return {key: value for key, value in (("display_name", self.display_name), ("age", self.age), ("age_band", self.age_band), ("age_source", self.age_source), ("language", self.language), ("accessibility", self.accessibility)) if value is not None}
 
 @dataclass(frozen=True)
 class ScenarioContext:
@@ -516,6 +518,7 @@ class ConversationContext:
     max_duration_seconds: int
     context_window: int
     profile: ProfileContext = field(default_factory=ProfileContext)
+    system_prompt: str = ""
     history: list[tuple[str, str]] = field(default_factory=list)
     started_at: float = field(default_factory=time.monotonic)
     turns: int = 0
@@ -653,7 +656,7 @@ class AudioIngressPipeline:
 
 
 class MockSpeechRecognizer:
-    def __init__(self, text="fixture recognized speech", confidence=.95): self.text=text; self.confidence=confidence
+    def __init__(self, text="mock recognized speech", confidence=.95): self.text=text; self.confidence=confidence
     async def transcribe(self, audio, cancelled):
         started=time.perf_counter(); await asyncio.sleep(0)
         if cancelled(): raise asyncio.CancelledError
@@ -764,7 +767,6 @@ class TopicPolicy:
         "stories": re.compile(r"сказ|истори", re.I),
         "feelings": re.compile(r"чувств|настро|рад|груст|весел", re.I),
         "questions": re.compile(r"почему|зачем|как |что |можно|расскажи|подскажи", re.I),
-        "fixture_neutral": re.compile(r"fixture|тест", re.I),
     }
 
     def check(self, text: str, allowed: tuple[str, ...], forbidden: tuple[str, ...]) -> bool:
@@ -1131,7 +1133,7 @@ class MockTTSProvider:
     character makes the browser play a sub-millisecond click and immediately
     enter the waiting state, which hides sequencing bugs in the audio path.
     This waveform is intentionally synthetic (production uses Silero); it is
-    only a stable, audible timing/queue fixture.
+    only a stable, audible development timing signal.
     """
 
     SAMPLE_RATE = 24_000
@@ -1160,7 +1162,7 @@ class MockTTSProvider:
             attack = min(1.0, progress / 0.025)
             release = min(1.0, (1.0 - progress) / 0.08)
             envelope = 0.16 * attack * release
-            # Two harmonics make the fixture clearly audible without pretending
+            # Two harmonics make the mock clearly audible without pretending
             # to be a real voice recording.
             pitch = 185.0 + 24.0 * math.sin(2.0 * math.pi * 2.1 * t)
             value = envelope * (math.sin(2.0 * math.pi * pitch * t) + 0.28 * math.sin(2.0 * math.pi * 2.0 * pitch * t))
@@ -1215,7 +1217,7 @@ class SileroTTSProvider:
             )
             return await self._await_native(native_future, token, cancelled)
         native_future = self._worker.submit(
-            token, cancelled, lambda: self.engine.synthesize_blocking(text)
+            token, cancelled, lambda: self._synthesize_with_preroll(text)
         )
         audio = await self._await_native(native_future, token, cancelled)
         if first_chunk:
@@ -1974,7 +1976,7 @@ class LocalS2SPipeline:
         self.pending_tasks: dict[str, asyncio.Task[AudioTurnResult]] = {}
         self.pending_started_at: dict[str, float] = {}
 
-    async def _recognize_turn(self, session_id: str, audio: AudioChunk, context: ConversationContext, generation: int, status: str, barge_in: bool) -> AudioTurnResult:
+    async def _recognize_turn(self, session_id: str, audio: AudioChunk, context: ConversationContext, generation: int, status: str, barge_in: bool, turn_handler=None) -> AudioTurnResult:
         """Run the expensive part after VAD has released the ingress loop."""
         try:
             started=time.perf_counter()
@@ -1996,7 +1998,11 @@ class LocalS2SPipeline:
             self.conversation.metrics.finish_voice_turn(session_id, "stt_low_confidence", generation_id=generation)
             return AudioTurnResult("stt_unknown", stt=result, turn=TurnResult((), (), True, "stt_low_confidence"), barge_in=barge_in)
         self.conversation.metrics.event("input_completed", source="audio", stt_ms=round(result.latency_ms, 2))
-        return AudioTurnResult(status, stt=result, turn=await self.conversation.run_text_turn(result.text, context, trace_generation_id=generation), barge_in=barge_in)
+        if turn_handler is None:
+            turn = await self.conversation.run_text_turn(result.text, context, trace_generation_id=generation)
+        else:
+            turn = await turn_handler(result.text, generation)
+        return AudioTurnResult(status, stt=result, turn=turn, barge_in=barge_in)
 
     def _remember_pending(self, session_id: str, task: asyncio.Task[AudioTurnResult]) -> None:
         self.pending_tasks[session_id] = task
@@ -2009,7 +2015,7 @@ class LocalS2SPipeline:
 
         task.add_done_callback(forget)
 
-    async def feed_audio(self, session_id: str, samples: tuple[float, ...], context: ConversationContext, *, wait_for_turn: bool = True) -> AudioTurnResult:
+    async def feed_audio(self, session_id: str, samples: tuple[float, ...], context: ConversationContext, *, wait_for_turn: bool = True, turn_handler=None) -> AudioTurnResult:
         generation = self.generations.get(session_id, 0)
         self.conversation.metrics.begin_voice_turn(session_id, generation_id=generation)
         self.conversation.metrics.mark_voice(session_id, "ingress", generation_id=generation)
@@ -2049,7 +2055,7 @@ class LocalS2SPipeline:
         # ``input_completed`` (which is emitted only after recognition).
         self.conversation.metrics.event("speech_end", source="audio", samples=len(audio.samples))
         self.conversation.metrics.mark_voice(session_id, "vad_decision", generation_id=generation)
-        task = asyncio.create_task(self._recognize_turn(session_id, audio, context, generation, status, barge_in), name=f"s2s-turn-{session_id}")
+        task = asyncio.create_task(self._recognize_turn(session_id, audio, context, generation, status, barge_in, turn_handler), name=f"s2s-turn-{session_id}")
         self._remember_pending(session_id, task)
         if not wait_for_turn:
             return AudioTurnResult(status, barge_in=barge_in, pending=task)
@@ -2123,29 +2129,6 @@ class BoundedConversationEngine:
     def is_active(self, session_id: str) -> bool:
         task = self.active_tasks.get(session_id)
         return bool(task and not task.done())
-
-    @staticmethod
-    def _quick_response(text: str, context: ConversationContext) -> str | None:
-        """Instant allowlisted replies for the common child-demo turns.
-
-        These phrases do not need a model round-trip. They still go through
-        the normal parser, Silero/RVC queue and browser playback, so
-        the fast path exercises the same audio contract with predictable TTFA.
-        Adult dev-mode deliberately bypasses this table.
-        """
-        if context.scenario_id != "fixture_core":
-            return None
-        key = text.casefold().strip().rstrip("?!.,")
-        replies = {
-            "привет": "Привет! Я рядом. Как у тебя настроение?",
-            "как настроение": "У меня всё спокойно. А у тебя как настроение?",
-            "как настроение сегодня": "У меня всё спокойно. А у тебя как настроение?",
-            "мне грустно": "Жаль это слышать. Можно поговорить со взрослым, которому ты доверяешь.",
-            "мне немного грустно": "Жаль это слышать. Можно поговорить со взрослым, которому ты доверяешь.",
-            "что ты умеешь": "Я могу поговорить, сыграть в игру или рассказать сказку.",
-            "расскажи сказку": "Выбери сказку кнопкой от одного до пяти.",
-        }
-        return replies.get(key)
 
     async def speak_text(self, session_id: str, text: str) -> TurnResult:
         """Synthesize trusted application text through the normal audio path."""
@@ -2236,17 +2219,14 @@ class BoundedConversationEngine:
         topic_instruction = ("Open developer dialogue: accept any topic unless it violates the safety rules. "
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
-        policy=(topic_instruction+"Forbidden: "+", ".join(context.forbidden_topics)+". "
-                "Start the answer immediately. Output only complete <say>...</say> tags or allowlisted actions; every <say> must have a closing </say>. "
-                "Never output analysis, markdown, or plain text outside these tags. Use one or two short spoken sentences, at most 45 words total, and stop.")
+        policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + '. Start the answer immediately. Output only complete <say>...</say> tags or allowlisted actions; every <say> must have a closing </say>. Never output analysis, markdown, or plain text outside these tags. Use one or two short spoken sentences, at most 45 words total, and stop.'
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
         messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}"},{"role":"user","content":text}]
         llm_started=time.perf_counter(); llm_completed=False
-        quick = self._quick_response(text, context) if self.allow_quick_replies else None
-        provider = MockLLMProvider([f"<say>{quick}</say>"]) if quick else self.llm
-        if quick:
-            self.metrics.event("quick_reply", chars=len(quick))
+        # Canonical runtime owns intent routing; no demo quick-reply
+        # table is allowed to bypass the bounded provider contract.
+        provider = self.llm
         try:
             chunks=[]; actions=[]; spoken_chars=0; raw_spoken=""
             chunker=SentenceChunker(self.config.max_chunk_chars, self.config.first_chunk_chars)

@@ -25,7 +25,7 @@ def test_silero_package_fallback_keeps_model_when_to_returns_none(tmp_path):
 
         def apply_tts(self, **kwargs):
             import torch
-            assert kwargs["speaker"] == "kseniya"
+            assert kwargs["speaker"] == "aidar"
             return torch.tensor([0.1, -0.1], dtype=torch.float32)
 
     engine = SileroTTSEngine(cache_path=str(tmp_path / "silero.pt"), device="cpu")
@@ -34,7 +34,7 @@ def test_silero_package_fallback_keeps_model_when_to_returns_none(tmp_path):
     samples, rate = engine.synthesize_blocking("Привет")
     assert rate == 48000
     assert len(samples) == 2
-    assert samples == (0.10000000149011612, -0.10000000149011612)
+    assert samples == (0.92, -0.92)
     assert engine.readiness()["load_source"] == "package_cache"
 
 
@@ -49,7 +49,8 @@ def test_silero_provider_has_bounded_worker_and_cancellation_contract():
     provider = SileroTTSProvider(FakeEngine())
     audio = asyncio.run(provider.synthesize("Привет", 1, lambda: False))
     assert audio.sample_rate == 48000
-    assert len(audio.samples) == 2
+    assert len(audio.samples) == 7202
+    assert audio.samples[:7200] == (0.0,) * 7200
     snapshot = provider.native_worker_snapshot()
     assert snapshot["active_jobs"] == 0
     assert snapshot["queued_jobs"] == 0

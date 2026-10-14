@@ -13,6 +13,8 @@ import tty
 import zlib
 from dataclasses import dataclass
 
+from .lighting import FakeLightingOutput, LightingCommand, LightingOutput, LightingState
+
 
 @dataclass(frozen=True)
 class HardwareFrame:

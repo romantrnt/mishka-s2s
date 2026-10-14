@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextlib
 import inspect
 import logging
@@ -11,13 +12,43 @@ from typing import Any, Callable
 from weakref import WeakSet
 
 from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, ProfileProvider, ScenarioRepository, SessionRecord, SessionRepository
-from .led_contract import BUTTON_LED_COLORS, fixed_button_colors
+from .lighting import LIGHTING_ELEMENT_IDS, EXHIBITION_DIGIT_WAVE_GROUPS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .adapters import ProfileProviderError
-from ..scenarios.langgraph_runtime import LangGraphRuntime
+from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseResolver, SafetyClassifier, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
 from .config import settings_from_compat_env
+from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest, validate_generated_story
+from .system_prompt import build_system_prompt
+from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
 
 logger = logging.getLogger("mishka.application")
+
+
+AUDIO_ASSET_STATUSES = frozenset({
+    "absent", "placeholder", "recorded_pending_approval", "approved",
+    "queued", "playing", "finished", "cancelled", "failed",
+})
+
+
+def _set_audio_effect_status(effect: dict[str, Any], *, asset_status: str,
+                             queued: bool, resolution: str | None = None) -> None:
+    """Attach honest transport-independent audio status to an effect."""
+    normalized = str(asset_status or "absent")
+    if normalized not in AUDIO_ASSET_STATUSES:
+        normalized = "absent"
+    effect["asset_status"] = normalized
+    effect["audio_status"] = "queued" if queued else ("unavailable" if normalized in {"absent", "missing"} else "failed")
+    effect["audio_requested"] = True
+    effect["audio_resolved"] = normalized not in {"absent", "missing"}
+    effect["audio_queued"] = bool(queued)
+    effect["audio_started"] = False
+    effect["audio_played"] = False
+    effect["audio_cancelled"] = False
+    effect["audio_failed"] = not queued and normalized not in {"absent", "missing"}
+    effect["audio_unavailable"] = not queued and normalized in {"absent", "missing"}
+    effect["played"] = False
+    if resolution:
+        effect["resolution"] = resolution
 
 
 class ScenarioApplication:
@@ -29,9 +60,10 @@ class ScenarioApplication:
         "audio_too_long",
     })
 
-    def __init__(self, sessions: SessionRepository, scenarios: ScenarioRepository, profiles: ProfileProvider, classifier: IntentClassifier, audio: AudioOutput, led: LEDController, publisher: EventPublisher, now=time.time, installation_id="default", threshold=0.6, bounded_s2s=None, history=None, max_session_seconds=1200, idle_timeout_seconds: float | None = None, display: DisplayController | None = None, schedule_weather: Any = None, allow_quick_replies: bool | None = None, settings: Any = None):
+    def __init__(self, sessions: SessionRepository, scenarios: ScenarioRepository, profiles: ProfileProvider, classifier: IntentClassifier, audio: AudioOutput, led: LEDController, publisher: EventPublisher, now=time.time, installation_id="default", threshold=0.6, bounded_s2s=None, history=None, max_session_seconds=1200, idle_timeout_seconds: float | None = None, display: DisplayController | None = None, schedule_weather: Any = None, allow_quick_replies: bool | None = None, settings: Any = None, adult_handoff: Any = None, monotonic_now=time.monotonic, background_scheduler: bool = True):
         self.sessions, self.scenarios, self.profiles, self.classifier, self.audio, self.led, self.publisher = sessions, scenarios, profiles, classifier, audio, led, publisher
-        self.now, self.installation_id, self.threshold = now, installation_id, threshold
+        self.now, self.monotonic_now, self.installation_id, self.threshold = now, monotonic_now, installation_id, threshold
+        self.background_scheduler = bool(background_scheduler)
         self.settings = settings if settings is not None else settings_from_compat_env()
         settings = self.settings
         profile = str(getattr(settings, "profile", None) or "mock").strip().lower()
@@ -71,8 +103,24 @@ class ScenarioApplication:
         self._last_audio_cleanup: dict[str, Any] | None = None
         self.audio_cleanup_timeout_seconds = max(0.01, float(getattr(settings, "audio_cleanup_timeout_s", 1.0)))
         self._session_epochs: dict[str, int] = {}
+        # One active immutable playback lease per session. Adapter callbacks
+        # must match it before entering the canonical state machine.
+        self._active_audio: dict[str, dict[str, Any]] = {}
+        self._audio_timeout_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._audio_timeout_sequences: dict[str, int] = {}
+        self._welcome_timers: dict[str, asyncio.Task[Any]] = {}
+        self._welcome_timer_sequences: dict[str, int] = {}
+        self._menu_tutorial_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._menu_tutorial_sequences: dict[str, int] = {}
         self._last_audio_ack_at: dict[str, float] = {}
         self.runtime_status: dict[str, Any] = {}
+        self.last_canonical_effects: list[dict[str, Any]] = []
+        self.last_canonical_state: dict[str, Any] = {}
+        self.last_canonical_event: dict[str, Any] = {}
+        self.canonical_trace: deque[dict[str, Any]] = deque(maxlen=200)
+        self.canonical_diagnostics: deque[dict[str, Any]] = deque(maxlen=100)
+        self.audio_runtime_diagnostics: deque[dict[str, Any]] = deque(maxlen=100)
+        self.state_update_hook: Any = None
         self.runtime_manager: Any = None
         self.metrics: Any = None
         self.watchdog_interval_seconds = float(getattr(settings, "watchdog_interval_s", 5.0))
@@ -82,25 +130,142 @@ class ScenarioApplication:
         self._watchdog_lifecycle: Any = None
         self._watchdog_runtime_manager: Any = None
         self._watchdog_cooldown_until: dict[tuple[str, str | None], float] = {}
+        self.canonical_runtime = None
+        self.allow_development_placeholders = profile in {"mock", "local_cpu", "local_gpu"} or str(getattr(settings, "hardware_mode", "physical")).lower() != "physical"
+        if str(getattr(settings, "scenario_id", "")).lower() == "canonical_product":
+            root = str(getattr(settings, "content_root", "content"))
+            self.canonical_runtime = CanonicalRuntime(now=self.now, monotonic_now=self.monotonic_now, stories=FixedStoryManifest(f"{root}/stories/fixed_manifest.json", "."), allow_development_placeholders=self.allow_development_placeholders, exhibition_mode=(str(getattr(settings, "runtime_mode", "exhibition")).lower() == "exhibition"))
         self.history_repository: Any = history
-        scenario_documents: dict[str, dict[str, Any]] = {}
-        for scenario_id in ("fixture_core", "dev_core"):
-            try:
-                document = scenarios.get(scenario_id)
-            except Exception as exc:
-                if profile != "mock":
-                    raise RuntimeError(f"production scenario document unavailable: {scenario_id}") from exc
-                document = None
-            if isinstance(document, dict):
-                scenario_documents[scenario_id] = document
-        self.langgraph = LangGraphRuntime(
-            scenario_documents,
-            enabled=str(getattr(settings, "scenario_engine", "legacy")).lower() not in {"legacy", "off", "0"},
-            strict=(
-                profile != "mock"
-                and bool(getattr(settings, "langgraph_strict", True))
-            ),
+        # Canonical scenario documents and LangGraph are the single source of
+        self.voice_manifest = RecordedPhraseResolver(f"{getattr(settings, 'content_root', 'content')}/audio/voice_manifest.json", allow_development_assets=self.allow_development_placeholders)
+        self.safety_classifier = SafetyClassifier()
+        self.adult_handoff = adult_handoff if adult_handoff is not None else (SimulatedAdultHandoff() if self.allow_development_placeholders else None)
+        self._canonical_profiles: dict[str, dict[str, Any] | None] = {}
+        self._canonical_schedule_refs: dict[str, str | None] = {}
+        self.transition_authorizer = CanonicalLangGraphAuthorizer() if self.canonical_runtime is not None else None
+
+    def record_audio_diagnostic(self, kind: str, **fields: Any) -> dict[str, Any]:
+        item = {"kind": str(kind), "at_monotonic": self.monotonic_now(), **fields}
+        self.audio_runtime_diagnostics.append(item)
+        self.canonical_diagnostics.append(item)
+        self.runtime_status["audio_last_diagnostic"] = dict(item)
+        return item
+
+    def _cancel_audio_timeout(self, session_id: str) -> None:
+        task = self._audio_timeout_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _audio_playback_watchdog(self, session_id: str, content_id: str, token: int,
+                                       playback_lease: str, generation: int) -> None:
+        timeout_s = max(0.01, float(getattr(self.settings, "playback_timeout_s", 60.0)))
+        try:
+            await asyncio.sleep(timeout_s)
+            lease = self._active_audio.get(session_id)
+            if not lease or lease.get("content_id") != content_id or lease.get("playback_lease") != playback_lease:
+                return
+            self.record_audio_diagnostic("audio_playback_timeout", session_id=session_id,
+                                        content_id=content_id, generation=generation,
+                                        playback_lease=playback_lease, timeout_s=timeout_s)
+            sequence = self._audio_timeout_sequences.get(session_id, 0) + 1
+            self._audio_timeout_sequences[session_id] = sequence
+            current = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
+            state_version = current.state_version if current is not None else 0
+            await self.receive_async(Event(
+                "AudioFailed", session_id, sequence, self.now(), "audio_watchdog",
+                {"response_id": content_id, "token": token, "playback_lease": playback_lease,
+                 "generation": generation, "error_code": "audio_playback_timeout",
+                 "state_version": state_version},
+                "audio-timeout:" + session_id + ":" + content_id + ":" + str(generation),
+                self.monotonic_now(),
+            ))
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._audio_timeout_tasks.get(session_id) is asyncio.current_task():
+                self._audio_timeout_tasks.pop(session_id, None)
+
+    def _register_audio_lease(self, session_id: str, content_id: str, token: int, playback_id: str,
+                              playback_lease: str | None = None) -> None:
+        self._cancel_audio_timeout(session_id)
+        generation = int(self._session_epochs.get(session_id, 0))
+        lease_value = str(playback_lease or "")
+        self._active_audio[session_id] = {
+            "content_id": str(content_id), "token": int(token), "playback_id": str(playback_id),
+            "playback_lease": lease_value, "generation": generation, "status": "queued",
+        }
+        self._audio_timeout_tasks[session_id] = asyncio.create_task(
+            self._audio_playback_watchdog(session_id, str(content_id), int(token), lease_value, generation),
+            name="mishka-audio-timeout-" + session_id,
         )
+
+    def _audio_callback_is_current(self, event: Event) -> bool:
+        lease = self._active_audio.get(event.session_id)
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        response_id = str(payload.get("response_id") or payload.get("content_id") or "")
+        token = payload.get("token")
+        generation = payload.get("generation")
+        if lease is None:
+            return False
+        try:
+            token_matches = int(token) == int(lease["token"])
+        except (TypeError, ValueError, OverflowError):
+            token_matches = False
+        try:
+            generation_matches = int(generation) == int(lease["generation"])
+        except (TypeError, ValueError, OverflowError):
+            generation_matches = False
+        current = (
+            response_id == lease["content_id"] and token_matches and generation_matches
+            and int(lease.get("generation", -1)) == int(self._session_epochs.get(event.session_id, 0))
+            and payload.get("playback_lease") == lease.get("playback_lease")
+        )
+        if not current:
+            self._record_audio_completion_diagnostic(
+                "stale_audio_callback", session_id=event.session_id,
+                correlation_id=event.correlation_id, generation=lease.get("generation"),
+                operation=event.event_type, content_id=response_id or None,
+                token=token, reason="playback_lease_mismatch",
+            )
+        return current
+
+    def _invalidate_audio_lease(self, session_id: str, status: str = "cancelled") -> None:
+        self._cancel_audio_timeout(session_id)
+        lease = self._active_audio.pop(session_id, None)
+        if lease is not None:
+            self.record_audio_diagnostic(
+                "audio_lease_invalidated", session_id=session_id,
+                content_id=lease.get("content_id"), generation=lease.get("generation"),
+                reason=status,
+            )
+
+    def _mark_audio_effect_lifecycle(self, response_id: str, status: str, *, reason: str | None = None) -> None:
+        """Project actual adapter lifecycle back to the canonical effect."""
+        allowed = {"queued", "playing", "finished", "cancelled", "failed", "unavailable"}
+        if status not in allowed:
+            return
+        for effect in self.last_canonical_effects:
+            kind = str(effect.get("type") or "")
+            matches = (
+                str(effect.get("phrase_id") or "") == str(response_id)
+                or str(effect.get("story_id") or "") == str(response_id)
+                or str(effect.get("effect_id") or "") == str(response_id)
+            )
+            if not matches and kind not in {"play_fixed_story", "resume_fixed_story", "play_placeholder", "speak", "support_question", "support_response"}:
+                continue
+            if not matches and kind in {"play_fixed_story", "resume_fixed_story", "play_placeholder"}:
+                matches = str(effect.get("story_id") or "") == str(response_id).split(":")[-1]
+            if not matches:
+                continue
+            effect["audio_status"] = status
+            effect["audio_started"] = status in {"playing", "finished", "cancelled"}
+            effect["audio_played"] = status == "finished"
+            effect["audio_cancelled"] = status == "cancelled"
+            effect["audio_failed"] = status == "failed"
+            effect["audio_unavailable"] = status == "unavailable"
+            if reason:
+                effect["audio_failure_reason"] = str(reason)[:80]
+            break
 
     def _iter_sessions(self) -> tuple[SessionRecord, ...]:
         iterator = getattr(self.sessions, "iter_sessions", None)
@@ -124,14 +289,20 @@ class ScenarioApplication:
 
     async def _cleanup_session_resources(self, session_id: str) -> dict[str, Any]:
         """Idempotently release all application-owned resources for a session."""
+        self._cancel_welcome_timer(session_id)
+        self._welcome_timer_sequences.pop(session_id, None)
+        self._cancel_menu_tutorial(session_id)
+        self._menu_tutorial_sequences.pop(session_id, None)
         completion_cleanup = await self._cancel_audio_completions(session_id, operation="session_cleanup")
+        self._invalidate_audio_lease(session_id)
         if self.s2s_audio is not None:
             await self.s2s_audio.cancel_session(session_id)
         elif self.bounded_s2s is not None:
             await self.bounded_s2s.cancel_session(session_id)
         self.conversation_contexts.pop(session_id, None)
+        self._canonical_profiles.pop(session_id, None)
+        self._canonical_schedule_refs.pop(session_id, None)
         self._last_audio_ack_at.pop(session_id, None)
-        self._session_epochs.pop(session_id, None)
         snapshot = self.resource_snapshot()
         snapshot["session_id"] = session_id
         snapshot["audio_completion_cleanup"] = completion_cleanup
@@ -224,7 +395,7 @@ class ScenarioApplication:
 
     async def watchdog_check_once(self) -> dict[str, Any]:
         """Run one bounded check and safely clean confirmed stale ownership."""
-        now = time.monotonic()
+        now = self.monotonic_now()
         lifecycle = self._watchdog_lifecycle
         engine = self._watchdog_engine()
         pipeline = getattr(self._watchdog_runtime_manager or self.runtime_manager, "audio_pipeline", None) or self.s2s_audio
@@ -307,7 +478,7 @@ class ScenarioApplication:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                now = time.monotonic()
+                now = self.monotonic_now()
                 state = self._watchdog_lifecycle.snapshot() if self._watchdog_lifecycle is not None else {}
                 self._watchdog_record({"at_monotonic": now, "condition": "watchdog_loop_exception",
                                        "session_id": None, "generation": state.get("generation"),
@@ -328,227 +499,637 @@ class ScenarioApplication:
                      "audio_completion_sessions": len(self._audio_completions),
                      "audio_completion_diagnostics": list(self._audio_completion_diagnostics),
                      "audio_hook_counters": dict(self._audio_hook_counters),
-                     "last_audio_cleanup": self._last_audio_cleanup})
+                     "last_audio_cleanup": self._last_audio_cleanup,
+                     "audio_runtime_diagnostics": list(self.audio_runtime_diagnostics)})
         return base
 
-    def _fixture_button_targets(self) -> dict[int, str]:
-        """Read the physical button contract from the canonical fixture content."""
-        scenario = self.scenarios.get("fixture_core") or {}
-        for node in scenario.get("nodes", []):
-            if isinstance(node, dict) and node.get("id") == "fixture_choose":
-                transitions = node.get("transitions", {})
-                return {
-                    int(key.removeprefix("button_")): str(target)
-                    for key, target in transitions.items()
-                    if isinstance(key, str) and key.startswith("button_")
-                    and key.removeprefix("button_").isdigit()
-                    and 1 <= int(key.removeprefix("button_")) <= 7
-                    and isinstance(target, str) and target
-                }
-        return {}
+    def _cancel_menu_tutorial(self, session_id: str) -> None:
+        task = self._menu_tutorial_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
 
-    def _prepare_visual_guest(self, session: SessionRecord) -> None:
-        """Start an anonymous visual session from a pre-auth physical button."""
-        if session.current_node or session.state in {Lifecycle.ACTIVE, Lifecycle.FALLBACK, Lifecycle.ENDED}:
-            return
-        scenario = self.scenarios.get("fixture_core")
-        session.anonymous = True
-        session.visual_only = True
-        session.state = Lifecycle.ACTIVE
-        session.scenario_id = "fixture_core"
-        session.scenario_version = (scenario or {}).get("metadata", {}).get("version")
-        session.current_node = str((scenario or {}).get("start", "fixture_choose"))
-        session.started_at = self.now()
-        session.last_activity_at = session.started_at
-        session.last_sequence = -1
-        self.publisher.publish(Event("VisualGuestStarted", session.session_id, session.last_sequence, self.now(), "application", session.correlation_id))
+    def _schedule_menu_tutorial_steps(self, session_id: str, token: int, duration_ms: int) -> None:
+        self._cancel_menu_tutorial(session_id)
+        sequence = self._menu_tutorial_sequences.get(session_id, 0) + 1
+        self._menu_tutorial_sequences[session_id] = sequence
+        interval = max(0.05, float(duration_ms) / 1000.0 / 7.0)
 
-    async def receive_async(self, event: Event, transient_text: str | None = None) -> dict[str, Any]:
-        await self.expire_idle_sessions()
-        session = self.sessions.get(event.session_id)
-        # Pre-auth physical buttons start a visual-only guest route. Authenticated
-        # sessions must continue through the normal scenario engine.
-        if event.event_type == "ButtonPressed" and str(event.payload.get("button_id")) in {"1", "2", "3", "4", "5", "7"}:
-            if session is None:
-                session = SessionRecord(event.session_id, self.installation_id, event.correlation_id or str(uuid.uuid4()), started_at=self.now(), last_activity_at=self.now())
-            # Persist the canonical record before handing the event to receive().
-            self.sessions.save(session)
-            pre_auth = (
-                session.rfid_tag is None
-                and session.current_node is None
-                and session.state == Lifecycle.WAITING_RFID
-            )
-            visual_choice = session.visual_only and session.current_node == "fixture_choose"
-            if pre_auth or visual_choice:
-                session.anonymous = True
-                session.visual_only = True
-                session.state = Lifecycle.ACTIVE
-                session.scenario_id = "fixture_core"
-                session.current_node = "fixture_choose"
-                session.last_sequence = event.sequence - 1
-                button_id = int(event.payload.get("button_id"))
-                targets = self._fixture_button_targets()
-                session.current_node = targets[button_id]
-                self.publisher.publish(Event("VisualGuestStarted", session.session_id, session.last_sequence, self.now(), "application", session.correlation_id))
-                self.sessions.save(session)
-                return self._result(session, [{"action": "visual_guest", "button_id": button_id, "node": session.current_node, "audio": False}], "visual_guest")
-        if (event.event_type == "ButtonPressed" and session is not None
-                and session.state not in {Lifecycle.ACTIVE, Lifecycle.FALLBACK, Lifecycle.ENDED}
-                and session.rfid_tag is None
-                and not session.current_node
-                and str(event.payload.get("button_id")) in {"1", "2", "3", "4", "5", "7"}):
-            self._prepare_visual_guest(session)
-        if (event.event_type == "ButtonPressed" and session is not None and self.schedule_weather is not None
-                and session.scenario_id == "fixture_core"
-                and str(event.payload.get("button_id")) == "7"
-                and self.bounded_s2s is not None
-                and not session.game_id
-                and self._node(self.scenarios.get(session.scenario_id or "fixture_core"), session.current_node).get("type") != "story"):
-            await self._cancel_audio_completions(event.session_id, operation="schedule_weather")
-            if self.s2s_audio is not None:
-                await self.s2s_audio.cancel_session(event.session_id)
-            await self.bounded_s2s.cancel_session(event.session_id)
-            result = self.receive(event, transient_text)
-            profile = self.profiles.resolve(session.rfid_tag or "") or {}
-            schedule_token = session.cancellation_token
+        async def advance() -> None:
             try:
-                report = validate_report(await self.schedule_weather.build(profile, session.rfid_tag or ""), allow_demo=getattr(getattr(self, "settings", None), "profile", "production") == "mock")
-            except ScheduleWeatherProviderError as exc:
-                result["reason"] = "schedule_weather_provider_failure"
-                result.setdefault("outputs", []).append({"action": "schedule_weather_error", "reason": str(exc)})
-                self.publisher.publish(Event("SafetyFallbackTriggered", session.session_id, event.sequence, self.now(), "schedule_weather", {"reason": str(exc)}, session.correlation_id))
-                self.sessions.save(session)
-                return result
-            current = self.sessions.get(event.session_id)
-            if current is None or current.state == Lifecycle.ENDED or current.cancellation_token != schedule_token:
-                result["reason"] = "schedule_weather_cancelled"
-                result.setdefault("outputs", []).append({"action": "schedule_weather_error", "reason": "session_ended_or_cancelled"})
-                self.sessions.save(current or session)
-                return result
-            # Deterministic application text uses the same bounded TTS/PCM
-            # route as conversational output.
-            speak_text = getattr(self.bounded_s2s, "speak_text", None)
-            if callable(speak_text):
-                spoken_result = await speak_text(
-                    session.session_id, report["spoken_text"]
-                )
-                if spoken_result.fallback_reason:
-                    result["reason"] = "schedule_weather_audio_failure"
-                    result.setdefault("outputs", []).append({
-                        "action": "schedule_weather_error",
-                        "reason": spoken_result.fallback_reason,
-                    })
-                    self.sessions.save(session)
-                    return result
-            result.setdefault("outputs", []).extend([
-                {"action": "schedule_weather", "schedule": report["schedule"], "weather": report["weather"], "source": report["source"], "spoken_text": report["spoken_text"]},
-                {"action": "audio_text", "response_id": "schedule_weather", "text": report["spoken_text"]},
-                {"action": "led_pattern", "pattern": "schedule_weather", "color": "blue", "duration_ms": 500},
-            ])
-            if self.history is not None and session.child_id and not session.anonymous:
-                item_id = str(session.rfid_tag or session.child_id)
-                if not self.history.has("schedule_weather", session.child_id, item_id):
-                    self.history.append("schedule_weather", session.child_id, item_id, report)
-            self.sessions.save(session)
-            return result
+                for step in range(1, 8):
+                    # The sleep is only a cancellable production wakeup.
+                    # Canonical tutorial deadlines/steps remain owned by the
+                    # injected monotonic clock and deterministic test driver.
+                    await asyncio.sleep(interval)
+                    state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
+                    record = self.sessions.get(session_id)
+                    if (state is None or record is None or record.cancellation_token != token
+                            or state.mode != "exhibition_menu_tutorial_buttons"):
+                        return
+                    next_sequence = self._menu_tutorial_sequences.get(session_id, 0) + 1
+                    self._menu_tutorial_sequences[session_id] = next_sequence
+                    await self._receive_canonical_event(Event(
+                        "MenuTutorialStep", session_id, next_sequence, self.now(),
+                        "canonical_menu_tutorial_clock", {"step": step, "token": token},
+                        f"menu-tutorial:{session_id}:{sequence}:{step}", self.monotonic_now(),
+                    ))
+            except asyncio.CancelledError:
+                return
+            finally:
+                current = self._menu_tutorial_tasks.get(session_id)
+                if current is asyncio.current_task():
+                    self._menu_tutorial_tasks.pop(session_id, None)
 
-        if event.event_type == "ButtonPressed" and session is not None and self.bounded_s2s is not None:
-            # Cancel before the next scenario response is emitted. Scheduling
-            # a late stop from the synchronous domain handler could otherwise
-            # mute the *new* story/game prompt in the browser.
-            if not (session.scenario_id == "dev_core" and session.current_node in {"dev_welcome", "dev_dialogue"}):
-                await self._cancel_audio_completions(event.session_id, operation="barge_in")
-                if self.s2s_audio is not None:
-                    await self.s2s_audio.cancel_session(event.session_id)
-                await self.bounded_s2s.cancel_session(event.session_id)
-            return self._async_sync_result(event, session, transient_text)
-        if event.event_type == "HandsetPlaced" and self.bounded_s2s is not None:
-            await self._cancel_audio_completions(event.session_id, operation="handset_down")
-            await self.bounded_s2s.cancel_session(event.session_id)
-            if self.s2s_audio is not None:
-                await self.s2s_audio.cancel_session(event.session_id)
-            self.conversation_contexts.pop(event.session_id, None)
-            return self._async_sync_result(event, session, transient_text)
-        if event.event_type != "SpeechReceived" or session is None or self.bounded_s2s is None:
-            return self._async_sync_result(event, session, transient_text)
-        if session.started_at and self.now()-session.started_at>=self.max_session_seconds:
-            outputs=self._end(session,"session_duration_limit",event.sequence); self.sessions.save(session); return self._result(session,outputs,"session_duration_limit")
-        # Direct pre-auth visual path: physical play buttons work without RFID/handset.
-        if (
-            event.event_type == "ButtonPressed"
-            and str(event.payload.get("button_id")) in {"1", "2", "3", "4", "5", "7"}
-            and (
-                (session.state not in {Lifecycle.ACTIVE, Lifecycle.FALLBACK, Lifecycle.ENDED} and not session.current_node)
-                or (session.visual_only and session.current_node == "fixture_choose")
-            )
-        ):
-            self._prepare_visual_guest(session)
-            button_id = int(event.payload.get("button_id"))
-            scenario = self.scenarios.get("fixture_core") or {}
-            start_node = self._node(scenario, session.current_node) if scenario else {}
-            static_targets = self._fixture_button_targets()
-            target = (start_node.get("transitions") or {}).get(f"button_{button_id}") or static_targets[button_id]
-            session.current_node = str(target)
-            self.publisher.publish(Event("ButtonPressed", {"button_id": button_id, "visual_only": True}, session.session_id, session.correlation_id))
-            return self._result(session, [{"action": "visual_guest", "button_id": button_id, "node": session.current_node, "audio": False}], "visual_guest")
+        if not self.background_scheduler:
+            return
+        self._menu_tutorial_tasks[session_id] = asyncio.create_task(
+            advance(), name=f"mishka-menu-tutorial-{session_id}"
+        )
 
-        # Text may arrive before RFID/handset initialization. Do not ask the
-        # scenario repository to resolve a null node; let the synchronous
-        # lifecycle handler return a structured, harmless ignored-input result.
-        if not session.current_node or not session.scenario_id:
-            return self._async_sync_result(event, session, transient_text)
-        scenario = self.scenarios.get(session.scenario_id or "fixture_core")
-        if session.scenario_id == "dev_core" and session.current_node == "dev_welcome":
-            session.current_node = "dev_dialogue"
-            self.sessions.save(session)
-        node = self._node(scenario, session.current_node)
-        if node["type"] != "bounded_free_conversation":
-            return self._async_sync_result(event, session, transient_text)
-        if event.sequence <= session.last_sequence:
-            return self._result(session, [], "idempotent_duplicate")
-        if session.state == Lifecycle.ENDED:
-            return self._result(session, [], "late_event_rejected")
-        if session.started_at and self.now()-session.started_at>=self.max_session_seconds:
-            outputs=self._end(session,"session_duration_limit",event.sequence); self.sessions.save(session); return self._result(session,outputs,"session_duration_limit")
-        turn_epoch = self._session_epochs.get(event.session_id, 0) + 1
-        self._session_epochs[event.session_id] = turn_epoch
-        # The previous LLM task may already be complete while several seconds
-        # of its PCM are still queued in the browser. Every new text turn must
-        # stop browser playback as well as cancel any in-flight voice/LLM work.
-        await self._cancel_audio_completions(event.session_id, operation="new_turn")
-        if self.s2s_audio is not None:
-            await self.s2s_audio.cancel_session(event.session_id)
-        await self.bounded_s2s.cancel_session(event.session_id)
-        session.last_sequence, session.last_activity_at = event.sequence, self.now(); self.publisher.publish(event)
-        context = self._conversation_context(session, node)
-        quick_response = self._quick_response_id(transient_text or "", context) if self.allow_quick_replies else None
-        if quick_response:
-            context.turns += 1
-            outputs = self._apply_quick_response(session, quick_response)
-            self.sessions.save(session)
-            return self._result(session, outputs, "quick_reply")
+    def _cancel_welcome_timer(self, session_id: str) -> None:
+        task = self._welcome_timers.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _fire_exhibition_welcome(self, session_id: str, deadline: float) -> dict[str, Any] | None:
+        state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
+        if state is None or state.welcome_deadline_monotonic != deadline or state.welcome_status != "pending":
+            return None
+        sequence = self._welcome_timer_sequences.get(session_id, 0) + 1
+        self._welcome_timer_sequences[session_id] = sequence
+        return await self._receive_canonical_event(Event(
+            "WelcomeTimerFired", session_id, sequence, self.now(),
+            "canonical_welcome_timer", {"deadline_monotonic": deadline},
+            f"welcome:{session_id}:{deadline}", self.monotonic_now(),
+        ))
+
+    async def _wait_for_exhibition_welcome(self, session_id: str, deadline: float) -> None:
         try:
-            result = await self.bounded_s2s.run_text_turn(transient_text or "", context)
+            # Production wakeup only; fake-clock tests call
+            # flush_welcome_timers() to advance this canonical deadline
+            # without waiting on wall time.
+            await asyncio.sleep(max(0.0, deadline - self.monotonic_now()))
+            await self._fire_exhibition_welcome(session_id, deadline)
         except asyncio.CancelledError:
-            # A newer turn/reset may cancel this HTTP handler while Ollama or
-            # Silero is streaming. Return a bounded cancellation response
-            # instead of leaking CancelledError as HTTP 500/No response.
-            if self._session_epochs.get(event.session_id, 0) != turn_epoch:
-                current = self.sessions.get(event.session_id)
-                if current is None:
-                    return {"session_id":event.session_id,"state":"RESET","node":None,
-                            "reason":"cancelled_by_new_input","outputs":[],"correlation_id":session.correlation_id}
-                return self._result(current, [], "cancelled_by_new_input")
-            raise
-        if result is None:
-            # Cancellation can complete the worker without raising CancelledError.
-            # Never let that race escape as Starlette 500 / No response.
-            current = self.sessions.get(event.session_id) or session
-            self.sessions.save(current)
-            return self._result(current, [], "cancelled_no_response")
-        outputs = self._apply_s2s_result(session, scenario, node, result)
-        self.sessions.save(session)
-        return {**self._result(session, outputs, "bounded_s2s"), "pending": False}
+            return
+        except Exception:
+            logger.exception("exhibition welcome timer failed", extra={"session_id": session_id})
+        finally:
+            if self._welcome_timers.get(session_id) is asyncio.current_task():
+                self._welcome_timers.pop(session_id, None)
+
+    def _schedule_exhibition_welcome(self, session_id: str, deadline: float) -> None:
+        self._cancel_welcome_timer(session_id)
+        if not self.background_scheduler:
+            return
+        self._welcome_timers[session_id] = asyncio.create_task(
+            self._wait_for_exhibition_welcome(session_id, deadline),
+            name=f"mishka-exhibition-welcome-{session_id}",
+        )
+
+    async def flush_welcome_timers(self) -> list[dict[str, Any]]:
+        """Fire due exhibition timers; deterministic seam for fake-clock tests."""
+        due = []
+        sessions = self.canonical_runtime.sessions if self.canonical_runtime is not None else {}
+        for session_id, state in tuple(sessions.items()):
+            deadline = state.welcome_deadline_monotonic
+            if state.welcome_status == "pending" and deadline is not None and self.monotonic_now() >= deadline:
+                result = await self._fire_exhibition_welcome(session_id, deadline)
+                if result is not None:
+                    due.append(result)
+        return due
+
+    async def _receive_canonical_event(self, event: Event, transient_text: str | None = None) -> dict[str, Any]:
+        """Bridge canonical decisions to application-owned effects.
+
+        The contract engine never touches audio, capture, LEDs or providers.
+        This boundary is the sole place where declared effects become calls.
+        """
+        profile = None
+        tag_id = None
+        if event.event_type == "RfidRemoved":
+            self._canonical_profiles.pop(event.session_id, None)
+            self._canonical_schedule_refs.pop(event.session_id, None)
+        if event.event_type == "RfidPresented":
+            try:
+                profile = self.profiles.resolve(str(event.payload.get("tag_id", "")))
+                tag_id = str(event.payload.get("tag_id", ""))
+            except ProfileProviderError:
+                return {"reason": "profile_unavailable", "outputs": [{"action": "safe_stop"}]}
+        current = self.canonical_runtime.sessions.get(event.session_id)
+        requested_version = event.payload.get("state_version") if isinstance(event.payload, dict) else None
+        state_version = int(requested_version) if isinstance(requested_version, int) else (current.state_version if current else 0)
+        previous_state = copy.deepcopy(current)
+        event_type = "VoiceIntentReady" if event.event_type == "SpeechReceived" else event.event_type
+        payload = dict(event.payload)
+        accepted_monotonic = event.monotonic_timestamp if event.monotonic_timestamp is not None else self.monotonic_now()
+        if event.event_type == "SpeechReceived":
+            text = transient_text or ""
+            safety = self.safety_classifier.classify(text)
+            payload.update({"intent": classify_intent(text), "safety_severity": safety.severity,
+                            "safety_reason": safety.reason})
+        decision = self.canonical_runtime.handle(CanonicalEvent(
+            event_type=event_type, session_id=event.session_id, sequence=event.sequence,
+            state_version=state_version, source=event.source, payload=payload,
+            correlation_id=event.correlation_id, timestamp=event.timestamp, monotonic_timestamp=accepted_monotonic,
+        ), profile, transient_text=transient_text)
+        snapshot, effects = decision["state"], decision["effects"]
+        exhibition_reset = bool(decision.get("reset_session"))
+        self.last_canonical_state = dict(snapshot)
+        self.last_canonical_event = {"type": event_type, "source": event.source, "sequence": event.sequence, "session_id": event.session_id, "timestamp": event.timestamp, "monotonic_timestamp": accepted_monotonic, "correlation_id": event.correlation_id, "payload": dict(payload)}
+        voice_open = snapshot.get("handset") == "up"
+        authorization = self.transition_authorizer.authorize(
+            previous_state.mode if previous_state is not None else "idle",
+            str(snapshot.get("mode") or "idle"),
+            event_type,
+        )
+        if not authorization["ok"]:
+            if previous_state is None:
+                self.canonical_runtime.sessions.pop(event.session_id, None)
+                rejected_state = {"mode": "idle", "state_version": 0}
+            else:
+                self.canonical_runtime.sessions[event.session_id] = previous_state
+                rejected_state = previous_state.snapshot()
+            return {
+                "reason": "transition_rejected",
+                "state": rejected_state["mode"],
+                "state_version": rejected_state["state_version"],
+                "outputs": [{"type": "transition_rejected", "authorization": authorization}],
+                "canonical_state": rejected_state,
+            }
+        record = self.sessions.get(event.session_id)
+        if record is None:
+            record = SessionRecord(event.session_id, self.installation_id, event.correlation_id or str(uuid.uuid4()))
+            record.cancellation_token = self._session_epochs.get(event.session_id, 0)
+        record.child_id = snapshot.get("profile_ref")
+        record.anonymous = snapshot.get("profile_status") != "identified"
+        record.handset_up = snapshot.get("handset") == "up"
+        record.scenario_id, record.scenario_version = "canonical", "canonical_product/v1"
+        record.current_node, record.last_sequence = snapshot.get("mode"), event.sequence
+        # Physical RFID values never enter SessionRecord or analytics; only the protected resolver sees them.
+        record.rfid_tag = None
+        record.last_activity_at = self.now()
+        record.state = Lifecycle.ENDED if snapshot.get("mode") in {"soft_end", "session_closed"} else Lifecycle.ACTIVE
+        # Keep the same mutable effect objects visible while a playback adapter
+        # reports its asynchronous lifecycle.
+        self.last_canonical_effects = effects
+        audio_failure: dict[str, Any] | None = None
+        if not exhibition_reset:
+            self.sessions.save(record)
+        # Do not populate the profile cache before the first RFID is handled.
+        # CanonicalRuntime uses the missing session/profile boundary to detect
+        # the first read; pre-populating it made the first tag look repeated.
+        if event.event_type == "RfidPresented":
+            self._canonical_profiles[event.session_id] = profile
+            self._canonical_schedule_refs[event.session_id] = (profile or {}).get("schedule_ref") or (profile or {}).get("profile_ref")
+            if (decision["reason"] in {"rfid_identified", "unknown_tag"}
+                    and not getattr(self.canonical_runtime, "exhibition_mode", False)):
+                await self._run_readiness_wave_async(record, effects)
+        for effect_index, effect in enumerate(effects):
+            # Canonical effects use ``type``; the readiness wave is an
+            # existing diagnostic compatibility projection and uses ``action``.
+            # Never expose an opaque ``unknown`` effect id to the UI.
+            effect_kind = effect.get("type") or effect.get("action") or "effect"
+            effect.setdefault("effect_id", f"{event.session_id}:{snapshot.get('state_version', 0)}:{effect_index}:{effect_kind}")
+            kind = effect.get("type")
+            if kind in {"speak", "play_fixed_story", "resume_fixed_story", "play_placeholder",
+                         "speak_dynamic", "support_question", "support_response"}:
+                effect.setdefault("session_id", event.session_id)
+                effect.setdefault("generation", int(self._session_epochs.get(event.session_id, 0)))
+            if kind == "lighting_wave_intent":
+                start_wave = getattr(self.led, "start_wave", None)
+                if callable(start_wave):
+                    groups = EXHIBITION_DIGIT_WAVE_GROUPS if str(effect.get("pattern")) == "age_digits_wave" else None
+                    lighting = start_wave(now=accepted_monotonic, groups=groups, hold_on_complete=True) if groups is not None else start_wave(now=accepted_monotonic)
+                    effect["lighting_effect"] = dict(lighting)
+                    effect["generation"] = lighting.get("generation")
+                    effect["resolution"] = "canonical_exhibition_wave_started"
+                else:
+                    effect["resolution"] = "canonical_wave_intent_recorded_without_effect_adapter"
+            elif kind == "exhibition_effects_cancelled":
+                cancel_effects = getattr(self.led, "cancel_effects", None)
+                effect["lighting_effect"] = dict(cancel_effects(clear=True)) if callable(cancel_effects) else {"effect": "unavailable"}
+                effect["resolution"] = "exhibition_effects_cancelled"
+            elif kind == "standby_breathing_started":
+                start_breathing = getattr(self.led, "start_breathing", None)
+                if callable(start_breathing):
+                    lighting = start_breathing(now=accepted_monotonic)
+                    effect["lighting_effect"] = dict(lighting)
+                    effect["generation"] = lighting.get("generation")
+                    effect["resolution"] = "canonical_standby_breathing_started"
+                else:
+                    effect["resolution"] = "standby_breathing_unavailable"
+            elif kind == "exhibition_reset":
+                effect["resolution"] = "canonical_exhibition_session_reset"
+            elif kind == "welcome_timer_scheduled":
+                effect["timer_status"] = "pending"
+                self._schedule_exhibition_welcome(event.session_id, float(effect["deadline_monotonic"]))
+            elif kind == "welcome_timer_cancelled":
+                effect["timer_status"] = "cancelled"
+                self._cancel_welcome_timer(event.session_id)
+            elif kind == "audio_stop":
+                record.cancellation_token += 1
+                self._invalidate_audio_lease(event.session_id)
+                self.audio.cancel(record.cancellation_token)
+                if self.bounded_s2s is not None:
+                    await self.bounded_s2s.cancel_session(event.session_id)
+            elif kind == "adult_handoff_request":
+                if self.adult_handoff is None:
+                    effect["resolution"] = "adult_handoff_unavailable"
+                    effect["fallback_phrase_id"] = "PHRASE_091"
+                    asset = self.voice_manifest.resolve("PHRASE_091")
+                    if asset and voice_open:
+                        self.audio.play("PHRASE_091", str(asset["asset_path"]), record.cancellation_token)
+                    continue
+                handoff_id = f"{event.session_id}:{event.correlation_id or event.sequence}"
+                request = {"incident_id": handoff_id, "handoff_id": handoff_id, "session_id": event.session_id, "profile_ref": snapshot.get("profile_ref"), "correlation_id": event.correlation_id, "severity": effect.get("severity"), "category": "urgent" if effect.get("severity") == "urgent" else "other", "safe_summary": "Ребёнок попросил взрослого", "location_device_id": self.installation_id, "created_at": self.now(), "delivery": "pending", "state_version": snapshot.get("state_version")}
+                try:
+                    delivery = self.adult_handoff.request(request)
+                    if inspect.isawaitable(delivery):
+                        delivery = await delivery
+                    if not isinstance(delivery, dict):
+                        raise TypeError("adult_handoff response must be an object")
+                    effect["delivery"] = dict(delivery)
+                    if not delivery.get("acknowledged"):
+                        effect["resolution"] = "adult_handoff_pending"
+                        continue
+                    effect["resolution"] = "adult_handoff_simulated" if delivery.get("simulated") else "adult_handoff_acknowledged"
+                    acknowledgement = await self._receive_canonical_event(Event("AdultHandoffAcknowledged", event.session_id, event.sequence, self.now(), "adult_handoff_simulator", {"handoff_id": handoff_id, "simulated": bool(delivery.get("simulated"))}, f"{event.correlation_id or handoff_id}:ack"))
+                    effect["acknowledgement"] = {"reason": acknowledgement.get("reason"), "simulated": bool(delivery.get("simulated"))}
+                    effects.extend(acknowledgement.get("outputs", []))
+                except Exception as exc:
+                    effect["resolution"] = "adult_handoff_delivery_failed"
+                    effect["fallback_phrase_id"] = "PHRASE_091"
+                    asset = self.voice_manifest.resolve("PHRASE_091")
+                    if asset and voice_open:
+                        self.audio.play("PHRASE_091", str(asset["asset_path"]), record.cancellation_token)
+                    effect["error"] = f"{type(exc).__name__}: {str(exc)[:160]}"
+
+            elif kind == "lighting":
+                self.led.clear_all()
+                for element_id in effect.get("elements", ()):
+                    self.led.set_element(int(element_id), int(effect.get("state", 0)))
+            elif kind == "lighting_preset":
+                self.led.clear_all()
+                preset = str(effect.get("preset", ""))
+                if preset == "EXHIBITION_MENU_TUTORIAL":
+                    buttons = effect.get("buttons", ())
+                    commands = tuple((element_id, 1) for button in buttons for element_id in BUTTON_ELEMENTS.get(int(button), ()))
+                else:
+                    commands = LED_PRESETS.get(preset, ())
+                if preset == "TARGET":
+                    commands = tuple((element_id, 1) for element_id in BUTTON_ELEMENTS.get(int(effect.get("target_button", 0)), ()))
+                for element_id, state in commands:
+                    self.led.set_element(element_id, state)
+            elif kind == "resume_fixed_story":
+                story_id = str(effect.get("story_id") or "")
+                manifest = getattr(self.canonical_runtime, "stories", None)
+                verified = manifest.get_verified(story_id) if manifest else None
+                placeholder = manifest.get_development_placeholder() if manifest and self.allow_development_placeholders else None
+                asset = verified or placeholder
+                if asset and voice_open:
+                    response_id = story_id if verified else f"placeholder:fixed_story:{story_id}"
+                    self.audio.play(response_id, str(asset["audio_file"]), record.cancellation_token)
+                    _set_audio_effect_status(effect, asset_status="approved" if verified else "placeholder", queued=True)
+                    self._register_audio_lease(event.session_id, response_id, record.cancellation_token,
+                                               str(effect.get("effect_id")), str(effect.get("playback_lease") or ""))
+                    effect["resolution"] = "resumed_verified_story" if verified else "resumed_development_placeholder"
+                else:
+                    _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="resume_requires_verified_story_asset")
+            elif kind == "play_fixed_story":
+                # The runtime has already verified rights and both SHA-256s.
+                if voice_open:
+                    response_id = str(effect["story_id"])
+                    self.audio.play(response_id, str(effect["asset"]), record.cancellation_token)
+                    _set_audio_effect_status(effect, asset_status="approved", queued=True)
+                    self._register_audio_lease(event.session_id, response_id, record.cancellation_token,
+                                               str(effect.get("effect_id")), str(effect.get("playback_lease") or ""))
+                else:
+                    _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="story_audio_requires_handset")
+            elif kind == "play_placeholder":
+                if voice_open:
+                    response_id = f"placeholder:{effect['content_kind']}:{effect['story_id']}"
+                    self.audio.play(response_id, str(effect["asset"]), record.cancellation_token)
+                    _set_audio_effect_status(effect, asset_status="placeholder", queued=True)
+                    self._register_audio_lease(event.session_id, response_id, record.cancellation_token,
+                                               str(effect.get("effect_id")), str(effect.get("playback_lease") or ""))
+                else:
+                    _set_audio_effect_status(effect, asset_status="placeholder", queued=False, resolution="placeholder_audio_requires_handset")
+                effect["resolution"] = "development_placeholder_no_rights_or_content"
+            elif kind == "speak_dynamic":
+                text = str(effect.get("text") or "").strip()
+                if voice_open and text and callable(getattr(self.audio, "play_text", None)):
+                    self.audio.play_text("dynamic", text, record.cancellation_token)
+                    _set_audio_effect_status(effect, asset_status="approved", queued=True)
+                else:
+                    _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="dynamic_audio_unavailable_visual_only")
+            elif kind == "speak":
+                # Missing recorded speech never falls through to dynamic TTS.
+                # A device/adapter failure is terminal for this declared effect:
+                # it is diagnosed and never retried by the exhibition timer.
+                phrase_id = str(effect.get("phrase_id", ""))
+                content_hash = str(effect.get("content_hash", ""))
+                effect["content_id"] = phrase_id
+                diagnosis = self.voice_manifest.diagnose(phrase_id, content_hash)
+                effect["asset_ref"] = diagnosis.get("asset_ref")
+                asset = self.voice_manifest.resolve(phrase_id, content_hash)
+                effect["session_id"] = event.session_id
+                effect["playback_id"] = f"{event.session_id}:{record.cancellation_token}:{effect.get('effect_id', phrase_id)}"
+                if asset and voice_open:
+                    try:
+                        self.audio.play(phrase_id, str(asset["asset_path"]), record.cancellation_token)
+                    except Exception as exc:
+                        _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=False, resolution="audio_dispatch_failed")
+                        effect["audio_failure_type"] = type(exc).__name__
+                        self.record_audio_diagnostic("audio_dispatch_failed", phrase_id=phrase_id,
+                                                     content_id=phrase_id, asset_ref=effect.get("asset_ref"),
+                                                     exception_type=type(exc).__name__, detail=str(exc)[:200],
+                                                     session_id=event.session_id)
+                        audio_failure = {"response_id": phrase_id, "token": record.cancellation_token,
+                                         "error_code": "audio_dispatch_failed", "detail": type(exc).__name__}
+                        logger.exception("canonical phrase dispatch failed", extra={"phrase_id": phrase_id, "session_id": event.session_id})
+                    else:
+                        _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=True)
+                        effect["generation"] = int(self._session_epochs.get(event.session_id, 0))
+                        self._register_audio_lease(event.session_id, phrase_id, record.cancellation_token,
+                                                   str(effect.get("playback_id")), str(effect.get("playback_lease") or ""))
+                        if phrase_id == "PHRASE_008" and snapshot.get("mode") == "exhibition_menu_tutorial_buttons":
+                            self._schedule_menu_tutorial_steps(event.session_id, record.cancellation_token, int(asset.get("duration_ms") or 18406))
+                else:
+                    _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="recorded_phrase_unavailable_visual_only")
+                    self.record_audio_diagnostic("recorded_phrase_unavailable", phrase_id=phrase_id,
+                                                content_id=phrase_id, asset_ref=diagnosis.get("asset_ref"),
+                                                content_status=diagnosis.get("status"),
+                                                content_code=diagnosis.get("code"), session_id=event.session_id)
+                    audio_failure = {"response_id": phrase_id, "token": record.cancellation_token,
+                                     "error_code": str(diagnosis.get("code") or "content_unavailable")[:80]}
+            elif kind in {"support_question", "support_response"}:
+                if kind == "support_question":
+                    phrase = {"pain_or_discomfort": "PHRASE_084", "fear": "PHRASE_085"}.get(str(effect.get("question")), "PHRASE_094")
+                else:
+                    phrase = "PHRASE_071" if str(effect.get("kind")) == "concern" else "PHRASE_094"
+                effect["phrase_id"] = phrase
+                diagnosis = self.voice_manifest.diagnose(phrase)
+                asset = self.voice_manifest.resolve(phrase)
+                if asset and voice_open:
+                    try:
+                        self.audio.play(phrase, str(asset["asset_path"]), record.cancellation_token)
+                    except Exception as exc:
+                        _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=False, resolution="audio_dispatch_failed")
+                        self.record_audio_diagnostic("audio_dispatch_failed", phrase_id=phrase, content_id=phrase,
+                                                     asset_ref=diagnosis.get("asset_ref"), exception_type=type(exc).__name__,
+                                                     detail=str(exc)[:200], session_id=event.session_id)
+                        audio_failure = {"response_id": phrase, "token": record.cancellation_token,
+                                         "error_code": "audio_dispatch_failed", "detail": type(exc).__name__}
+                    else:
+                        _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=True)
+                        self._register_audio_lease(event.session_id, phrase, record.cancellation_token,
+                                                   str(effect.get("effect_id")), str(effect.get("playback_lease") or ""))
+                else:
+                    _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="recorded_phrase_unavailable_visual_only")
+                    self.record_audio_diagnostic("recorded_phrase_unavailable", phrase_id=phrase, content_id=phrase,
+                                                asset_ref=diagnosis.get("asset_ref"), content_status=diagnosis.get("status"),
+                                                content_code=diagnosis.get("code"), session_id=event.session_id)
+                    audio_failure = {"response_id": phrase, "token": record.cancellation_token,
+                                     "error_code": str(diagnosis.get("code") or "content_unavailable")[:80]}
+            elif kind == "adult_handoff_offer":
+                effect["phrase_id"] = "PHRASE_086"
+                effect["resolution"] = "offer_requires_explicit_button_or_speech"
+            elif kind == "bounded_dialogue_turn":
+                effect["response_policy"] = "bounded_validated_dialogue"
+                if self.bounded_s2s is None or not voice_open or not (transient_text or "").strip():
+                    effect["resolution"] = "bounded_dialogue_unavailable_visual_only"
+                else:
+                    try:
+                        turn = await self.bounded_s2s.run_text_turn(
+                            str(transient_text), self._canonical_audio_context(event.session_id)
+                        )
+                        effect["resolution"] = "bounded_dialogue_completed" if turn.fallback_reason is None else "bounded_dialogue_fallback"
+                        effect["fallback_reason"] = turn.fallback_reason
+                        effect["chunks"] = list(turn.chunks)
+                    except Exception as exc:
+                        effect["resolution"] = "bounded_dialogue_fallback"
+                        effect["fallback_reason"] = type(exc).__name__
+            elif kind == "generate_personal_story":
+                brief = effect.get("brief") if isinstance(effect.get("brief"), dict) else {}
+                age_band = brief.get("age_band", "3-5")
+                duration = {"1-3": 50, "3-5": 70, "5-7": 100}.get(str(age_band), 70)
+                candidate = {"title": "Маленькое доброе путешествие", "text": "Герой нашёл спокойную дорогу и вернулся домой.", "age_band": age_band, "estimated_duration_sec": duration, "safety_tags": ["safe_resolved"], "ending_state": "safe_resolved"}
+                valid, reason = validate_generated_story(candidate, brief)
+                effect["candidate"] = candidate
+                effect["validated"] = valid
+                effect["resolution"] = "validated_development_story" if valid else "story_validation_failed"
+                if reason:
+                    effect["validation_reason"] = reason
+                if valid:
+                    effect["pipeline_transition"] = await self._receive_canonical_event(Event("VoiceIntentReady", event.session_id, event.sequence, self.now(), "story_pipeline_generated", {"intent": "generated", "safety_severity": "none"}, f"{event.correlation_id or event.session_id}:story-generated"))
+                    effects.extend(effect["pipeline_transition"].get("outputs", []))
+                else:
+                    effect["fallback_phrase_id"] = "PHRASE_080"
+                    effect["pipeline_transition"] = await self._receive_canonical_event(Event("VoiceIntentReady", event.session_id, event.sequence, self.now(), "story_pipeline_validator", {"intent": "validation_failed", "safety_severity": "none"}, f"{event.correlation_id or event.session_id}:story-rejected"))
+                    effects.extend(effect["pipeline_transition"].get("outputs", []))
+            elif kind == "validate_personal_story":
+                effect["resolution"] = "validator_boundary_acknowledged"
+                effect["pipeline_transition"] = await self._receive_canonical_event(Event("VoiceIntentReady", event.session_id, event.sequence, self.now(), "story_pipeline_validated", {"intent": "validated", "safety_severity": "none"}, f"{event.correlation_id or event.session_id}:story-validated"))
+                effects.extend(effect["pipeline_transition"].get("outputs", []))
+            elif kind == "play_personal_story":
+                effect["resolution"] = "development_only_story_visual_placeholder"
+                effect["development_only"] = True
+            elif kind in {"capture_open", "capture_close", "audio_stop"}:
+                effect["resolution"] = "application_boundary_acknowledged"
+            elif kind == "game_retry":
+                self.led.clear_all()
+                target = int(effect.get("target_button") or 0)
+                preset = "HINT" if int(effect.get("hint_stage") or 0) >= 2 else "RETRY"
+                for element_id, value in LED_PRESETS.get(preset, ()):
+                    self.led.set_element(element_id, value)
+                for element_id in BUTTON_ELEMENTS.get(target, ()):
+                    self.led.set_element(element_id, 1)
+                effect["lighting_preset"] = preset
+                effect.setdefault("resolution", "declarative_effect_emitted")
+            elif kind == "game_level":
+                self.led.clear_all()
+                target = int(effect.get("target_button") or 0)
+                if target:
+                    for element_id in BUTTON_ELEMENTS.get(target, ()):
+                        self.led.set_element(element_id, 1)
+                effect.setdefault("resolution", "declarative_effect_emitted")
+            elif kind in {"exhibition_menu_selected", "menu_tutorial_complete", "exhibition_menu_tutorial_step"}:
+                effect.setdefault("resolution", "canonical_exhibition_menu_boundary")
+            elif kind in {"content_blocked", "privacy_blocked", "offer_adult", "visual", "clear_private_display", "game_continue_visual", "adult_incident_closed", "game_exit_confirmation", "story_speech_analysis", "hardware_reconnected", "button_edge_ack", "mood_report"}:
+                effect.setdefault("resolution", "declarative_effect_emitted")
+            elif kind == "typed_info_request":
+                try:
+                    profile = self._canonical_profiles.get(event.session_id)
+                    info = await TypedInfoRenderer(self.schedule_weather, profile, self._canonical_schedule_refs.get(event.session_id)).render(
+                        str(effect.get("kind")), allow_demo=getattr(self.settings, "profile", "") == "mock")
+                    effect["typed_data"] = info
+                except (ScheduleWeatherProviderError, ValueError) as exc:
+                    effect["resolution"] = "typed_information_unavailable"
+                    effect["error"] = str(exc)
+        if audio_failure is not None and event.event_type not in {"AudioFailed", "AudioCompleted"}:
+            failure = await self._receive_canonical_event(Event(
+                "AudioFailed", event.session_id, event.sequence + 1, self.now(),
+                "canonical_audio_failure", audio_failure,
+                f"{event.correlation_id or event.session_id}:audio-failed", self.monotonic_now(),
+            ))
+            failure["audio_origin"] = dict(audio_failure)
+            # Preserve the declarative effect that failed alongside the
+            # canonical failure effects. Otherwise callers only see the
+            # generic safe-stop projection and lose the phrase/asset/error
+            # evidence that explains why playback was not started.
+            failure_effects = list(failure.get("outputs") or [])
+            failure["outputs"] = [dict(item) for item in effects] + failure_effects
+            self.last_canonical_effects = [dict(item) for item in failure["outputs"]]
+            return failure
+        reset_cleanup = None
+        if exhibition_reset:
+            # Bump before cancelling providers so late audio/STT/model work
+            # cannot be accepted by the next physical session.
+            self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
+            reset_cleanup = await self._cleanup_session_resources(event.session_id)
+            self.canonical_runtime.reset(event.session_id)
+            self._canonical_profiles.pop(event.session_id, None)
+            self._canonical_schedule_refs.pop(event.session_id, None)
+            self.sessions.delete(event.session_id)
+
+        # Persist the fully enriched effects for the canonical WebPanel/state
+        # projection.  Audio status and effect IDs are applied at the
+        # application boundary after LangGraph authorization.
+        self.last_canonical_effects = [dict(item) for item in effects]
+        self.canonical_trace.append({
+            "input": payload.get("_input_type") or event.event_type,
+            "normalized_event": payload.get("_normalized_event") or ("handset_up" if event_type == "HandsetLifted" else "handset_down" if event_type == "HandsetPlaced" else event_type),
+            "canonical_event": event_type,
+            "state_before": previous_state.mode if previous_state is not None else "idle",
+            "state_after": snapshot.get("mode"),
+            "effects": [str(item.get("type") or item.get("action") or "effect") for item in effects],
+            "monotonic_timestamp": accepted_monotonic,
+            "timer_started": snapshot.get("welcome_t0_monotonic"),
+            "timer_deadline": snapshot.get("welcome_deadline_monotonic"),
+            "audio": next((item.get("phrase_id") for item in effects if item.get("type") == "speak"), None),
+        })
+        if not exhibition_reset:
+            self.sessions.save(record)
+        published_event = event
+        if event.event_type == "RfidPresented":
+            # The physical tag is resolved only inside the protected profile
+            # boundary; it must never enter the common event stream.
+            published_event = Event(
+                event.event_type, event.session_id, event.sequence, event.timestamp,
+                event.source, {
+                    "profile_resolved": snapshot.get("profile_status") == "identified",
+                    "unknown_tag": snapshot.get("profile_status") != "identified",
+                },
+                event.correlation_id,
+            )
+        self.publisher.publish(published_event)
+        final_state = dict(snapshot) if exhibition_reset else self.canonical_runtime.sessions.get(event.session_id).snapshot()
+        self.last_canonical_state = dict(final_state)
+        hook = self.state_update_hook
+        if callable(hook):
+            try:
+                update = hook(event.session_id, {"reason": decision["reason"], "state": final_state.get("mode"), "canonical_state": final_state, "outputs": effects})
+                if inspect.isawaitable(update):
+                    await update
+            except Exception:
+                logger.exception("canonical state update hook failed", extra={"session_id": event.session_id})
+        return {"reason": decision["reason"], "state": final_state.get("mode"),
+                "state_version": final_state.get("state_version"), "outputs": effects,
+                "canonical_state": final_state,
+                "canonical_trace": list(self.canonical_trace),
+                "canonical_diagnostics": list(self.canonical_diagnostics),
+                "reset_cleanup": reset_cleanup,
+                "pipeline": ["ingress", "normalize_event", "session_guard", "safety_precheck", "route_mode", "policy_validate", "emit_effects", "persist_snapshot", "await_event"],
+                "guards": decision.get("guards", {})}
+        """Start an anonymous visual session from a pre-auth physical button."""
+    async def receive_async(self, event: Event, transient_text: str | None = None) -> dict[str, Any]:
+        """Ingress for the single canonical runtime and LangGraph boundary."""
+        await self.expire_idle_sessions()
+        if self.canonical_runtime is None:
+            return {"session_id": event.session_id, "state": Lifecycle.IDLE.value,
+                    "node": None, "reason": "canonical_runtime_required",
+                    "outputs": [{"action": "safe_stop"}],
+                    "correlation_id": event.correlation_id}
+        if (event.event_type == "ButtonPressed"
+                and getattr(self.canonical_runtime, "exhibition_mode", False)):
+            active = self.canonical_runtime.sessions.get(event.session_id)
+            if active is None or active.handset != "up":
+                return {"session_id": event.session_id, "state": "idle",
+                        "reason": "exhibition_age_not_ready", "outputs": [],
+                        "canonical_state": {"mode": "idle", "handset": "down"}}
+        # In exhibition mode a down edge while no physical session exists is
+        # already the neutral state. Do not materialize a new repository or
+        # canonical session merely to acknowledge a repeated SpacePressed.
+        callback_lease = None
+        if event.event_type in {"AudioCompleted", "AudioFailed"}:
+            callback_lease = self._active_audio.get(event.session_id)
+            if not self._audio_callback_is_current(event):
+                state = self.canonical_runtime.sessions.get(event.session_id)
+                return {"session_id": event.session_id, "state": state.mode if state else "idle",
+                        "reason": "stale_exhibition_audio_completion"
+                        if getattr(self.canonical_runtime, "exhibition_mode", False)
+                        else "stale_audio_callback",
+                        "outputs": [], "canonical_state": state.snapshot()
+                        if state else {"mode": "idle", "handset": "down"}}
+        if (event.event_type == "AudioCompleted"
+                and getattr(self.canonical_runtime, "exhibition_mode", False)):
+            active = self.canonical_runtime.sessions.get(event.session_id)
+            record = self.sessions.get(event.session_id)
+            token = event.payload.get("token")
+            try:
+                token_matches = token is not None and int(token) == int(record.cancellation_token) if record is not None else False
+            except (TypeError, ValueError, OverflowError):
+                token_matches = False
+            if active is None or record is None or not token_matches:
+                return {"session_id": event.session_id, "state": active.mode if active else "idle",
+                        "reason": "stale_exhibition_audio_completion", "outputs": [],
+                        "canonical_state": active.snapshot() if active else {"mode": "idle", "handset": "down"}}
+        if (event.event_type == "MenuTutorialStep"
+                and getattr(self.canonical_runtime, "exhibition_mode", False)):
+            active = self.canonical_runtime.sessions.get(event.session_id)
+            record = self.sessions.get(event.session_id)
+            token = event.payload.get("token")
+            try:
+                token_matches = token is not None and int(token) == int(record.cancellation_token) if record is not None else False
+            except (TypeError, ValueError, OverflowError):
+                token_matches = False
+            if active is None or record is None or not token_matches:
+                return {"session_id": event.session_id, "state": active.mode if active else "idle",
+                        "reason": "stale_exhibition_menu_tutorial_step", "outputs": [],
+                        "canonical_state": active.snapshot() if active else {"mode": "idle", "handset": "down"}}
+        if (event.event_type == "HandsetPlaced"
+                and getattr(self.canonical_runtime, "exhibition_mode", False)
+                and event.session_id not in self.canonical_runtime.sessions
+                and self.sessions.get(event.session_id) is None):
+            return {"session_id": event.session_id, "state": "idle",
+                    "node": None, "reason": "handset_already_placed",
+                    "outputs": [], "canonical_state": {"mode": "idle", "handset": "down"},
+                    "correlation_id": event.correlation_id}
+        result = await self._receive_canonical_event(event, transient_text)
+        if event.event_type in {"AudioCompleted", "AudioFailed"} and callback_lease is not None:
+            self._cancel_audio_timeout(event.session_id)
+            if self._active_audio.get(event.session_id) is callback_lease:
+                callback_lease["status"] = "finished" if event.event_type == "AudioCompleted" else "failed"
+                self._active_audio.pop(event.session_id, None)
+        if (event.event_type in {"SpeechReceived", "VoiceIntentReady"}
+                and result.get("reason") == "exhibition_onboarding_completed"
+                and getattr(self.canonical_runtime, "exhibition_mode", False)):
+            current = self.canonical_runtime.sessions.get(event.session_id)
+            handoff = await self._receive_canonical_event(Event(
+                "ExhibitionOnboardingComplete", event.session_id, event.sequence + 1,
+                self.now(), "canonical_gr03_handoff",
+                {"state_version": current.state_version if current is not None else 0},
+                f"{event.correlation_id or event.session_id}:exhibition-onboarding-complete",
+                self.monotonic_now(),
+            ))
+            handoff["gr03_completion"] = {
+                "reason": result.get("reason"), "state": result.get("canonical_state"),
+                "outputs": result.get("outputs", []),
+            }
+            handoff["handoff_event"] = "ExhibitionOnboardingComplete"
+            return handoff
+        return result
 
     def _ignored_audio_result(self, session: Any, sequence: int) -> dict[str, Any]:
         """Consume stale PCM without changing the scenario lifecycle.
@@ -567,69 +1148,74 @@ class ScenarioApplication:
                 "audio_status": "ignored", "audio_flow": "stale_input",
                 "barge_in": False, "pending": False}
 
-    async def receive_audio_async(self, session_id: str, samples: tuple[float, ...], sequence: int, *, wait_for_turn: bool = True) -> dict[str, Any]:
-        """Accept one RAM-only PCM chunk through the application boundary."""
+    def _canonical_audio_context(self, session_id: str):
+        # LocalS2SPipeline needs a bounded context object for VAD/STT
+        # bookkeeping. Canonical voice turns never pass through its LLM/TTS
+        # conversation path; the STT transcript is re-ingressed as a
+        # canonical SpeechReceived event below.
+        from .s2s import ConversationContext, ProfileContext
+        state = self.canonical_runtime.sessions.get(session_id)
+        profile = self._canonical_profiles.get(session_id)
+        state_snapshot = state.snapshot() if state is not None else {"mode": "bear_dialogue", "handset": "up"}
+        prompt = build_system_prompt(profile=profile, state=state_snapshot)
+        return ConversationContext(session_id, "canonical_product", str(state_snapshot.get("mode") or "bear_dialogue"), ("greetings", "clinic", "weather", "games", "stories", "feelings", "questions"), ("diagnosis", "medicine", "secret", "personal_data"), 5, 120, 2, profile=ProfileContext.from_profile(profile), system_prompt=prompt)
+
+    async def _complete_canonical_audio_turn(self, session_id: str, sequence: int, pending: asyncio.Task[Any], epoch: int, correlation_id: str) -> None:
+        try:
+            audio_result = await pending
+        except asyncio.CancelledError:
+            return
+        session = self.sessions.get(session_id)
+        if session is None or session.state == Lifecycle.ENDED or self._session_epochs.get(session_id, 0) != epoch or session.correlation_id != correlation_id:
+            return
+        if audio_result.stt is None or not audio_result.stt.text.strip():
+            return
+        payload = await self._receive_canonical_event(
+            Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio",
+                  {"length": len(audio_result.stt.text)}, correlation_id),
+            audio_result.stt.text,
+        )
+        await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
+
+    async def _receive_canonical_audio(self, session_id: str, samples: tuple[float, ...], sequence: int, *, wait_for_turn: bool) -> dict[str, Any]:
         session = self.sessions.get(session_id)
         if session is None:
             return {"session_id": session_id, "state": Lifecycle.IDLE.value, "outputs": [], "reason": "audio_session_required", "audio_status": "ignored", "pending": False}
-        if self.s2s_audio is None or self.bounded_s2s is None:
+        if self.s2s_audio is None:
             return {**self._result(session, [], "audio_unavailable"), "audio_status": "ignored", "barge_in": False, "pending": False}
         if session.state == Lifecycle.ENDED or sequence <= session.last_sequence:
             return {**self._result(session, [], "late_or_duplicate_audio"), "pending": False}
-        if not session.current_node or not session.scenario_id:
-            return self._ignored_audio_result(session, sequence)
-        scenario = self.scenarios.get(session.scenario_id or "fixture_core")
-        node = self._node(scenario, session.current_node)
-        if node["type"] != "bounded_free_conversation":
-            # A WAV/PCM upload is chunked. The first chunk may complete the turn
-            # and move the scenario before the tail of that same upload arrives.
-            # Treat that tail as stale input instead of surfacing a transport
-            # error to the tester.
-            return self._ignored_audio_result(session, sequence)
-        # Every accepted PCM frame is part of the event stream, including
-        # frames while VAD is still collecting. Persisting the sequence here
-        # makes duplicate UART/WebSocket delivery idempotent and keeps SQLite
-        # session activity current during a long utterance.
+        if session.handset_up is not True:
+            return {**self._result(session, [], "audio_not_listening"), "audio_status": "handset_required", "pending": False, "barge_in": False}
+        voice_open = True
         session.last_sequence, session.last_activity_at = sequence, self.now()
-        context = self._conversation_context(session, node)
-        audio_result = await self.s2s_audio.feed_audio(session_id, samples, context, wait_for_turn=wait_for_turn)
-        barge_outputs=[]
-        if audio_result.barge_in:
-            self.publisher.publish(Event("BargeInDetected",session.session_id,sequence,self.now(),"uart_audio",{},session.correlation_id))
-            barge_outputs=[{"action":"barge_in","status":"previous_output_cancelled"}]
+        context = self._canonical_audio_context(session_id)
+        from .s2s import TurnResult
+        async def no_llm_turn(_text: str, _generation: int):
+            return TurnResult((), (), False, None)
+        audio_result = await self.s2s_audio.feed_audio(session_id, samples, context, wait_for_turn=wait_for_turn, turn_handler=no_llm_turn)
+        barge_outputs = [{"action": "barge_in", "status": "previous_output_cancelled"}] if audio_result.barge_in else []
         if audio_result.pending is not None:
-            # VAD has completed a turn, but browser ingress must remain free
-            # to receive the next utterance immediately.  Completion is
-            # applied in a separate task and published through the stand hook.
-            ack_enabled = bool(getattr(self.settings, "fast_audio_ack", False))
-            ack_cooldown = float(getattr(self.settings, "fast_audio_ack_cooldown_s", 4.0))
-            now_mono = time.monotonic()
-            last_ack = self._last_audio_ack_at.get(session_id, 0.0)
-            ack_allowed = ack_enabled and not audio_result.barge_in and now_mono - last_ack >= ack_cooldown
-            if ack_allowed:
-                self._last_audio_ack_at[session_id] = now_mono
-                self.audio.play("ack_listening", None, session.cancellation_token)
-                engine = getattr(getattr(self, "runtime_manager", None), "engine", None)
-                if engine is not None:
-                    engine.metrics.event("audio_ack_requested", response_id="ack_listening")
-                barge_outputs.append({"action": "audio_ack", "response_id": "ack_listening"})
-            completion = asyncio.create_task(
-                self._complete_audio_turn(session_id, sequence, context, audio_result.pending,
-                                          self._session_epochs.get(session_id, 0), session.correlation_id),
-                name=f"audio-completion-{session_id}",
-            )
-            owned = self._audio_completions.setdefault(session_id, set())
-            owned.add(completion)
-            self._audio_completion_started_at[session_id] = time.monotonic()
+            epoch = self._session_epochs.get(session_id, 0)
+            completion = asyncio.create_task(self._complete_canonical_audio_turn(session_id, sequence, audio_result.pending, epoch, session.correlation_id), name=f"canonical-audio-{session_id}")
+            owned = self._audio_completions.setdefault(session_id, set()); owned.add(completion)
+            self._audio_completion_started_at[session_id] = self.monotonic_now()
             completion.add_done_callback(self._audio_completion_callback(session_id))
             self.sessions.save(session)
-            return {**self._result(session, barge_outputs, "audio_processing"),
-                    "audio_status": "processing", "pending": True,
-                    "barge_in": audio_result.barge_in}
-        if audio_result.turn is None:
-            self.sessions.save(session)
-            return {**self._result(session, barge_outputs, audio_result.ingress_status), "audio_status":audio_result.ingress_status,"barge_in":audio_result.barge_in}
-        return self._apply_audio_turn_result(session, sequence, context, audio_result, barge_outputs, scenario, node)
+            return {**self._result(session, barge_outputs, "audio_processing"), "audio_status": "processing", "pending": True, "barge_in": audio_result.barge_in}
+        if audio_result.stt is not None and audio_result.stt.text.strip():
+            result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text)}, session.correlation_id), audio_result.stt.text)
+            result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
+            return result
+        if audio_result.turn is not None and audio_result.turn.fallback_reason:
+            asset = self.voice_manifest.resolve("PHRASE_091")
+            if asset and voice_open: self.audio.play("PHRASE_091", str(asset["asset_path"]), session.cancellation_token)
+            return {**self._result(session, barge_outputs + [{"action": "audio_retry", "reason": audio_result.turn.fallback_reason}], "audio_retry"), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
+        self.sessions.save(session)
+        return {**self._result(session, barge_outputs, audio_result.ingress_status), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
+
+    async def receive_audio_async(self, session_id: str, samples: tuple[float, ...], sequence: int, *, wait_for_turn: bool = True) -> dict[str, Any]:
+        return await self._receive_canonical_audio(session_id, samples, sequence, wait_for_turn=wait_for_turn)
 
     @staticmethod
     def _bounded_diagnostic_reason(value: Any) -> str | None:
@@ -803,50 +1389,6 @@ class ScenarioApplication:
         )
         return report
 
-    async def _complete_audio_turn(self, session_id: str, sequence: int, context: Any,
-                                   pending: asyncio.Task[Any], epoch: int,
-                                   correlation_id: str) -> None:
-        try:
-            audio_result = await pending
-        except asyncio.CancelledError:
-            self._record_audio_completion_diagnostic(
-                "audio_completion_cancelled", session_id=session_id,
-                generation=epoch, correlation_id=correlation_id,
-                operation="completion", cleanup_completed=True,
-            )
-            return
-        except Exception as exc:
-            # The synchronous upload path already turns provider failures into
-            # a bounded retry.  A detached browser task must have the same
-            # safety behavior and must never become an unhandled task error.
-            self._record_audio_completion_diagnostic(
-                "audio_completion_error", session_id=session_id,
-                generation=epoch, correlation_id=correlation_id,
-                operation="completion", exception_type=type(exc).__name__,
-                cleanup_completed=True,
-            )
-            self.runtime_status["last_audio_completion_error"] = {"session_id": session_id, "error": type(exc).__name__}
-            return
-        session = self.sessions.get(session_id)
-        if (session is None or session.state == Lifecycle.ENDED or
-                self._session_epochs.get(session_id, 0) != epoch or
-                session.correlation_id != correlation_id):
-            self._record_audio_completion_diagnostic(
-                "audio_completion_stale_generation", session_id=session_id,
-                generation=epoch, correlation_id=correlation_id,
-                operation="completion", cleanup_completed=True,
-            )
-            return
-        scenario = self.scenarios.get(session.scenario_id or "fixture_core")
-        node = self._node(scenario, session.current_node) if session.current_node else None
-        if node is None or node["type"] != "bounded_free_conversation":
-            return
-        payload = self._apply_audio_turn_result(session, sequence, context, audio_result, [], scenario, node)
-        self.sessions.save(session)
-        await self._invoke_audio_update_hook(
-            session_id, payload, generation=epoch, correlation_id=correlation_id,
-        )
-
     async def _invoke_audio_update_hook(self, session_id: str, payload: dict[str, Any], *,
                                         generation: Any = None,
                                         correlation_id: str | None = None) -> None:
@@ -900,466 +1442,58 @@ class ScenarioApplication:
             if mandatory:
                 raise RuntimeError("mandatory audio completion hook failed") from exc
 
-    def _apply_audio_turn_result(self, session: Any, sequence: int, context: Any, audio_result: Any, barge_outputs: list[dict[str, Any]], scenario: Any, node: Any) -> dict[str, Any]:
-        """Apply a completed STT/LLM result for both HTTP and WebSocket paths."""
-        if audio_result.stt is not None:
-            self.publisher.publish(Event("SpeechReceived", session.session_id, sequence, self.now(), "uart_audio", {"length":len(audio_result.stt.text)}, session.correlation_id))
-            quick_response = self._quick_response_id(audio_result.stt.text, context) if self.allow_quick_replies else None
-            if quick_response:
-                context.turns += 1
-                outputs = barge_outputs + self._apply_quick_response(session, quick_response)
-                self.sessions.save(session)
-                return {**self._result(session, outputs, "quick_reply_audio"), "audio_status":audio_result.ingress_status,
-                        "stt_confidence":audio_result.stt.confidence, "barge_in":audio_result.barge_in}
-        # Audio ingress failures are transport/recognition problems, not a
-        # scenario decision.  Previously these were passed to
-        # ``_apply_s2s_result`` like a safety or provider failure, which moved
-        # an otherwise healthy conversation to ``*_fallback``.  The browser
-        # then continued sending PCM to a non-listening node and every next
-        # chunk was reported as ``audio_not_listening``.  Keep the node alive,
-        # give the tester a bounded retry prompt, and let the next utterance
-        # start a fresh VAD/STT turn.
-        if audio_result.turn.fallback_reason in self.AUDIO_RECOVERABLE_FAILURES:
-            retry_reason = audio_result.turn.fallback_reason
-            self.audio.play("fallback_repeat", None, session.cancellation_token)
-            outputs = barge_outputs + [
-                {"action": "audio_retry", "reason": retry_reason},
-                {"action": "audio", "response_id": "fallback_repeat"},
-            ]
-            self.sessions.save(session)
-            return {**self._result(session, outputs, "audio_retry"),
-                    "audio_status": audio_result.ingress_status,
-                    "audio_error": retry_reason,
-                    "stt_confidence": audio_result.stt.confidence if audio_result.stt else None,
-                    "barge_in": audio_result.barge_in}
-        outputs = barge_outputs+self._apply_s2s_result(session, scenario, node, audio_result.turn)
-        self.sessions.save(session)
-        return {**self._result(session, outputs, "bounded_s2s_audio"), "audio_status":audio_result.ingress_status,
-                "stt_confidence":audio_result.stt.confidence if audio_result.stt else None,"barge_in":audio_result.barge_in}
-
-    def _conversation_context(self, session, node):
-        from .s2s import ConversationContext, ProfileContext
-        context = self.conversation_contexts.get(session.session_id)
-        if context is None:
-            profile = self.profiles.resolve(session.rfid_tag or "") or {}
-            if getattr(self.profiles, "last_error", None):
-                raise RuntimeError("profile provider unavailable")
-            context = ConversationContext(session.session_id, session.scenario_id or "fixture_core", node["id"], tuple(node["allowed_topics"]), tuple(node["forbidden_topics"]), int(node["max_turns"]), int(node["max_duration_seconds"]), int(node["context_window"]), ProfileContext.from_profile(profile))
-            self.conversation_contexts[session.session_id] = context
-        return context
-
-    @staticmethod
-    def _quick_response_id(text: str, context: Any) -> str | None:
-        if context.scenario_id != "fixture_core":
-            return None
-        key = " ".join(str(text).casefold().strip().rstrip("?!.,").split())
-        return {
-            "привет": "quick_greeting",
-            "как настроение": "quick_mood",
-            "как настроение сегодня": "quick_mood",
-            "мне грустно": "quick_sad",
-            "мне немного грустно": "quick_sad",
-            "что ты умеешь": "quick_capabilities",
-            "расскажи сказку": "quick_story_prompt",
-        }.get(key)
-
-    def _apply_quick_response(self, session, response_id: str) -> list[dict[str, Any]]:
-        self.audio.play(response_id, None, session.cancellation_token)
-        engine = getattr(getattr(self, "runtime_manager", None), "engine", None)
-        if engine is not None:
-            engine.metrics.event("quick_reply_audio", response_id=response_id)
-        return [{"action":"quick_reply", "response_id":response_id},
-                {"action":"audio", "response_id":response_id}]
-
-    def _apply_s2s_result(self, session, scenario, node, result):
-        outputs = [{"action":"s2s_text", "text":chunk} for chunk in result.chunks] + [{"action":item.value, **item.params} for item in result.actions]
-        if result.fallback_reason:
-            # Expose only the bounded reason, never raw child input or model
-            # output. This makes a tester's fallback diagnosable in the stand
-            # without weakening the fail-safe scenario routing.
-            outputs.insert(0, {"action":"s2s_fallback", "reason":result.fallback_reason})
-            if result.fallback_reason == "safety_signal":
-                self.publisher.publish(Event("SafetySignalDetected", session.session_id, session.last_sequence, self.now(), "safety", {"category":"child_signal"}, session.correlation_id))
-            outputs += self._goto(session, scenario, node["on_safety_signal"] if "safety" in result.fallback_reason or "blocked" in result.fallback_reason else node["fallback_node"], result.fallback_reason)
-        elif result.return_to_scenario:
-            outputs += self._goto(session, scenario, node["return_node"], "s2s_return")
-        return outputs
-
     def start_session(self, session_id: str, correlation_id: str | None = None) -> dict[str, Any]:
         current = self.sessions.get(session_id)
         if current is not None:
             return self._result(current, [], "existing_session")
         active = self.sessions.active_for_installation(self.installation_id)
-        session = SessionRecord(session_id, self.installation_id, correlation_id or str(uuid.uuid4()), started_at=self.now(), last_activity_at=self.now())
+        session = SessionRecord(session_id, self.installation_id, correlation_id or str(uuid.uuid4()), scenario_id="canonical", started_at=self.now(), last_activity_at=self.now())
         if active is not None:
             return self._result(session, [], "installation_busy")
         self.sessions.save(session)
         return self._result(session, [], "session_created")
 
     async def reset_session(self, session_id: str) -> dict[str, Any]:
+        self._cancel_welcome_timer(session_id)
+        self._welcome_timer_sequences.pop(session_id, None)
+        self._cancel_menu_tutorial(session_id)
+        self._menu_tutorial_sequences.pop(session_id, None)
         self._session_epochs[session_id] = self._session_epochs.get(session_id, 0) + 1
+        self._invalidate_audio_lease(session_id)
         cleanup = await self._cancel_audio_completions(session_id, operation="reset")
         if self.bounded_s2s is not None:
             await self.bounded_s2s.cancel_session(session_id)
         if self.s2s_audio is not None:
             await self.s2s_audio.cancel_session(session_id)
         self.conversation_contexts.pop(session_id, None)
+        if self.canonical_runtime is not None:
+            self.canonical_runtime.reset(session_id)
+            self._canonical_profiles.pop(session_id, None)
+            self._canonical_schedule_refs.pop(session_id, None)
+        # Reset is an application-level boundary, not only a repository
+        # operation. Keep fake, PTY and physical LED implementations aligned
+        # even when reset is invoked without the Stand wrapper.
+        clear_all = getattr(self.led, "clear_all", None)
+        if callable(clear_all):
+            clear_all()
         self._last_audio_ack_at.pop(session_id, None)
         self.sessions.delete(session_id)
+        # Reset is also an observability boundary: do not leave the previous
+        # dialogue node visible in health/panel snapshots after a successful
+        # installation reset.
+        self.last_canonical_state = {
+            "session_id": session_id,
+            "mode": "idle",
+            "handset": "down",
+            "expected_inputs": ["handset_up"],
+        }
+        self.last_canonical_event = {}
+        self.last_canonical_effects = []
         return {"session_id":session_id,"state":"RESET","reset":True,"cleanup":cleanup}
 
-    def receive(self, event: Event, transient_text: str | None = None) -> dict[str, Any]:
-        session = self.sessions.get(event.session_id) or SessionRecord(event.session_id, self.installation_id, event.correlation_id or str(uuid.uuid4()), started_at=self.now(), last_activity_at=self.now())
-        button_id = str(event.payload.get("button_id", ""))
-        # Text/voice arriving before RFID or handset setup is a benign early input.
-        # Keep the session in an explicit waiting state instead of resolving a null graph node.
-        if event.event_type == "SpeechReceived" and (session.current_node is None or session.state == Lifecycle.IDLE):
-            session.state = Lifecycle.WAITING_RFID
-            self.sessions.save(session)
-            return self._result(session, [{"action": "audio_cancelled"}, {"action": "input_ignored"}], "processed")
-        # Button release is a physical edge, not a new scenario command.
-        # It must never re-route an already accepted press into safety fallback.
-        if event.event_type == "ButtonReleased":
-            self.sessions.save(session)
-            return self._result(session, [], "button_released")
+    def receive(self, event: Event, transient_text: str | None = None, *, trigger_readiness_wave: bool = True) -> dict[str, Any]:
+        raise RuntimeError("canonical runtime accepts events through receive_async")
 
-        # Speech normally completes in receive_async(), but the synchronous
-        # API and hardware smoke tests must still receive a structured result.
-        # Keep text transient, apply the same safety gate, and defer ordinary
-        # input to the bounded S2S/LLM worker instead of falling through.
-        if event.event_type == "SpeechReceived":
-            text = str(transient_text or event.payload.get("text", ""))
-            lowered = text.lower()
-            unsafe = len(text) > 512 or any(
-                marker in lowered
-                for marker in ("ignore instructions", "system prompt", "покажи промпт")
-            )
-            if unsafe:
-                outputs = self._fallback(session, "unsafe_input", event.sequence)
-                self.sessions.save(session)
-                return self._result(session, outputs, "unsafe_input")
-            self.sessions.save(session)
-            return self._result(session, [], "speech_deferred")
-        if event.event_type == "ButtonPressed" and button_id not in {"1","2","3","4","5","6","7"} and session.state == Lifecycle.AUTHENTICATED:
-            event.event_type = "HandsetLifted"
-        if (
-            event.event_type == "ButtonPressed"
-            and str(event.payload.get("button_id")) in {"1", "2", "3", "4", "5", "7"}
-            and session.rfid_tag is None
-            and session.current_node is None
-            and session.state == Lifecycle.WAITING_RFID
-        ):
-            self._prepare_visual_guest(session)
-            button_id = int(event.payload.get("button_id"))
-            targets = self._fixture_button_targets()
-            session.current_node = targets[button_id]
-            self.publisher.publish(Event("VisualGuestStarted", session.session_id, session.last_sequence, self.now(), "application", session.correlation_id))
-            self.sessions.save(session)
-            return self._result(session, [{"action": "visual_guest", "button_id": button_id, "node": session.current_node, "audio": False}], "visual_guest")
-
-
-        if (event.event_type == "ButtonPressed" and session is not None
-                and session.state not in {Lifecycle.ACTIVE, Lifecycle.FALLBACK, Lifecycle.ENDED}
-                and not session.current_node
-                and str(event.payload.get("button_id")) in {"1", "2", "3", "4", "5", "7"}):
-            self._prepare_visual_guest(session)
-        if event.sequence <= session.last_sequence:
-            return self._result(session, [], "idempotent_duplicate")
-        if session.state == Lifecycle.ENDED:
-            return self._result(session, [], "late_event_rejected")
-        session.last_sequence, session.last_activity_at = event.sequence, self.now()
-        self.publisher.publish(event)
-        outputs: list[dict] = []
-        # Pre-auth visual guest input is deterministic hardware routing. It must
-        # not ask LangGraph/LLM to authorize a branch before a session exists.
-        if (event.event_type == "ButtonPressed" and session.visual_only
-                and session.scenario_id == "fixture_core"
-                and session.current_node == "fixture_choose"):
-            scenario = self.scenarios.get("fixture_core") or {}
-            node = self._node(scenario, session.current_node) if scenario else {}
-            static_targets = self._fixture_button_targets()
-            button_value = int(event.payload.get("button_id", 0))
-            target = node.get("transitions", {}).get(f"button_{button_value}") or static_targets.get(button_value)
-            if target:
-                session.current_node = str(target)
-                self.publisher.publish(Event("ScenarioAdvanced", session.session_id, session.last_sequence, self.now(), "application", session.correlation_id))
-                visual = [{"action": "visual_guest", "button_id": int(event.payload.get("button_id", 0)), "node": session.current_node, "audio": False}]
-                if session.current_node == "fixture_led_mix":
-                    visual.append({"action": "led_pattern", "pattern": "led_mix", "color": "yellow", "duration_ms": 500})
-                elif session.current_node == "fixture_game_repeat_pattern":
-                    visual.append({"action": "led_pattern", "pattern": "game_repeat_pattern", "color": "yellow", "duration_ms": 800})
-                return self._result(session, visual, "visual_guest")
-        if event.event_type == "RfidPresented":
-            tag = str(event.payload.get("tag_id", ""))
-            try:
-                profile = self.profiles.resolve(tag)
-            except ProfileProviderError as exc:
-                # Provider failure is not an unknown tag.  Do not persist a new
-                # session or bind an existing one; keep the diagnostic explicit.
-                if self.sessions.get(event.session_id) is not None:
-                    session.error_state = "profile_provider_unavailable"
-                    session.state = Lifecycle.WAITING_RFID
-                    self.sessions.save(session)
-                return self._result(
-                    session,
-                    [{"action": "auth", "status": "error", "reason": "profile_provider_unavailable"}],
-                    "profile_provider_unavailable",
-                )
-            # A child may lift the handset before the RFID reader reports the tag.
-            # Bind the profile into the already-running anonymous fixture session
-            # instead of destroying the active scenario and leaving the device
-            # in a disabled/no-node state.
-            if session.state == Lifecycle.ACTIVE and session.current_node and profile and not session.child_id:
-                session.rfid_tag = tag
-                session.child_id = profile.get("child_id")
-                session.anonymous = False
-                outputs.append({"action":"auth", "status":"authenticated"})
-                outputs.append({"action":"rfid_late_bound", "tag_id":tag, "child_id":session.child_id})
-                self.sessions.save(session)
-                return self._result(session, outputs, "rfid_late_bound")
-            if session.current_node or session.state in {Lifecycle.ACTIVE, Lifecycle.FALLBACK, Lifecycle.ENDING}:
-                result = self._result(session, [{"action":"auth", "status":"rejected", "reason":"session_active"}], "session_rebind_rejected")
-                self.sessions.save(session)
-                return result
-            existing = self.sessions.active_for_installation(session.installation_id)
-            if existing and existing.session_id != session.session_id:
-                # Persist the rejected session as a blocked placeholder.  A
-                # later handset event for the same id must not silently turn
-                # an installation-busy request into anonymous mode.
-                session.error_state = "installation_busy"
-                self.sessions.save(session)
-                return self._result(session, [], "installation_busy")
-            tag = str(event.payload.get("tag_id", ""))
-            # Resolve once per RFID edge.  An unknown/unauthorized tag must not
-            # bind the session or open an anonymous voice channel.
-            if not profile:
-                session.rfid_tag = None
-                session.child_id = None
-                session.anonymous = False
-                session.state = Lifecycle.WAITING_RFID
-                outputs.append({"action": "auth", "status": "rejected", "reason": "unknown_rfid"})
-                self.sessions.save(session)
-                return self._result(session, outputs, "unknown_rfid")
-            session.rfid_tag = tag
-            session.child_id = profile.get("child_id")
-            session.anonymous = False
-            session.state = Lifecycle.AUTHENTICATED
-            if profile.get("child_id") and not session.current_node:
-                scenario = self.scenarios.get("fixture_core") or {}
-                session.scenario_id = "fixture_core"
-                session.scenario_version = (scenario.get("metadata") or {}).get("version")
-                session.current_node = str(scenario.get("start", "fixture_choose"))
-            outputs.append({"action":"auth", "status":"authenticated" if profile else "anonymous"})
-            rainbow_colors = {str(button_id): color for button_id, color in BUTTON_LED_COLORS.items()}
-            self.led.pattern_map("rfid_wave", rainbow_colors, 1200, session.cancellation_token)
-            outputs.extend([{"action":"led_pattern", "pattern":"rfid_wave", "colors":rainbow_colors, "duration_ms":1200}] if profile else [])
-            self.sessions.save(session)
-            return self._result(session, outputs, "rfid_presented")
-        elif event.event_type == "HandsetLifted":
-            if session.error_state == "installation_busy":
-                self.sessions.save(session)
-                return self._result(session, [], "installation_busy")
-            # A handset lift is a lifecycle edge, never a button command.
-            if session.handset_up:
-                self.sessions.save(session)
-                return self._result(session, [], "idempotent_duplicate")
-            session.handset_up = True
-            session.state = Lifecycle.ACTIVE
-            profile = self.profiles.resolve(session.rfid_tag or "") or {}
-            session.scenario_id = "dev_core" if profile.get("dev_mode") else "fixture_core"
-            scenario = self.scenarios.get(session.scenario_id) or self.scenarios.get("fixture_core") or {}
-            session.scenario_version = (scenario.get("metadata") or {}).get("version", "")
-            if session.scenario_id == "dev_core":
-                welcome_outputs = self._goto(session, scenario, "dev_welcome", "handset_lifted")
-                session.current_node = "dev_dialogue"
-                outputs.extend(welcome_outputs)
-            else:
-                # RFID admission records the scenario entry node so visual
-                # button input can be handled before the handset is lifted.
-                # Strict LangGraph entry authorization expects that node to be
-                # entered from the pre-auth marker (current_node=None). Clear
-                # only that marker before the first handset greeting; a child
-                # who already chose a visual branch must keep the live node.
-                start_node = str(scenario.get("start", "fixture_welcome"))
-                if session.current_node == start_node:
-                    session.current_node = None
-                outputs.extend(self._goto(session, scenario, start_node, "handset_lifted"))
-            self.publisher.publish(Event("SessionStarted", session.session_id, event.sequence, self.now(), "application", {}, session.correlation_id))
-            self.sessions.save(session)
-            return self._result(session, outputs, "handset_lifted")
-            if event.event_type not in {"HandsetLifted", "HandsetPlaced"} and session.state in {Lifecycle.ACTIVE, Lifecycle.FALLBACK, Lifecycle.ENDING} and session.current_node:
-                result = self._result(session, [], "idempotent_duplicate")
-                self.sessions.save(session)
-                return result
-            if session.state == Lifecycle.WAITING_RFID: session.anonymous = True
-            session.state = Lifecycle.ACTIVE
-            profile = self.profiles.resolve(session.rfid_tag or "") or {}
-            session.scenario_id = "dev_core" if profile.get("dev_mode") else "fixture_core"
-            scenario = self.scenarios.get(session.scenario_id); session.scenario_version = scenario["metadata"]["version"]
-            if session.scenario_id == "dev_core":
-                welcome_outputs = self._goto(session, scenario, "dev_welcome", "handset_lifted")
-                session.current_node = "dev_dialogue"
-                outputs += welcome_outputs
-            else:
-                outputs += self._goto(session, scenario, scenario["start"], "handset_lifted")
-            self.publisher.publish(Event("SessionStarted", session.session_id, event.sequence, self.now(), "application", {}, session.correlation_id))
-        if event.event_type == "HandsetLifted":
-            if session.handset_up:
-                return self._result(session, outputs, "idempotent_duplicate")
-                session.handset_up = True
-                self.sessions.save(session)
-                return self._result(session, outputs, "handset_lifted")
-
-        if event.event_type == "HandsetPlaced":
-            session.handset_up = False
-            # Async S2S cancellation is handled by receive_async() before it
-            # enters this synchronous lifecycle boundary.  The sync boundary
-            # cancels deterministic audio through _end() and must not create an
-            # un-awaited coroutine.
-            ended = self._end(session, "handset_placed", event.sequence)
-            # Lifecycle events are terminal for this dispatch.
-            if isinstance(ended, dict):
-                return ended
-            outputs.extend(ended)
-            self.sessions.save(session)
-            return self._result(session, outputs, "handset_placed")
-        elif event.event_type == "HardwareDisconnected":
-            outputs.extend(self._fallback(session, "hardware_disconnected", event.sequence))
-            self.sessions.save(session)
-            return self._result(session, outputs, "hardware_disconnected")
-        elif event.event_type in {"ButtonHeld", "ButtonLongHeld"}:
-            if int(event.payload.get("duration_ms", 0)) >= 20_000:
-                outputs.extend(self._end(session, "long_hold", event.sequence))
-            self.sessions.save(session)
-            return self._result(session, outputs, "button_hold")
-        elif event.event_type == "ButtonPressed":
-            button_id = int(event.payload.get("button_id", 0))
-            # DEV dialogue starts when the handset is lifted. Its physical
-            # buttons are unused, so they must not cancel an answer that is
-            # still being streamed to the browser.
-        scenario = self.scenarios.get(session.scenario_id or "fixture_core")
-        node = self._node(scenario, session.current_node)
-        if session.current_node == "fixture_welcome":
-            # The welcome handoff to the button-choice node is routing-only.
-            # Do not play the choice node's generic game_menu prompt before
-            # immediately entering the branch selected by this same button.
-            session.current_node = "fixture_choose"
-            node = self._node(scenario, session.current_node)
-        # Physical contract: 6 opens Mishka/LLM; 7 opens schedule/weather.
-        # Child button 6 is the real bounded Mishka/LLM dialogue route.
-        # Keep the child scenario/profile intact; dev_core is reserved for
-        # the explicit adult engineering profile.
-        if session.scenario_id == "fixture_core" and button_id == 6 and not session.game_id:
-            target = "fixture_free"
-            if self._node(scenario, target) is not None:
-                outputs += self._goto(session, scenario, target, "button_6_dialogue")
-            self.sessions.save(session)
-            return self._result(session, outputs, "button_6_dialogue")
-            # Physical contract: child button 7 always opens schedule + weather,
-        # regardless of the active child activity/dialogue node.
-        if (session.scenario_id == "fixture_core" and button_id == 7
-                and not session.game_id
-                and node.get("type") != "story"):
-            target = "fixture_schedule_weather"
-            if self._node(scenario, target) is not None:
-                outputs += self._goto(session, scenario, target, "button_7_schedule_weather")
-            self.sessions.save(session)
-            return self._result(session, outputs, "button_7_schedule_weather")
-
-        if session.scenario_id == "dev_core" and node["type"] == "bounded_free_conversation":
-            if button_id == 6:
-                self.sessions.save(session)
-                return self._result(session, [], "dev_dialogue_ready")
-            if button_id == 7:
-                outputs = self._goto(session, "fixture_core", "fixture_schedule_weather", "button:7")
-                self.sessions.save(session)
-                return self._result(session, outputs, "dev_schedule_weather")
-            self.sessions.save(session)
-            return self._result(session, [{"action":"dev_button_ignored","button_id":button_id,"reason":"dialogue_already_active"}], "processed")
-        if session.game_id:
-            outputs = self._game_button(session, button_id, event.sequence)
-            self.sessions.save(session)
-            return self._result(session, outputs, "game_button")
-        target = node.get("transitions", {}).get(f"button_{button_id}")
-        return self._goto(session, scenario, target, f"button:{button_id}") if target else self._fallback(session, "unknown_button", event.sequence)
-
-    def _button(self, session, button_id, sequence):
-        # Duplicate/empty mock or noisy handset frames must not tear down an active session.
-        if (not button_id or str(button_id) not in {"1", "2", "3", "4", "5", "6", "7"}) and session.current_node and session.state in {Lifecycle.ACTIVE, Lifecycle.FALLBACK}:
-            return [{"action": "input_ignored", "reason": "invalid_button", "button_id": str(button_id)}]
-        if not session.current_node or not session.scenario_id:
-            return [{"action":"input_ignored", "reason":"session_not_ready", "button_id":button_id}]
-        if session.game_id: return self._game_button(session,button_id,sequence)
-        scenario = self.scenarios.get(session.scenario_id or "fixture_core"); node = self._node(scenario, session.current_node)
-        # Adult engineering mode is already in the dialogue node after the
-        # handset is lifted. Physical buttons are intentionally inert there;
-        # they must never route a harmless button press into safety fallback.
-        if session.scenario_id == "dev_core" and node["type"] == "bounded_free_conversation":
-            if button_id == 6:
-                return [{"action":"dev_dialogue_ready","button_id":6,"reason":"dialogue_active"}]
-            return [{"action":"dev_button_ignored", "button_id":button_id, "reason":"dialogue_already_active"}]
-        target = node.get("transitions", {}).get(f"button_{button_id}")
-        return self._goto(session, scenario, target, f"button:{button_id}") if target else self._fallback(session, "unknown_button", sequence)
-
-    def _game_button(self,session,button_id,sequence):
-        scenario=self.scenarios.get(session.scenario_id or "fixture_core"); node=self._node(scenario,session.current_node); game_id=session.game_id or ""; game=self.scenarios.game(game_id) or {}
-        expected=session.game_expected[session.game_index]
-        if button_id==expected:
-            session.game_index+=1
-            if session.game_index<len(session.game_expected):
-                next_button=session.game_expected[session.game_index]
-                colors=fixed_button_colors((next_button,))
-                self.led.pattern_map(f"next_button_{next_button}",colors,500,session.cancellation_token)
-                return [{"action":"led_pattern","pattern":f"next_button_{next_button}","colors":colors,"duration_ms":500}]
-            if self.history is not None and session.child_id and not session.anonymous: self.history.append("game",session.child_id,game_id,{"success":True,"attempts":session.game_attempts})
-            self.publisher.publish(Event("GameCompleted",session.session_id,sequence,self.now(),"application",{"game_id":game_id,"success":True,"attempts":session.game_attempts},session.correlation_id))
-            self.audio.play(str(game.get("success_response","correct")),None,session.cancellation_token)
-            session.game_id=None; session.game_expected=[]
-            return [{"action":"audio","response_id":game.get("success_response","correct")}] + self._goto(session,scenario,node.get("transitions",{}).get("success") or "fixture_choose","game_success")
-        session.game_attempts+=1; session.game_index=0; self.audio.play("incorrect",None,session.cancellation_token)
-        pattern=str(game.get("pattern","attention")); colors=fixed_button_colors(game.get("expected",()))
-        self.led.pattern_map(pattern,colors,800,session.cancellation_token)
-        outputs=[{"action":"audio","response_id":"incorrect"},{"action":"led_pattern","pattern":pattern,"colors":colors,"duration_ms":800}]
-        if session.game_attempts>=session.game_max_attempts:
-            if self.history is not None and session.child_id and not session.anonymous: self.history.append("game",session.child_id,game_id,{"success":False,"attempts":session.game_attempts})
-            self.publisher.publish(Event("GameCompleted",session.session_id,sequence,self.now(),"application",{"game_id":game_id,"success":False,"attempts":session.game_attempts},session.correlation_id))
-            session.game_id=None; session.game_expected=[]
-            outputs+=self._goto(session,scenario,node.get("transitions",{}).get("failure") or "fixture_choose","game_failure")
-        return outputs
-
-    def _speech(self, session, text, sequence):
-        if not session.current_node or not session.scenario_id:
-            return [{"action":"input_ignored", "reason":"session_not_ready"}]
-        if len(text) > 512 or any(x in text.lower() for x in ("ignore instructions", "system prompt", "покажи промпт")): return self._fallback(session, "unsafe_input", sequence)
-        scenario = self.scenarios.get(session.scenario_id or "fixture_core"); node = self._node(scenario, session.current_node)
-        intent = self.classifier.classify(text, str(uuid.uuid4()), lambda: session.state == Lifecycle.ENDED)
-        self.publisher.publish(Event("IntentClassified", session.session_id, sequence, self.now(), "classifier", {"intent":intent.value, "confidence":intent.confidence}, session.correlation_id))
-        target = node.get("transitions", {}).get(intent.value) if intent.is_valid(self.threshold) else None
-        return self._goto(session, scenario, target, f"intent:{intent.value}") if target else self._fallback(session, "intent_fallback", sequence)
-
-    def _fallback(self, session, reason, sequence):
-        if not session.current_node or not session.scenario_id:
-            return [{"action":"input_ignored", "reason":"session_not_ready", "trigger":reason}]
-        session.retries += 1; self.publisher.publish(Event("SafetyFallbackTriggered", session.session_id, sequence, self.now(), "application", {"reason":reason}, session.correlation_id))
-        if session.retries >= 3: return self._end(session, "retry_limit", sequence)
-        scenario = self.scenarios.get(session.scenario_id or "fixture_core")
-        node = self._node(scenario, session.current_node)
-        target = node.get("fallback") or "end"
-        outputs = self._goto(session, scenario, target, reason)
-        if outputs and outputs[0].get("action") == "scenario_rejected":
-            return outputs
-        # _goto activates normal destinations; safety fallback remains visible
-        # as a distinct lifecycle state while its safe response is playing.
-        session.state = Lifecycle.FALLBACK
-        return outputs
-
-    def _cancel(self, session, sequence):
-        session.cancellation_token += 1
-        self.audio.cancel(session.cancellation_token)
-        # Async ingress already stopped browser PCM and any in-flight model
-        # before entering this deterministic state-machine transition.
-        self.publisher.publish(Event("AudioCancelled", session.session_id, sequence, self.now(), "application", {}, session.correlation_id))
-        return [{"action":"audio_cancelled", "token":session.cancellation_token}]
     def _end(self, session, reason, sequence, emit=True):
         if session.state == Lifecycle.ENDED:
             return []
@@ -1367,148 +1501,88 @@ class ScenarioApplication:
         session.termination_reason = reason
         session.cancellation_token += 1
         self.audio.cancel(session.cancellation_token)
-        # Session termination is also a device-state transition: clear the
-        # physical LEDs through the same canonical command consumed by UI.
-        self.led.pattern("off", "off", 0, session.cancellation_token)
+        # Session termination is also a device-state transition. Do not use
+        # the legacy pattern projection here: clear canonical 16-element
+        # lighting directly.
+        clear_all = getattr(self.led, "clear_all", None)
+        if callable(clear_all):
+            clear_all()
         self.publisher.publish(Event("SessionEnded", session.session_id, sequence, self.now(), "application", {"reason": reason}, session.correlation_id))
-        return [{"action": "led_pattern", "pattern": "off", "color": "off", "duration_ms": 0}, {"action": "session_ended", "reason": reason}]
-    def _goto(self, session, scenario, target, reason="transition"):
-        """Advance the deterministic scenario graph and start node-owned output."""
-        if not isinstance(scenario, dict):
-            return self._fallback(session, "invalid_scenario", session.last_sequence)
-        node = self._node(scenario, target)
-        if not node:
-            return self._fallback(session, "unknown_node", session.last_sequence)
-        scenario_id = str(scenario.get("id", session.scenario_id or "fixture_core"))
-        decision = self.langgraph.authorize(
-            scenario_id,
-            session.current_node,
-            str(target),
-            str(reason),
-        )
-        if not decision.get("ok"):
-            diagnostic = {
-                "scenario_id": scenario_id,
-                "current_node": session.current_node,
-                "target": str(target),
-                "reason": decision.get("reason", "provider_or_validation_failure"),
-                "environment": decision.get("environment"),
-            }
-            self.runtime_status["last_scenario_transition_failure"] = diagnostic
-            self.publisher.publish(Event(
-                "ScenarioTransitionRejected",
-                session.session_id,
-                session.last_sequence,
-                self.now(),
-                "scenario_engine",
-                diagnostic,
-                session.correlation_id,
-            ))
-            return [{
-                "action": "scenario_rejected",
-                "reason": diagnostic["reason"],
-                "scenario_id": scenario_id,
-                "node": session.current_node,
-                "target": str(target),
-                "environment": diagnostic["environment"],
-            }]
-        session.scenario_id = scenario_id
-        session.scenario_version = str(scenario.get("metadata", {}).get("version", ""))
-        session.current_node = str(target)
-        session.state = Lifecycle.ACTIVE
-        actions = [{"action": "scenario", "node": str(target), "reason": str(reason)}]
-        node_type = str(node.get("type", ""))
-        if node_type == "say" and not session.visual_only and session.handset_up:
-            meta = node.get("metadata", {}) if isinstance(node.get("metadata", {}), dict) else {}
-            response_id = meta.get("personalized_response") if session.child_id and not session.anonymous else None
-            response_id = response_id or node.get("prompt")
-            if response_id:
-                self.audio.play(str(response_id), node.get("audio_asset"), session.cancellation_token)
-                actions.append({"action": "audio", "response_id": str(response_id)})
-        elif node_type == "story":
-            story_id = str(node.get("metadata", {}).get("story_id", ""))
-            story = self.scenarios.story(story_id) if story_id else None
-            if story:
-                if session.handset_up and not session.visual_only:
-                    self.audio.play(story_id, story.get("audio_asset"), session.cancellation_token)
-                actions.append({"action": "story", "story_id": story_id, "audio_asset": story.get("audio_asset")})
-                self.publisher.publish(Event("StorySelected", session.session_id, session.last_sequence, self.now(), "application", {"story_id": story_id}, session.correlation_id))
-                if self.history is not None and session.child_id and not session.anonymous:
-                    self.history.append("story", session.child_id, story_id, {"completed": False})
-        elif node_type == "game":
-            game_id = str(node.get("metadata", {}).get("game_id", ""))
-            game = self.scenarios.game(game_id) if game_id else None
-            if game:
-                session.game_id = game_id
-                session.game_expected = [int(v) for v in game.get("expected", [])]
-                session.game_index = 0
-                session.game_attempts = 0
-                if session.handset_up and not session.visual_only:
-                    self.audio.play(node.get("prompt", "game_press"), node.get("audio_asset"), session.cancellation_token)
-                actions.append({"action": "game", "game_id": game_id})
-                if not node.get("actions") and not node.get("led_pattern"):
-                    first_button = session.game_expected[0]
-                    pattern = f"next_button_{first_button}"
-                    colors = fixed_button_colors((first_button,))
-                    self.led.pattern_map(pattern, colors, 500, session.cancellation_token)
-                    actions.append({"action": "led_pattern", "pattern": pattern, "colors": colors, "duration_ms": 500})
-        elif node.get("prompt") and session.handset_up and not session.visual_only and node_type not in {"wait", "bounded_free_conversation"}:
-            self.audio.play(str(node["prompt"]), node.get("audio_asset"), session.cancellation_token)
-            actions.append({"action": "audio", "response_id": str(node["prompt"])})
-        if node.get("led_pattern"):
-            self.led.pattern(str(node["led_pattern"]), node.get("led_color", "yellow"), 500, session.cancellation_token)
-            actions.append({"action": "led_pattern", "pattern": str(node["led_pattern"]), "color": node.get("led_color", "yellow"), "duration_ms": 500})
-        for command in node.get("actions", []):
-            if not isinstance(command, dict):
-                continue
-            command_type = str(command.get("type", ""))
-            if command_type == "led_pattern":
-                pattern = str(command.get("pattern", "off"))
-                color = str(command.get("color", "off"))
-                duration_ms = int(command.get("duration_ms", 500))
-                raw_colors = command.get("colors")
-                if isinstance(raw_colors, dict):
-                    colors = fixed_button_colors(
-                        int(button_id) for button_id, value in raw_colors.items()
-                        if str(button_id).isdigit() and str(value).lower() != "off"
-                    )
-                    self.led.pattern_map(pattern, colors, duration_ms, session.cancellation_token)
-                    actions.append({"action": "led_pattern", "pattern": pattern, "colors": colors, "duration_ms": duration_ms})
-                else:
-                    self.led.pattern(pattern, color, duration_ms, session.cancellation_token)
-                    actions.append({"action": "led_pattern", "pattern": pattern, "color": color, "duration_ms": duration_ms})
-            elif command_type == "display":
-                actions.append({
-                    "action": "display",
-                    "asset_id": str(command.get("asset_id", "")),
-                    "text": str(command.get("text", "")),
-                })
-        # Story completion is a transport boundary: the browser reports the
-        # end of the single story audio asset by pressing button 7.  The
-        # scenario contract makes story_done an acknowledgement node whose
-        # next transition returns to the choice menu; apply that transition
-        # in the same dispatch so the client cannot remain in a dead-end node.
-        if target in {"fixture_story_done", "fixture_game_done"}:
-            next_target = node.get("transitions", {}).get("next")
-            if next_target:
-                session.current_node = str(next_target)
-                actions.append({"action": "scenario", "node": str(next_target), "reason": "story_completed"})
-        self.sessions.save(session)
-        return actions
+        return [{"type": "lighting", "elements": list(LIGHTING_ELEMENT_IDS), "state": 0}, {"action": "session_ended", "reason": reason}]
 
-    @staticmethod
-    def _node(scenario, node_id):
-        for node in scenario["nodes"]:
-            if node["id"] == node_id: return node
-        raise ValueError("validated scenario lost node")
-    def _async_sync_result(self, event, session, transient_text):
-        result = self.receive(event, transient_text)
-        if isinstance(result, dict):
-            return result
-        current = self.sessions.get(event.session_id) or session
+    def _reconcile_canonical_lighting(self, effects: list[dict]) -> None:
+        """Restore the canonical effect after the transient readiness wave.
+
+        The wave is a physical presentation layer and intentionally ends with
+        its last group lit. The device snapshot must nevertheless represent
+        the canonical state produced by the state machine, otherwise the UI
+        and the next input observe a stale all-on projection.
+        """
+        clear_all = getattr(self.led, "clear_all", None)
+        if not callable(clear_all):
+            return
+        clear_all()
+        for effect in effects:
+            kind = effect.get("type")
+            if kind == "lighting":
+                clear_all()
+                for element_id in effect.get("elements", ()):
+                    self.led.set_element(int(element_id), int(effect.get("state", 0)))
+            elif kind == "lighting_preset":
+                clear_all()
+                preset = str(effect.get("preset", ""))
+                commands = LED_PRESETS.get(preset, ())
+                if preset == "TARGET":
+                    commands = tuple(
+                        (element_id, 1)
+                        for element_id in BUTTON_ELEMENTS.get(int(effect.get("target_button", 0)), ())
+                    )
+                for element_id, state in commands:
+                    self.led.set_element(element_id, state)
+
+    async def _run_readiness_wave_async(self, session, outputs: list[dict]) -> None:
+        if session.readiness_wave_completed:
+            return
+        wave = getattr(self.led, "readiness_wave_async", None)
+        if not callable(wave):
+            self._run_readiness_wave(session, outputs)
+            return
+        session_id = session.session_id
+        await wave(
+            READINESS_WAVE_DURATION_MS,
+            cancelled=lambda: self.sessions.get(session_id) is None,
+        )
+        complete_wave = getattr(self.led, "complete_readiness_wave", None)
+        if callable(complete_wave):
+            complete_wave()
+        current = self.sessions.get(session_id)
         if current is None:
-            return {"session_id": event.session_id, "state": "RESET", "node": None, "reason": "ignored_input", "outputs": result, "correlation_id": event.correlation_id}
-        return self._result(current, result, "sync_result")
+            return
+        current.readiness_wave_completed = True
+        self._reconcile_canonical_lighting(outputs)
+        self.sessions.save(current)
+        outputs.append({
+            "action": "led_pattern",
+            "pattern": "rfid_wave",
+            "duration_ms": READINESS_WAVE_DURATION_MS,
+            "groups": [list(group) for group in READINESS_WAVE_GROUPS],
+        })
+
+    def _run_readiness_wave(self, session, outputs: list[dict]) -> None:
+        if session.readiness_wave_completed:
+            return
+        wave = getattr(self.led, "readiness_wave", None)
+        if not callable(wave):
+            raise RuntimeError("canonical LED controller lacks readiness_wave")
+        wave(READINESS_WAVE_DURATION_MS)
+        session.readiness_wave_completed = True
+        self._reconcile_canonical_lighting(outputs)
+        outputs.append({
+            "action": "led_pattern",
+            "pattern": "rfid_wave",
+            "duration_ms": READINESS_WAVE_DURATION_MS,
+            "groups": [list(group) for group in READINESS_WAVE_GROUPS],
+        })
 
     @staticmethod
     def _result(session, outputs, reason): return {"session_id":session.session_id, "state":session.state.value, "node":session.current_node, "reason":reason, "outputs":outputs, "correlation_id":session.correlation_id}

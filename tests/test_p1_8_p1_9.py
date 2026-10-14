@@ -9,6 +9,7 @@ import pytest
 from app.foundation import hardware
 from app.foundation.hardware import PosixSerialTransport, SerialHardwareAdapter, decode_frame, encode_frame
 from app.foundation.stand import AudioInputError, HardwareIntegrationStand, decode_wav, resample
+from app.foundation.config import Settings
 
 
 class FakeTransport:
@@ -154,7 +155,7 @@ def test_resample_preserves_bounds_and_rejects_invalid_input():
 
 def test_audio_codec_offload_can_be_cancelled_without_orphaning_executor():
     async def run():
-        stand = HardwareIntegrationStand()
+        stand = HardwareIntegrationStand(settings=Settings(profile="mock", hardware_mode="fake"))
         started = asyncio.Event()
         release = asyncio.Event()
         original = stand._offload_audio

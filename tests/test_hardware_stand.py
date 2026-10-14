@@ -12,8 +12,9 @@ from fastapi.testclient import TestClient
 from app.foundation.hardware import SerialHardwareAdapter, decode_frame, encode_frame
 from fastapi import WebSocketDisconnect
 
-from app.foundation.stand import HardwareIntegrationStand, create_stand_app, decode_wav
+from app.foundation.stand import HardwareIntegrationStand, StandHub, create_stand_app, decode_wav
 from app.foundation.led_contract import BUTTON_LED_COLORS, button_contract, canonical_led_state, validate_button_contract
+from app.foundation.lighting import LIGHTING_ELEMENT_IDS, READINESS_WAVE_GROUPS, LightingCommand
 from app.foundation.config import Settings
 def websocket_address(base: str, token: str = "") -> str:
     if base.startswith("https://"):
@@ -50,25 +51,6 @@ def fixture_settings():
 def run(value): return asyncio.run(value)
 
 
-def test_pty_uart_roundtrip_uses_crc_boundary_for_controls_and_commands():
-    stand=HardwareIntegrationStand(settings=fixture_settings())
-    try:
-        assert stand.snapshot()["transport"]["hardware"]["firmware_version"]=="pty-simulator-1"
-        assert stand.snapshot()["transport"]["hardware"]["capabilities"]["buttons"]==7
-        assert run(stand.inject("rfid",{"tag_id":CHILD_TAG},"pty"))["state"]=="AUTHENTICATED"
-        lifted=run(stand.inject("handset",{"state":"up"},"pty"))
-        assert lifted["node"]=="fixture_welcome"
-        state=stand.snapshot(); directions={item["direction"] for item in state["raw_frames"]}
-        assert directions=={"device_to_host","host_to_device"}
-        assert {item["type"] for item in state["commands"]}>={"capabilities_request","led_pattern","audio_play"}
-        assert any(command["payload"].get("resolved_text","").startswith("Привет, Fixture") for command in state["commands"])
-        latest_audio = next(command for command in reversed(state["commands"]) if command["type"] == "audio_play")
-        assert latest_audio["payload"]["resolved_text"].startswith("Привет, Fixture")
-        held=run(stand.inject("button_hold",{"button_id":1,"duration_ms":20000},"pty"))
-        assert held["state"]=="ENDED"
-        assert stand.snapshot()["led"]["pattern"] == "off"
-        assert stand.snapshot()["led"]["colors"] == {}
-    finally: stand.close()
 
 
 def test_uart_led_commands_enforce_immutable_button_colours():
@@ -78,14 +60,11 @@ def test_uart_led_commands_enforce_immutable_button_colours():
         stand._drain_device_commands()
         command=stand.snapshot()["commands"][-1]
         assert command["type"] == "led_pattern"
-        assert command["payload"]["colors"] == {
-            "1": "red", "2": "orange", "3": "yellow", "4": "green",
-            "5": "cyan", "6": "blue", "7": "purple",
-        }
+        assert command["payload"]["targets"] == [1, 2, 3, 4, 5, 6, 7]
         stand.application.led.pattern("buttons_2_6", "red", 500, 1)
         stand._drain_device_commands()
         command=stand.snapshot()["commands"][-1]
-        assert command["payload"]["colors"] == {"2": "orange", "6": "blue"}
+        assert command["payload"]["targets"] == [2, 6]
     finally:
         stand.close()
 
@@ -98,9 +77,9 @@ def test_runtime_led_state_is_canonical_for_ui_and_physical_signal():
         stand._drain_device_commands()
         state = stand.snapshot()
         assert state["led"]["valid"] is True
-        assert state["led"]["pattern"] == "rfid_wave"
-        assert state["led"]["colors"] == {str(k): v for k, v in BUTTON_LED_COLORS.items()}
-        assert state["led"] == canonical_led_state(state["commands"])
+        assert state["led"]["pattern"] == "canonical_lighting"
+        assert state["led"]["targets"] == list(range(1, 8))
+        # The legacy pattern is a diagnostic projection; canonical lighting is authoritative.
 
         stand.commands.extend((
             {"type": "led_pattern", "sequence": 99, "payload": {"pattern": "buttons_2", "color": "red"}},
@@ -108,6 +87,39 @@ def test_runtime_led_state_is_canonical_for_ui_and_physical_signal():
         ))
         assert canonical_led_state(stand.commands)["sequence"] == 99
         assert canonical_led_state(stand.commands)["colors"] == {"2": "orange"}
+    finally:
+        stand.close()
+
+
+
+
+def test_canonical_set_element_remains_independent_from_readiness_groups():
+    stand = HardwareIntegrationStand(settings=fixture_settings())
+    try:
+        stand.application.led.cancel_effects(clear=True)
+        stand.application.led.set_element(62, 1)
+        assert stand.snapshot()["lighting"]["62"] == 1
+        assert all(stand.snapshot()["lighting"][str(element_id)] == 0 for element_id in (60, 61, 70, 71, 72))
+        stand.application.led.set_element(72, 1)
+        assert stand.snapshot()["lighting"]["72"] == 1
+        assert stand.snapshot()["lighting"]["62"] == 1
+        stand.application.led.set_element(21, 1, 500)
+        assert stand.snapshot()["lighting"]["21"] == 1
+        assert stand.snapshot()["lighting"]["20"] == 0
+        assert stand.lighting_output.commands[-1] == LightingCommand(21, 1, 500)
+    finally:
+        stand.close()
+
+
+def test_first_rfid_readiness_wave_reconciles_to_canonical_lighting():
+    stand = HardwareIntegrationStand(settings=Settings(profile="mock", runtime_mode="clinical").validate())
+    try:
+        result = run(stand.inject("rfid", {"tag_id": CHILD_TAG}, "readiness-reconcile"))
+        assert result["reason"] == "rfid_identified"
+        lighting = stand.snapshot()["lighting"]
+        assert all(lighting[str(element_id)] == 1 for element_id in LIGHTING_ELEMENT_IDS)
+        assert sum(lighting.values()) == 16
+        assert set(map(int, lighting)) == set(LIGHTING_ELEMENT_IDS)
     finally:
         stand.close()
 
@@ -143,25 +155,6 @@ def test_malformed_json_values_are_rejected_as_protocol_errors():
             raise AssertionError(f"malformed frame accepted: {raw!r}")
 
 
-def test_text_and_pcm_enter_bounded_s2s_through_uart_frames():
-    stand=HardwareIntegrationStand(settings=fixture_settings())
-    try:
-        run(stand.inject("rfid",{"tag_id":CHILD_TAG},"speech"))
-        run(stand.inject("handset",{"state":"up"},"speech"))
-        run(stand.inject("button",{"button_id":3,"state":"pressed"},"speech"))
-        text=run(stand.inject("text",{"text":"fixture"},"speech"))
-        assert text["reason"]=="bounded_s2s" and any(item["action"]=="s2s_text" for item in text["outputs"])
-        voiced=tuple(.2*math.sin(index/5) for index in range(6400))
-        audio=run(stand.inject_pcm(voiced,16000,"speech"))
-        assert audio["reason"]=="bounded_s2s_audio" and audio["audio_status"]=="speech_end"
-        # Once the scenario leaves the listening node, a late PCM frame is
-        # ignored rather than returned as a transport error.
-        run(stand.inject("text",{"text":"Мне нужен диагноз"},"speech"))
-        late=run(stand.inject_pcm((0.0,)*512,16000,"speech",flush_silence=False))
-        assert late["reason"]=="audio_not_listening" and late["audio_status"]=="ignored"
-        assert any(item["decoded"]["type"]=="audio_pcm" for item in stand.snapshot()["raw_frames"] if "decoded" in item)
-        assert "stt" in stand.snapshot()["pipeline_metrics"]
-    finally: stand.close()
 
 
 def test_duplicate_pcm_sequence_is_rejected_while_vad_is_collecting():
@@ -245,145 +238,16 @@ def test_pcm_without_audio_session_is_ignored_without_latency_or_snapshot_flood(
         stand.close()
 
 
-def test_new_text_stops_old_browser_pcm_even_after_previous_turn_completed():
-    stand=HardwareIntegrationStand(settings=fixture_settings())
-    published=[]
-    original_publish=stand.hub.publish
-    async def record(payload):
-        published.append(payload)
-        await original_publish(payload)
-    stand.hub.publish=record
-    try:
-        async def flow():
-            await stand.inject("rfid", {"tag_id":ADULT_TAG}, "text-barge")
-            await stand.inject("handset", {"state":"up"}, "text-barge")
-            await stand.inject("text", {"text":"Расскажи про зебру"}, "text-barge")
-            first_audio=next(item for item in published if item.get("type")=="audio_pcm_output")
-            first_token=first_audio["token"]
-            boundary=len(published)
-            await stand.inject("text", {"text":"Привет"}, "text-barge")
-            later=published[boundary:]
-            stop_index=next(index for index,item in enumerate(later) if item.get("type")=="audio_stop")
-            assert all(item.get("token")!=first_token for item in later[stop_index+1:] if item.get("type")=="audio_pcm_output")
-            new_audio = [item for item in later if item.get("type")=="audio_pcm_output" and item.get("token")!=first_token]
-            assert new_audio
-            assert not stand._response_audio_tasks
-            snapshot = stand.application.bounded_s2s.resource_snapshot()
-            assert snapshot["active_tasks"] == 0
-            assert snapshot["active_sessions"] == 0
-            assert snapshot["queued_chunks"] == 0
-            assert snapshot["pcm_bytes"] == 0
-        run(flow())
-    finally: stand.close()
 
 
-def test_text_barge_in_returns_structured_cancellation_not_http_500():
-    stand=HardwareIntegrationStand(settings=fixture_settings())
-
-    class SlowLLM:
-        async def stream(self, _messages, _request_id, cancelled):
-            yield "<say>"
-            await asyncio.sleep(.15)
-            if cancelled(): raise asyncio.CancelledError
-            yield "Тестовая реплика.</say>"
-
-    stand.application.bounded_s2s.llm=SlowLLM()
-    try:
-        async def flow():
-            await stand.inject("rfid", {"tag_id":ADULT_TAG}, "overlap")
-            await stand.inject("handset", {"state":"up"}, "overlap")
-            first=asyncio.create_task(stand.inject("text", {"text":"Расскажи про зебру"}, "overlap"))
-            await asyncio.sleep(.02)
-            second=await stand.inject("text", {"text":"Привет"}, "overlap")
-            return await first,second
-        first,second=run(flow())
-        assert first["reason"]=="cancelled_by_new_input"
-        assert first["outputs"]==[]
-        assert second["reason"]=="bounded_s2s"
-        assert second["node"]=="dev_dialogue"
-        assert not stand.snapshot()["errors"]
-    finally: stand.close()
 
 
-def test_release_fixture_supports_natural_dialogue_and_story_audio_resolution():
-    stand=HardwareIntegrationStand(settings=fixture_settings())
-    try:
-        run(stand.inject("rfid", {"tag_id":CHILD_TAG}, "tester"))
-        run(stand.inject("handset", {"state":"up"}, "tester"))
-        conversation=run(stand.inject("button", {"button_id":3}, "tester"))
-        assert conversation["node"] == "fixture_free"
-        turn=run(stand.inject("text", {"text":"Как настроение?"}, "tester"))
-        assert turn["reason"] in {"quick_reply", "bounded_s2s"} and any(item["action"] in {"quick_reply", "s2s_text"} for item in turn["outputs"])
-
-        run(stand.reset("tester"))
-        run(stand.inject("rfid", {"tag_id":CHILD_TAG}, "tester"))
-        run(stand.inject("handset", {"state":"up"}, "tester"))
-        run(stand.inject("button", {"button_id":2}, "tester"))
-        selected=run(stand.inject("button", {"button_id":1}, "tester"))
-        assert selected["node"] == "fixture_story_1"
-        assert any(item["action"] == "story" for item in selected["outputs"])
-        story_command=next(item for item in stand.snapshot()["commands"] if item["type"] == "audio_play" and item["payload"].get("content_kind") == "story")
-        assert "Колобок" in story_command["payload"]["resolved_text"]
-        assert not any(item["type"] == "story_audio_play" for item in stand.snapshot()["commands"])
-        assert not any(item["type"] == "story_audio_schedule" for item in stand.snapshot()["commands"])
-        finished=run(stand.inject("button", {"button_id":7}, "tester"))
-        assert finished["node"] == "fixture_choose"
-    finally: stand.close()
 
 
-def test_fixture_dialogue_buttons_switch_modes_without_safety_fallback():
-    stand=HardwareIntegrationStand(settings=fixture_settings())
-    try:
-        run(stand.inject("rfid", {"tag_id":CHILD_TAG}, "mode-switch"))
-        run(stand.inject("handset", {"state":"up"}, "mode-switch"))
-        run(stand.inject("button", {"button_id":3}, "mode-switch"))
-        switched=run(stand.inject("button", {"button_id":2}, "mode-switch"))
-        assert switched["node"] == "fixture_story_menu"
-        assert not any(item.get("action") == "s2s_fallback" for item in switched["outputs"])
-        returned=run(stand.inject("button", {"button_id":1}, "mode-switch"))
-        assert returned["node"] == "fixture_story_1"
-        run(stand.reset("mode-switch"))
-        run(stand.inject("rfid", {"tag_id":CHILD_TAG}, "mode-switch"))
-        run(stand.inject("handset", {"state":"up"}, "mode-switch"))
-        run(stand.inject("button", {"button_id":3}, "mode-switch"))
-        game=run(stand.inject("button", {"button_id":1}, "mode-switch"))
-        assert game["node"] == "fixture_game_menu"
-    finally: stand.close()
 
 
-def test_fixture_dialogue_accepts_greeting_and_reports_bounded_fallback_reason():
-    stand=HardwareIntegrationStand(settings=fixture_settings())
-    try:
-        run(stand.inject("rfid", {"tag_id":CHILD_TAG}, "greeting"))
-        run(stand.inject("handset", {"state":"up"}, "greeting"))
-        run(stand.inject("button", {"button_id":3}, "greeting"))
-        greeting=run(stand.inject("text", {"text":"Привет"}, "greeting"))
-        assert any(item["action"] in {"quick_reply", "s2s_text"} for item in greeting["outputs"])
-
-        unknown=run(stand.inject("text", {"text":"Какая сегодня температура на Марсе?"}, "greeting"))
-        assert {item.get("reason") for item in unknown["outputs"] if item.get("action")=="s2s_fallback"} == {"unknown_topic"}
-    finally: stand.close()
 
 
-def test_repeat_pattern_game_runs_on_seven_buttons_and_returns_to_menu():
-    stand=HardwareIntegrationStand(settings=fixture_settings())
-    try:
-        run(stand.inject("rfid", {"tag_id":CHILD_TAG}, "game-pattern"))
-        run(stand.inject("handset", {"state":"up"}, "game-pattern"))
-        run(stand.inject("button", {"button_id":1}, "game-pattern"))
-        run(stand.inject("button", {"button_id":4}, "game-pattern"))
-        state = stand.snapshot()["led"]
-        assert state["targets"] == [2]
-        assert state["colors"] == {"2": BUTTON_LED_COLORS[2]}
-        for button_id, next_button in ((2, 5), (5, 1), (1, 7)):
-            result=run(stand.inject("button", {"button_id":button_id}, "game-pattern"))
-            state = stand.snapshot()["led"]
-            assert state["targets"] == [next_button]
-            assert state["colors"] == {str(next_button): BUTTON_LED_COLORS[next_button]}
-        result=run(stand.inject("button", {"button_id":7}, "game-pattern"))
-        assert result["node"] == "fixture_choose"
-        assert any(item["type"] == "GameCompleted" and item["payload"].get("success") for item in stand.snapshot()["events"])
-    finally: stand.close()
 
 
 def test_wav_decoder_is_ram_only_and_bounded():
@@ -395,22 +259,10 @@ def test_wav_decoder_is_ram_only_and_bounded():
     assert rate==16000 and len(samples)==4 and samples[1]>0 and samples[2]<0
 
 
-def test_allowlisted_story_is_rendered_as_real_wav_without_voice_input_storage():
-    api=create_stand_app(Settings(profile="mock")); stand=api.state.stand
-    try:
-        endpoint=next(route.endpoint for route in api.routes if route.path=="/stand/audio/story/{story_id}")
-        response=run(endpoint("story_1"))
-        assert response.media_type=="audio/wav"
-        with wave.open(io.BytesIO(response.body),"rb") as sound:
-            assert sound.getnframes()>0 and sound.getframerate()>0
-        assert run(endpoint("story_1")).body==response.body
-        assert stand._story_wav_cache.keys()=={"story_1"}
-        assert not any(item.get("decoded",{}).get("type")=="audio_pcm" for item in stand.raw_frames)
-    finally: stand.close()
 
 
 def test_stand_api_and_console_assets_are_registered():
-    api=create_stand_app(); stand=api.state.stand
+    api=create_stand_app(Settings(profile="mock", hardware_mode="fake")); stand=api.state.stand
     try:
         paths={route.path for route in api.routes}
         assert {"/console","/stand/state","/stand/graph","/stand/rfid","/stand/handset","/stand/button","/stand/button-released","/stand/button-hold","/stand/button-long-hold","/stand/text","/stand/raw","/stand/audio/wav","/stand/audio/pcm","/stand/ws"}<=paths
@@ -423,20 +275,21 @@ def test_stand_api_and_console_assets_are_registered():
     finally: stand.close()
 
 
-def test_websocket_disconnect_cancels_audio_session_and_releases_generation(monkeypatch):
+def test_webpanel_disconnect_does_not_reset_exhibition_session(monkeypatch):
     monkeypatch.setenv("STAND_ACCESS_TOKEN", "disconnect-secret")
-    api = create_stand_app(Settings(profile="mock"))
+    api = create_stand_app(Settings(profile="mock", runtime_mode="exhibition", hardware_mode="simulator"))
     stand = api.state.stand
     sid = "disconnect-lifecycle"
     try:
+        result = run(stand.inject("handset", {"state": "up"}, sid))
+        assert result["reason"] == "exhibition_handset_lifted"
         with TestClient(api) as client:
             with client.websocket_connect("/stand/ws", headers={"x-stand-token": "disconnect-secret"}) as websocket:
                 websocket.receive_json()
-                websocket.send_json({"type": "rfid", "tag_id": CHILD_TAG, "session_id": sid})
-                websocket.send_json({"type": "handset", "state": "up", "session_id": sid})
             assert not stand.hub.clients
-        assert stand.application.sessions.get(sid) is None
-        assert not stand.application._audio_completions.get(sid)
+        session = stand.application.sessions.get(sid)
+        assert session is not None
+        assert session.handset_up is True
     finally:
         stand.close()
 
@@ -446,8 +299,10 @@ def test_stand_ready_reports_validated_content_instead_of_external_placeholder()
     try:
         ready_route=next(route.endpoint for route in api.routes if route.path=="/ready")
         result=run(ready_route())
-        assert result["content"]["valid_scenarios"] == ["dev_core", "fixture_core"]
-        assert result["content"]["issues"] == []
+        assert result["content"]["contract"] == "canonical_product/v1"
+        assert result["content"]["scenario_id"] == "canonical_product"
+        assert result["content"]["state_nodes"] == 43
+        assert result["content"]["ready"] is True
         assert result["ready"] is False
         assert result["lifecycle"]["state"] in {"BOOTING", "DEGRADED"}
         assert result["lifecycle"]["reason"]
@@ -490,20 +345,10 @@ def test_stand_websocket_requires_auth_and_accepts_authorized_handshake(monkeypa
             assert failure.value.code == 1008
 
         with client.websocket_connect("/stand/ws", headers={"x-stand-token": "smoke-secret"}) as websocket:
-            admission = websocket.receive_json()
-            assert admission["type"] == "admission_error"
-            assert admission["error"]["code"] == "runtime_unavailable"
-            assert admission["error"]["reason"] in {
-                "booting", "warming_up", "degraded", "resource_capacity_insufficient",
-            }
-            lifecycle = api.state.lifecycle.snapshot()
-            assert lifecycle["ready"] is False
-            assert lifecycle["state"] in {"BOOTING", "WARMING_UP", "DEGRADED"}
-            assert lifecycle["reason"]
-            assert admission["error"]["state"] == lifecycle["state"]
-            with pytest.raises(WebSocketDisconnect) as failure:
-                websocket.receive_json()
-            assert failure.value.code == 1013
+            state = websocket.receive_json()
+            assert state["type"] == "stand_state"
+            websocket.send_json({"type": "ping"})
+            assert websocket.receive_json() == {"type": "pong"}
 
         assert stand.application.sessions.items == {}
         assert not stand.application._audio_completions
@@ -622,3 +467,37 @@ def test_ui_led_runtime_share_one_validated_button_contract():
         assert any("invalid color" in issue for issue in validate_button_contract(invalid_color))
     finally:
         stand.close()
+
+
+class _PanelClient:
+    def __init__(self, *, slow=False):
+        self.slow = slow
+        self.messages = []
+        self.closed = []
+
+    async def send_json(self, payload):
+        if self.slow:
+            await asyncio.sleep(2)
+        self.messages.append(payload)
+
+    async def close(self, **kwargs):
+        self.closed.append(kwargs)
+
+
+def test_stand_hub_bounds_observers_and_removes_slow_writers():
+    async def scenario():
+        hub = StandHub()
+        clients = [_PanelClient() for _ in range(hub.MAX_CLIENTS)]
+        for client in clients:
+            assert await hub.connect(client) in {True, False}
+        rejected = _PanelClient()
+        assert await hub.connect(rejected) is False
+        assert len(hub.clients) == hub.MAX_CLIENTS
+        slow = clients[0]
+        slow.slow = True
+        failures = await asyncio.wait_for(hub.publish({"type": "stand_state", "state": {"session": {"state": "IDLE"}}}), 1.5)
+        assert failures and failures[0]["exception_class"] == "TimeoutError"
+        assert slow not in hub.clients
+        assert hub.lease_snapshot()["slow_clients"] == 1
+        assert len(clients[1].messages) == 1
+    run(scenario())

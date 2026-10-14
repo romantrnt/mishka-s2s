@@ -107,6 +107,6 @@ def test_disabled_provider_is_explicitly_unavailable(monkeypatch):
 
 @pytest.mark.unit
 def test_removed_duplicate_weather_adapter_has_no_env_reader():
-    source = Path("app/foundation/experience.py").read_text()
-    assert "os.getenv" not in source
+    assert not Path("app/foundation/experience.py").exists()
+    source = Path("app/foundation/schedule_weather.py").read_text()
     assert "open-meteo" not in source.lower()

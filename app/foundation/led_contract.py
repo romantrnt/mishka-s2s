@@ -1,5 +1,18 @@
 from __future__ import annotations
 from typing import Any, Iterable
+
+from .lighting import (
+    BUTTON_DIGIT_ELEMENTS,
+    BUTTON_OUTPUT_ELEMENTS,
+    ELEMENT_TO_BUTTON,
+    FakeLightingOutput,
+    LightingCommand,
+    LightingController,
+    LightingOutput,
+    LightingState,
+    LIGHTING_ELEMENT_IDS,
+)
+
 BUTTON_LED_COLORS = {1: "red", 2: "orange", 3: "yellow", 4: "green", 5: "cyan", 6: "blue", 7: "purple"}
 BUTTON_LED_LABELS = {button_id: color.upper() for button_id, color in BUTTON_LED_COLORS.items()}
 
@@ -58,6 +71,16 @@ def canonical_led_command(payload: dict[str, Any]):
     if duration < 0: raise ValueError("LED duration must be non-negative")
     if pattern == "off":
         return {"valid": True, "pattern": "off", "color": "off", "colors": {}, "targets": [], "duration_ms": duration}
+    raw_targets = payload.get("targets")
+    if raw_targets is not None:
+        if not isinstance(raw_targets, (list, tuple)):
+            raise ValueError("LED targets must be a list")
+        ids = []
+        for value in raw_targets:
+            if isinstance(value, bool) or not str(value).isdigit() or int(value) not in BUTTON_LED_COLORS:
+                raise ValueError("LED target list contains an unknown button")
+            ids.append(int(value))
+        return {"valid": True, "pattern": pattern, "targets": sorted(set(ids)), "duration_ms": duration}
     raw = payload.get("colors")
     if raw is not None:
         if not isinstance(raw, dict): raise ValueError("LED colors must be an object")
@@ -78,3 +101,26 @@ def canonical_led_state(commands):
     try: state=canonical_led_command(dict(command.get("payload") or {}))
     except (TypeError,ValueError,KeyError) as exc: return {"valid": False, "pattern": "invalid", "color": "invalid", "colors": {}, "targets": [], "sequence": int(command.get("sequence",0)), "reason": str(exc)}
     state["sequence"]=int(command.get("sequence",0)); return state
+
+def canonical_led_state_from_lighting(lighting: dict[str, int] | None):
+    """Build the UI color compatibility projection from canonical lighting.
+
+    The element snapshot remains the source of truth and is what the
+    physical adapter receives.
+    """
+    source = lighting if isinstance(lighting, dict) else {}
+    targets = []
+    colors = {}
+    for button_id, (fill_id, _digit_id) in {
+        1: (10, 11), 2: (20, 21), 3: (30, 31), 4: (40, 41),
+        5: (50, 51), 6: (60, 61), 7: (70, 71),
+    }.items():
+        if int(source.get(str(fill_id), source.get(fill_id, 0))) == 1:
+            targets.append(button_id)
+            colors[str(button_id)] = BUTTON_LED_COLORS[button_id]
+        else:
+            colors[str(button_id)] = "off"
+    return {"valid": True, "pattern": "canonical_lighting",
+            "color": "mixed" if targets else "off", "colors": colors,
+            "targets": targets, "duration_ms": 0, "sequence": 0,
+            "source": "canonical_lighting"}

@@ -157,11 +157,17 @@ class SQLiteRepository(InMemorySessionRepository):
             missing = sorted({"sessions", "history"} - tables)
             if missing:
                 return {"ready": False, **base, "schema_state": "invalid", "reason": "schema_invalid", "details": {"missing_tables": missing}}
-            self.db.execute("SELECT 1").fetchone()
-            count = int(self.db.execute("SELECT COUNT(*) FROM history").fetchone()[0])
+            probe = self.db.execute("SELECT 1").fetchone()
+            count_row = self.db.execute("SELECT COUNT(*) FROM history").fetchone()
+            if probe is None or count_row is None:
+                raise sqlite3.OperationalError("history_probe_empty")
+            count = int(count_row[0])
             return {"ready": True, **base, "provider_state": "operational", "schema_state": "valid",
                     "history_availability": "with_records" if count else "empty",
                     "reason": None if count else "operational_empty", "details": {"history_count": count}}
-        except sqlite3.Error as exc:
+        except Exception as exc:
+            # SQLite connections are shared by read-only readiness probes and
+            # the event writer. Any transient driver failure is a bounded
+            # health result, never an ASGI traceback.
             self.last_error = {"reason": "provider_unavailable", "error_class": type(exc).__name__}
             return {"ready": False, **base, "reason": "provider_unavailable", "details": dict(self.last_error)}

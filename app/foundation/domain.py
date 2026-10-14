@@ -9,7 +9,11 @@ ALLOWED_INTENTS = frozenset({"greeting", "mood_positive", "mood_neutral", "mood_
 
 
 class Lifecycle(str, Enum):
-    IDLE = "IDLE"; WAITING_RFID = "WAITING_RFID"; AUTHENTICATED = "AUTHENTICATED"; WAITING_HANDSET = "WAITING_HANDSET"; ACTIVE = "ACTIVE"; FALLBACK = "FALLBACK"; ENDING = "ENDING"; ENDED = "ENDED"
+    """Physical session lifecycle; scenario modes live in CanonicalState."""
+    IDLE = "IDLE"
+    WAITING_RFID = "WAITING_RFID"
+    ACTIVE = "ACTIVE"
+    ENDED = "ENDED"
 
 
 @dataclass(frozen=True)
@@ -21,9 +25,10 @@ class Event:
     source: str
     payload: dict[str, Any] = field(default_factory=dict)
     correlation_id: str = ""
+    monotonic_timestamp: float | None = None
 
 
-EVENT_TYPES = frozenset({"RfidPresented", "SessionStarted", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "IntentClassified", "ScenarioAdvanced", "AudioStarted", "AudioCancelled", "BargeInDetected", "GameStarted", "GameCompleted", "StorySelected", "SessionTimedOut", "SessionEnded", "SafetySignalDetected", "SafetyFallbackTriggered", "HardwareDisconnected"})
+EVENT_TYPES = frozenset({"RfidPresented", "RfidRemoved", "AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "MenuTutorialStep"})
 
 
 @dataclass
@@ -54,6 +59,7 @@ class SessionRecord:
     game_index: int = 0
     game_attempts: int = 0
     game_max_attempts: int = 0
+    readiness_wave_completed: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,6 +101,15 @@ class HandsetReader(Protocol): pass
 class ButtonReader(Protocol): pass
 
 class LEDController(Protocol):
+    # Canonical lighting port: callers address explicit logical elements.
+    def set_element(self, element_id: int, state: int, transition_ms: int = 0) -> None: ...
+    def set_elements(self, commands: Any) -> None: ...
+    def clear_all(self, transition_ms: int = 0) -> None: ...
+    def readiness_wave(self, total_duration_ms: int = 1200) -> None: ...
+    async def readiness_wave_async(self, total_duration_ms: int = 1200, *, cancelled: Any = None) -> None: ...
+
+    # Legacy compatibility projection; it must not be used as canonical
+    # lighting state and must not be sent to the lighting hardware path.
     def pattern(self, pattern_id: str, color: str, duration_ms: int, token: int) -> None: ...
     def pattern_map(self, pattern_id: str, colors: dict[str, str], duration_ms: int, token: int) -> None: ...
 

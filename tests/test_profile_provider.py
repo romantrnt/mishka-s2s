@@ -37,15 +37,17 @@ def test_sqlite_profile_provider_fails_closed_on_invalid_payload(tmp_path):
 
 def test_production_build_requires_configured_profile_db(monkeypatch):
     monkeypatch.delenv("MISHKA_PROFILE_DB", raising=False)
+    monkeypatch.delenv("MISHKA_VOICE_CONVERSION", raising=False)
     with pytest.raises(RuntimeError, match="MISHKA_PROFILE_DB"):
-        build_application(settings=Settings(profile="production_candidate", llm_provider="ollama"))
+        build_application(settings=Settings(profile="production_candidate", runtime_mode="clinical", llm_provider="ollama", voice_conversion="off", profile_db=""))
 
 
 def test_production_build_injects_sqlite_provider_without_mock_fallback(monkeypatch, tmp_path):
+    monkeypatch.delenv("MISHKA_VOICE_CONVERSION", raising=False)
     path = tmp_path / "profiles.sqlite3"
     SQLiteProfileProvider(str(path))
     monkeypatch.setenv("MISHKA_PROFILE_DB", str(path))
-    application, _, _, _ = build_application(settings=Settings(profile="production_candidate", llm_provider="ollama"))
+    application, _, _, _ = build_application(settings=Settings(profile="production_candidate", runtime_mode="clinical", llm_provider="ollama", voice_conversion="off"))
     assert type(application.profiles).__name__ == "SQLiteProfileProvider"
     assert type(application.profiles).__name__ != "MockProfileProvider"
     assert type(application.history_repository).__name__ == "SQLiteRepository"
@@ -97,7 +99,9 @@ def test_sqlite_history_empty_and_persists_across_repository_instances(tmp_path)
 
 
 def test_sqlite_history_provider_unavailable_is_not_empty(tmp_path):
-    path = tmp_path / "missing" / "history.sqlite3"
+    parent = tmp_path / "missing"
+    parent.write_text("not a directory", encoding="utf-8")
+    path = parent / "history.sqlite3"
     provider = SQLiteRepository(path)
     status = provider.readiness()
     assert status["ready"] is False

@@ -23,9 +23,13 @@ the persistent RVC worker.
 
 ## Health
 
-- `/live` checks process liveness.
-- `/health` exposes redacted component and observability state.
-- `/ready` describes primary service readiness.
+- `/live` checks process liveness only.
+- `/health` exposes bounded, redacted component and observability state; it never means production release approval.
+- `/stand/health`, `/stand/diagnostics` and `/stand/trace` remain observer endpoints during degraded hardware states.
+- `/ready` is the software-admission contract. `ready=true` and HTTP 200 mean the initialized software/simulator path is usable; HTTP 503 means admission is unavailable. `production_ready` is a separate strict exhibition-release gate and may remain false while `/ready` is 200 (for example in simulator mode or with unapproved content).
+- MISHKA_MUTATION_AUTH_POLICY=token_required is the only deployment policy. Every state-changing HTTP route and /stand/ws requires the operator token from secure configuration/environment; firewall/VPN is not a prerequisite. A missing server token returns a generic configuration error and keeps production_ready=false; a missing/invalid presented token returns generic unauthorized. Read-only redacted observer endpoints may remain available. Query-string tokens are never accepted or emitted.
+
+Configuration is loaded by `scripts/run_stand.py` with process environment precedence over `.env` or an explicitly declared `MISHKA_ENV_FILE`. An explicitly declared file is mandatory and malformed/unreadable files fail closed. Operational projections expose only bounded source labels and presence flags, never values or private absolute paths.
 
 RVC, optional memory probes and stale-worker cleanup are non-critical. Their
 failures are recorded as warnings and do not make RFID or WebSocket traffic

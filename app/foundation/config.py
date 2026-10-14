@@ -127,6 +127,7 @@ class Settings:
     """Single typed boundary for canonical and explicit local/mock profiles."""
 
     profile: str = "mock"
+    runtime_mode: str = "exhibition"
     host: str = "0.0.0.0"
     port: int = 8000
     policy_version: str = CANONICAL_POLICY.version
@@ -135,8 +136,22 @@ class Settings:
     profile_db: str = "runtime/data/profiles.sqlite3"
     stand_access_token: str = ""
     allow_query_token: bool = False
+    mutation_auth_policy: str = "token_required"
     audio_output_device: str = ""
     vad_device: str = "cpu"
+    hardware_mode: str = "fake"
+    # Explicit exhibition operational policies. These are configuration
+    # contracts, not alternate runtimes.
+    audio_policy: str = "recorded_catalog"
+    hid_policy: str = "space_lifecycle"
+    lighting_policy: str = "canonical_effects"
+    webpanel_enabled: bool = True
+    diagnostics_level: str = "standard"
+    allow_degraded_hardware: bool = True
+    lighting_device: str = ""
+    lighting_baudrate: int = 115200
+    lighting_timeout_s: float = 1.0
+    hid_device: str = ""
     max_input_chars: int = 512
     session_timeout_s: int = 1200
     session_idle_timeout_s: int = 300
@@ -158,7 +173,7 @@ class Settings:
     stt_model: str = "large-v3-turbo"
     silero_model: str = "v5_5_ru"
     silero_language: str = "ru"
-    silero_speaker: str = "kseniya"
+    silero_speaker: str = "aidar"
     silero_sample_rate: int = 48_000
     silero_cache_path: str = "runtime/cache/silero/v5_5_ru.pt"
     silero_leading_silence_ms: int = 150
@@ -228,6 +243,10 @@ class Settings:
     e2e_stage_timeout_s: float = 20.0
     warmup_pcm_path: str = "assets/reference/mishka_24k_mono.wav"
 
+    # Product identity and execution backend are separate contracts.
+    scenario_id: str = "canonical_product"
+    graph_backend: str = "langgraph"
+    # Temporary compatibility alias; never use it to select the product flow.
     scenario_engine: str | None = None
     langgraph_strict: bool | None = None
     weather_provider: str | None = None
@@ -241,10 +260,14 @@ class Settings:
         profile = str(self.profile).strip().lower()
         if self.validation_provider is None:
             object.__setattr__(self, "validation_provider", "mock" if profile == "mock" else "ollama")
-        if self.scenario_engine is None:
-            object.__setattr__(self, "scenario_engine", "legacy" if profile == "mock" else "langgraph")
-        if self.langgraph_strict is None:
-            object.__setattr__(self, "langgraph_strict", profile != "mock")
+        object.__setattr__(self, "scenario_id", str(self.scenario_id).strip().lower())
+        object.__setattr__(self, "graph_backend", str(self.graph_backend).strip().lower())
+        # Compatibility projection for legacy callers. "langgraph" here is
+        # accepted only as an old alias for the LangGraph backend.
+        if self.scenario_engine != "canonical":
+            object.__setattr__(self, "scenario_engine", "canonical")
+        if self.langgraph_strict is not True:
+            object.__setattr__(self, "langgraph_strict", True)
         if self.weather_provider is None:
             object.__setattr__(self, "weather_provider", "demo" if profile == "mock" else "yandex")
 
@@ -252,6 +275,18 @@ class Settings:
         profiles = {"mock", "local_cpu", "local_gpu", "production", "production_candidate", "exhibition_candidate", "production_qwen_rvc"}
         if self.profile not in profiles:
             raise SettingsError("MISHKA_PROFILE is unsupported")
+        if self.runtime_mode not in {"exhibition", "clinical"}:
+            raise SettingsError("MISHKA_RUNTIME_MODE must be exhibition or clinical")
+        if self.audio_policy not in {"recorded_catalog"}:
+            raise SettingsError("MISHKA_AUDIO_POLICY is unsupported")
+        if self.hid_policy not in {"space_lifecycle"}:
+            raise SettingsError("MISHKA_HID_POLICY is unsupported")
+        if self.lighting_policy not in {"canonical_effects"}:
+            raise SettingsError("MISHKA_LIGHTING_POLICY is unsupported")
+        if self.diagnostics_level not in {"quiet", "standard", "verbose"}:
+            raise SettingsError("MISHKA_DIAGNOSTICS_LEVEL is unsupported")
+        if self.mutation_auth_policy != "token_required":
+            raise SettingsError("MISHKA_MUTATION_AUTH_POLICY is unsupported")
         if self.policy_version != CANONICAL_POLICY.version:
             raise SettingsError("MISHKA_POLICY_VERSION is unsupported")
         if not self.no_voice_recording:
@@ -289,8 +324,14 @@ class Settings:
             raise SettingsError("production profile cannot use mock LLM")
         if production and self.validation_provider != "ollama":
             raise SettingsError("production profile requires Ollama validation")
-        if production and self.scenario_engine in {"legacy", "off", "0"}:
-            raise SettingsError("production profile requires LangGraph scenario engine")
+        if self.scenario_id != "canonical_product":
+            raise SettingsError("MISHKA_SCENARIO_ID must be canonical_product")
+        if self.graph_backend != "langgraph":
+            raise SettingsError("MISHKA_GRAPH_BACKEND must be langgraph")
+        if self.scenario_engine != "canonical":
+            raise SettingsError("MISHKA_SCENARIO_ENGINE compatibility alias is invalid")
+        if not self.langgraph_strict:
+            raise SettingsError("MISHKA_LANGGRAPH_STRICT must remain true")
         if not self.llm_model.strip():
             raise SettingsError("LLM_MODEL must not be empty")
         if not 0 <= self.llm_temperature <= 2:
@@ -355,6 +396,14 @@ class Settings:
         data = asdict(self)
         return {key: value for key, value in data.items() if key not in secret}
 
+    @property
+    def operator_token_present(self) -> bool:
+        return bool(self.stand_access_token.strip())
+
+    @property
+    def mutation_policy_ready(self) -> bool:
+        return self.mutation_auth_policy == "token_required" and self.operator_token_present
+
     def policy_snapshot(self) -> dict[str, Any]:
         return {"version": self.policy_version, "profile": self.profile,
                 "min_available_ram_gb": self.min_available_ram_gb,
@@ -366,11 +415,16 @@ class Settings:
     def from_env(cls, *, validate: bool = True) -> "Settings":
         profile = _text("MISHKA_PROFILE", "mock").lower()
         validation_default = "mock" if profile == "mock" else "ollama"
+        legacy_scenario_engine = _text("MISHKA_SCENARIO_ENGINE", "").lower()
+        if legacy_scenario_engine and legacy_scenario_engine not in {"canonical", "langgraph"}:
+            raise SettingsError("MISHKA_SCENARIO_ENGINE compatibility alias must be canonical or langgraph")
+        scenario_id = _text("MISHKA_SCENARIO_ID", "canonical_product").lower()
+        graph_backend = _text("MISHKA_GRAPH_BACKEND", "langgraph").lower()
         settings = cls(
-            profile=profile, host=_text("MISHKA_HOST", "0.0.0.0"), port=_int("MISHKA_PORT", 8000),
+            profile=profile, runtime_mode=_text("MISHKA_RUNTIME_MODE", "exhibition").lower(), host=_text("MISHKA_HOST", "0.0.0.0"), port=_int("MISHKA_PORT", 8000),
             policy_version=_text("MISHKA_POLICY_VERSION", CANONICAL_POLICY.version),
             no_voice_recording=_bool("NO_VOICE_RECORDING", True), content_root=_text("MISHKA_CONTENT_ROOT", "content"),
-            profile_db=_text("MISHKA_PROFILE_DB", "runtime/data/profiles.sqlite3"), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False),
+            profile_db=_text("MISHKA_PROFILE_DB", "runtime/data/profiles.sqlite3"), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False), mutation_auth_policy=_text("MISHKA_MUTATION_AUTH_POLICY", "token_required").lower(),
             audio_output_device=_text("AUDIO_OUTPUT_DEVICE", ""), vad_device=_text("MISHKA_VAD_DEVICE", "cpu").lower(),
             max_input_chars=_int("MAX_INPUT_CHARS", 512), session_timeout_s=_int("MISHKA_MAX_SESSION_SECONDS", 1200),
             session_idle_timeout_s=_int("MISHKA_SESSION_IDLE_TTL_SECONDS", 300), confidence_threshold=_float("INTENT_CONFIDENCE_THRESHOLD", 0.6),
@@ -381,13 +435,13 @@ class Settings:
             llm_think=_bool("LLM_THINK", False), llm_warmup_timeout_s=_float("LLM_WARMUP_TIMEOUT_SECONDS", 120),
             ollama_base_url=_text("OLLAMA_BASE_URL", "http://127.0.0.1:11434"), vllm_base_url=_text("VLLM_BASE_URL", "http://127.0.0.1:8001"),
             stt_model=_text("WHISPER_MODEL", "large-v3-turbo"),
-            silero_model=_text("SILERO_MODEL", "v5_5_ru"), silero_language=_text("SILERO_LANGUAGE", "ru"), silero_speaker=_text("SILERO_SPEAKER", "kseniya").lower(), silero_sample_rate=_int("SILERO_SAMPLE_RATE", 48000), silero_cache_path=_text("SILERO_CACHE_PATH", "runtime/cache/silero/v5_5_ru.pt"), silero_leading_silence_ms=_int("SILERO_LEADING_SILENCE_MS", 150),
+            silero_model=_text("SILERO_MODEL", "v5_5_ru"), silero_language=_text("SILERO_LANGUAGE", "ru"), silero_speaker=_text("SILERO_SPEAKER", "aidar").lower(), silero_sample_rate=_int("SILERO_SAMPLE_RATE", 48000), silero_cache_path=_text("SILERO_CACHE_PATH", "runtime/cache/silero/v5_5_ru.pt"), silero_leading_silence_ms=_int("SILERO_LEADING_SILENCE_MS", 150),
             voice_conversion=_text("MISHKA_VOICE_CONVERSION", "rvc_v2").lower(), fast_audio_ack=_bool("FAST_AUDIO_ACK", False), fast_audio_ack_cooldown_s=_float("FAST_AUDIO_ACK_COOLDOWN_S", 4),
             rvc_project_root=_text("RVC_PROJECT_ROOT", "vendor/rvc"), rvc_python=_text("RVC_PYTHON", ".venv/bin/python"), rvc_model=_text("RVC_MODEL_PATH", "models/rvc/mishka-rvc-v2.pth"), rvc_index=_text("RVC_INDEX_PATH", "models/rvc/mishka-rvc-v2.index"), rvc_f0_method=_text("RVC_F0_METHOD", "rmvpe"), rvc_filter_radius=_float("RVC_FILTER_RADIUS", 3), rvc_f0_up_key=_int("RVC_F0_UP_KEY", 0), rvc_index_rate=_float("RVC_INDEX_RATE", 0.0), rvc_protect=_float("RVC_PROTECT", .33), rvc_tmp_dir=_text("RVC_TMP_DIR", "runtime/cache/rvc-tmp"), rvc_startup_timeout_s=_float("RVC_STARTUP_TIMEOUT_SECONDS", 60), rvc_fallback_mode=_text("RVC_FALLBACK_MODE", "passthrough").lower(),
             min_available_ram_gb=_float("MIN_AVAILABLE_RAM_GB", CANONICAL_POLICY.min_available_ram_gb), min_available_vram_gb=_float("MIN_AVAILABLE_VRAM_GB", CANONICAL_POLICY.min_available_vram_gb),
             audio_sample_rate=_int("AUDIO_SAMPLE_RATE", 16000), audio_channels=_int("AUDIO_CHANNELS", 1), audio_format=_text("AUDIO_FORMAT", "float32"), vad_threshold=_float("VAD_THRESHOLD", .35), vad_continue_threshold=_float("VAD_CONTINUE_THRESHOLD", .20), vad_preroll_ms=_int("VAD_PREROLL_MS", 320), vad_silence_ms=_int("VAD_SILENCE_MS", 200), min_speech_ms=_int("MIN_SPEECH_MS", 300), max_speech_ms=_int("MAX_SPEECH_MS", 12000), max_audio_buffer_seconds=_int("MAX_AUDIO_BUFFER_SECONDS", 15), stt_timeout_s=_float("STT_TIMEOUT_SECONDS", 8), llm_timeout_s=_float("LLM_TIMEOUT_SECONDS", 10), tts_timeout_s=_float("TTS_TIMEOUT_SECONDS", 10), rvc_timeout_s=_float("RVC_TIMEOUT_SECONDS", 45), playback_timeout_s=_float("PLAYBACK_TIMEOUT_SECONDS", 60), max_response_chars=_int("MAX_RESPONSE_CHARS", 320), max_tts_chunk_chars=_int("MAX_TTS_CHUNK_CHARS", 72), max_tts_first_chunk_chars=_int("MAX_TTS_FIRST_CHUNK_CHARS", 12), tts_queue_size=_int("TTS_QUEUE_SIZE", 4), tts_queue_put_timeout_s=_float("TTS_QUEUE_PUT_TIMEOUT_SECONDS", 2), stt_confidence_threshold=_float("STT_CONFIDENCE_THRESHOLD", .45), stt_beam_size=_int("STT_BEAM_SIZE", 3), max_turn_seconds=_float("MISHKA_MAX_TURN_SECONDS", 60), max_tts_queue_bytes=_int("MAX_TTS_QUEUE_BYTES", 256*1024), max_tts_chunks_per_generation=_int("MAX_TTS_CHUNKS_PER_GENERATION", 32), max_history_entries=_int("MAX_HISTORY_ENTRIES", 20), max_history_chars=_int("MAX_HISTORY_CHARS", 8192),
             validation_provider=_text("VALIDATION_PROVIDER", validation_default).lower(), validation_model=_text("VALIDATION_MODEL", "qwen3:0.6b"), validation_timeout_ms=_int("VALIDATION_TIMEOUT_MS", 120 if profile == "mock" else 10000), validation_keep_alive=_text("VALIDATION_KEEP_ALIVE", "-1"), validation_num_ctx=_int("VALIDATION_NUM_CTX", 1024), validation_fail_closed=_bool("VALIDATION_FAIL_CLOSED", True),
-            watchdog_interval_s=_float("MISHKA_WATCHDOG_INTERVAL_SECONDS", 5), watchdog_stale_after_s=_float("MISHKA_WATCHDOG_STALE_AFTER_SECONDS", 30), watchdog_cooldown_s=_float("MISHKA_WATCHDOG_COOLDOWN_SECONDS", 30), audio_cleanup_timeout_s=_float("MISHKA_AUDIO_CLEANUP_TIMEOUT_SECONDS", 1), observability_latency_limit=_int("OBSERVABILITY_LATENCY_LIMIT", 500), observability_event_limit=_int("OBSERVABILITY_EVENT_LIMIT", 500), observability_watchdog_limit=_int("OBSERVABILITY_WATCHDOG_LIMIT", 200), e2e_warmup_timeout_s=_float("MISHKA_WARMUP_E2E_TIMEOUT_S", 90), e2e_stage_timeout_s=_float("MISHKA_WARMUP_E2E_STAGE_TIMEOUT_S", 20), warmup_pcm_path=_text("MISHKA_WARMUP_PCM_PATH", "assets/reference/mishka_24k_mono.wav"), scenario_engine=_text("MISHKA_SCENARIO_ENGINE", "legacy" if profile == "mock" else "langgraph").lower(), langgraph_strict=_bool("MISHKA_LANGGRAPH_STRICT", profile != "mock"),
+            watchdog_interval_s=_float("MISHKA_WATCHDOG_INTERVAL_SECONDS", 5), watchdog_stale_after_s=_float("MISHKA_WATCHDOG_STALE_AFTER_SECONDS", 30), watchdog_cooldown_s=_float("MISHKA_WATCHDOG_COOLDOWN_SECONDS", 30), audio_cleanup_timeout_s=_float("MISHKA_AUDIO_CLEANUP_TIMEOUT_SECONDS", 1), observability_latency_limit=_int("OBSERVABILITY_LATENCY_LIMIT", 500), observability_event_limit=_int("OBSERVABILITY_EVENT_LIMIT", 500), observability_watchdog_limit=_int("OBSERVABILITY_WATCHDOG_LIMIT", 200), e2e_warmup_timeout_s=_float("MISHKA_WARMUP_E2E_TIMEOUT_S", 90), e2e_stage_timeout_s=_float("MISHKA_WARMUP_E2E_STAGE_TIMEOUT_S", 20), warmup_pcm_path=_text("MISHKA_WARMUP_PCM_PATH", "assets/reference/mishka_24k_mono.wav"), scenario_id=scenario_id, graph_backend=graph_backend, scenario_engine="canonical", langgraph_strict=_bool("MISHKA_LANGGRAPH_STRICT", True),
             weather_provider=_compat_text("MISHKA_WEATHER_PROVIDER", "WEATHER_PROVIDER", "demo" if profile == "mock" else "yandex").lower(),
             weather_endpoint=_compat_text("YANDEX_WEATHER_URL", "WEATHER_URL", "https://api.weather.yandex.ru/v2/forecast"),
             yandex_weather_api_key=_compat_text("YANDEX_WEATHER_API_KEY", "WEATHER_API_KEY", ""),
@@ -395,7 +449,52 @@ class Settings:
             yandex_weather_longitude=_compat_optional_float("YANDEX_WEATHER_LONGITUDE", "WEATHER_LONGITUDE"),
             yandex_weather_timeout_s=_compat_float("YANDEX_WEATHER_TIMEOUT_S", "WEATHER_TIMEOUT_S", 2),
         )
+        object.__setattr__(settings, "hardware_mode", _text("MISHKA_HARDWARE_MODE", "fake" if profile in {"mock", "local_cpu", "local_gpu"} else "physical").lower())
+        object.__setattr__(settings, "audio_policy", _text("MISHKA_AUDIO_POLICY", "recorded_catalog").lower())
+        object.__setattr__(settings, "hid_policy", _text("MISHKA_HID_POLICY", "space_lifecycle").lower())
+        object.__setattr__(settings, "lighting_policy", _text("MISHKA_LIGHTING_POLICY", "canonical_effects").lower())
+        object.__setattr__(settings, "webpanel_enabled", _bool("MISHKA_WEBPANEL_ENABLED", True))
+        object.__setattr__(settings, "diagnostics_level", _text("MISHKA_DIAGNOSTICS_LEVEL", "standard").lower())
+        object.__setattr__(settings, "allow_degraded_hardware", _bool("MISHKA_ALLOW_DEGRADED_HARDWARE", True))
+        object.__setattr__(settings, "lighting_device", _text("MISHKA_LIGHTING_DEVICE", ""))
+        object.__setattr__(settings, "lighting_baudrate", _int("MISHKA_LIGHTING_BAUDRATE", 115200))
+        object.__setattr__(settings, "lighting_timeout_s", _float("MISHKA_LIGHTING_TIMEOUT_S", 1.0))
+        object.__setattr__(settings, "hid_device", _text("MISHKA_HID_DEVICE", ""))
         return settings.validate() if validate else settings
+
+    def operational_snapshot(self) -> dict[str, Any]:
+        """Return the non-secret configuration contract for health/diagnostics."""
+        if os.getenv("MISHKA_CONFIG_SOURCE"):
+            config_source = os.getenv("MISHKA_CONFIG_SOURCE")
+        elif os.getenv("MISHKA_ENV_FILE"):
+            config_source = "declared-env-file"
+        else:
+            config_source = "process-environment"
+        return {
+            "mode": self.runtime_mode,
+            "scenario_id": self.scenario_id,
+            "graph_backend": self.graph_backend,
+            # Deprecated projection retained for old health consumers.
+            "graph": self.graph_backend,
+            "scenario_engine": self.scenario_engine,
+            "content_manifest": "content/audio/voice_manifest.json",
+            "audio_policy": self.audio_policy,
+            "hid_policy": self.hid_policy,
+            "lighting_policy": self.lighting_policy,
+            "hardware_mode": self.hardware_mode,
+            "webpanel_enabled": self.webpanel_enabled,
+            "diagnostics_level": self.diagnostics_level,
+            "allow_degraded_hardware": self.allow_degraded_hardware,
+            "mutation_auth_policy": self.mutation_auth_policy,
+            "operator_token_present": self.operator_token_present,
+            "mutation_policy_ready": self.mutation_policy_ready,
+            "no_voice_recording": self.no_voice_recording,
+            "provenance": {
+                "config_source": config_source,
+                "entrypoint": os.path.basename(__import__("sys").argv[0]) or None,
+                "python": ".".join(str(part) for part in __import__("sys").version_info[:3]),
+            },
+        }
 
 
 # Explicit compatibility boundary for older direct-construction call sites.
@@ -406,6 +505,8 @@ _COMPAT_ENV_FIELDS = {
     "MISHKA_PROFILE_DB": "profile_db",
     "STAND_ACCESS_TOKEN": "stand_access_token",
     "MISHKA_VOICE_CONVERSION": "voice_conversion",
+    "MISHKA_SCENARIO_ID": "scenario_id",
+    "MISHKA_GRAPH_BACKEND": "graph_backend",
     "MISHKA_SCENARIO_ENGINE": "scenario_engine",
     "MISHKA_LANGGRAPH_STRICT": "langgraph_strict",
     "MISHKA_WARMUP_PCM_PATH": "warmup_pcm_path",

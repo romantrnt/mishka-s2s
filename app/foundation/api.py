@@ -1,17 +1,19 @@
 from __future__ import annotations
+import asyncio
 
 import os
 import logging
+import secrets
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from collections import deque
 from pathlib import Path
 
-from .adapters import ProfileProviderError, SQLiteProfileProvider, RecordingAudio, RecordingLED, RuleBasedIntentClassifier
+from .adapters import (ExhibitionProfileProvider, ProfileProviderError, SQLiteProfileProvider, RecordingAudio, RecordingLED, RuleBasedIntentClassifier)
 from .application import ScenarioApplication
 from .schedule_weather import DemoScheduleWeatherService, ProductionScheduleWeatherService, YandexWeatherProvider
-from .content import FileScenarioRepository
+from .canonical_services import CanonicalContentCatalog
 from .config import Settings, settings_with_compat_env
 from .events import parse_event
 from .observability import Metrics, StructuredEventPublisher
@@ -59,10 +61,11 @@ def _prepare_runtime_dirs(settings: Settings) -> None:
         PROJECT_ROOT / "runtime" / "rvc",
         PROJECT_ROOT / "logs",
         PROJECT_ROOT / "data",
-        Path(settings.profile_db).parent,
         Path(settings.rvc_tmp_dir),
         Path(settings.silero_cache_path).parent,
     }
+    if settings.runtime_mode != "exhibition":
+        paths.add(Path(settings.profile_db).parent)
     for path in paths:
         path.mkdir(parents=True, exist_ok=True)
 
@@ -136,8 +139,8 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
         )
         status = primary_voice.configuration_readiness()
         if not status.get("configuration_ready"):
-            logging.getLogger("mishka.voice").warning(
-                "RVC configuration is unavailable; using passthrough until it recovers"
+            raise RuntimeError(
+                "RVC v2 requested but its pinned runtime/model/index configuration is unavailable"
             )
         voice = ResilientVoiceProvider(primary_voice)
     else:
@@ -153,16 +156,22 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
 
 def build_application(content_root: str | Path | None = None, settings: Settings | None = None,
                       *, audio_output=None, led_controller=None,
-                      playback_override: PlaybackController | None = None, display_controller=None):
+                      playback_override: PlaybackController | None = None, display_controller=None,
+                      monotonic_now=None, background_scheduler: bool = True):
     settings=settings or Settings.from_env()
     settings = settings_with_compat_env(settings, ("MISHKA_PROFILE_DB", "MISHKA_CONTENT_ROOT"))
     settings = _normalize_paths(settings).validate()
     _prepare_runtime_dirs(settings)
     root = Path(content_root).resolve() if content_root is not None else Path(settings.content_root).resolve()
-    scenarios = FileScenarioRepository(root, strict=settings.profile != "mock"); metrics = Metrics(latency_limit=settings.observability_latency_limit, event_limit=settings.observability_event_limit, watchdog_limit=settings.observability_watchdog_limit); publisher = StructuredEventPublisher()
+    scenarios = CanonicalContentCatalog(str(root), allow_development_assets=(settings.profile in {"mock", "local_cpu", "local_gpu"} or str(settings.hardware_mode).lower() != "physical")); metrics = Metrics(latency_limit=settings.observability_latency_limit, event_limit=settings.observability_event_limit, watchdog_limit=settings.observability_watchdog_limit); publisher = StructuredEventPublisher()
     s2s,audio_pipeline,runtime_manager=_build_s2s(settings,root,playback_override)
     profile_db = settings.profile_db
-    if settings.profile == "mock":
+    if settings.runtime_mode == "exhibition":
+        # Exhibition is deliberately self-contained: no RFID/profile provider,
+        # SQLite session persistence, or clinical identity gate is constructed.
+        sessions = InMemorySessionRepository(); history = InMemoryHistoryRepository()
+        profiles = ExhibitionProfileProvider()
+    elif settings.profile == "mock":
         from .adapters import MockProfileProvider
         sessions = InMemorySessionRepository(); history = InMemoryHistoryRepository()
         profiles = MockProfileProvider()
@@ -178,25 +187,22 @@ def build_application(content_root: str | Path | None = None, settings: Settings
         weather = ProductionScheduleWeatherService(YandexWeatherProvider.from_settings(settings), weather_config.timeout_s)
     else:
         weather = ProductionScheduleWeatherService(None, weather_config.timeout_s)
-    app = ScenarioApplication(sessions, scenarios, profiles, RuleBasedIntentClassifier(), audio_output or RecordingAudio(), led_controller or RecordingLED(), publisher, now=time.time, threshold=settings.confidence_threshold, bounded_s2s=s2s, history=history, max_session_seconds=settings.session_timeout_s, idle_timeout_seconds=settings.session_idle_timeout_s, display=display_controller, schedule_weather=weather, allow_quick_replies=settings.profile == "mock", settings=settings)
+    app = ScenarioApplication(sessions, scenarios, profiles, RuleBasedIntentClassifier(), audio_output or RecordingAudio(), led_controller or RecordingLED(), publisher, now=time.time, threshold=settings.confidence_threshold, bounded_s2s=s2s, history=history, max_session_seconds=settings.session_timeout_s, idle_timeout_seconds=settings.session_idle_timeout_s, display=display_controller, schedule_weather=weather, allow_quick_replies=settings.profile == "mock", settings=settings, monotonic_now=monotonic_now or time.monotonic, background_scheduler=background_scheduler)
     app.s2s_audio=audio_pipeline; app.runtime_manager=runtime_manager; runtime_manager.audio_pipeline=audio_pipeline; app.runtime_status=runtime_manager.configuration(); app.settings=settings; app.metrics=metrics
     if settings.profile != "mock":
         from .e2e_probe import ProductionE2EWarmupProbe
         runtime_manager.e2e_probe = ProductionE2EWarmupProbe(runtime_manager, audio_pipeline).run
     app.history_repository=history
-    if settings.profile != "mock":
-        graph_status = app.langgraph.status()
-        if not graph_status.get("enabled") or graph_status.get("errors"):
-            raise RuntimeError(f"production scenario engine unavailable: {graph_status}")
     return app, scenarios, metrics, publisher
 
 def create_app(application=None, *, include_test_routes: bool = False):
     try:
-        from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+        from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
         from fastapi.responses import JSONResponse
     except ImportError as exc: raise RuntimeError("Run make install before starting the HTTP API") from exc
     # With postponed annotations FastAPI resolves WebSocket from module globals.
     globals()["WebSocket"] = WebSocket
+    globals()["Response"] = Response
     if application is None:
         build_settings = Settings(profile="mock") if include_test_routes else None
         application, scenarios, metrics, publisher = build_application(settings=build_settings)
@@ -212,7 +218,18 @@ def create_app(application=None, *, include_test_routes: bool = False):
 
     @asynccontextmanager
     async def lifespan(_api):
+        # The hardware stand is attached after create_app() returns. Resolve it
+        # at lifespan entry so physical HID/lighting startup is not skipped.
+        hardware_owner = getattr(_api.state, "stand", None)
+        if hardware_owner is None and hasattr(application, "start_hardware"):
+            hardware_owner = application
         try:
+            if hardware_owner is not None and hasattr(hardware_owner, "start_hardware"):
+                await hardware_owner.start_hardware()
+                led = getattr(getattr(hardware_owner, "application", hardware_owner), "led", None)
+                start_breathing = getattr(led, "start_breathing", None)
+                if callable(start_breathing):
+                    start_breathing()
             if manager is None:
                 lifecycle.dependency_failed("runtime", "manager_unavailable")
             else:
@@ -230,6 +247,8 @@ def create_app(application=None, *, include_test_routes: bool = False):
             await lifecycle.stop()
             if manager is not None:
                 await manager.close()
+            if hardware_owner is not None and hasattr(hardware_owner, "stop_hardware"):
+                await hardware_owner.stop_hardware()
 
     api = FastAPI(
         title="Мягкий телефон Мишки — production candidate",
@@ -281,7 +300,7 @@ def create_app(application=None, *, include_test_routes: bool = False):
                           else {"ready": False, "provider": type(history_repo).__name__ if history_repo is not None else None,
                                 "provider_state": "unavailable", "reason": "history_provider_readiness_unavailable"})
         return {
-            "runtime_mode": {"name": getattr(settings, "profile", "unknown"), "state": "configured"},
+            "runtime_mode": {"name": getattr(settings, "runtime_mode", "unknown"), "state": "configured"},
             "hardware_backend": hardware,
             "profile_provider": dict(profile_status),
             "llm": component("llm", runtime.get("llm_provider", "unknown")),
@@ -293,6 +312,9 @@ def create_app(application=None, *, include_test_routes: bool = False):
 
     @api.get("/health")
     def health():
+        operational_stand = getattr(api.state, "stand", None)
+        if operational_stand is not None and hasattr(operational_stand, "health_snapshot"):
+            return operational_stand.health_snapshot()
         manager=getattr(application,"runtime_manager",None)
         warmup=getattr(manager,"last_warmup",None) if manager is not None else None
         provider = getattr(application, "profiles", None)
@@ -301,7 +323,12 @@ def create_app(application=None, *, include_test_routes: bool = False):
         resources=application.resource_snapshot() if hasattr(application, "resource_snapshot") else (engine.resource_snapshot() if engine is not None and hasattr(engine, "resource_snapshot") else {})
         metrics.observe_resources(resources)
         runtime_status = getattr(manager, "configuration", lambda: {})()
+        hardware = dependency_identity(profile_status, runtime_status).get("hardware_backend", {})
+        simulated_hardware = str(hardware.get("state", "")).lower() in {"simulator", "fake", "degraded"}
         return {"status":"ok", "profile":getattr(application,"runtime_status",{}).get("profile","external"),
+                "degraded": simulated_hardware, "software_runtime_usable": True,
+                "production_ready": False if simulated_hardware else None,
+                "physical_hardware_ready": not simulated_hardware,
                 "observability":{"resources":resources,"metrics":metrics.snapshot(),"warmup_history":{"last_successful":getattr(manager,"last_successful_warmup",None),"last_failed":getattr(manager,"last_failed_warmup",None),"active_probe_correlation_id":getattr(manager,"active_probe_correlation_id",None)},"last_recovery":getattr(manager,"last_recovery",None)},
                 "lifecycle": lifecycle.snapshot(), "warmup": warmup,
                 "models_loaded":bool(warmup and warmup.get("ok")), "no_voice_recording":True,
@@ -310,13 +337,43 @@ def create_app(application=None, *, include_test_routes: bool = False):
                 "dependencies": dependency_identity(profile_status, runtime_status)}
     @api.get("/live")
     def live(): return {"live":True}
+    @api.get("/health/live")
+    def health_live():
+        return {"live": True, "service": "mishka"}
+    @api.get("/health/safe")
+    def health_safe():
+        handoff = getattr(application, "adult_handoff", None)
+        simulated = type(handoff).__name__ == "SimulatedAdultHandoff"
+        configured = handoff is not None
+        return {"safe": configured and not simulated, "adult_handoff_simulated": simulated,
+                "adult_handoff": {"configured": configured, "simulated": simulated},
+                "safety_policy": "canonical_fail_closed", "fail_closed": True}
+    async def _bounded_runtime_readiness(manager):
+        if manager is None:
+            return {"ready": False, "profile": "external", "reason": "runtime_manager_unavailable"}
+        timeout_s = 3.0
+        try:
+            timeout_s = min(max(float(getattr(getattr(manager, "settings", None), "readiness_timeout_s", timeout_s)), 0.25), 5.0)
+        except (TypeError, ValueError):
+            timeout_s = 3.0
+        try:
+            return await asyncio.wait_for(manager.readiness(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            return {"ready": False, "reason": "runtime_readiness_timeout", "timeout_s": timeout_s, "bounded": True}
+        except Exception as exc:
+            return {"ready": False, "reason": "runtime_readiness_error", "error": type(exc).__name__, "bounded": True}
+
     @api.get("/ready")
-    async def ready():
+    @api.get("/health/ready")
+    async def ready(response: Response = None):
         manager=getattr(application,"runtime_manager",None)
-        runtime=await manager.readiness() if manager is not None else {"ready":False,"profile":"external","reason":"runtime_manager_unavailable"}
-        content_ready = scenarios is None or not getattr(scenarios, "has_errors", bool(getattr(scenarios, "issues", [])))
-        langgraph=getattr(application,"langgraph",None)
-        graph_status=langgraph.status() if langgraph is not None else {"provider":"legacy"}
+        runtime=await _bounded_runtime_readiness(manager)
+        content_ready = scenarios is None or bool(scenarios.report().get("ready"))
+        authorizer = getattr(application, "transition_authorizer", None)
+        graph_status = (authorizer.status() if authorizer is not None else {
+            "provider": "langgraph", "strict": True, "ready": False,
+            "reason": "canonical_authorizer_unavailable",
+        })
         provider = getattr(application, "profiles", None)
         profile_status = provider.readiness() if provider is not None and hasattr(provider, "readiness") else {"ready": False, "provider": type(provider).__name__ if provider is not None else None, "reason": "profile_provider_readiness_unavailable"}
         history_repo = getattr(application, "history_repository", None)
@@ -328,7 +385,78 @@ def create_app(application=None, *, include_test_routes: bool = False):
         if lifecycle_status["ready"] and not runtime_ready:
             lifecycle.observe_noncritical("runtime_not_ready", {"source": "readiness", "runtime_reason": runtime.get("reason")})
             lifecycle_status = lifecycle.snapshot()
-        return {"ready":lifecycle_status["ready"] and content_ready and runtime_ready and bool(profile_status.get("ready")) and bool(history_status.get("ready")), "lifecycle":lifecycle_status, "content":scenarios.report() if scenarios else {"external":True}, "metrics":metrics.snapshot(), "dependencies":{"s2s":runtime,"profile":profile_status,"history":history_status,"langgraph":graph_status, **dependency_identity(profile_status, runtime)}}
+        hardware = dependency_identity(profile_status, runtime).get("hardware_backend", {})
+        simulated_hardware = str(hardware.get("state", "")).lower() in {"simulator", "fake", "degraded"}
+        content_report = scenarios.report() if scenarios else {"external": True}
+        voice_report = content_report.get("voice", {}) if isinstance(content_report, dict) else {}
+        audio_content_ready = bool(voice_report.get("approved_recorded_count", 0) >= voice_report.get("required_recorded_count", 1))
+        settings = getattr(application, "settings", None)
+        security_ready = bool(getattr(settings, "mutation_policy_ready", False))
+        provenance = settings.operational_snapshot().get("provenance", {}) if settings is not None else {}
+        launcher_provenance_ready = provenance.get("entrypoint") == "run_stand.py"
+        lifecycle_admission = bool(
+            lifecycle_status.get("ready") and runtime_ready
+        ) or bool(
+            simulated_hardware
+            and lifecycle_status.get("state") == "DEGRADED"
+            and lifecycle_status.get("reason") == "resource_capacity_insufficient"
+        )
+        software_runtime_usable = bool(
+            lifecycle_admission
+            and bool(profile_status.get("ready"))
+            and bool(history_status.get("ready"))
+            and bool(graph_status.get("ready"))
+        )
+        content_production_ready = bool(
+            isinstance(content_report, dict)
+            and voice_report.get("physical_production_ready")
+            and all(bool(value) for value in content_report.get("fixed_stories", {}).values())
+        )
+        production_ready = bool(
+            not simulated_hardware
+            and software_runtime_usable
+            and content_ready
+            and content_production_ready
+            and security_ready
+            and launcher_provenance_ready
+            and bool(profile_status.get("ready"))
+            and bool(history_status.get("ready"))
+            and bool(graph_status.get("ready"))
+        )
+        if response is not None:
+            response.status_code = 200 if software_runtime_usable else 503
+        return {
+            "ready": software_runtime_usable,
+            "readiness_contract": "software_admission",
+            "degraded": not software_runtime_usable,
+            "software_runtime_usable": software_runtime_usable,
+            "production_ready": production_ready,
+            "headless_ready": software_runtime_usable,
+            "webpanel_ready": True,
+            "simulated_hardware_ready": simulated_hardware,
+            "physical_hardware_ready": not simulated_hardware,
+            "audio_content_ready": audio_content_ready,
+            "security": {
+                "mutation_auth_policy": getattr(settings, "mutation_auth_policy", "unconfigured"),
+                "operator_token_present": bool(getattr(settings, "operator_token_present", False)),
+                "mutation_policy_ready": security_ready,
+                "launcher_provenance_ready": launcher_provenance_ready,
+            },
+            "production_blockers": [
+                code for code, blocked in (
+                    ("simulator_hardware", simulated_hardware),
+                    ("software_runtime_unusable", not software_runtime_usable),
+                    ("content_not_production_ready", not content_production_ready),
+                    ("mutation_policy_unconfigured_or_unsafe", not security_ready),
+                    ("launcher_provenance_unestablished", not launcher_provenance_ready),
+                ) if blocked
+            ],
+            "lifecycle": lifecycle_status,
+            "content": content_report,
+            "metrics": metrics.snapshot(),
+            "dependencies": {"s2s": runtime, "profile": profile_status, "history": history_status,
+                             "state_machine": graph_status, **dependency_identity(profile_status, runtime)},
+        }
     @api.post("/internal/s2s/warmup")
     async def warmup():
         manager=getattr(application,"runtime_manager",None)
@@ -358,6 +486,17 @@ def create_app(application=None, *, include_test_routes: bool = False):
             return await application.reset_session(session_id)
     @api.websocket("/ws/{session_id}")
     async def ws(websocket:WebSocket, session_id:str):
+        settings = getattr(application, "settings", None)
+        access_token = str(getattr(settings, "stand_access_token", "") or "")
+        headers = getattr(websocket, "headers", {}) or {}
+        cookies = getattr(websocket, "cookies", {}) or {}
+        supplied = headers.get("x-stand-token") or cookies.get("stand_token") or ""
+        if getattr(settings, "mutation_auth_policy", "token_required") != "token_required" or not access_token:
+            await websocket.close(code=1013, reason="mutation_auth_unconfigured")
+            return
+        if not secrets.compare_digest(supplied, access_token):
+            await websocket.close(code=1008, reason="auth_failure")
+            return
         if not lifecycle.admits_users():
             snapshot = lifecycle.snapshot()
             state = str(snapshot.get("state", "DEGRADED"))

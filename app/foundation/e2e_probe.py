@@ -101,7 +101,7 @@ class ProductionE2EWarmupProbe:
                 stages.append(self._stage("pcm_input", (time.perf_counter() - started) * 1000, False, f"{type(exc).__name__}: {str(exc)[:160]}"))
                 return {"ok": False, "correlation_id": correlation_id, "stages": stages, "reason": "pcm_input_failed", "metrics_snapshot": self._metric_snapshot()}
             trace = self.manager.engine.metrics.begin_voice_turn(session_id, correlation_id)
-            context = ConversationContext(session_id, "dev_core", "dev_dialogue", ("__all__",), (), 1, 120, 4)
+            context = ConversationContext(session_id, "canonical", "bear_dialogue", ("__all__",), (), 1, 120, 4)
             vad_started = time.perf_counter()
             result = None
             try:

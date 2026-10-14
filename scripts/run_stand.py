@@ -4,6 +4,7 @@ import os
 import sys
 import asyncio
 import re
+import stat
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -48,18 +49,73 @@ class StandAccessLogRedactionFilter(logging.Filter):
             record.args = {key: self._redact_text(value) for key, value in args.items()}
         return True
 
-def _load_runtime_env():
-    # Runtime secrets are injected by the process manager.  A local .env is
-    # optional for development; the repository only ships .env.example.
-    env_file = PROJECT_ROOT / ".env"
-    if not env_file.is_file():
-        return
-    for raw in env_file.read_text(encoding="utf-8").splitlines():
+def _resolve_env_file():
+    """Resolve the declared env file without overriding process env values."""
+    declared = os.getenv("MISHKA_ENV_FILE")
+    if not declared:
+        return PROJECT_ROOT / ".env"
+    path = Path(declared).expanduser()
+    if not path.is_absolute() and ".." in path.parts:
+        raise RuntimeError("MISHKA_ENV_FILE path traversal is not allowed")
+    return path.resolve() if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
+
+def _safe_config_source(env_file: Path) -> str:
+    """Return a bounded provenance label, never a private absolute path."""
+    try:
+        return f"project:{env_file.relative_to(PROJECT_ROOT)}"
+    except ValueError:
+        return "external-env-file"
+
+
+def _parse_env_file(env_file: Path) -> dict[str, str]:
+    try:
+        mode = stat.S_IMODE(env_file.stat().st_mode)
+        raw_lines = env_file.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError as exc:
+        raise RuntimeError("declared MISHKA_ENV_FILE does not exist") from exc
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError("declared MISHKA_ENV_FILE is unreadable") from exc
+
+    values: dict[str, str] = {}
+    for line_number, raw in enumerate(raw_lines, 1):
         line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
+        if not line or line.startswith("#"):
             continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
+        if "=" not in line:
+            raise RuntimeError(f"env file is malformed at line {line_number}")
+        key, value = (part.strip() for part in line.split("=", 1))
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise RuntimeError(f"env file has an invalid key at line {line_number}")
+        if value[:1] in {"'", '"'}:
+            quote = value[0]
+            if len(value) < 2 or value[-1] != quote:
+                raise RuntimeError(f"env file has an unterminated value at line {line_number}")
+            value = value[1:-1]
+        values[key] = value
+
+    secret_key_pattern = re.compile(r"(?:^|_)(?:SECRET|PASSWORD|API_KEY|PRIVATE_KEY)$|(?:^|_)ACCESS_TOKEN$")
+    contains_secret = any(secret_key_pattern.search(key.upper()) and value.strip() for key, value in values.items())
+    if contains_secret and mode & 0o077:
+        raise RuntimeError("env file containing secrets must not be group/world readable")
+    return values
+
+
+def _load_runtime_env():
+    # Runtime secrets are injected by the process manager. A local .env is
+    # optional; an explicitly declared MISHKA_ENV_FILE is mandatory. Process
+    # environment wins by design, while malformed or unreadable declarations
+    # fail closed before the application is constructed.
+    declared = bool(os.getenv("MISHKA_ENV_FILE"))
+    env_file = _resolve_env_file()
+    if not env_file.is_file():
+        if declared:
+            raise RuntimeError("declared MISHKA_ENV_FILE does not exist")
+        return
+    values = _parse_env_file(env_file)
+    os.environ.setdefault("MISHKA_CONFIG_SOURCE", _safe_config_source(env_file))
+    for key, value in values.items():
+        os.environ.setdefault(key, value)
 
 
 _load_runtime_env()

@@ -60,9 +60,11 @@ def test_offline_http_transport_start_validation_and_reset():
 
 
 def test_offline_websocket_session_binding_and_structured_error():
-    app=create_app(include_test_routes=True); endpoint=next(route.endpoint for route in app.routes if route.path=="/ws/{session_id}")
+    application, _, _, _ = __import__("app.foundation.api", fromlist=["build_application"]).build_application(settings=__import__("app.foundation.config", fromlist=["Settings"]).Settings(profile="mock", stand_access_token="offline-secret"))
+    app=create_app(application=application, include_test_routes=True); endpoint=next(route.endpoint for route in app.routes if route.path=="/ws/{session_id}")
     class OfflineSocket:
         def __init__(self):
+            self.headers={"x-stand-token": "offline-secret"}
             self.incoming=[{"type":"handset_up","session_id":"other"},{"type":"button","button_id":99}]
             self.sent=[]
             self.close_calls=0

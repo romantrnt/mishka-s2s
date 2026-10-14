@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from typing import Any
@@ -110,16 +111,26 @@ class YandexWeatherProvider:
         }
 
 
-def validate_schedule(value: Any) -> list[dict[str, str]]:
+def validate_schedule(value: Any) -> list[dict[str, Any]]:
+    """Validate and minimize typed schedule facts without dropping navigation fields."""
     if not isinstance(value, list) or not value:
         raise ScheduleWeatherSchemaError("schedule_data_unavailable")
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     for item in value:
         if not isinstance(item, dict) or not isinstance(item.get("time"), str) or not isinstance(item.get("title"), str):
             raise ScheduleWeatherSchemaError("malformed_schedule_response")
-        if not item["time"].strip() or not item["title"].strip():
+        if not item["time"].strip() or not item["title"].strip() or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", item["time"].strip()):
             raise ScheduleWeatherSchemaError("malformed_schedule_response")
-        result.append({"time": item["time"].strip(), "title": item["title"].strip()})
+        normalized: dict[str, Any] = {"time": item["time"].strip(), "title": item["title"].strip()}
+        for key in ("room", "floor", "start_at", "minutes_until", "status", "priority"):
+            value = item.get(key)
+            if value is None:
+                continue
+            if key in {"room", "start_at", "status"} and isinstance(value, str) and value.strip():
+                normalized[key] = value.strip()[:80]
+            elif key in {"floor", "minutes_until", "priority"} and isinstance(value, int) and not isinstance(value, bool):
+                normalized[key] = value
+        result.append(normalized)
     return result
 
 
@@ -149,25 +160,33 @@ def validate_report(value: Any, *, allow_demo: bool = False) -> dict[str, Any]:
 class ProductionScheduleWeatherService:
     """Production schedule/weather service backed by the configured RU adapter."""
 
-    def __init__(self, weather_provider: RussianWeatherProvider | None = None, timeout_s: float = 2.0):
+    def __init__(self, weather_provider: YandexWeatherProvider | None = None, timeout_s: float = 2.0):
         self.weather_provider = weather_provider
         self.timeout_s = timeout_s
 
-    async def build(self, profile: Any, tag_id: str) -> dict[str, Any]:
+    async def schedule(self, profile: Any, tag_id: str) -> list[dict[str, Any]]:
+        if not isinstance(profile, dict):
+            raise ScheduleWeatherProviderError("profile_data_unavailable")
+        return validate_schedule(profile.get("schedule"))
+
+    async def weather(self, profile: Any, tag_id: str, *, allow_demo: bool = False) -> dict[str, Any]:
         if self.weather_provider is None:
             raise ScheduleWeatherProviderError("ru_weather_provider_not_configured")
         if not isinstance(profile, dict):
             raise ScheduleWeatherProviderError("profile_data_unavailable")
-        schedule = validate_schedule(profile.get("schedule"))
         try:
-            weather = await asyncio.wait_for(self.weather_provider.current(profile, tag_id), timeout=self.timeout_s)
+            value = await asyncio.wait_for(self.weather_provider.current(profile, tag_id), timeout=self.timeout_s)
         except asyncio.TimeoutError as exc:
             raise ScheduleWeatherProviderError("weather_provider_timeout") from exc
         except ScheduleWeatherProviderError:
             raise
         except Exception as exc:
             raise ScheduleWeatherProviderError("weather_provider_network_failure") from exc
-        weather = validate_weather(weather)
+        return validate_weather(value, allow_demo=allow_demo)
+
+    async def build(self, profile: Any, tag_id: str) -> dict[str, Any]:
+        schedule = await self.schedule(profile, tag_id)
+        weather = await self.weather(profile, tag_id)
         items = ", ".join(f"{item['time']} — {item['title']}" for item in schedule[:4])
         return validate_report({
             "spoken_text": f"Расписание: {items}. Погода: {weather['summary']}.",
@@ -176,7 +195,14 @@ class ProductionScheduleWeatherService:
 
 
 class DemoScheduleWeatherService:
-    """Fixture-only service. Never use this in a production profile."""
+    """Development-only service. Never use this in a production profile."""
+
+    async def schedule(self, profile: Any, tag_id: str) -> list[dict[str, Any]]:
+        profile = profile if isinstance(profile, dict) else {}
+        return validate_schedule(profile.get("schedule") or [{"time": "09:00", "title": "Занятие"}])
+
+    async def weather(self, profile: Any, tag_id: str, *, allow_demo: bool = False) -> dict[str, Any]:
+        return validate_weather({"summary": "ясно, без осадков", "temperature_c": 15, "source": "demo"}, allow_demo=True)
 
     async def build(self, profile: Any, tag_id: str) -> dict[str, Any]:
         profile = profile if isinstance(profile, dict) else {}
