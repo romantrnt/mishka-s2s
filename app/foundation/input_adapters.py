@@ -183,7 +183,7 @@ class KeyboardHIDInputAdapter:
             return
         if int(key_code) == self.KEY_SPACE:
             # Space is a physical level with explicit edges: pressed means
-            # on-hook and released means off-hook. Autorepeat (value=2) is
+            # handset lifted (off-hook) and released means handset placed (on-hook). Autorepeat (value=2) is
             # deliberately ignored and cannot create another lifecycle edge.
             if value == 1:
                 if self.KEY_SPACE in self._pressed:

@@ -681,7 +681,7 @@ function render(state) {
   const lightingResult = normalizeLightingState(state.lighting);
   const lighting = lightingResult.state;
   $('device-led').textContent = lightingResult.valid
-    ? '16 ELEMENTS / ' + Object.values(lighting).filter(Boolean).length + ' ON'
+    ? '19 ELEMENTS / ' + Object.values(lighting).filter(Boolean).length + ' ON'
     : 'INVALID LIGHTING SNAPSHOT: ' + lightingResult.issues.join('; ');
   if (!lightingResult.valid) showError(new Error(lightingResult.issues.join('; ')));
   else renderButtons(state, led, contract, lighting);

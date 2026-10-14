@@ -853,9 +853,9 @@ class HardwareIntegrationStand:
             sequence = self._physical_sequence
         edge = normalized.get("type")
         if edge == "SpacePressed":
-            normalized = {"type": "handset_down", "_input_type": edge, "_normalized_event": "handset_down"}
-        elif edge == "SpaceReleased":
             normalized = {"type": "handset_up", "_input_type": edge, "_normalized_event": "handset_up"}
+        elif edge == "SpaceReleased":
+            normalized = {"type": "handset_down", "_input_type": edge, "_normalized_event": "handset_down"}
         event = parse_event(normalized, self.active_session_id, int(sequence), source)
         result = await self.application.receive_async(event, None)
         self._collect_events()
