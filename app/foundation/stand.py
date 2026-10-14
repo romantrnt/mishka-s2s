@@ -691,6 +691,9 @@ class HardwareIntegrationStand:
             self.input_adapter = None
         self._hid_status = {"state": "stopped", "generation": stopped_generation}
         self._physical_loop = None
+        lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
+        if callable(lighting_output_close):
+            lighting_output_close()
         if self.lighting_serial is not None:
             self.lighting_serial.close()
             self.lighting_serial = None
@@ -1673,6 +1676,9 @@ class HardwareIntegrationStand:
             self.audio_input.stop()
         if self.input_adapter is not None:
             self.input_adapter.close()
+        lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
+        if callable(lighting_output_close):
+            lighting_output_close()
         if self.lighting_serial is not None:
             self.lighting_serial.close()
         self.adapter.close(); self._uart_executor.shutdown(wait=True, cancel_futures=True)

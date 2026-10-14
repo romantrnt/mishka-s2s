@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol, Sequence
@@ -637,13 +638,37 @@ class SerialLightingAdapter:
 
 
 class PhysicalLightingOutput:
-    """Canonical state owner backed by ``SerialLightingAdapter``."""
+    """Canonical lighting state with an ordered background serial writer.
+
+    USB CDC writes may block while the Arduino drains its input buffer. The
+    FIFO worker keeps command order without freezing the asyncio event loop.
+    """
 
     def __init__(self, adapter: SerialLightingAdapter) -> None:
         self.adapter = adapter
         self.state = LightingState()
         self._generation = 0
         self._lock = threading.Lock()
+        self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mishka-lighting-io")
+        self._closed = False
+        self._last_async_error: dict[str, str] | None = None
+
+    def _write_batch(self, commands: tuple[LightingCommand, ...]) -> None:
+        if hasattr(self.adapter, "is_ready") and not self.adapter.is_ready():
+            reconnect = getattr(self.adapter, "reconnect", None)
+            if not callable(reconnect):
+                raise ConnectionError("lighting serial adapter is not ready")
+            reconnect()
+        self.adapter.send_batch(commands)
+
+    def _consume_write(self, future) -> None:
+        try:
+            future.result()
+        except Exception as exc:
+            self._last_async_error = {
+                "exception_type": type(exc).__name__,
+                "detail": str(exc)[:200],
+            }
 
     def set_element(self, element_id: int, state: int, transition_ms: int = 0) -> None:
         self.set_elements((LightingCommand(element_id, state, transition_ms),))
@@ -654,17 +679,12 @@ class PhysicalLightingOutput:
             for command in commands
         )
         with self._lock:
-            generation = self._generation
-            if hasattr(self.adapter, "is_ready") and not self.adapter.is_ready():
-                reconnect = getattr(self.adapter, "reconnect", None)
-                if not callable(reconnect):
-                    raise ConnectionError("lighting serial adapter is not ready")
-                reconnect()
-            self.adapter.send_batch(validated)
-            if generation != self._generation:
-                return
+            if self._closed:
+                raise ConnectionError("lighting output is closed")
             for command in validated:
                 self.state.apply(command)
+            future = self._writer.submit(self._write_batch, validated)
+            future.add_done_callback(self._consume_write)
 
     def clear_all(self, transition_ms: int = 0) -> None:
         self.set_elements(tuple(
@@ -677,7 +697,17 @@ class PhysicalLightingOutput:
             self._generation += 1
 
     def snapshot(self) -> dict[str, int]:
-        return self.state.snapshot()
+        with self._lock:
+            return self.state.snapshot()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        self._writer.shutdown(wait=True, cancel_futures=True)
 
     def diagnostics(self) -> dict:
-        return {"backend": "serial", "state": self.snapshot(), **self.adapter.diagnostics()}
+        return {"backend": "serial", "state": self.snapshot(),
+                "async_error": dict(self._last_async_error) if self._last_async_error else None,
+                **self.adapter.diagnostics()}
