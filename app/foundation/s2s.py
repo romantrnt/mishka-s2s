@@ -1558,8 +1558,12 @@ class SoundDevicePlaybackController:
         value = self.device
         if value is None or value == "":
             return None
-        if isinstance(value, str) and value.strip().isdigit():
-            return int(value.strip())
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized.lower() in {"default", "system", "none"}:
+                return None
+            if normalized.isdigit():
+                return int(normalized)
         return value
 
     def readiness(self) -> dict[str, Any]:
@@ -1630,8 +1634,12 @@ class SoundDeviceCaptureController:
         value = self.device
         if value is None or value == "":
             return None
-        if isinstance(value, str) and value.strip().isdigit():
-            return int(value.strip())
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized.lower() in {"default", "system", "none"}:
+                return None
+            if normalized.isdigit():
+                return int(normalized)
         return value
 
     def readiness(self) -> dict[str, Any]:

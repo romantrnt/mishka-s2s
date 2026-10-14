@@ -170,7 +170,12 @@ class PosixSerialTransport:
         if self.baud not in self.BAUD: raise ValueError("unsupported UART baud")
         self.fd=os.open(self.path,os.O_RDWR|os.O_NOCTTY|os.O_NONBLOCK)
         tty.setraw(self.fd); attrs=termios.tcgetattr(self.fd); speed=self.BAUD[self.baud]
+        attrs[0] &= ~(termios.IXON | termios.IXOFF | termios.IXANY)
+        attrs[1] &= ~termios.OPOST
+        attrs[2] |= termios.CLOCAL | termios.CREAD
+        attrs[2] &= ~getattr(termios, "CRTSCTS", 0)
         attrs[4]=speed; attrs[5]=speed; termios.tcsetattr(self.fd,termios.TCSANOW,attrs)
+        termios.tcflush(self.fd, termios.TCIOFLUSH)
     def write(self, raw: bytes):
         if self.fd is None: raise RuntimeError("serial transport is closed")
         view=memoryview(raw); deadline=time.monotonic()+1.0

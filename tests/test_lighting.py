@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.foundation.lighting import (BUTTON_OUTPUT_ELEMENTS, EXHIBITION_BREATHING_PHASE_MS, EXHIBITION_DIGIT_WAVE_GROUPS, LIGHTING_ELEMENT_IDS, ExhibitionLightingEngine, FakeLightingOutput, LightingCommand, LightingController, LightingState, PhysicalLightingOutput, SerialLightingAdapter, show_digit)
@@ -67,6 +69,37 @@ def test_physical_lighting_protocol_emits_exact_ordered_csv_lf_frames():
         assert b"".join(transport.writes) == b"10,1,120\n62,0,0\n72,1,120\n"
     finally:
         adapter.close()
+
+
+def test_physical_lighting_reconnects_before_next_command_after_transport_loss():
+    transport = _RecordingLightingTransport()
+    adapter = SerialLightingAdapter("/dev/test-lighting", transport=transport)
+    adapter.open()
+    output = PhysicalLightingOutput(adapter)
+    adapter._ready = False
+    output.set_element(10, 1, 100)
+    assert transport.writes == [b"10,1,100\n"]
+    adapter.close()
+
+
+def test_background_lighting_failure_is_recorded_without_unhandled_task_exception():
+    class FailingOutput(FakeLightingOutput):
+        def set_elements(self, _commands):
+            raise ConnectionError("UART write timed out")
+
+    async def scenario():
+        output = FakeLightingOutput()
+        clock = [0.0]
+        engine = ExhibitionLightingEngine(output, monotonic_now=lambda: clock[0])
+        engine.start_breathing(now=0.0)
+        engine.output = FailingOutput()
+        clock[0] = 1.0
+        await asyncio.sleep(0.15)
+        assert not engine.task_active
+        assert engine.last_error["exception_type"] == "ConnectionError"
+        assert "timed out" in engine.last_error["detail"]
+
+    asyncio.run(scenario())
 
 
 def test_canonical_element_api_is_independent_and_preserves_transition():

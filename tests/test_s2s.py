@@ -46,6 +46,7 @@ def test_vad_detects_end_short_and_max_duration():
 def test_sounddevice_capture_normalizes_numeric_device_and_multichannel_frames():
     controller = SoundDeviceCaptureController("1", sample_rate=16_000, channels=2)
     assert controller._device_arg() == 1
+    assert SoundDeviceCaptureController("default")._device_arg() is None
 
     delivered = []
 

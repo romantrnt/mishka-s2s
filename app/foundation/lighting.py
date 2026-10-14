@@ -278,6 +278,7 @@ class ExhibitionLightingEngine:
         self.wave_stage = -1
         self.frame_count = 0
         self.last_frame: dict[str, object] | None = None
+        self.last_error: dict[str, object] | None = None
         self._task: asyncio.Task[object] | None = None
         self._pwm_phase_origin: float | None = None
         self._wave_groups: tuple[tuple[int, ...], ...] = EXHIBITION_WAVE_GROUPS
@@ -312,6 +313,21 @@ class ExhibitionLightingEngine:
                 await asyncio.sleep(EXHIBITION_BREATHING_TICK_MS / 1000.0)
         except asyncio.CancelledError:
             raise
+        except Exception as exc:
+            # A physical serial failure must not become an unhandled asyncio
+            # task exception. Keep the effect state visible in diagnostics;
+            # the next canonical effect/reset can reconnect the adapter.
+            self.last_error = {
+                "exception_type": type(exc).__name__,
+                "detail": str(exc)[:200],
+                "generation": generation,
+            }
+            self.last_frame = {
+                "effect": self.effect,
+                "error": "lighting_output_failed",
+                "error_detail": str(exc)[:200],
+            }
+            self._notify_frame(dict(self.last_frame))
         finally:
             if self._task is asyncio.current_task():
                 self._task = None
@@ -484,7 +500,7 @@ class ExhibitionLightingEngine:
 
     def snapshot(self) -> dict[str, object]:
         frame = dict(self.last_frame or {})
-        return {"active": self.effect != "idle", "effect": self.effect, "generation": self.generation, "clock": "monotonic_injected", "task_active": self.task_active, "scheduler": "background_wakeup" if self.background_scheduler else "manual_fake_clock", "wave_stage": self.wave_stage, "frame_count": self.frame_count, "state": frame.get("state"), "transition_ms": frame.get("transition_ms"), "protocol": frame.get("protocol"), "brightness_percent": frame.get("brightness_percent"), "requested_brightness_percent": frame.get("requested_brightness_percent"), "on_slots": frame.get("on_slots"), "pwm_slots": frame.get("pwm_slots"), "elements": list(LIGHTING_ELEMENT_IDS), "last_frame": frame}
+        return {"active": self.effect != "idle", "effect": self.effect, "generation": self.generation, "clock": "monotonic_injected", "task_active": self.task_active, "scheduler": "background_wakeup" if self.background_scheduler else "manual_fake_clock", "wave_stage": self.wave_stage, "frame_count": self.frame_count, "state": frame.get("state"), "transition_ms": frame.get("transition_ms"), "protocol": frame.get("protocol"), "brightness_percent": frame.get("brightness_percent"), "requested_brightness_percent": frame.get("requested_brightness_percent"), "on_slots": frame.get("on_slots"), "pwm_slots": frame.get("pwm_slots"), "elements": list(LIGHTING_ELEMENT_IDS), "last_frame": frame, "last_error": dict(self.last_error) if self.last_error else None}
 
 
 
@@ -607,6 +623,11 @@ class PhysicalLightingOutput:
         )
         with self._lock:
             generation = self._generation
+            if hasattr(self.adapter, "is_ready") and not self.adapter.is_ready():
+                reconnect = getattr(self.adapter, "reconnect", None)
+                if not callable(reconnect):
+                    raise ConnectionError("lighting serial adapter is not ready")
+                reconnect()
             self.adapter.send_batch(validated)
             if generation != self._generation:
                 return
