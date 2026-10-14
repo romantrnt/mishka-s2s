@@ -136,6 +136,23 @@ def test_standby_breathing_uses_one_second_binary_transition_serial_batches():
         adapter.close()
 
 
+def test_effect_frame_hook_receives_binary_breathing_and_wave_frames():
+    output = FakeLightingOutput()
+    frames = []
+    engine = ExhibitionLightingEngine(
+        output, monotonic_now=lambda: 0.0, background_scheduler=False,
+        frame_hook=frames.append,
+    )
+    engine.start_breathing(now=0.0)
+    engine.advance(now=1.0)
+    assert [frame["effect"] for frame in frames] == ["breathing", "breathing"]
+    assert [frame["state"] for frame in frames] == [1, 0]
+
+    engine.start_wave(now=2.0)
+    engine.advance(now=3.0, force=True)
+    assert frames[-1]["effect"] == "wave_complete"
+
+
 def test_uart_controller_forwards_digit_wave_groups_and_holds_fourteen_elements():
     controller = UARTLEDController(
         adapter=None,

@@ -1250,8 +1250,9 @@ function createMicResampler(sourceRate, sendFrame) {
   };
 }
 async function startMic() {
-  if (!current || !['bear_dialogue', 'support_intake', 'voice_welcome', 'personal_story_theme', 'wellbeing_check', 'schedule_weather'].includes(current.session.node)) {
-    showError(new Error('Сначала откройте разговор кнопкой 3 или поднимите трубку.'));
+  const micCapableNodes = new Set(['bear_dialogue', 'support_intake', 'voice_welcome', 'exhibition_name_capture', 'personal_story_theme', 'wellbeing_check', 'schedule_weather']);
+  if (!current || !micCapableNodes.has(String(current.session?.node || ''))) {
+    showError(new Error('Голосовой ввод доступен на активном голосовом шаге; для имени сначала поднимите трубку и дождитесь вопроса «Как тебя зовут?»'));
     return;
   }
   const context = await unlockAudio();

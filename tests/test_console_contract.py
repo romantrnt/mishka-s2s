@@ -77,3 +77,11 @@ def test_panel_command_projection_excludes_tokens_and_transcripts():
     panel = source[source.index("def panel_snapshot"):source.index("def close", source.index("def panel_snapshot"))]
     assert '"token"' not in panel
     assert "resolved_text" not in panel
+
+
+def test_webpanel_allows_microphone_on_exhibition_name_capture_and_tracks_live_effects():
+    source = CONSOLE.read_text(encoding="utf-8")
+    html = (CONSOLE.parent / "index.html").read_text(encoding="utf-8")
+    assert "exhibition_name_capture" in source
+    assert "20261014-live-effects-5" in html
+    assert "BREATHING" in html

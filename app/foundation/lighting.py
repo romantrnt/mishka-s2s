@@ -261,9 +261,11 @@ class ExhibitionLightingEngine:
         *,
         monotonic_now=time.monotonic,
         background_scheduler: bool = True,
+        frame_hook=None,
     ) -> None:
         self.output = output
         self.monotonic_now = monotonic_now
+        self.frame_hook = frame_hook
         # Production uses a cancellable wakeup poll. Canonical effect timing
         # never comes from the sleep duration: advance() reads monotonic_now.
         # Deterministic simulator runs disable this poll and call advance()
@@ -314,11 +316,41 @@ class ExhibitionLightingEngine:
             if self._task is asyncio.current_task():
                 self._task = None
 
+    @staticmethod
+    def _consume_frame_hook_task(task: asyncio.Task[object]) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.exception()
+        except Exception:
+            pass
+
+    def _notify_frame(self, frame: dict[str, object]) -> None:
+        hook = self.frame_hook
+        if not callable(hook):
+            return
+        try:
+            result = hook(dict(frame))
+        except Exception:
+            return
+        if not inspect.isawaitable(result):
+            return
+        try:
+            task = asyncio.create_task(result)
+        except RuntimeError:
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()
+            return
+        task.add_done_callback(self._consume_frame_hook_task)
+
     def _emit(self, commands: tuple[LightingCommand, ...], frame: dict[str, object]) -> dict[str, object]:
         self.output.set_elements(commands)
         self.frame_count += 1
         self.last_frame = {**frame, "frame_index": self.frame_count, "commands": len(commands)}
-        return dict(self.last_frame)
+        result = dict(self.last_frame)
+        self._notify_frame(result)
+        return result
 
     def _all_binary_commands(self, state: int, transition_ms: int = 0) -> tuple[LightingCommand, ...]:
         return tuple(LightingCommand(element_id, state, transition_ms) for element_id in LIGHTING_ELEMENT_IDS)

@@ -287,7 +287,7 @@ class UARTLEDController:
     canonical element state; behavior code can use set_element(s) when it is
     ready to select individual elements explicitly.
     """
-    def __init__(self, adapter: SerialHardwareAdapter, output=None, legacy_sink=None, stage_hook=None, monotonic_now=time.monotonic, background_scheduler: bool = True):
+    def __init__(self, adapter: SerialHardwareAdapter, output=None, legacy_sink=None, stage_hook=None, effect_hook=None, monotonic_now=time.monotonic, background_scheduler: bool = True):
         self.adapter = adapter
         self.output = output or FakeLightingOutput()
         self.legacy_sink = legacy_sink
@@ -296,6 +296,7 @@ class UARTLEDController:
             self.output,
             monotonic_now=monotonic_now,
             background_scheduler=background_scheduler,
+            frame_hook=effect_hook,
         )
 
     def set_element(self, element_id: int, state: int, transition_ms: int = 0) -> None:
@@ -484,7 +485,7 @@ class HardwareIntegrationStand:
             self.audio_output = UARTAudioOutput(self.adapter)
         self.application,self.scenarios,self.metrics,self.publisher=build_application(
             content_root,self.settings,audio_output=self.audio_output,
-            led_controller=UARTLEDController(self.adapter, self.lighting_output, legacy_sink=self._record_legacy_led, stage_hook=self._publish_lighting_wave_stage, monotonic_now=self.monotonic_now, background_scheduler=self.background_scheduler),display_controller=UARTDisplayController(self.adapter),playback_override=self.playback,monotonic_now=self.monotonic_now,background_scheduler=self.background_scheduler)
+            led_controller=UARTLEDController(self.adapter, self.lighting_output, legacy_sink=self._record_legacy_led, stage_hook=self._publish_lighting_wave_stage, effect_hook=self._publish_lighting_effect_frame, monotonic_now=self.monotonic_now, background_scheduler=self.background_scheduler),display_controller=UARTDisplayController(self.adapter),playback_override=self.playback,monotonic_now=self.monotonic_now,background_scheduler=self.background_scheduler)
         self.application.audio_update_hook=self._publish_audio_completion
         self.application.state_update_hook=self._publish_canonical_state_update
         reset_to_standby = getattr(self.application.led, "reset_to_standby", None)
@@ -1183,6 +1184,13 @@ class HardwareIntegrationStand:
 
     def _collect_events(self):
         self._event_cursor=len(self.publisher.events)
+
+    async def _publish_lighting_effect_frame(self, _frame: dict[str, Any]) -> None:
+        # Background lighting transitions are canonical state changes too.
+        # Publish them immediately so the WebPanel cannot remain stuck on the
+        # first red wave stage or on the initial breathing phase.
+        if self.hub.clients:
+            await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
 
     async def reset(self, session_id: str | None = None):
         self._cancel_story_audio()
