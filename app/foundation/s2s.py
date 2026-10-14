@@ -1554,6 +1554,14 @@ class SoundDevicePlaybackController:
     def __init__(self, device: str | int | None = None):
         self.device=device; self.active_token=0; self._stream=None; self._generation=0
 
+    def _device_arg(self):
+        value = self.device
+        if value is None or value == "":
+            return None
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+        return value
+
     def readiness(self) -> dict[str, Any]:
         package = importlib.util.find_spec("sounddevice") is not None
         if not package:
@@ -1561,7 +1569,7 @@ class SoundDevicePlaybackController:
                     "device": self.device}
         try:
             import sounddevice as sd
-            info = sd.query_devices(self.device, "output")
+            info = sd.query_devices(self._device_arg(), "output")
             channels = int(info.get("max_output_channels", 0))
             return {"ready": channels > 0, "provider": "sounddevice", "package": True,
                     "device": self.device, "max_output_channels": channels}
@@ -1574,7 +1582,7 @@ class SoundDevicePlaybackController:
         try:
             import numpy as np
             import sounddevice as sd
-            stream=sd.OutputStream(samplerate=audio.sample_rate,channels=1,dtype="float32",device=self.device)
+            stream=sd.OutputStream(samplerate=audio.sample_rate,channels=1,dtype="float32",device=self._device_arg())
             self._stream=stream
             await asyncio.to_thread(stream.start)
             if generation!=self._generation or audio.token!=self.active_token: return
@@ -1597,6 +1605,113 @@ class SoundDevicePlaybackController:
             with contextlib.suppress(Exception): await asyncio.to_thread(stream.abort)
             with contextlib.suppress(Exception): await asyncio.to_thread(stream.close)
             if self._stream is stream: self._stream=None
+
+class SoundDeviceCaptureController:
+    """Cancellable local microphone adapter for the physical headless stand.
+
+    PortAudio callbacks only copy bounded PCM frames and hand them to the
+    asyncio loop; inference stays outside the real-time callback.
+    """
+
+    def __init__(self, device: str | int | None = None, *, sample_rate: int = 16_000,
+                 channels: int = 1, blocksize: int = 512):
+        self.device = device
+        self.sample_rate = int(sample_rate)
+        self.channels = max(1, int(channels))
+        self.blocksize = max(64, int(blocksize))
+        self._stream = None
+        self._loop = None
+        self._on_frame = None
+        self._frames = 0
+        self._last_status = None
+        self._last_error = None
+
+    def _device_arg(self):
+        value = self.device
+        if value is None or value == "":
+            return None
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+        return value
+
+    def readiness(self) -> dict[str, Any]:
+        package = importlib.util.find_spec("sounddevice") is not None
+        if not package:
+            return {"ready": False, "provider": "sounddevice", "direction": "input",
+                    "package": False, "device": self.device}
+        try:
+            import sounddevice as sd
+            info = sd.query_devices(self._device_arg(), "input")
+            available = int(info.get("max_input_channels", 0))
+            return {"ready": available >= self.channels, "provider": "sounddevice",
+                    "direction": "input", "package": True, "device": self.device,
+                    "max_input_channels": available, "sample_rate": self.sample_rate,
+                    "channels": self.channels}
+        except Exception as exc:
+            return {"ready": False, "provider": "sounddevice", "direction": "input",
+                    "package": True, "device": self.device,
+                    "reason": f"{type(exc).__name__}: {str(exc)[:180]}"}
+
+    def is_ready(self) -> bool:
+        return self._stream is not None
+
+    def start(self, loop: asyncio.AbstractEventLoop, on_frame: Callable[[Any], None]) -> None:
+        if self.is_ready():
+            return
+        import sounddevice as sd
+        self._loop = loop
+        self._on_frame = on_frame
+        self._last_error = None
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self.sample_rate, channels=self.channels,
+                dtype="float32", blocksize=self.blocksize, device=self._device_arg(),
+                callback=self._callback,
+            )
+            self._stream.start()
+        except Exception as exc:
+            stream, self._stream = self._stream, None
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    stream.close()
+            self._last_error = {"exception_type": type(exc).__name__, "detail": str(exc)[:180]}
+            raise RuntimeError("local microphone capture unavailable") from exc
+
+    def _callback(self, indata, _frames, _time_info, status) -> None:
+        if status:
+            self._last_status = str(status)
+        loop = self._loop
+        on_frame = self._on_frame
+        if loop is None or on_frame is None or loop.is_closed():
+            return
+        try:
+            values = np.asarray(indata, dtype=np.float32)
+            values = values.mean(axis=1, dtype=np.float32) if values.ndim == 2 and values.shape[1] > 1 else values.reshape(-1)
+            loop.call_soon_threadsafe(on_frame, np.ascontiguousarray(values, dtype=np.float32))
+            self._frames += 1
+        except Exception as exc:
+            self._last_error = {"exception_type": type(exc).__name__, "detail": str(exc)[:180]}
+
+    def stop(self) -> None:
+        stream, self._stream = self._stream, None
+        self._on_frame = None
+        self._loop = None
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                stream.abort()
+            with contextlib.suppress(Exception):
+                stream.close()
+
+    def diagnostics(self) -> dict[str, Any]:
+        result = {"ready": self.is_ready(), "provider": "sounddevice",
+                  "backend": "portaudio", "direction": "input", "device": self.device,
+                  "sample_rate": self.sample_rate, "channels": self.channels,
+                  "blocksize": self.blocksize, "frames": self._frames,
+                  "last_status": self._last_status, "last_error": self._last_error}
+        if not self.is_ready():
+            result.update({key: value for key, value in self.readiness().items() if key not in result})
+        return result
+
 
 class CancellationController:
     def __init__(self): self.tokens={}; self.events={}

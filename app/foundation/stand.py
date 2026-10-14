@@ -28,7 +28,7 @@ from .domain import Event, Lifecycle
 from .hardware import (HardwareFrame, PTYUARTSimulator, PosixSerialTransport,
                        SerialHardwareAdapter, decode_frame, encode_frame)
 from .canonical_contract import FixedStoryManifest, canonical_state_nodes
-from .s2s import AudioChunk, SoundDevicePlaybackController
+from .s2s import AudioChunk, SoundDeviceCaptureController, SoundDevicePlaybackController
 from .input_adapters import KeyboardHIDInputAdapter, NormalizedInputEvent
 from .led_contract import BUTTON_LED_COLORS, button_contract, canonical_led_state, canonical_led_state_from_lighting, fixed_button_colors
 from .lighting import (
@@ -48,6 +48,10 @@ from .lighting import (
 AUDIO_SAMPLE_RATES = {16000, 22050, 24000, 48000}
 MAX_AUDIO_SECONDS = 15
 MAX_AUDIO_WAV_BYTES = 6 * 1024 * 1024
+HEADLESS_AUDIO_NODES = frozenset({
+    "exhibition_name_capture", "bear_dialogue", "support_intake",
+    "personal_story_theme", "wellbeing_check", "schedule_weather",
+})
 _AUTH_QUERY_KEYS = frozenset({"token", "access_token", "stand_token"})
 
 
@@ -439,6 +443,11 @@ class HardwareIntegrationStand:
         self._hid_generation = 0
         self._hid_status: dict[str, Any] = {"state": "not_started", "generation": 0}
         self._lighting_status: dict[str, Any] = {"state": "starting"}
+        self.audio_input = None
+        self._headless_audio_queue: asyncio.Queue[Any] | None = None
+        self._headless_audio_task: asyncio.Task[Any] | None = None
+        self._headless_audio_dropped = 0
+        self._headless_audio_status: dict[str, Any] = {"state": "not_started"}
         self._startup_state = "starting"
         self._startup_diagnostics: deque[dict[str, Any]] = deque(maxlen=50)
         self._input_start_error: dict[str, Any] | None = None
@@ -461,6 +470,12 @@ class HardwareIntegrationStand:
         self.adapter=SerialHardwareAdapter(self.transport,raw_observer=self._observe_raw); self.adapter.connect()
         if self.hardware_mode == "physical":
             self.playback = SoundDevicePlaybackController(self.settings.audio_output_device or None)
+            self.audio_input = SoundDeviceCaptureController(
+                self.settings.audio_input_device or None,
+                sample_rate=self.settings.audio_sample_rate,
+                channels=1,
+                blocksize=512,
+            )
             self.audio_output = HeadlessAudioOutput()
             try:
                 if not getattr(self.settings, "lighting_device", ""):
@@ -481,6 +496,7 @@ class HardwareIntegrationStand:
         else:
             self.lighting_output = FakeLightingOutput()
             self._lighting_status = {"state": "simulated", "backend": "fake_lighting"}
+            self.audio_input = None
             self.playback=BrowserPlaybackController(self.hub)
             self.audio_output = UARTAudioOutput(self.adapter)
         self.application,self.scenarios,self.metrics,self.publisher=build_application(
@@ -514,6 +530,105 @@ class HardwareIntegrationStand:
         for frame in self._receive_frames_sync():
             if frame.type=="capabilities":
                 self.adapter.capabilities=dict(frame.payload); self.adapter.firmware_version=str(frame.payload.get("firmware",""))
+
+    def _headless_audio_accepting(self) -> bool:
+        session = self.application.sessions.get(self.active_session_id)
+        return bool(
+            session is not None
+            and getattr(session, "handset_up", False)
+            and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
+        )
+
+    def _enqueue_headless_audio_frame(self, values: Any) -> None:
+        queue = self._headless_audio_queue
+        if queue is None or not self._headless_audio_accepting():
+            return
+        try:
+            queue.put_nowait(values)
+        except asyncio.QueueFull:
+            self._headless_audio_dropped += 1
+
+    async def _headless_audio_worker(self) -> None:
+        queue = self._headless_audio_queue
+        if queue is None:
+            return
+        while True:
+            values = await queue.get()
+            if values is None:
+                return
+            if not self._headless_audio_accepting():
+                continue
+            try:
+                result = await self.inject_pcm(
+                    tuple(float(value) for value in np.asarray(values, dtype=np.float32).reshape(-1)),
+                    self.settings.audio_sample_rate,
+                    self.active_session_id,
+                    flush_silence=False,
+                    wait_for_turn=False,
+                )
+                if isinstance(result, dict) and isinstance(result.get("error"), dict):
+                    self.errors.append({
+                        "at": time.time(),
+                        "stage": "headless_audio_input",
+                        "error_code": result["error"].get("code", "audio_input_failed"),
+                    })
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.errors.append({
+                    "at": time.time(),
+                    "stage": "headless_audio_input",
+                    "error_code": "capture_dispatch_failed",
+                    "exception_type": type(exc).__name__,
+                })
+
+    def _start_headless_audio_capture(self) -> None:
+        capture = getattr(self, "audio_input", None)
+        if capture is None or getattr(self, "_headless_audio_task", None) is not None:
+            return
+        loop = self._physical_loop or asyncio.get_running_loop()
+        self._headless_audio_queue = asyncio.Queue(maxsize=64)
+        self._headless_audio_dropped = 0
+        self._headless_audio_task = asyncio.create_task(
+            self._headless_audio_worker(),
+            name="mishka-headless-audio-input",
+        )
+        try:
+            capture.start(loop, self._enqueue_headless_audio_frame)
+            self._headless_audio_status = {
+                "state": "active",
+                "device": self.settings.audio_input_device or "default",
+                "sample_rate": self.settings.audio_sample_rate,
+                "channels": 1,
+            }
+        except Exception as exc:
+            task, self._headless_audio_task = self._headless_audio_task, None
+            if task is not None:
+                task.cancel()
+            self._headless_audio_queue = None
+            self._headless_audio_status = {
+                "state": "unavailable",
+                "error_code": "audio_input_unavailable",
+                "exception_type": type(exc).__name__,
+            }
+            if not self.settings.allow_degraded_hardware:
+                raise
+            self._startup_diagnostics.append({
+                "code": "audio_input_unavailable",
+                "component": "audio_input",
+            })
+
+    async def _stop_headless_audio_capture(self) -> None:
+        capture = getattr(self, "audio_input", None)
+        if capture is not None:
+            capture.stop()
+        task, self._headless_audio_task = getattr(self, "_headless_audio_task", None), None
+        self._headless_audio_queue = None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if capture is not None:
+            self._headless_audio_status = {"state": "stopped"}
 
     async def start_hardware(self):
         if self.hardware_mode != "physical":
@@ -560,9 +675,11 @@ class HardwareIntegrationStand:
         level_sync = hid_diag.get("initial_level_sync") or {}
         hid_state = "active" if hid_diag.get("physical_ready") else ("initial_level_unavailable" if level_sync.get("status") == "unavailable" else "degraded")
         self._hid_status = {"state": hid_state, "generation": generation, "initial_level_sync": level_sync, "semantic_input_accepted": bool(hid_diag.get("semantic_input_accepted")), "physical_ready": bool(hid_diag.get("physical_ready"))}
-        self._startup_state = "ready" if getattr(self, "_lighting_status", {"state": "available"}).get("state") == "available" and hid_diag.get("physical_ready") else "degraded"
+        self._start_headless_audio_capture()
+        self._startup_state = "ready" if getattr(self, "_lighting_status", {"state": "available"}).get("state") == "available" and hid_diag.get("physical_ready") and getattr(self, "_headless_audio_status", {}).get("state") == "active" else "degraded"
 
     async def stop_hardware(self):
+        await self._stop_headless_audio_capture()
         led = getattr(getattr(self, "application", None), "led", None)
         cancel_effects = getattr(led, "cancel_effects", None)
         if callable(cancel_effects):
@@ -1395,6 +1512,9 @@ class HardwareIntegrationStand:
         if self._input_start_error is not None:
             input_diagnostics["startup_error"] = dict(self._input_start_error)
         audio_readiness = dict(self.playback.readiness()) if hasattr(self.playback, "readiness") else {"ready": True, "backend": "browser"}
+        audio_input = dict(self.audio_input.diagnostics()) if self.audio_input is not None else {"ready": True, "backend": "browser", "direction": "input", "state": "webpanel"}
+        audio_input["stand_status"] = dict(self._headless_audio_status)
+        audio_input["dropped_frames"] = int(self._headless_audio_dropped)
         audio_readiness["runtime_diagnostics"] = list(getattr(self.application, "audio_runtime_diagnostics", ()))[-20:]
         audio_readiness["active_playback"] = next((item for item in reversed(audio_readiness["runtime_diagnostics"])
                                                     if item.get("kind") == "audio_playback_started"), None)
@@ -1417,7 +1537,7 @@ class HardwareIntegrationStand:
                 "physical_lighting":physical_lighting,
                 "lighting_wave": dict(self._lighting_wave),
                 "lighting_effects": (self.application.led.effect_snapshot() if callable(getattr(self.application.led, "effect_snapshot", None)) else {}),
-                "hardware": {"transport_mode": self.hardware_mode, "lighting": self.lighting_serial.diagnostics() if self.lighting_serial is not None else dict(self._lighting_status), "input": input_diagnostics, "audio": self.playback.readiness() if hasattr(self.playback, "readiness") else {"ready": True, "backend": "browser"}, "acceptance": "physical" if self.hardware_mode == "physical" else "simulator"},
+                "hardware": {"transport_mode": self.hardware_mode, "lighting": self.lighting_serial.diagnostics() if self.lighting_serial is not None else dict(self._lighting_status), "input": input_diagnostics, "audio": audio_readiness, "audio_input": audio_input, "acceptance": "physical" if self.hardware_mode == "physical" else "simulator"},
                 "button_contract":button_contract(),
                 "latencies":list(self.latencies),"pipeline_metrics":self.application.runtime_manager.engine.metrics.snapshot(),
                 "graph":self.graph,
@@ -1504,6 +1624,7 @@ class HardwareIntegrationStand:
             "results": [result_item(item) for item in source.get("results", [])[-50:]],
             "lighting": dict(source.get("lighting") or {}),
             "physical_lighting": dict(source.get("physical_lighting") or source.get("lighting") or {}),
+            "audio_input": dict((source.get("hardware") or {}).get("audio_input") or {}),
             "lighting_wave": dict(source.get("lighting_wave") or {}),
             "lighting_effects": dict(source.get("lighting_effects") or {}),
             "button_contract": source.get("button_contract"),
@@ -1529,6 +1650,8 @@ class HardwareIntegrationStand:
         self._cancel_story_audio(); self._cancel_response_audio()
         self._hid_generation = getattr(self, "_hid_generation", 0) + 1
         self._physical_loop = None
+        if getattr(self, "audio_input", None) is not None:
+            self.audio_input.stop()
         if self.input_adapter is not None:
             self.input_adapter.close()
         if self.lighting_serial is not None:

@@ -138,6 +138,7 @@ class Settings:
     allow_query_token: bool = False
     mutation_auth_policy: str = "token_required"
     audio_output_device: str = ""
+    audio_input_device: str = ""
     vad_device: str = "cpu"
     hardware_mode: str = "fake"
     # Explicit exhibition operational policies. These are configuration
@@ -425,7 +426,7 @@ class Settings:
             policy_version=_text("MISHKA_POLICY_VERSION", CANONICAL_POLICY.version),
             no_voice_recording=_bool("NO_VOICE_RECORDING", True), content_root=_text("MISHKA_CONTENT_ROOT", "content"),
             profile_db=_text("MISHKA_PROFILE_DB", "runtime/data/profiles.sqlite3"), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False), mutation_auth_policy=_text("MISHKA_MUTATION_AUTH_POLICY", "token_required").lower(),
-            audio_output_device=_text("AUDIO_OUTPUT_DEVICE", ""), vad_device=_text("MISHKA_VAD_DEVICE", "cpu").lower(),
+            audio_output_device=_text("AUDIO_OUTPUT_DEVICE", ""), audio_input_device=_text("AUDIO_INPUT_DEVICE", ""), vad_device=_text("MISHKA_VAD_DEVICE", "cpu").lower(),
             max_input_chars=_int("MAX_INPUT_CHARS", 512), session_timeout_s=_int("MISHKA_MAX_SESSION_SECONDS", 1200),
             session_idle_timeout_s=_int("MISHKA_SESSION_IDLE_TTL_SECONDS", 300), confidence_threshold=_float("INTENT_CONFIDENCE_THRESHOLD", 0.6),
             llm_provider=_text("LLM_PROVIDER", "ollama"), llm_model=_text("LLM_MODEL", "qwen3:14b"),
@@ -479,6 +480,8 @@ class Settings:
             "scenario_engine": self.scenario_engine,
             "content_manifest": "content/audio/voice_manifest.json",
             "audio_policy": self.audio_policy,
+            "audio_output_device": self.audio_output_device,
+            "audio_input_device": self.audio_input_device,
             "hid_policy": self.hid_policy,
             "lighting_policy": self.lighting_policy,
             "hardware_mode": self.hardware_mode,
@@ -514,6 +517,7 @@ _COMPAT_ENV_FIELDS = {
     "MISHKA_WARMUP_E2E_STAGE_TIMEOUT_S": "e2e_stage_timeout_s",
     "MISHKA_CONTENT_ROOT": "content_root",
     "MISHKA_AUDIO_OUTPUT_DEVICE": "audio_output_device",
+    "MISHKA_AUDIO_INPUT_DEVICE": "audio_input_device",
 }
 
 

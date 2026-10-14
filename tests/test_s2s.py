@@ -17,6 +17,7 @@ from app.foundation.s2s import (
     OutputSafetyValidator, ResponseTagParser, RVCProvider, S2SConfig,
     RetryingLLMProvider, SentenceChunker, TTSQueueOverflowError,
     FasterWhisperRecognizer, CancellationController,
+    SoundDeviceCaptureController,
 )
 
 
@@ -40,6 +41,46 @@ def test_vad_detects_end_short_and_max_duration():
     short=AudioIngressPipeline(EnergyVADAdapter(),config)
     short.feed(tuple([.2]*512),1)
     assert short.feed(tuple([0.0]*4096),1)[0]=="too_short"
+
+
+def test_sounddevice_capture_normalizes_numeric_device_and_multichannel_frames():
+    controller = SoundDeviceCaptureController("1", sample_rate=16_000, channels=2)
+    assert controller._device_arg() == 1
+
+    delivered = []
+
+    class Loop:
+        def is_closed(self):
+            return False
+
+        def call_soon_threadsafe(self, callback, values):
+            delivered.append(tuple(float(value) for value in values))
+
+    controller._loop = Loop()
+    controller._on_frame = lambda values: None
+    controller._callback(
+        s2s_module.np.asarray([[0.2, 0.4], [0.6, 0.8]], dtype=s2s_module.np.float32),
+        2,
+        None,
+        None,
+    )
+    assert delivered == [pytest.approx((0.3, 0.7))]
+
+
+def test_sounddevice_capture_drops_callback_when_event_loop_is_closed():
+    controller = SoundDeviceCaptureController("1")
+    delivered = []
+
+    class Loop:
+        def is_closed(self):
+            return True
+
+        def call_soon_threadsafe(self, *_args):
+            delivered.append(True)
+
+    controller._loop = Loop()
+    controller._callback(s2s_module.np.asarray([[0.2]], dtype=s2s_module.np.float32), 1, None, None)
+    assert delivered == []
 
 
 def test_vad_does_not_double_count_the_current_silence_window():
