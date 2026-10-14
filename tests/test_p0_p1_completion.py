@@ -43,7 +43,7 @@ def test_canonical_p0_wave_space_and_contextual_story_flow():
             assert repeated["outputs"] == []
 
             stand._physical_sequence += 1
-            await stand.inject_physical({"type": "SpacePressed"})
+            await stand.inject_physical({"type": "SpaceReleased"})
             assert stand.snapshot()["session"]["node"] == "automatic_mood_check"
             await stand.inject("button", {"button_id": 4}, "completion")
             assert stand.snapshot()["session"]["node"] == "root_menu"

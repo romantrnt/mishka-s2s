@@ -20,7 +20,7 @@ def parse_event(payload: dict[str, Any], session_id: str, sequence: int, source:
         raise EventValidationError("event payload is invalid or exceeds 16 KiB")
     event_name=str(payload.get("type"))
     if event_name=="handset": event_name="handset_up" if payload.get("state")=="up" else "handset_down"
-    aliases = {"anonymous":"AnonymousStart", "anonymous_start":"AnonymousStart", "rfid":"RfidPresented", "handset_up":"HandsetLifted", "handset_down":"HandsetPlaced", "SpacePressed":"HandsetLifted", "SpaceReleased":"HandsetPlaced", "space_pressed":"HandsetLifted", "space_released":"HandsetPlaced", "button":"ButtonPressed", "button_pressed":"ButtonPressed", "button_released":"ButtonReleased", "button_hold":"ButtonHeld", "button_long_hold":"ButtonLongHeld", "text":"SpeechReceived", "hardware_disconnected":"HardwareDisconnected"}
+    aliases = {"anonymous":"AnonymousStart", "anonymous_start":"AnonymousStart", "rfid":"RfidPresented", "handset_up":"HandsetLifted", "handset_down":"HandsetPlaced", "SpacePressed":"HandsetPlaced", "SpaceReleased":"HandsetLifted", "space_pressed":"HandsetPlaced", "space_released":"HandsetLifted", "button":"ButtonPressed", "button_pressed":"ButtonPressed", "button_released":"ButtonReleased", "button_hold":"ButtonHeld", "button_long_hold":"ButtonLongHeld", "text":"SpeechReceived", "hardware_disconnected":"HardwareDisconnected"}
     name = aliases.get(event_name, event_name)
     if name not in EVENT_TYPES:
         raise EventValidationError("unknown event type")
