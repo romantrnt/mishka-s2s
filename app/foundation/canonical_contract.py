@@ -968,6 +968,8 @@ class CanonicalRuntime:
             state.expected_inputs = ["handset_down"]
             state.state_version += 1
             return self._decision(state, [
+                {"type": "lighting_wave_intent", "pattern": "onboarding_closing_wave",
+                 "groups": "buttons", "source": "canonical", "hold_on_complete": False},
                 {"type": "exhibition_onboarding_step", "step": "onboarding_ready"},
             ], "exhibition_onboarding_ready", clear_audio=True)
         if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_menu_tutorial_intro":
@@ -1090,6 +1092,7 @@ class CanonicalRuntime:
                 state.welcome_status = "pending"
                 return self._decision(state, [
                     {"type": "lighting_wave_intent", "pattern": "handset_lift_wave", "source": "canonical"},
+                    {"type": "play_asset", "asset_id": "assets/sounds/ringtone.wav", "content_id": "RINGTONE"},
                     {"type": "welcome_timer_scheduled", "phrase_id": "PHRASE_001",
                      "delay_seconds": EXHIBITION_WELCOME_DELAY_SECONDS,
                      "t0_monotonic": state.welcome_t0_monotonic,
@@ -1204,11 +1207,14 @@ class CanonicalRuntime:
                 policy = policy_for_band(band, source="exhibition_button")
                 state.age_band, state.age_band_source = band, "exhibition_button"
                 state.age_policy, state.age_years = policy.as_dict(), None
+                state.dialogue_memory.bounded_turns.append({"kind": "age_selection", "button": button, "age_band": band})
+                state.dialogue_memory.touch(now)
                 state.mode, state.substate = "exhibition_age_complete", "awaiting_closing_audio"
                 state.expected_inputs = ["audio_completed", "handset_down"]
                 state.state_version += 1
                 return self._decision(state, [
                     {"type": "speak", "phrase_id": "PHRASE_107"},
+                    {"type": "lighting_select_button", "button": button, "state": 1},
                     {"type": "exhibition_onboarding_step", "step": "age_selected", "age_band": band},
                 ], "exhibition_age_selected", clear_audio=True)
             if state.mode == "automatic_mood_check":
@@ -1385,6 +1391,8 @@ class CanonicalRuntime:
                     ], "exhibition_name_unrecognized")
                 state.display_name = name
                 state.onboarding_name_collected = True
+                state.dialogue_memory.bounded_turns.append({"kind": "name", "value": name})
+                state.dialogue_memory.touch(now)
                 state.mode, state.substate = "exhibition_age_prompt", "awaiting_age_question_audio"
                 state.expected_inputs = ["audio_completed", "handset_down"]
                 state.state_version += 1

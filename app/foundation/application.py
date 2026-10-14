@@ -12,7 +12,7 @@ from typing import Any, Callable
 from weakref import WeakSet
 
 from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, ProfileProvider, ScenarioRepository, SessionRecord, SessionRepository
-from .lighting import LIGHTING_ELEMENT_IDS, EXHIBITION_DIGIT_WAVE_GROUPS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS
+from .lighting import BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, EXHIBITION_DIGIT_WAVE_GROUPS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .adapters import ProfileProviderError
 from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseResolver, SafetyClassifier, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
@@ -698,14 +698,46 @@ class ScenarioApplication:
                 effect.setdefault("generation", int(self._session_epochs.get(event.session_id, 0)))
             if kind == "lighting_wave_intent":
                 start_wave = getattr(self.led, "start_wave", None)
+                start_age_wave = getattr(self.led, "start_age_selection_wave", None)
                 if callable(start_wave):
-                    groups = EXHIBITION_DIGIT_WAVE_GROUPS if str(effect.get("pattern")) == "age_digits_wave" else None
-                    lighting = start_wave(now=accepted_monotonic, groups=groups, hold_on_complete=True) if groups is not None else start_wave(now=accepted_monotonic)
+                    pattern = str(effect.get("pattern") or "")
+                    if pattern == "age_digits_wave" and callable(start_age_wave):
+                        lighting = start_age_wave(now=accepted_monotonic)
+                    elif pattern == "age_digits_wave":
+                        lighting = start_wave(now=accepted_monotonic, groups=EXHIBITION_DIGIT_WAVE_GROUPS, hold_on_complete=True)
+                    else:
+                        lighting = start_wave(now=accepted_monotonic, hold_on_complete=bool(effect.get("hold_on_complete", True)))
                     effect["lighting_effect"] = dict(lighting)
                     effect["generation"] = lighting.get("generation")
                     effect["resolution"] = "canonical_exhibition_wave_started"
                 else:
                     effect["resolution"] = "canonical_wave_intent_recorded_without_effect_adapter"
+            elif kind == "lighting_select_button":
+                cancel_effects = getattr(self.led, "cancel_effects", None)
+                if callable(cancel_effects):
+                    cancel_effects(clear=False)
+                button = int(effect.get("button", 0))
+                element_id = BUTTON_FILL_ELEMENTS.get(button)
+                if element_id is None:
+                    effect["resolution"] = "invalid_button"
+                else:
+                    self.led.set_element(element_id, int(effect.get("state", 1)))
+                    effect["resolution"] = "selected_button_fill_lit"
+                    effect["element_id"] = element_id
+            elif kind == "play_asset":
+                asset_id = str(effect.get("content_id") or effect.get("asset_id") or "")
+                asset_path = str(effect.get("asset_id") or "")
+                if voice_open and asset_id and asset_path:
+                    self.audio.play(asset_id, asset_path, record.cancellation_token)
+                    effect["asset_status"] = "queued"
+                    effect["audio_status"] = "queued"
+                    effect["audio_queued"] = True
+                    effect["resolution"] = "canonical_asset_queued"
+                else:
+                    effect["asset_status"] = "absent"
+                    effect["audio_status"] = "unavailable"
+                    effect["audio_queued"] = False
+                    effect["resolution"] = "asset_requires_handset"
             elif kind == "exhibition_effects_cancelled":
                 cancel_effects = getattr(self.led, "cancel_effects", None)
                 effect["lighting_effect"] = dict(cancel_effects(clear=True)) if callable(cancel_effects) else {"effect": "unavailable"}
@@ -1157,8 +1189,23 @@ class ScenarioApplication:
         state = self.canonical_runtime.sessions.get(session_id)
         profile = self._canonical_profiles.get(session_id)
         state_snapshot = state.snapshot() if state is not None else {"mode": "bear_dialogue", "handset": "up"}
-        prompt = build_system_prompt(profile=profile, state=state_snapshot)
-        return ConversationContext(session_id, "canonical_product", str(state_snapshot.get("mode") or "bear_dialogue"), ("greetings", "clinic", "weather", "games", "stories", "feelings", "questions"), ("diagnosis", "medicine", "secret", "personal_data"), 5, 120, 2, profile=ProfileContext.from_profile(profile), system_prompt=prompt)
+        # Onboarding identity is session-scoped RAM, not a persisted profile.
+        # Keep it available to the bounded voice context after the anonymous
+        # name/age exchange while leaving the public snapshot redacted.
+        private_profile = dict(profile or {})
+        if state is not None:
+            if state.display_name:
+                private_profile.setdefault("display_name", state.display_name)
+            private_profile["age_band"] = state.age_band
+            if state.age_years is not None:
+                private_profile["age"] = state.age_years
+            state_snapshot["onboarding_name_collected"] = bool(state.onboarding_name_collected)
+            state_snapshot["dialogue_memory"] = {
+                "status": state.dialogue_memory.status,
+                "turns": list(state.dialogue_memory.bounded_turns),
+            }
+        prompt = build_system_prompt(profile=private_profile or None, state=state_snapshot)
+        return ConversationContext(session_id, "canonical_product", str(state_snapshot.get("mode") or "bear_dialogue"), ("greetings", "clinic", "weather", "games", "stories", "feelings", "questions"), ("diagnosis", "medicine", "secret", "personal_data"), 5, 120, 2, profile=ProfileContext.from_profile(private_profile or None), system_prompt=prompt)
 
     async def _complete_canonical_audio_turn(self, session_id: str, sequence: int, pending: asyncio.Task[Any], epoch: int, correlation_id: str) -> None:
         try:

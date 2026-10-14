@@ -29,6 +29,11 @@ BUTTON_OUTPUT_ELEMENTS: Mapping[int, tuple[int, ...]] = {
     + ((PICTOGRAM_ELEMENTS[button_id],) if button_id in PICTOGRAM_ELEMENTS else ())
     for button_id in BUTTON_FILL_ELEMENTS
 }
+BUTTON_WAVE_ELEMENTS: Mapping[int, tuple[int, ...]] = {
+    button_id: BUTTON_OUTPUT_ELEMENTS[button_id]
+    + ((COMPENSATION_ELEMENTS[button_id],) if button_id in COMPENSATION_ELEMENTS else ())
+    for button_id in BUTTON_FILL_ELEMENTS
+}
 
 ELEMENT_TO_BUTTON: Mapping[int, int] = {
     element_id: button_id
@@ -41,9 +46,9 @@ ELEMENT_TO_BUTTON = {
 }
 
 READINESS_WAVE_GROUPS: tuple[tuple[int, ...], ...] = (
-    BUTTON_OUTPUT_ELEMENTS[1], BUTTON_OUTPUT_ELEMENTS[2], BUTTON_OUTPUT_ELEMENTS[3],
-    BUTTON_OUTPUT_ELEMENTS[4], BUTTON_OUTPUT_ELEMENTS[5], BUTTON_OUTPUT_ELEMENTS[6],
-    BUTTON_OUTPUT_ELEMENTS[7],
+    BUTTON_WAVE_ELEMENTS[1], BUTTON_WAVE_ELEMENTS[2], BUTTON_WAVE_ELEMENTS[3],
+    BUTTON_WAVE_ELEMENTS[4], BUTTON_WAVE_ELEMENTS[5], BUTTON_WAVE_ELEMENTS[6],
+    BUTTON_WAVE_ELEMENTS[7],
 )
 READINESS_WAVE_DURATION_MS = 1200
 
@@ -293,6 +298,8 @@ class ExhibitionLightingEngine:
         self._task: asyncio.Task[object] | None = None
         self._pwm_phase_origin: float | None = None
         self._wave_groups: tuple[tuple[int, ...], ...] = EXHIBITION_WAVE_GROUPS
+        self._follow_up_groups: tuple[tuple[int, ...], ...] | None = None
+        self.wave_phase = "idle"
         self._wave_hold_on_complete = True
 
     @property
@@ -391,6 +398,8 @@ class ExhibitionLightingEngine:
         self.last_emit_key = None
         self.wave_stage = -1
         self._wave_groups = EXHIBITION_WAVE_GROUPS
+        self._follow_up_groups = None
+        self.wave_phase = "idle"
         self._wave_hold_on_complete = True
         return self.generation
 
@@ -410,6 +419,7 @@ class ExhibitionLightingEngine:
         *,
         now: float | None = None,
         groups: Sequence[Sequence[int]] | None = None,
+        follow_up_groups: Sequence[Sequence[int]] | None = None,
         hold_on_complete: bool = True,
     ) -> dict[str, object]:
         now = self.monotonic_now() if now is None else float(now)
@@ -418,6 +428,11 @@ class ExhibitionLightingEngine:
             raise ValueError("wave groups must not be empty")
         generation = self._start_generation("wave", now)
         self._wave_groups = normalized
+        self._follow_up_groups = (
+            tuple(tuple(_element_id(int(element_id)) for element_id in group) for group in follow_up_groups)
+            if follow_up_groups is not None else None
+        )
+        self.wave_phase = "primary"
         self._wave_hold_on_complete = bool(hold_on_complete)
         self.output.clear_all()
         self.advance(now, force=True)
@@ -433,6 +448,8 @@ class ExhibitionLightingEngine:
         self.last_emit_key = None
         self.wave_stage = -1
         self._wave_groups = EXHIBITION_WAVE_GROUPS
+        self._follow_up_groups = None
+        self.wave_phase = "idle"
         self._wave_hold_on_complete = True
         if clear:
             self.output.clear_all()
@@ -481,6 +498,14 @@ class ExhibitionLightingEngine:
         groups = self._wave_groups
         stage = int(elapsed_ms // EXHIBITION_WAVE_STAGE_MS)
         if stage >= len(groups):
+            if self._follow_up_groups is not None and self.wave_phase == "primary":
+                self._wave_groups = self._follow_up_groups
+                self._follow_up_groups = None
+                self.wave_phase = "follow_up"
+                self.started_at_monotonic = now
+                self.wave_stage = -1
+                self.last_emit_key = None
+                return self.advance(now, force=True)
             if self.wave_stage != len(groups):
                 self.wave_stage = len(groups)
                 active = {element_id for group in groups for element_id in group}
@@ -511,7 +536,7 @@ class ExhibitionLightingEngine:
 
     def snapshot(self) -> dict[str, object]:
         frame = dict(self.last_frame or {})
-        return {"active": self.effect != "idle", "effect": self.effect, "generation": self.generation, "clock": "monotonic_injected", "task_active": self.task_active, "scheduler": "background_wakeup" if self.background_scheduler else "manual_fake_clock", "wave_stage": self.wave_stage, "frame_count": self.frame_count, "state": frame.get("state"), "transition_ms": frame.get("transition_ms"), "protocol": frame.get("protocol"), "brightness_percent": frame.get("brightness_percent"), "requested_brightness_percent": frame.get("requested_brightness_percent"), "on_slots": frame.get("on_slots"), "pwm_slots": frame.get("pwm_slots"), "elements": list(LIGHTING_ELEMENT_IDS), "last_frame": frame, "last_error": dict(self.last_error) if self.last_error else None}
+        return {"active": self.effect != "idle", "effect": self.effect, "generation": self.generation, "clock": "monotonic_injected", "task_active": self.task_active, "scheduler": "background_wakeup" if self.background_scheduler else "manual_fake_clock", "wave_stage": self.wave_stage, "wave_phase": self.wave_phase, "frame_count": self.frame_count, "state": frame.get("state"), "transition_ms": frame.get("transition_ms"), "protocol": frame.get("protocol"), "brightness_percent": frame.get("brightness_percent"), "requested_brightness_percent": frame.get("requested_brightness_percent"), "on_slots": frame.get("on_slots"), "pwm_slots": frame.get("pwm_slots"), "elements": list(LIGHTING_ELEMENT_IDS), "last_frame": frame, "last_error": dict(self.last_error) if self.last_error else None}
 
 
 

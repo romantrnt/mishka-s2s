@@ -316,9 +316,15 @@ class UARTLEDController:
     def start_breathing(self, *, now: float | None = None):
         return self.exhibition_effects.start_breathing(now=now)
 
-    def start_wave(self, *, now: float | None = None, groups=None, hold_on_complete: bool = True):
+    def start_wave(self, *, now: float | None = None, groups=None, follow_up_groups=None, hold_on_complete: bool = True):
         return self.exhibition_effects.start_wave(
-            now=now, groups=groups, hold_on_complete=hold_on_complete,
+            now=now, groups=groups, follow_up_groups=follow_up_groups, hold_on_complete=hold_on_complete,
+        )
+
+    def start_age_selection_wave(self, *, now: float | None = None):
+        return self.exhibition_effects.start_wave(
+            now=now, groups=EXHIBITION_WAVE_GROUPS,
+            follow_up_groups=EXHIBITION_DIGIT_WAVE_GROUPS, hold_on_complete=True,
         )
 
     def cancel_effects(self, *, clear: bool = True):
@@ -800,6 +806,10 @@ class HardwareIntegrationStand:
                 "at": time.time(), "stage": "asset_playback", "response_id": response_id,
                 "asset_id": asset_id, "error": type(exc).__name__, "detail": str(exc)[:200],
             })
+            if not (response_id in self.stories
+                    or response_id.startswith("placeholder:fixed_story:")
+                    or response_id.startswith("PHRASE_")):
+                return
             self._audio_event_sequence += 1
             lease = dict(getattr(self.application, "_active_audio", {}).get(session_id) or {})
             await self.application.receive_async(
@@ -898,6 +908,16 @@ class HardwareIntegrationStand:
         path = Path(str(asset["asset_path"]))
         if not path.is_absolute():
             path = Path(__file__).resolve().parents[2] / "content" / "audio" / path
+        try:
+            return path.read_bytes()
+        except OSError:
+            return None
+
+    async def asset_wav(self, asset_id: str) -> bytes | None:
+        """Serve only the small allowlisted exhibition assets."""
+        if str(asset_id) != "RINGTONE":
+            return None
+        path = Path(__file__).resolve().parents[2] / "assets" / "sounds" / "ringtone.wav"
         try:
             return path.read_bytes()
         except OSError:
@@ -1112,6 +1132,9 @@ class HardwareIntegrationStand:
                         if phrase:
                             payload["asset_path"] = str(phrase["asset_path"])
                             payload["content_kind"] = "phrase"
+                    elif str(payload.get("response_id", "")) == "RINGTONE":
+                        payload["asset_path"] = "RINGTONE"
+                        payload["content_kind"] = "asset"
                 if frame.type=="audio_stop":
                     self._cancel_story_audio()
                     self._cancel_response_audio()
@@ -1850,6 +1873,13 @@ def create_stand_app(settings: Settings | None = None):
         if rendered is None:
             raise HTTPException(status_code=404, detail="unknown phrase")
         return Response(content=rendered, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+    @api.get("/stand/audio/asset/{asset_id}")
+    async def asset_audio(asset_id: str):
+        rendered = await stand.asset_wav(asset_id)
+        if rendered is None:
+            raise HTTPException(status_code=404, detail="unknown audio asset")
+        return Response(rendered, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
     @api.get("/stand/audio/story/{story_id}")
     async def story_audio(story_id: str):

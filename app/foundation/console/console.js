@@ -969,6 +969,27 @@ async function playPhraseAsset(command, generation) {
   $('audio-state').textContent = 'AUDIO: PHRASE / WAV';
 }
 
+async function playGenericAsset(command, generation) {
+  const assetId = String(command.payload.asset_path || '');
+  const response = await fetch(apiPath(`/stand/audio/asset/${encodeURIComponent(assetId)}`));
+  if (!response.ok) throw new Error(`audio asset HTTP ${response.status}`);
+  const data = await response.arrayBuffer();
+  const context = await unlockAudio();
+  if (generation !== storySpeechGeneration) return;
+  const buffer = await context.decodeAudioData(data);
+  if (generation !== storySpeechGeneration) return;
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+  activeSources.add(source);
+  source.onended = () => {
+    activeSources.delete(source);
+    if (generation === storySpeechGeneration) $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
+  };
+  source.start();
+  $('audio-state').textContent = 'AUDIO: RINGTONE / WAV';
+}
+
 async function playStoryAsset(command, generation) {
   const response = await fetch(apiPath(`/stand/audio/story/${encodeURIComponent(command.payload.response_id)}`));
   if (!response.ok) throw new Error(`story audio HTTP ${response.status}`);
@@ -1003,7 +1024,7 @@ function speakCommands(state) {
     if ((command.type === 'audio_play' || command.type === 'audio_stop') && !audioReady) break;
     lastSpokenCommand = command.sequence;
     if (command.type === 'audio_stop') {
-      storySpeechGeneration += 1;
+      interruptAudioForInput();
       window.speechSynthesis?.cancel();
     }
     if (command.type === 'audio_play' && command.payload.content_kind === 'phrase' && command.payload.asset_path) {
@@ -1012,6 +1033,14 @@ function speakCommands(state) {
         if (generation !== storySpeechGeneration) return;
         post('/stand/audio/failed', { session_id: command.payload.session_id, response_id: command.payload.response_id, playback_lease: command.payload.playback_lease, generation: command.payload.generation, error_code: 'browser_phrase_playback_failed' }).catch(() => {});
         showError(new Error(`Recorded phrase unavailable; audio path stopped: ${error.message}`));
+      });
+      continue;
+    }
+    if (command.type === 'audio_play' && command.payload.content_kind === 'asset' && command.payload.asset_path) {
+      const generation = ++storySpeechGeneration;
+      playGenericAsset(command, generation).catch(error => {
+        if (generation !== storySpeechGeneration) return;
+        showError(new Error('Audio asset unavailable: ' + error.message));
       });
       continue;
     }
