@@ -13,6 +13,24 @@ from .s2s import ConversationContext, LocalS2SPipeline
 from .config import compatibility_env_value
 
 
+class _SilentWarmupPlayback:
+    """Keep the production warmup probe off the physical loudspeaker.
+
+    The probe is deliberately a real PCM -> STT -> LLM -> TTS pipeline, but
+    it is a readiness check, not a user-facing turn. Using the live playback
+    device here made every server restart speak the fixture response before
+    the handset was lifted and could also create acoustic feedback into the
+    microphone. The queue still executes its playback stage and records the
+    timing; only the final hardware write is suppressed.
+    """
+
+    async def play(self, _audio) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+
 class ProductionE2EWarmupProbe:
     """Real PCM -> VAD -> STT -> LLM -> validation -> TTS -> playback probe."""
 
@@ -152,6 +170,11 @@ class ProductionE2EWarmupProbe:
                     "reason": None if failed is None else failed.get("reason", "stage_failed"),
                     "diagnostic": validation_failure}
 
+        engine = getattr(self.manager, "engine", None)
+        original_playback = getattr(engine, "playback", None)
+        silent_playback = _SilentWarmupPlayback()
+        if engine is not None:
+            engine.playback = silent_playback
         try:
             return await asyncio.wait_for(run_inner(), total_timeout)
         except asyncio.TimeoutError:
@@ -159,3 +182,5 @@ class ProductionE2EWarmupProbe:
             return {"ok": False, "correlation_id": correlation_id, "stages": stages, "reason": "e2e_overall_timeout", "metrics_snapshot": self._metric_snapshot()}
         finally:
             await self.audio_pipeline.cancel_session(session_id)
+            if engine is not None and engine.playback is silent_playback:
+                engine.playback = original_playback
