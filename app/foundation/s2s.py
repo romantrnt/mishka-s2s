@@ -166,8 +166,12 @@ class S2SConfig:
     playback_timeout_s: float = 60.0
     max_input_chars: int = 512
     max_response_chars: int = 320
-    max_chunk_chars: int = 100
-    first_chunk_chars: int = 12
+    # TTS/RVC operate on semantic blocks, not token-sized fragments.  The
+    # production response budget is 320 chars; 240 keeps a block in the
+    # natural 1-3 sentence / roughly 3-12 second range while still allowing a
+    # short answer to be synthesized as one unit.
+    max_chunk_chars: int = 240
+    first_chunk_chars: int = 240
     first_audio_gate_s: float = 1.25
     queue_size: int = 4
     queue_put_timeout_s: float = 2.0
@@ -886,75 +890,52 @@ class StreamingTokenConsumer:
 
 
 class SentenceChunker:
-    """Emit complete spoken units without cutting through a word.
+    """Group one to three complete sentences into a single voice block.
 
-    The old implementation fell back to ``cut = limit`` when there was no
-    preceding space.  That is a real audio bug for streaming TTS: a short
-    first chunk could contain ``При`` and the next chunk ``вет``.  RVC then
-    converted those fragments independently and the first consonants were
-    especially easy to lose.  Prefer a punctuation/whitespace boundary and
-    wait for the next boundary when a single word is longer than the target.
+    Streaming model tokens are an implementation detail and must never define
+    the acoustic unit.  Waiting for a semantic boundary gives Silero one
+    prosodic curve and lets the queue perform one RVC conversion over the
+    whole block.  A long single sentence may exceed the target; it is still
+    preferable to splitting through a word or through its intonation.
     """
 
-    def __init__(self, max_chars=100, first_max_chars=None):
+    def __init__(self, max_chars=240, first_max_chars=None, *, min_sentences=2, max_sentences=3):
         self.max_chars=max_chars
         self.first_max_chars=first_max_chars or max_chars
-        if self.max_chars < 1 or self.first_max_chars < 1:
+        self.min_sentences=min_sentences
+        self.max_sentences=max_sentences
+        if self.max_chars < 16 or self.first_max_chars < 16 or not 1 <= min_sentences <= max_sentences:
             raise ValueError("chunk limits must be positive")
         self.first=True
         self.buffer=""
-
-    @property
-    def first_min_chars(self):
-        # RVC needs more than a greeting plus punctuation to infer stable
-        # phonemes.  Keep a short first sentence buffered until either this
-        # context is available or the producer flushes the completed reply.
-        return min(self.first_max_chars, 16)
 
     def feed(self, token):
         self.buffer += token
         result=[]
         while True:
-            match=re.search(r"^(.+?[.!?,;:])(?:\s|$)", self.buffer)
-            if match:
-                spoken_prefix=match.group(1).strip()
-                if self.first and len(spoken_prefix) < self.first_min_chars:
-                    # Do not feed a 5–10 character fragment such as
-                    # ``Привет,`` to an independent RVC conversion job.
-                    # Continue accumulating until the first context target,
-                    # then the normal whitespace boundary logic below takes
-                    # over.  ``flush`` preserves genuinely short replies.
-                    pass
-                else:
-                    end=match.end()
-                    result.append(self.buffer[:end].strip())
-                    self.buffer=self.buffer[end:].lstrip()
-                    self.first=False
-                    continue
-            limit=self.first_max_chars if self.first else self.max_chars
-            if len(self.buffer) < limit:
-                break
-            # Never split a word just because the latency target was reached.
-            # Include the boundary whitespace in the consumed prefix, then
-            # strip it from the next buffer so chunks remain natural speech.
-            cut=self.buffer.rfind(" ",0,limit + 1)
-            if cut > 0:
-                result.append(self.buffer[:cut].strip())
-                self.buffer=self.buffer[cut:].lstrip()
+            boundaries=list(re.finditer(r".+?[.!?…]+(?=\s|$)", self.buffer, re.S))
+            if len(boundaries) >= self.min_sentences:
+                selected=boundaries[min(self.max_sentences, len(boundaries))-1]
+                result.append(self.buffer[:selected.end()].strip())
+                self.buffer=self.buffer[selected.end():].lstrip()
                 self.first=False
                 continue
-            # A long first/next word is kept intact until its terminating
-            # whitespace arrives.  The bounded response/queue limits still
-            # cap memory; semantic integrity is more important than a hard
-            # character cap at this boundary.
-            next_space=re.search(r"\s", self.buffer[limit:])
-            if next_space is None:
+            limit=self.first_max_chars if self.first else self.max_chars
+            if len(self.buffer) < limit or not boundaries:
                 break
-            cut=limit + next_space.start()
-            if cut <= 0:
-                break
-            result.append(self.buffer[:cut].strip())
-            self.buffer=self.buffer[cut:].lstrip()
+            # A long single sentence is emitted at its natural end.  If the
+            # buffer contains several sentences but not the minimum yet, use
+            # the last complete boundary under the target.
+            eligible=[match for match in boundaries if match.end() <= limit]
+            if eligible:
+                selected=eligible[-1]
+                result.append(self.buffer[:selected.end()].strip())
+                self.buffer=self.buffer[selected.end():].lstrip()
+                self.first=False
+                continue
+            selected=boundaries[0]
+            result.append(self.buffer[:selected.end()].strip())
+            self.buffer=self.buffer[selected.end():].lstrip()
             self.first=False
         return [x for x in result if x]
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from app.foundation.voice_pipeline import normalize_text, peak_normalize, prepend_pre_roll
+from app.foundation.voice_pipeline import plan_prosody, prepend_pre_roll, validate_audio
 
 SILERO_MODEL_URL = "https://models.silero.ai/models/tts/ru/v5_5_ru.pt"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -46,7 +46,7 @@ class SileroTTSEngine:
 
     @staticmethod
     def normalize(text):
-        return normalize_text(text)
+        return plan_prosody(text)
 
 
     def _load_from_hub(self, torch):
@@ -117,7 +117,11 @@ class SileroTTSEngine:
         with self._synthesis_lock, torch.inference_mode():
             audio = model.apply_tts(text=self.normalize(text), speaker=self.speaker,
                                      sample_rate=self.sample_rate, put_accent=True, put_yo=True)
-            values = peak_normalize(audio.detach().to("cpu").float().reshape(-1).tolist())
+            # Keep Silero dynamics intact.  Independent peak normalization at
+            # this stage makes every short block equally loud and gives RVC a
+            # synthetic input envelope.  The only loudness normalization is
+            # performed once after the complete RVC block.
+            values = validate_audio(audio.detach().to("cpu").float().reshape(-1).tolist(), name="Silero audio")
         if not values:
             raise RuntimeError("Silero produced no audio")
         leading_ms = int(leading_silence_ms)

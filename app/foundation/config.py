@@ -214,8 +214,10 @@ class Settings:
     rvc_startup_timeout_s: float = 60.0
     playback_timeout_s: float = 60.0
     max_response_chars: int = 320
-    max_tts_chunk_chars: int = 72
-    max_tts_first_chunk_chars: int = 12
+    # Semantic TTS/RVC block, not token streaming.  Keep one to three
+    # sentences together so Silero and RVC see a stable prosodic context.
+    max_tts_chunk_chars: int = 240
+    max_tts_first_chunk_chars: int = 240
     tts_queue_size: int = 4
     tts_queue_put_timeout_s: float = 2.0
     stt_confidence_threshold: float = 0.45
