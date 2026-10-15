@@ -33,6 +33,41 @@ def test_headless_audio_gate_includes_spoken_age_selection() -> None:
     assert "exhibition_age_selection" in HEADLESS_AUDIO_NODES
 
 
+def test_tutorial_skip_and_handset_down_survive_stuck_audio_cleanup() -> None:
+    app, _, _, _ = build_application(
+        settings=Settings(profile="mock", runtime_mode="exhibition", content_root="content"),
+        background_scheduler=False,
+    )
+
+    class HangingAudioOwner:
+        async def cancel_session(self, _session_id: str) -> None:
+            await asyncio.sleep(60)
+
+    async def scenario() -> None:
+        app.audio_cleanup_timeout_seconds = 0.01
+        app.bounded_s2s = HangingAudioOwner()
+        session_id = "stuck-audio-skip"
+        state = app.canonical_runtime._new_state(session_id, None)
+        state.handset = "up"
+        state.mode = "exhibition_menu_tutorial_buttons"
+        state.substate = "explaining_button_1"
+        state.state_version = 1
+        app.canonical_runtime.sessions[session_id] = state
+        skipped = await asyncio.wait_for(app.receive_async(Event(
+            "ButtonPressed", session_id, 1, 0.0, "hid", {"button_id": 4}, "skip", 0.0,
+        )), 0.5)
+        assert skipped["reason"] == "exhibition_menu_tutorial_skipped"
+        assert skipped["state"] == "menu_ready"
+        down = await asyncio.wait_for(app.receive_async(Event(
+            "HandsetPlaced", session_id, 2, 0.1, "hid", {}, "down", 0.1,
+        )), 0.5)
+        assert down["reason"] == "exhibition_reset"
+        assert down["state"] == "idle"
+        assert any(item["kind"] == "audio_owner_cleanup_timeout" for item in app.audio_runtime_diagnostics)
+
+    asyncio.run(scenario())
+
+
 def test_exhibition_application_ignores_buttons_before_handset_lift() -> None:
     app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="exhibition", content_root="content"))
 

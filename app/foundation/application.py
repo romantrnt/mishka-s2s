@@ -344,6 +344,62 @@ class ScenarioApplication:
                     return True
         return bool(self._audio_completions.get(session_id))
 
+    @staticmethod
+    def _consume_detached_audio_cancel(task: asyncio.Task[Any]) -> None:
+        """Consume a late cancellation result without an unhandled-task warning."""
+        if task.cancelled():
+            return
+        try:
+            task.exception()
+        except (asyncio.CancelledError, Exception):
+            return
+
+    async def _cancel_audio_owner(self, owner: Any, session_id: str, *, operation: str) -> dict[str, Any]:
+        """Bound provider cleanup so HID/reset cannot be held by native audio I/O."""
+        cancel_session = getattr(owner, "cancel_session", None)
+        if not callable(cancel_session):
+            return {"status": "unavailable", "operation": operation, "session_id": session_id}
+        task = asyncio.create_task(
+            cancel_session(session_id),
+            name=f"mishka-audio-cancel-{operation}-{session_id}",
+        )
+        timeout = self.audio_cleanup_timeout_seconds
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            # Do not let a late cleanup for the old physical session cancel a
+            # new session that reuses the same session id. Native PortAudio
+            # work may remain shielded inside the provider, but its owner
+            # coroutine must stop carrying this session's cancellation intent.
+            if not task.done():
+                task.cancel()
+            task.add_done_callback(self._consume_detached_audio_cancel)
+            diagnostic = {
+                "kind": "audio_owner_cleanup_timeout",
+                "session_id": session_id,
+                "operation": operation,
+                "timeout_s": timeout,
+            }
+            self.audio_runtime_diagnostics.append(diagnostic)
+            logger.warning("audio owner cleanup timed out; continuing reset", extra=diagnostic)
+            return {**diagnostic, "status": "timed_out"}
+        except asyncio.CancelledError:
+            if not task.done():
+                task.cancel()
+            raise
+        except Exception as exc:
+            diagnostic = {
+                "kind": "audio_owner_cleanup_failed",
+                "session_id": session_id,
+                "operation": operation,
+                "exception_type": type(exc).__name__,
+                "detail": str(exc)[:160],
+            }
+            self.audio_runtime_diagnostics.append(diagnostic)
+            logger.warning("audio owner cleanup failed; continuing reset: %s", diagnostic["detail"])
+            return {**diagnostic, "status": "failed"}
+        return {"status": "completed", "operation": operation, "session_id": session_id}
+
     async def _cleanup_session_resources(self, session_id: str) -> dict[str, Any]:
         """Idempotently release all application-owned resources for a session."""
         self._cancel_welcome_timer(session_id)
@@ -354,9 +410,9 @@ class ScenarioApplication:
         completion_cleanup = await self._cancel_audio_completions(session_id, operation="session_cleanup")
         self._invalidate_audio_lease(session_id)
         if self.s2s_audio is not None:
-            await self.s2s_audio.cancel_session(session_id)
+            await self._cancel_audio_owner(self.s2s_audio, session_id, operation="session_cleanup")
         elif self.bounded_s2s is not None:
-            await self.bounded_s2s.cancel_session(session_id)
+            await self._cancel_audio_owner(self.bounded_s2s, session_id, operation="session_cleanup")
         self.conversation_contexts.pop(session_id, None)
         self._canonical_profiles.pop(session_id, None)
         self._canonical_schedule_refs.pop(session_id, None)
@@ -942,7 +998,9 @@ class ScenarioApplication:
                 self._invalidate_audio_lease(event.session_id)
                 self.audio.cancel(record.cancellation_token)
                 if self.bounded_s2s is not None:
-                    await self.bounded_s2s.cancel_session(event.session_id)
+                    effect["audio_cleanup"] = await self._cancel_audio_owner(
+                        self.bounded_s2s, event.session_id, operation="audio_stop",
+                    )
             elif kind == "adult_handoff_request":
                 if self.adult_handoff is None:
                     effect["resolution"] = "adult_handoff_unavailable"
@@ -1746,9 +1804,9 @@ class ScenarioApplication:
         self._invalidate_audio_lease(session_id)
         cleanup = await self._cancel_audio_completions(session_id, operation="reset")
         if self.bounded_s2s is not None:
-            await self.bounded_s2s.cancel_session(session_id)
+            await self._cancel_audio_owner(self.bounded_s2s, session_id, operation="reset")
         if self.s2s_audio is not None:
-            await self.s2s_audio.cancel_session(session_id)
+            await self._cancel_audio_owner(self.s2s_audio, session_id, operation="reset")
         self.conversation_contexts.pop(session_id, None)
         if self.canonical_runtime is not None:
             self.canonical_runtime.reset(session_id)
