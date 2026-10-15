@@ -97,16 +97,16 @@ def test_canonical_set_element_remains_independent_from_readiness_groups():
     stand = HardwareIntegrationStand(settings=fixture_settings())
     try:
         stand.application.led.cancel_effects(clear=True)
-        stand.application.led.set_element(62, 1)
-        assert stand.snapshot()["lighting"]["62"] == 1
-        assert all(stand.snapshot()["lighting"][str(element_id)] == 0 for element_id in (60, 61, 70, 71, 72))
-        stand.application.led.set_element(72, 1)
-        assert stand.snapshot()["lighting"]["72"] == 1
-        assert stand.snapshot()["lighting"]["62"] == 1
-        stand.application.led.set_element(21, 1, 500)
-        assert stand.snapshot()["lighting"]["21"] == 1
-        assert stand.snapshot()["lighting"]["20"] == 0
-        assert stand.lighting_output.commands[-1] == LightingCommand(21, 1, 500)
+        stand.application.led.set_element(4, 1)
+        assert stand.snapshot()["lighting"]["4"] == 1
+        assert all(stand.snapshot()["lighting"][str(element_id)] == 0 for element_id in (3, 5, 16, 17))
+        stand.application.led.set_element(17, 1)
+        assert stand.snapshot()["lighting"]["17"] == 1
+        assert stand.snapshot()["lighting"]["4"] == 1
+        stand.application.led.set_element(12, 1, 500)
+        assert stand.snapshot()["lighting"]["12"] == 1
+        assert stand.snapshot()["lighting"]["13"] == 0
+        assert stand.lighting_output.commands[-1] == LightingCommand(12, 1, 500)
     finally:
         stand.close()
 
@@ -118,7 +118,7 @@ def test_first_rfid_readiness_wave_reconciles_to_canonical_lighting():
         assert result["reason"] == "rfid_identified"
         lighting = stand.snapshot()["lighting"]
         assert all(lighting[str(element_id)] == 1 for element_id in LIGHTING_ELEMENT_IDS)
-        assert sum(lighting.values()) == 16
+        assert sum(lighting.values()) == 18
         assert set(map(int, lighting)) == set(LIGHTING_ELEMENT_IDS)
     finally:
         stand.close()
@@ -301,7 +301,7 @@ def test_stand_ready_reports_validated_content_instead_of_external_placeholder()
         result=run(ready_route())
         assert result["content"]["contract"] == "canonical_product/v1"
         assert result["content"]["scenario_id"] == "canonical_product"
-        assert result["content"]["state_nodes"] == 43
+        assert result["content"]["state_nodes"] == 50
         assert result["content"]["ready"] is True
         assert result["ready"] is False
         assert result["lifecycle"]["state"] in {"BOOTING", "DEGRADED"}

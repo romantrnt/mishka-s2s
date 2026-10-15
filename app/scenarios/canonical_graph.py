@@ -153,6 +153,12 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             target == "wellbeing_check"
             or (current == "wellbeing_check" and target in {"support_intake", "safety_handoff"})
             or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
+            or (current in {
+                "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
+                "exhibition_menu_tutorial_buttons", "exhibition_menu_wave",
+                "exhibition_menu_repeat_prompt", "exhibition_menu_repeat_listen",
+                "exhibition_menu_replay_buttons",
+            } and target == "menu_ready")
             or (current in ROOT_ENTRY_MODES and target in BUTTON_TARGETS | {"awaiting_handset"})
             or (current == "personal_story_theme" and target in {"personal_story_generating", "root_menu"})
             or (current == "automatic_mood_check" and target == "root_menu")
@@ -171,6 +177,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             target in {"safety_handoff", "support_intake"}
             or (current == "exhibition_name_capture" and target == "exhibition_age_prompt")
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
+            or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
             or (current == "exhibition_menu_repeat_listen" and target in {"exhibition_menu_repeat_listen", "exhibition_menu_replay_buttons", "menu_ready"})
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_paused", "story_speech_analysis"})
             or (current == "story_speech_analysis" and target == "support_intake")

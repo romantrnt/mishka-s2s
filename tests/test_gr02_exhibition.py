@@ -76,7 +76,7 @@ def test_stale_application_timer_cannot_touch_second_physical_session() -> None:
     asyncio.run(scenario())
 
 
-def test_breathing_is_deterministic_all_sixteen_binary_leds_and_idempotent():
+def test_breathing_is_deterministic_all_eighteen_binary_leds_and_idempotent():
     output = FakeLightingOutput()
     engine = ExhibitionLightingEngine(output, monotonic_now=lambda: 0.0)
     first = engine.start_breathing(now=0.0)
@@ -85,7 +85,7 @@ def test_breathing_is_deterministic_all_sixteen_binary_leds_and_idempotent():
     assert first["state"] == 1
     assert first["transition_ms"] == EXHIBITION_BREATHING_PHASE_MS
     assert first["brightness_percent"] == 100
-    assert len(output.batches[-1]) == 16
+    assert len(output.batches[-1]) == 18
     assert {c.element_id for c in output.batches[-1]} == set(LIGHTING_ELEMENT_IDS)
     assert {c.state for c in output.batches[-1]} == {1}
     assert {c.transition_ms for c in output.batches[-1]} == {EXHIBITION_BREATHING_PHASE_MS}
@@ -97,7 +97,7 @@ def test_breathing_is_deterministic_all_sixteen_binary_leds_and_idempotent():
     assert off["state"] == 0 and off["brightness_percent"] == 0
     assert on["state"] == 1 and on["brightness_percent"] == 100
     assert off["transition_ms"] == on["transition_ms"] == EXHIBITION_BREATHING_PHASE_MS
-    assert all(len(batch) == 16 for batch in output.batches)
+    assert all(len(batch) == 18 for batch in output.batches)
     assert all(command.transition_ms == EXHIBITION_BREATHING_PHASE_MS for batch in output.batches[-2:] for command in batch)
     engine.cancel_effects()
     commands_after_reset = len(output.commands)
@@ -111,7 +111,7 @@ def test_wave_is_one_foreground_effect_and_cancelled_by_reset() -> None:
     wave = engine.start_wave(now=5.0)
     assert wave["effect"] == "wave" and wave["generation"] > previous
     assert wave["last_frame"]["effect"] == "wave"
-    assert len(output.batches[-1]) == 16
+    assert len(output.batches[-1]) == 18
     assert sum(c.state for c in output.batches[-1]) > 0
     engine.cancel_effects()
     commands_after_cancel = len(output.commands)
@@ -121,8 +121,8 @@ def test_wave_is_one_foreground_effect_and_cancelled_by_reset() -> None:
 
 
 def test_csv_lf_protocol_and_brightness_quantization_are_exact() -> None:
-    assert LightingCommand(10, 1, 120).to_wire() == b"10,1,120\n"
-    assert LightingCommand(72, 0, 0).to_wire() == b"72,0,0\n"
+    assert LightingCommand(0, 1, 120).to_wire() == b"0,1,120\n"
+    assert LightingCommand(17, 0, 0).to_wire() == b"17,0,0\n"
     assert quantize_brightness_percent(0) == (0.0, 0)
     assert quantize_brightness_percent(30) == (30.0, 3)
     assert quantize_brightness_percent(80) == (80.0, 8)
@@ -132,7 +132,7 @@ def test_csv_lf_protocol_and_brightness_quantization_are_exact() -> None:
     output = FakeLightingOutput()
     engine = ExhibitionLightingEngine(output, monotonic_now=lambda: 0.0)
     engine.start_breathing(now=0.0)
-    assert len(output.batches[-1]) == 16
+    assert len(output.batches[-1]) == 18
     assert all(set(c.as_dict()) == {"element_id", "state", "transition_ms"} for c in output.batches[-1])
     assert [c.element_id for c in output.batches[-1]] == list(LIGHTING_ELEMENT_IDS)
 

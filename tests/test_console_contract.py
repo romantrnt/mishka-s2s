@@ -83,5 +83,6 @@ def test_webpanel_allows_microphone_on_exhibition_name_capture_and_tracks_live_e
     source = CONSOLE.read_text(encoding="utf-8")
     html = (CONSOLE.parent / "index.html").read_text(encoding="utf-8")
     assert "exhibition_name_capture" in source
-    assert "20261014-live-effects-5" in html
+    assert "exhibition_age_selection" in source
+    assert "console.js?v=20261014-live-effects-" in html
     assert "BREATHING" in html

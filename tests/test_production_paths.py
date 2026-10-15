@@ -60,7 +60,7 @@ def test_exhibition_session_keeps_onboarding_memory_and_closing_wave():
     state = runtime.sessions["production-path"]
     selected = runtime.handle(_event("ButtonPressed", 9, state.state_version, {"button_id": 2}, source="hid"))
     assert any(item["kind"] == "name" and item["value"] == "Аня" for item in state.dialogue_memory.bounded_turns)
-    assert any(item["kind"] == "age_selection" and item["button"] == 2 for item in state.dialogue_memory.bounded_turns)
+    assert any(item["kind"] == "age_selection" and item["age"] == 2 for item in state.dialogue_memory.bounded_turns)
     assert any(item["type"] == "lighting_select_button" and item["button"] == 2 for item in selected["effects"])
     state = runtime.sessions["production-path"]
     closing = runtime.handle(_event("AudioCompleted", 10, state.state_version, {"response_id": "PHRASE_107"}, source="audio"))

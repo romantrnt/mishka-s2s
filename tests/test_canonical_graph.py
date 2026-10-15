@@ -15,6 +15,24 @@ def test_compiled_langgraph_authorizes_only_allowlisted_transition() -> None:
     assert graph.authorize("game_menu", "safety_handoff", "ButtonPressed")["ok"] is False
 
 
+def test_langgraph_allows_headless_onboarding_voice_and_tutorial_skip() -> None:
+    graph = CanonicalLangGraphAuthorizer()
+    assert graph.authorize("exhibition_age_selection", "exhibition_age_complete", "VoiceIntentReady")["ok"] is True
+    for mode in (
+        "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
+        "exhibition_menu_tutorial_buttons", "exhibition_menu_wave",
+        "exhibition_menu_repeat_prompt", "exhibition_menu_repeat_listen",
+        "exhibition_menu_replay_buttons",
+    ):
+        assert graph.authorize(mode, "menu_ready", "ButtonPressed")["ok"] is True
+
+
+def test_headless_audio_gate_includes_spoken_age_selection() -> None:
+    from app.foundation.stand import HEADLESS_AUDIO_NODES
+
+    assert "exhibition_age_selection" in HEADLESS_AUDIO_NODES
+
+
 def test_exhibition_application_ignores_buttons_before_handset_lift() -> None:
     app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="exhibition", content_root="content"))
 
