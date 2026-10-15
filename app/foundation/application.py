@@ -1327,7 +1327,8 @@ class ScenarioApplication:
             return
         payload = await self._receive_canonical_event(
             Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio",
-                  {"length": len(audio_result.stt.text)}, correlation_id),
+                  {"length": len(audio_result.stt.text)},
+                  f"{correlation_id}:audio:{sequence}"),
             audio_result.stt.text,
         )
         await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
@@ -1359,7 +1360,7 @@ class ScenarioApplication:
             self.sessions.save(session)
             return {**self._result(session, barge_outputs, "audio_processing"), "audio_status": "processing", "pending": True, "barge_in": audio_result.barge_in}
         if audio_result.stt is not None and audio_result.stt.text.strip():
-            result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text)}, session.correlation_id), audio_result.stt.text)
+            result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text)
             result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
             return result
         if audio_result.turn is not None and audio_result.turn.fallback_reason:
