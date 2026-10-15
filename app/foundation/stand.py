@@ -49,6 +49,7 @@ AUDIO_SAMPLE_RATES = {16000, 22050, 24000, 48000}
 MAX_AUDIO_SECONDS = 15
 MAX_AUDIO_WAV_BYTES = 6 * 1024 * 1024
 HEADLESS_AUDIO_NODES = frozenset({
+    "exhibition_menu_repeat_listen",
     "exhibition_name_capture", "bear_dialogue", "support_intake",
     "personal_story_theme", "wellbeing_check", "schedule_weather",
 })
