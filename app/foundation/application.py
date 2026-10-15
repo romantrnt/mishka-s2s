@@ -527,7 +527,9 @@ class ScenarioApplication:
         task = self._lighting_wave_tasks.pop(session_id, None)
         if task is not None and not task.done():
             task.cancel()
-        self._lighting_wave_sequences.pop(session_id, None)
+        # CanonicalRuntime keeps the last sequence per source for the whole
+        # session. Keep this counter monotonic when replacing/canceling a
+        # wave, otherwise the next completion is rejected as stale.
 
     def _schedule_lighting_wave_completion(
         self, session_id: str, token: int, event_type: str, delay_ms: int,
