@@ -302,7 +302,7 @@ class PipelineMetrics:
             "tts_provider": tts_provider,
             "tts_model": getattr(settings, "silero_model", "v5_5_ru") if tts_provider == "silero" else "mock",
             "tts_language": getattr(settings, "silero_language", "ru") if tts_provider == "silero" else "mock",
-            "tts_speaker": getattr(settings, "silero_speaker", "kseniya") if tts_provider == "silero" else "mock",
+            "tts_speaker": getattr(settings, "silero_speaker", "aidar") if tts_provider == "silero" else "mock",
             "tts_sample_rate": getattr(settings, "silero_sample_rate", 48000) if tts_provider == "silero" else 24000,
             "voice_conversion": voice_conversion,
             "stream_preroll_ms": getattr(settings, "silero_leading_silence_ms", 150) if tts_provider == "silero" else 0,
