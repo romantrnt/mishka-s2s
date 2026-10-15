@@ -1549,10 +1549,16 @@ class MockPlaybackController:
 
 
 class SoundDevicePlaybackController:
-    """Lazy, cancellable local speaker adapter without a daemon worker thread."""
+    """Lazy local speaker adapter with serialized, cancellation-safe PortAudio I/O."""
 
     def __init__(self, device: str | int | None = None):
-        self.device=device; self.active_token=0; self._stream=None; self._generation=0
+        self.device = device
+        self.active_token = 0
+        self._stream = None
+        self._generation = 0
+        self._io_future: asyncio.Task[Any] | None = None
+        self._play_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
 
     def _device_arg(self):
         value = self.device
@@ -1581,34 +1587,69 @@ class SoundDevicePlaybackController:
             return {"ready": False, "provider": "sounddevice", "package": True,
                     "device": self.device, "reason": f"{type(exc).__name__}: {str(exc)[:180]}"}
 
-    async def play(self,audio):
-        generation=self._generation
+    async def _run_io(self, operation) -> Any:
+        # Cancelling asyncio.to_thread() does not stop the native PortAudio call.
+        # Keep the inner task alive and wait for it before any stream close.
+        future = asyncio.create_task(asyncio.to_thread(operation))
+        self._io_future = future
         try:
-            import numpy as np
-            import sounddevice as sd
-            stream=sd.OutputStream(samplerate=audio.sample_rate,channels=1,dtype="float32",device=self._device_arg())
-            self._stream=stream
-            await asyncio.to_thread(stream.start)
-            if generation!=self._generation or audio.token!=self.active_token: return
-            await asyncio.to_thread(stream.write,np.asarray(audio.samples,dtype=np.float32).reshape(-1,1))
+            return await asyncio.shield(future)
         except asyncio.CancelledError:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.shield(future)
             raise
-        except Exception as exc:
-            raise RuntimeError("local playback unavailable") from exc
         finally:
-            stream=self._stream
-            if stream is not None:
-                with contextlib.suppress(Exception): await asyncio.to_thread(stream.abort)
-                with contextlib.suppress(Exception): await asyncio.to_thread(stream.close)
-                if self._stream is stream: self._stream=None
+            if self._io_future is future:
+                self._io_future = None
+
+    async def _close_stream(self, stream) -> None:
+        async with self._close_lock:
+            if self._stream is not stream:
+                return
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(stream.abort)
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(stream.close)
+            if self._stream is stream:
+                self._stream = None
+
+    async def play(self, audio):
+        async with self._play_lock:
+            generation = self._generation
+            stream = None
+            try:
+                import numpy as np
+                import sounddevice as sd
+                stream = sd.OutputStream(
+                    samplerate=audio.sample_rate,
+                    channels=1,
+                    dtype="float32",
+                    device=self._device_arg(),
+                )
+                self._stream = stream
+                await self._run_io(stream.start)
+                if generation != self._generation or audio.token != self.active_token:
+                    return
+                samples = np.asarray(audio.samples, dtype=np.float32).reshape(-1, 1)
+                await self._run_io(lambda: stream.write(samples))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                raise RuntimeError("local playback unavailable") from exc
+            finally:
+                if stream is not None:
+                    await self._close_stream(stream)
 
     async def stop(self):
-        self._generation+=1
-        stream=self._stream
+        self._generation += 1
+        io_future = self._io_future
+        if io_future is not None and not io_future.done():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.shield(io_future)
+        stream = self._stream
         if stream is not None:
-            with contextlib.suppress(Exception): await asyncio.to_thread(stream.abort)
-            with contextlib.suppress(Exception): await asyncio.to_thread(stream.close)
-            if self._stream is stream: self._stream=None
+            await self._close_stream(stream)
+
 
 class SoundDeviceCaptureController:
     """Cancellable local microphone adapter for the physical headless stand.

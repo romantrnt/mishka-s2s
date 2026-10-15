@@ -12,7 +12,7 @@ from typing import Any, Callable
 from weakref import WeakSet
 
 from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, ProfileProvider, ScenarioRepository, SessionRecord, SessionRepository
-from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS
+from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .adapters import ProfileProviderError
 from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseResolver, SafetyClassifier, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
@@ -868,7 +868,12 @@ class ScenarioApplication:
                 for element_id in effect.get("elements", ()):
                     self.led.set_element(int(element_id), int(effect.get("state", 0)))
             elif kind == "lighting_preset":
-                self.led.clear_all()
+                # Replace the complete logical frame in one ordered batch.
+                # Sending clear_all() first caused a visible off-to-on pulse
+                # on the large weather pictogram (element 17).
+                cancel_effects = getattr(self.led, "cancel_effects", None)
+                if callable(cancel_effects):
+                    cancel_effects(clear=False)
                 preset = str(effect.get("preset", ""))
                 if preset == "EXHIBITION_MENU_TUTORIAL":
                     buttons = effect.get("buttons", ())
@@ -888,8 +893,13 @@ class ScenarioApplication:
                     commands = LED_PRESETS.get(preset, ())
                 if preset == "TARGET":
                     commands = tuple((element_id, 1) for element_id in BUTTON_ELEMENTS.get(int(effect.get("target_button", 0)), ()))
+                desired = {element_id: 0 for element_id in LIGHTING_ELEMENT_IDS}
                 for element_id, state in commands:
-                    self.led.set_element(element_id, state)
+                    desired[int(element_id)] = int(state)
+                self.led.set_elements(tuple(
+                    LightingCommand(element_id, state, 0)
+                    for element_id, state in desired.items()
+                ))
             elif kind == "resume_fixed_story":
                 story_id = str(effect.get("story_id") or "")
                 manifest = getattr(self.canonical_runtime, "stories", None)
