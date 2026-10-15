@@ -2421,7 +2421,7 @@ class BoundedConversationEngine:
         topic_instruction = ("Open developer dialogue: accept any topic unless it violates the safety rules. "
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
-        policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + '. Start the answer immediately. Output only complete <say>...</say> tags or allowlisted actions; every <say> must have a closing </say>. Never output analysis, markdown, or plain text outside these tags. Use one or two short spoken sentences, at most 45 words total, and stop.'
+        policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + '. NON_NEGOTIABLE_RUNTIME_OUTPUT: start immediately; emit only complete <say>...</say> blocks, plus at most the allowlisted <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/>. Never emit JSON, markdown, analysis, tool calls, URLs, hardware commands, unclosed tags, or plain text outside tags. Use one or two short Russian spoken sentences, at most 45 words total, and stop.'
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
         messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}"},{"role":"user","content":text}]

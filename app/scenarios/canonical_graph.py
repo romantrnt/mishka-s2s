@@ -19,6 +19,11 @@ class AuthorizationState(TypedDict, total=False):
     current_mode: str
     target_mode: str
     event_type: str
+    intent: str
+    safety_level: str
+    tool: str
+    model_action: str
+    model_action_target: str
     allowed: bool
     reason: str
     trace: list[str]
@@ -36,6 +41,24 @@ ROOT_ENTRY_MODES = frozenset({
     "automatic_mood_check", "awaiting_handset",
 })
 PIPELINE_NODES = ("ingress", "normalize_event", "session_guard", "safety_precheck", "route_mode", "policy_validate", "emit_effects", "persist_snapshot", "await_event")
+GRAPH_POLICY_VERSION = "canonical-product-policy-v2"
+
+# These are capabilities, not I/O implementations. The application layer
+# remains the only owner allowed to call providers, audio, LEDs or storage.
+TOOL_CAPABILITY_POLICY: dict[str, dict[str, Any]] = {
+    "date": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": False},
+    "weather": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": False},
+    "schedule": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": True},
+}
+MODEL_ACTION_POLICY: dict[str, Any] = {
+    "led": {"patterns": frozenset({"calm", "attention", "off"}), "states": frozenset(STATE_NAMES)},
+    "return_to_scenario": {"targets": frozenset({"root_menu", "fixed_story_menu", "menu_ready"})},
+}
+SAFETY_POLICY = {
+    "levels": frozenset({"none", "concern", "urgent"}),
+    "urgent_target": "safety_handoff",
+    "adult_intent": "request_adult",
+}
 _SCENARIO_PATH = Path(__file__).resolve().parents[2] / "content" / "scenarios" / "canonical_product_v1.json"
 
 def load_canonical_scenario_document(path: str | Path | None = None) -> dict[str, Any]:
@@ -166,7 +189,7 @@ def _node_for(mode: str):
         current = str(state.get("current_mode") or "")
         target = str(state.get("target_mode") or "")
         event_type = str(state.get("event_type") or "")
-        allowed = current == mode and _is_explicitly_allowed(current, target, event_type)
+        allowed = bool(state.get("allowed", True)) and current == mode and _is_explicitly_allowed(current, target, event_type)
         return {
             **state,
             "allowed": allowed,
@@ -181,12 +204,66 @@ def _identity(state: AuthorizationState) -> AuthorizationState:
     return state
 
 
+def _session_guard(state: AuthorizationState) -> AuthorizationState:
+    current = str(state.get("current_mode") or "")
+    target = str(state.get("target_mode") or "")
+    event_type = str(state.get("event_type") or "")
+    valid = current in STATE_NAMES and target in STATE_NAMES and event_type in {
+        "RfidPresented", "RfidRemoved", "AnonymousStart", "HandsetLifted", "HandsetPlaced",
+        "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
+        "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
+        "StoryPositionUpdated", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected",
+        "HardwareReconnected", "SessionCancel", "SessionReset", "AdultHandoffAcknowledged",
+        "AdultResolved", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
+        "StoryChoiceWaveComplete", "MenuTutorialStep",
+    }
+    return {**state, "allowed": valid, "reason": "session_guard_passed" if valid else "session_guard_rejected"}
+
+
+def _safety_precheck(state: AuthorizationState) -> AuthorizationState:
+    if not state.get("allowed", False):
+        return state
+    event_type = str(state.get("event_type") or "")
+    safety = str(state.get("safety_level") or "none")
+    target = str(state.get("target_mode") or "")
+    intent = str(state.get("intent") or "")
+    valid = safety in SAFETY_POLICY["levels"]
+    if event_type == "VoiceIntentReady" and safety == "urgent":
+        valid = target == SAFETY_POLICY["urgent_target"]
+    if event_type == "VoiceIntentReady" and intent == SAFETY_POLICY["adult_intent"]:
+        valid = valid and target == SAFETY_POLICY["urgent_target"]
+    return {**state, "allowed": valid, "reason": "safety_precheck_passed" if valid else "safety_precheck_rejected"}
+
+
+def _policy_validate(state: AuthorizationState) -> AuthorizationState:
+    if not state.get("allowed", False):
+        return {**state, "reason": str(state.get("reason") or "transition_not_allowlisted")}
+    tool = str(state.get("tool") or "")
+    if tool:
+        policy = TOOL_CAPABILITY_POLICY.get(tool)
+        if policy is None or str(state.get("current_mode") or "") not in policy["states"]:
+            return {**state, "allowed": False, "reason": "tool_capability_rejected"}
+    action = str(state.get("model_action") or "")
+    if action == "led":
+        pattern = str(state.get("model_action_target") or "")
+        if pattern not in MODEL_ACTION_POLICY["led"]["patterns"]:
+            return {**state, "allowed": False, "reason": "model_action_rejected"}
+    elif action == "return_to_scenario":
+        if str(state.get("model_action_target") or "") not in MODEL_ACTION_POLICY["return_to_scenario"]["targets"]:
+            return {**state, "allowed": False, "reason": "model_action_rejected"}
+    return {**state, "reason": "transition_allowed"}
+
+
 def build_canonical_graph(document: Mapping[str, Any] | None = None):
     """Compile the full canonical pipeline and state authorization nodes."""
     document = dict(document or load_canonical_scenario_document())
     graph = StateGraph(AuthorizationState)
     for node in PIPELINE_NODES:
-        graph.add_node(node, _identity)
+        graph.add_node(node, {
+            "session_guard": _session_guard,
+            "safety_precheck": _safety_precheck,
+            "policy_validate": _policy_validate,
+        }.get(node, _identity))
     for mode in sorted(STATE_NAMES):
         graph.add_node(mode, _node_for(mode))
         graph.add_edge(mode, "policy_validate")
@@ -211,7 +288,7 @@ class CanonicalLangGraphAuthorizer:
         self.document = load_canonical_scenario_document(scenario_path)
         self.graph = build_canonical_graph(self.document)
 
-    def authorize(self, current_mode: str | None, target_mode: str, event_type: str) -> dict[str, Any]:
+    def authorize(self, current_mode: str | None, target_mode: str, event_type: str, *, intent: str | None = None, safety_level: str = "none", tool: str | None = None) -> dict[str, Any]:
         current = str(current_mode or "idle")
         target = str(target_mode)
         if current not in STATE_NAMES or target not in STATE_NAMES:
@@ -219,7 +296,8 @@ class CanonicalLangGraphAuthorizer:
                     "trace": [current, str(event_type), target], "provider": "langgraph",
                     "scenario_id": self.document["scenario_id"], "scenario_version": self.document["version"]}
         result = self.graph.invoke(
-            {"current_mode": current, "target_mode": target, "event_type": str(event_type)}
+            {"current_mode": current, "target_mode": target, "event_type": str(event_type),
+             "intent": str(intent or ""), "safety_level": str(safety_level or "none"), "tool": str(tool or "")}
         )
         return {
             "ok": bool(result.get("allowed")),
@@ -228,11 +306,39 @@ class CanonicalLangGraphAuthorizer:
             "provider": "langgraph",
             "scenario_id": self.document["scenario_id"],
             "scenario_version": self.document["version"],
+            "policy_version": GRAPH_POLICY_VERSION,
         }
+
+    def authorize_tool(self, current_mode: str | None, tool: str, *, profile_status: str = "anonymous") -> dict[str, Any]:
+        current = str(current_mode or "idle")
+        name = str(tool or "")
+        policy = TOOL_CAPABILITY_POLICY.get(name)
+        allowed = bool(policy and current in policy["states"] and
+                       (not policy["profile_required"] or profile_status == "identified"))
+        return {"ok": allowed, "reason": "tool_allowed" if allowed else "tool_capability_rejected",
+                "tool": name, "provider_boundary": "application_owned", "policy_version": GRAPH_POLICY_VERSION}
+
+    def authorize_model_action(self, current_mode: str | None, action: str, target: str) -> dict[str, Any]:
+        current = str(current_mode or "idle")
+        action = str(action or "")
+        target = str(target or "")
+        if action == "led":
+            allowed = current in MODEL_ACTION_POLICY["led"]["states"] and target in MODEL_ACTION_POLICY["led"]["patterns"]
+        elif action == "return_to_scenario":
+            allowed = target in MODEL_ACTION_POLICY["return_to_scenario"]["targets"]
+        else:
+            allowed = False
+        return {"ok": allowed, "reason": "model_action_allowed" if allowed else "model_action_rejected",
+                "action": action, "target": target, "policy_version": GRAPH_POLICY_VERSION}
 
     def status(self) -> dict[str, Any]:
         return {"provider": "langgraph", "strict": True, "ready": True,
                 "scenario_id": self.document["scenario_id"], "scenario_version": self.document["version"],
                 "nodes": sorted(STATE_NAMES), "topology": list(PIPELINE_NODES),
-                "authorization_boundary": "session_guard→safety_precheck→policy_validate"}
-
+                "policy_version": GRAPH_POLICY_VERSION,
+                "authorization_boundary": "session_guard→safety_precheck→route_mode→policy_validate",
+                "tool_capabilities": {name: {"states": sorted(policy["states"]), "profile_required": policy["profile_required"]}
+                                      for name, policy in TOOL_CAPABILITY_POLICY.items()},
+                "model_actions": {"led": sorted(MODEL_ACTION_POLICY["led"]["patterns"]),
+                                  "return_to_scenario": sorted(MODEL_ACTION_POLICY["return_to_scenario"]["targets"])},
+                "safety_policy": {"urgent_target": SAFETY_POLICY["urgent_target"], "adult_intent": SAFETY_POLICY["adult_intent"]}}

@@ -741,6 +741,8 @@ class ScenarioApplication:
             previous_state.mode if previous_state is not None else "idle",
             str(snapshot.get("mode") or "idle"),
             event_type,
+            intent=str(payload.get("intent") or ""),
+            safety_level=str(payload.get("safety_severity") or "none"),
         )
         if not authorization["ok"]:
             if previous_state is None:
@@ -1190,9 +1192,20 @@ class ScenarioApplication:
                 effect.setdefault("resolution", "declarative_effect_emitted")
             elif kind == "typed_info_request":
                 try:
+                    tool_kind = str(effect.get("kind") or "")
+                    tool_name = "date" if tool_kind == "date" else "weather" if tool_kind == "weather" else "schedule"
+                    tool_authorizer = self.transition_authorizer
+                    tool_auth = (tool_authorizer.authorize_tool(
+                        snapshot.get("mode"), tool_name,
+                        profile_status=str(snapshot.get("profile_status") or "anonymous"),
+                    ) if tool_authorizer is not None else {"ok": False, "reason": "langgraph_unavailable"})
+                    effect["tool_authorization"] = dict(tool_auth)
+                    if not tool_auth.get("ok"):
+                        effect["resolution"] = "typed_information_blocked_by_policy"
+                        continue
                     profile = self._canonical_profiles.get(event.session_id)
                     info = await TypedInfoRenderer(self.schedule_weather, profile, self._canonical_schedule_refs.get(event.session_id)).render(
-                        str(effect.get("kind")), allow_demo=getattr(self.settings, "profile", "") == "mock")
+                        tool_kind, allow_demo=getattr(self.settings, "profile", "") == "mock")
                     effect["typed_data"] = info
                 except (ScheduleWeatherProviderError, ValueError) as exc:
                     effect["resolution"] = "typed_information_unavailable"
