@@ -1326,6 +1326,18 @@ class CanonicalRuntime:
                         {"type": "lighting_preset", "preset": "STORY_MENU"},
                         {"type": "speak", "phrase_id": "PHRASE_054"},
                     ], "fixed_story_menu_opened", clear_audio=True)
+                if button == 6:
+                    state.mode, state.substate = "bear_dialogue", "dialogue_started"
+                    state.expected_inputs = ["speech", "button_7", "handset_down"]
+                    state.dialogue_memory.touch(now)
+                    selection["target_state"] = "bear_dialogue"
+                    selection["downstream_owner"] = "bear_dialogue"
+                    return self._decision(state, [
+                        selection,
+                        {"type": "lighting_preset", "preset": "BEAR_DIALOGUE"},
+                        {"type": "capture_open"},
+                        {"type": "speak", "phrase_id": "PHRASE_094"},
+                    ], "bear_dialogue_started", clear_audio=True)
                 effects = [selection]
                 if button == 7:
                     # The current exhibition build has no live calendar/weather
@@ -1435,14 +1447,25 @@ class CanonicalRuntime:
                     state.mode, state.state_version = "awaiting_handset", state.state_version + 1
                     return self._decision(state, [{"type": "lighting", "elements": [14], "state": 1}, {"type": "visual", "view": "lift_handset"}], "handset_required")
                 state.mode, state.state_version = mode, state.state_version + 1
-                state.expected_inputs = ["button", "speech"] if state.handset == "up" else ["button"]
+                state.expected_inputs = (["speech", "button_7", "handset_down"]
+                                         if mode == "bear_dialogue" and state.handset == "up"
+                                         else ["button", "speech"] if state.handset == "up" else ["button"])
                 preset = {
                     "game_menu": "GAME_MENU", "fixed_story_menu": "STORY_MENU",
                     "support_intake": "SUPPORT", "personal_story_theme": "PERSONAL_STORY",
                     "wellbeing_check": "HELP", "bear_dialogue": "BEAR_DIALOGUE",
                     "schedule_weather": "SCHEDULE_WEATHER",
                 }.get(mode, "ROOT_MENU")
-                return self._decision(state, [{"type": "lighting_preset", "preset": preset}], "button_mode")
+                effects = [{"type": "lighting_preset", "preset": preset}]
+                if mode == "bear_dialogue" and state.handset == "up":
+                    state.substate = "dialogue_started"
+                    state.dialogue_memory.touch(now)
+                    effects.extend([
+                        {"type": "capture_open"},
+                        {"type": "speak", "phrase_id": "PHRASE_094"},
+                    ])
+                    return self._decision(state, effects, "bear_dialogue_started", clear_audio=True)
+                return self._decision(state, effects, "button_mode")
             if state.mode == "personal_story_theme":
                 themes = {1: "dinosaurs", 2: "космос", 3: "лес", 4: "дружелюбные машины", 6: "море"}
                 if button == 7:

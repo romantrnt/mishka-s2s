@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from app.foundation.age_policy import age_details, policy_for
-from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest
+from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime, CanonicalState, FixedStoryManifest
 from app.foundation.system_prompt import build_system_prompt, validate_response_plan
 
 
@@ -38,3 +38,19 @@ def test_story_emotional_reaction_keeps_playback_and_game_has_safety_escape():
     reaction = runtime.handle(_event("VoiceIntentReady", 5, started["state"]["state_version"], {"intent": "emotional_reaction", "safety_severity": "none"}))
     assert reaction["state"]["mode"] == "fixed_story_playing"
     assert reaction["effects"][0]["playback_continues"] is True
+
+
+def test_exhibition_button_six_starts_bear_dialogue_capture():
+    runtime = CanonicalRuntime(exhibition_mode=True)
+    runtime.sessions["p1-2"] = CanonicalState(
+        session_id="p1-2", mode="menu_ready", handset="up",
+        expected_inputs=[f"button_{button}" for button in range(1, 8)],
+    )
+    result = runtime.handle(_event("ButtonPressed", 1, 0, {"button_id": 6}))
+    assert result["reason"] == "bear_dialogue_started"
+    assert result["state"]["mode"] == "bear_dialogue"
+    assert result["state"]["expected_inputs"] == ["speech", "button_7", "handset_down"]
+    assert [effect["type"] for effect in result["effects"]] == [
+        "exhibition_menu_selected", "lighting_preset", "capture_open", "speak",
+    ]
+    assert result["effects"][-1]["phrase_id"] == "PHRASE_094"
