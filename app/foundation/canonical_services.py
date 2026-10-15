@@ -91,6 +91,8 @@ def classify_intent(text: str) -> str:
     )
     for pattern, theme in theme_map:
         if re.search(pattern, value): return theme
+    if re.search(r"^(да|ага|угу|конечно|хочу|повтори)([.!?, ]|$)", value): return "yes"
+    if re.search(r"^(нет|неа|не хочу|не надо|не нужно|не повторяй)([.!?, ]|$)", value): return "no"
     if re.search(r"(сказк|истори)", value): return "story_theme"
     return "free_speech"
 

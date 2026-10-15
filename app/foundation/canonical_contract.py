@@ -53,7 +53,9 @@ STATE_NAMES = frozenset({
     "exhibition_age_hint", "exhibition_age_selection", "exhibition_age_complete",
     "exhibition_onboarding_complete",
     "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
-    "exhibition_menu_tutorial_buttons", "menu_ready",
+    "exhibition_menu_tutorial_buttons", "exhibition_menu_wave",
+    "exhibition_menu_repeat_prompt", "exhibition_menu_repeat_listen",
+    "exhibition_menu_replay_buttons", "menu_ready",
     "automatic_mood_check", "root_menu",
     "dialogue_suspended_ram", "dialogue_memory_expired", "game_menu", "game_active",
     "fixed_story_menu", "fixed_story_playing", "story_speech_analysis",
@@ -69,7 +71,7 @@ ALLOWED_EVENTS = frozenset({
     "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
     "StoryPositionUpdated", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected", "HardwareReconnected",
     "SessionCancel", "SessionReset", "AdultHandoffAcknowledged", "AdultResolved",
-    "ExhibitionOnboardingComplete", "MenuTutorialStep",
+    "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "MenuTutorialStep",
 })
 PERSONA_FORBIDDEN = re.compile(
     r"\b(малыш|llm|tts|stt|vad|rfid|sqlite|api|langgraph|prompt|backend|state|tool|id)\b",
@@ -216,7 +218,9 @@ class CanonicalState:
     display_name: str | None = None
     onboarding_name_collected: bool = False
     menu_tutorial_step: int = 0
+    menu_tutorial_phase: str = "idle"
     menu_tutorial_audio_complete: bool = False
+    menu_prompt_after_wave: bool = True
     menu_lit_buttons: list[int] = field(default_factory=list)
     menu_pressed_buttons: list[int] = field(default_factory=list)
     selected_menu_button: int | None = None
@@ -275,7 +279,7 @@ def canonical_state_nodes() -> dict[str, dict[str, Any]]:
 
 REQUIRED_EXHIBITION_PHRASES = (
     "PHRASE_001", "PHRASE_007", "PHRASE_008", "PHRASE_016",
-    "PHRASE_068", "PHRASE_074", "PHRASE_075", "PHRASE_078",
+    "PHRASE_009", "PHRASE_068", "PHRASE_074", "PHRASE_075", "PHRASE_078",
     "PHRASE_099", "PHRASE_102", "PHRASE_107", "PHRASE_108",
 )
 
@@ -290,6 +294,7 @@ REQUIRED_EXHIBITION_CONTENT = (
     {"requirement": "onboarding_thanks", "phrase_id": "PHRASE_016", "transcript": "Здорово. Спасибо"},
     {"requirement": "menu_prompt", "phrase_id": "PHRASE_007", "transcript": "Что хочешь сделать?"},
     {"requirement": "menu_list", "phrase_id": "PHRASE_008", "transcript": "Один — игры. Два — сказки. Три — рассказать или спросить. Четыре — новая сказка. Пять — помощь. Шесть — поговорить. Семь — день и планы"},
+    {"requirement": "menu_repeat_prompt", "phrase_id": "PHRASE_009", "transcript": "Повторить меню?"},
     {"requirement": "listen", "phrase_id": "PHRASE_068", "transcript": "Я слушаю"},
     {"requirement": "retry", "phrase_id": "PHRASE_074", "transcript": "Я не расслышал. Скажи ещё раз"},
     {"requirement": "age_button_hint", "phrase_id": "PHRASE_075", "transcript": "Можно показать кнопкой"},
@@ -814,47 +819,96 @@ class CanonicalRuntime:
         if event.event_type == "ExhibitionOnboardingComplete":
             if not self.exhibition_mode or state.mode != "exhibition_onboarding_complete":
                 return self._decision(state, [], "exhibition_menu_handoff_ignored")
-            state.mode, state.substate = "exhibition_menu_tutorial_intro", "awaiting_thanks_audio"
+            # The onboarding closing wave is already complete and dark here.
+            state.mode, state.substate = "exhibition_menu_tutorial_buttons", "awaiting_menu_audio"
             state.expected_inputs = ["audio_completed", "handset_down"]
             state.menu_tutorial_step = 0
+            state.menu_tutorial_phase = "idle"
             state.menu_tutorial_audio_complete = False
+            state.menu_prompt_after_wave = True
             state.menu_lit_buttons = []
             state.menu_pressed_buttons = []
             state.selected_menu_button = None
             state.selected_menu_action = None
             state.state_version += 1
             return self._decision(state, [
-                {"type": "speak", "phrase_id": "PHRASE_016"},
-                {"type": "exhibition_menu_tutorial_step", "step": "thanks"},
+                {"type": "speak", "phrase_id": "PHRASE_008"},
+                {"type": "exhibition_menu_tutorial_step", "step": "menu_audio"},
             ], "exhibition_menu_tutorial_started")
         if event.event_type == "MenuTutorialStep":
-            if not self.exhibition_mode or state.mode != "exhibition_menu_tutorial_buttons":
+            if not self.exhibition_mode or state.mode not in {
+                "exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons",
+            }:
                 return self._decision(state, [], "exhibition_menu_tutorial_step_ignored")
-            try:
-                step = int(event.payload.get("step"))
-            except (TypeError, ValueError):
-                return self._decision(state, [], "exhibition_menu_tutorial_step_invalid")
-            if step != state.menu_tutorial_step + 1 or step not in range(1, 8):
-                return self._decision(state, [], "exhibition_menu_tutorial_step_duplicate")
-            state.menu_tutorial_step = step
-            state.menu_lit_buttons = list(range(1, step + 1))
-            state.state_version += 1
-            lighting = {"type": "lighting_preset", "preset": "EXHIBITION_MENU_TUTORIAL",
-                        "buttons": list(state.menu_lit_buttons), "tutorial_step": step}
-            if step == 7:
-                state.mode, state.substate = "menu_ready", "menu_tutorial_complete"
-                state.expected_inputs = [f"button_{button}" for button in range(1, 8)] + ["handset_down"]
+            phase = str(event.payload.get("phase") or "")
+            # Legacy operator/test events remain accepted; production sends
+            # explicit digit/full phases tied to the recorded WAV.
+            if not phase:
+                try:
+                    step = int(event.payload.get("step"))
+                except (TypeError, ValueError):
+                    return self._decision(state, [], "exhibition_menu_tutorial_step_invalid")
+                if step != state.menu_tutorial_step + 1 or step not in range(1, 8):
+                    return self._decision(state, [], "exhibition_menu_tutorial_step_duplicate")
+                state.menu_tutorial_step = step
+                state.menu_tutorial_phase = "full"
+                state.menu_lit_buttons = list(range(1, step + 1))
+                state.state_version += 1
+                lighting = {"type": "lighting_preset", "preset": "EXHIBITION_MENU_TUTORIAL",
+                            "buttons": list(state.menu_lit_buttons), "tutorial_step": step}
+                if step == 7:
+                    state.mode, state.substate = "menu_ready", "menu_tutorial_complete"
+                    state.expected_inputs = [f"button_{button}" for button in range(1, 8)] + ["handset_down"]
+                    return self._decision(state, [
+                        lighting,
+                        {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons)},
+                    ], "menu_tutorial_complete")
+                state.substate = f"explaining_button_{step}"
+                state.expected_inputs = ["menu_tutorial_step", "handset_down"]
                 return self._decision(state, [
                     lighting,
-                    {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons)},
-                ], "menu_tutorial_complete")
-            state.substate = f"explaining_button_{step}"
-            state.expected_inputs = ["menu_tutorial_step", "handset_down"]
-            return self._decision(state, [
-                lighting,
-                {"type": "exhibition_menu_tutorial_step", "step": step,
-                 "button": step, "buttons": list(state.menu_lit_buttons)},
-            ], "menu_tutorial_button_lit")
+                    {"type": "exhibition_menu_tutorial_step", "step": step,
+                     "button": step, "buttons": list(state.menu_lit_buttons)},
+                ], "menu_tutorial_button_lit")
+
+            try:
+                button = int(event.payload.get("button"))
+            except (TypeError, ValueError):
+                return self._decision(state, [], "exhibition_menu_tutorial_step_invalid")
+            expected = state.menu_tutorial_step + 1
+            if button != expected or button not in range(1, 8):
+                return self._decision(state, [], "exhibition_menu_tutorial_step_duplicate")
+            if phase == "digit":
+                if state.menu_tutorial_phase not in {"idle", "full"}:
+                    return self._decision(state, [], "exhibition_menu_tutorial_phase_duplicate")
+                state.menu_tutorial_phase = "digit"
+                state.substate = f"explaining_button_{button}_digit"
+                state.expected_inputs = ["menu_tutorial_step", "handset_down"]
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "lighting_preset", "preset": "EXHIBITION_MENU_TUTORIAL_DIGIT",
+                     "buttons": list(state.menu_lit_buttons), "digit_button": button,
+                     "tutorial_phase": "digit"},
+                    {"type": "exhibition_menu_tutorial_step", "button": button,
+                     "phase": "digit", "buttons": list(state.menu_lit_buttons)},
+                ], "menu_tutorial_digit_lit")
+            if phase == "full":
+                if state.menu_tutorial_phase != "digit":
+                    return self._decision(state, [], "exhibition_menu_tutorial_phase_invalid")
+                state.menu_tutorial_step = button
+                state.menu_tutorial_phase = "full"
+                state.menu_lit_buttons = list(range(1, button + 1))
+                state.substate = f"explaining_button_{button}"
+                state.expected_inputs = ["menu_tutorial_step", "audio_completed", "handset_down"]
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "lighting_preset", "preset": "EXHIBITION_MENU_TUTORIAL",
+                     "buttons": list(state.menu_lit_buttons), "tutorial_step": button,
+                     "tutorial_phase": "full"},
+                    {"type": "exhibition_menu_tutorial_step", "button": button,
+                     "phase": "full", "buttons": list(state.menu_lit_buttons)},
+                ], "menu_tutorial_button_lit")
+            return self._decision(state, [], "exhibition_menu_tutorial_phase_invalid")
         if event.event_type == "WelcomeTimerFired":
             deadline = state.welcome_deadline_monotonic
             if state.mode != "voice_welcome" or state.welcome_status != "pending" or deadline is None:
@@ -964,12 +1018,13 @@ class CanonicalRuntime:
         if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_age_complete":
             if str(event.payload.get("response_id") or "") != "PHRASE_107":
                 return self._decision(state, [], "exhibition_closing_audio_completion_ignored")
-            state.substate = "onboarding_ready"
-            state.expected_inputs = ["handset_down"]
+            state.mode, state.substate = "exhibition_onboarding_complete", "awaiting_onboarding_wave"
+            state.expected_inputs = ["onboarding_wave_complete", "handset_down"]
             state.state_version += 1
             return self._decision(state, [
                 {"type": "lighting_wave_intent", "pattern": "onboarding_closing_wave",
-                 "groups": "buttons", "source": "canonical", "hold_on_complete": False},
+                 "groups": "buttons", "source": "canonical", "hold_on_complete": False,
+                 "completion_event": "ExhibitionOnboardingComplete"},
                 {"type": "exhibition_onboarding_step", "step": "onboarding_ready"},
             ], "exhibition_onboarding_ready", clear_audio=True)
         if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_menu_tutorial_intro":
@@ -988,12 +1043,53 @@ class CanonicalRuntime:
             state.menu_tutorial_audio_complete = False
             state.state_version += 1
             return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_008"}], "exhibition_menu_buttons_started", clear_audio=True)
-        if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_menu_tutorial_buttons":
+        if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode in {
+            "exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons",
+        }:
             if str(event.payload.get("response_id") or "") != "PHRASE_008" or state.menu_tutorial_audio_complete:
                 return self._decision(state, [], "exhibition_menu_audio_completion_ignored")
             state.menu_tutorial_audio_complete = True
+            state.mode, state.substate = "exhibition_menu_wave", "awaiting_menu_wave"
+            state.expected_inputs = ["menu_wave_complete", "handset_down"]
             state.state_version += 1
-            return self._decision(state, [], "exhibition_menu_audio_completed", clear_audio=True)
+            return self._decision(state, [
+                {"type": "lighting_wave_intent", "pattern": "menu_buttons_wave",
+                 "groups": "menu_buttons", "source": "canonical", "hold_on_complete": True,
+                 "completion_event": "ExhibitionMenuWaveComplete"},
+                {"type": "exhibition_menu_tutorial_step", "step": "menu_wave"},
+            ], "exhibition_menu_audio_completed", clear_audio=True)
+        if event.event_type == "ExhibitionMenuWaveComplete" and self.exhibition_mode:
+            if state.mode != "exhibition_menu_wave":
+                return self._decision(state, [], "exhibition_menu_wave_completion_ignored")
+            state.state_version += 1
+            if state.menu_prompt_after_wave:
+                state.mode, state.substate = "exhibition_menu_repeat_prompt", "awaiting_repeat_prompt_audio"
+                state.expected_inputs = ["audio_completed", "handset_down"]
+                return self._decision(state, [
+                    {"type": "speak", "phrase_id": "PHRASE_009"},
+                    {"type": "exhibition_menu_tutorial_step", "step": "repeat_prompt"},
+                ], "exhibition_menu_repeat_prompt_started")
+            state.mode, state.substate = "menu_ready", "menu_tutorial_complete"
+            state.expected_inputs = [f"button_{button}" for button in range(1, 8)] + ["handset_down"]
+            return self._decision(state, [
+                {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons)},
+            ], "exhibition_menu_replay_complete")
+        if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_menu_repeat_prompt":
+            if str(event.payload.get("response_id") or "") != "PHRASE_009":
+                return self._decision(state, [], "exhibition_menu_repeat_prompt_completion_ignored")
+            state.mode, state.substate = "exhibition_menu_repeat_listen", "awaiting_repeat_answer"
+            state.expected_inputs = ["speech", "handset_down"]
+            state.state_version += 1
+            return self._decision(state, [
+                {"type": "capture_open"},
+                {"type": "exhibition_menu_tutorial_step", "step": "repeat_listen"},
+            ], "exhibition_menu_repeat_listen_ready", clear_audio=True)
+        if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_menu_repeat_listen":
+            if str(event.payload.get("response_id") or "") != "PHRASE_074":
+                return self._decision(state, [], "exhibition_menu_repeat_retry_completion_ignored")
+            state.expected_inputs = ["speech", "handset_down"]
+            state.state_version += 1
+            return self._decision(state, [{"type": "capture_open"}], "exhibition_menu_repeat_listen_ready", clear_audio=True)
         if event.event_type == "AudioCompleted" and state.mode in {"fixed_story_playing", "story_speech_analysis"}:
             state.mode, state.state_version = "fixed_story_menu", state.state_version + 1
             return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "fixed_story_completed", clear_audio=True)
@@ -1155,7 +1251,12 @@ class CanonicalRuntime:
                 return self._decision(state, [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
             if self.exhibition_mode and state.mode in {"exhibition_name_capture", "exhibition_age_prompt", "exhibition_age_hint", "exhibition_onboarding_complete", "exhibition_age_complete"}:
                 return self._decision(state, [], "exhibition_onboarding_button_ignored")
-            if self.exhibition_mode and state.mode in {"exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt", "exhibition_menu_tutorial_buttons"}:
+            if self.exhibition_mode and state.mode in {
+                "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
+                "exhibition_menu_tutorial_buttons", "exhibition_menu_wave",
+                "exhibition_menu_repeat_prompt", "exhibition_menu_repeat_listen",
+                "exhibition_menu_replay_buttons",
+            }:
                 return self._decision(state, [], "exhibition_menu_tutorial_input_ignored")
             if self.exhibition_mode and state.mode == "menu_ready":
                 if button in state.menu_pressed_buttons:
@@ -1253,7 +1354,6 @@ class CanonicalRuntime:
                 if button in {3, 6} and state.handset != "up":
                     state.pending_mode = mode
                     state.mode, state.state_version = "awaiting_handset", state.state_version + 1
-                # Safety/help remains a global escape from active play.\n                # The root-menu map is contextual, but in-game help must win.\n                "game_active",
                     return self._decision(state, [{"type": "lighting", "elements": [14], "state": 1}, {"type": "visual", "view": "lift_handset"}], "handset_required")
                 state.mode, state.state_version = mode, state.state_version + 1
                 state.expected_inputs = ["button", "speech"] if state.handset == "up" else ["button"]
@@ -1356,6 +1456,34 @@ class CanonicalRuntime:
                 return self._decision(state, [{"type": "adult_handoff_request", "severity": "concern"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}], "adult_requested")
             if state.handset != "up" and state.mode not in {"safety_handoff"}:
                 return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "voice_requires_handset")
+            if self.exhibition_mode and state.mode == "exhibition_menu_repeat_listen":
+                if intent == "yes":
+                    state.mode, state.substate = "exhibition_menu_replay_buttons", "awaiting_menu_audio"
+                    state.expected_inputs = ["audio_completed", "handset_down"]
+                    state.menu_tutorial_step = 0
+                    state.menu_tutorial_phase = "idle"
+                    state.menu_tutorial_audio_complete = False
+                    state.menu_prompt_after_wave = False
+                    state.menu_lit_buttons = []
+                    state.state_version += 1
+                    return self._decision(state, [
+                        {"type": "capture_close"},
+                        {"type": "speak", "phrase_id": "PHRASE_008"},
+                        {"type": "exhibition_menu_tutorial_step", "step": "menu_replay"},
+                    ], "exhibition_menu_replay_started", clear_audio=True)
+                if intent == "no":
+                    state.mode, state.substate = "menu_ready", "menu_repeat_declined"
+                    state.expected_inputs = [f"button_{button}" for button in range(1, 8)] + ["handset_down"]
+                    state.state_version += 1
+                    return self._decision(state, [
+                        {"type": "capture_close"},
+                        {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons)},
+                    ], "exhibition_menu_repeat_declined", clear_audio=True)
+                state.expected_inputs = ["audio_completed", "handset_down"]
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "speak", "phrase_id": "PHRASE_074"},
+                ], "exhibition_menu_repeat_unclear", clear_audio=True)
             if state.mode in {"fixed_story_playing", "story_speech_analysis"} and intent in {"pause", "pause_story", "stop", "stop_story", "exit_story"}:
                 state.mode, state.state_version = "story_paused", state.state_version + 1
                 state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": int(event.payload.get("offset_ms", 0))}

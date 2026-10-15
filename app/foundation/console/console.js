@@ -1075,7 +1075,14 @@ function updateGuide(state, contract) {
     bear_dialogue: ['6 · Ограниченный разговор', 'Короткий разговор по безопасным темам.'],
     schedule_weather: ['7 · День и планы', 'Дата, погода и расписание из typed-провайдеров.'],
     safety_handoff: ['Помощь взрослого', 'Ожидается подтверждение безопасного контура.'],
-    root_menu: ['Главное меню', 'Выберите действие кнопкой 1–7.']
+    root_menu: ['Главное меню', 'Выберите действие кнопкой 1–7.'],
+    exhibition_onboarding_complete: ['Знакомство завершено', 'Подсветка гаснет перед меню.'],
+    exhibition_menu_tutorial_buttons: ['Меню', 'Мишка называет кнопку и подсвечивает её по записи.'],
+    exhibition_menu_wave: ['Меню · финальная волна', 'После списка все рабочие диоды проходят волну.'],
+    exhibition_menu_repeat_prompt: ['Повторить меню?', 'Ожидается завершение вопроса.'],
+    exhibition_menu_repeat_listen: ['Повторить меню?', 'Скажите «да» или «нет».'],
+    exhibition_menu_replay_buttons: ['Меню · повтор', 'Повторная синхронная подсветка без финального вопроса.'],
+    menu_ready: ['Меню готово', 'Выберите действие кнопкой 1–7.']
   };
   const node = String(state.session.node || '');
   const guideMap = document.querySelector('.guide-map');

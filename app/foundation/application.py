@@ -12,7 +12,7 @@ from typing import Any, Callable
 from weakref import WeakSet
 
 from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, ProfileProvider, ScenarioRepository, SessionRecord, SessionRepository
-from .lighting import BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, EXHIBITION_DIGIT_WAVE_GROUPS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS
+from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .adapters import ProfileProviderError
 from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseResolver, SafetyClassifier, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
@@ -22,6 +22,18 @@ from .system_prompt import build_system_prompt
 from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
 
 logger = logging.getLogger("mishka.application")
+
+# PHRASE_008 is one approved 18.406 s WAV. These offsets are the measured
+# starts of each spoken digit and its following action phrase in that file.
+EXHIBITION_MENU_PHASE_TIMINGS_MS = (
+    (1, "digit", 380), (1, "full", 1520),
+    (2, "digit", 2800), (2, "full", 3690),
+    (3, "digit", 5160), (3, "full", 5960),
+    (4, "digit", 8370), (4, "full", 9400),
+    (5, "digit", 11110), (5, "full", 12200),
+    (6, "digit", 13510), (6, "full", 14430),
+    (7, "digit", 15910), (7, "full", 16830),
+)
 
 
 AUDIO_ASSET_STATUSES = frozenset({
@@ -112,6 +124,8 @@ class ScenarioApplication:
         self._welcome_timer_sequences: dict[str, int] = {}
         self._menu_tutorial_tasks: dict[str, asyncio.Task[Any]] = {}
         self._menu_tutorial_sequences: dict[str, int] = {}
+        self._lighting_wave_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._lighting_wave_sequences: dict[str, int] = {}
         self._last_audio_ack_at: dict[str, float] = {}
         self.runtime_status: dict[str, Any] = {}
         self.last_canonical_effects: list[dict[str, Any]] = []
@@ -293,6 +307,7 @@ class ScenarioApplication:
         self._welcome_timer_sequences.pop(session_id, None)
         self._cancel_menu_tutorial(session_id)
         self._menu_tutorial_sequences.pop(session_id, None)
+        self._cancel_lighting_wave(session_id)
         completion_cleanup = await self._cancel_audio_completions(session_id, operation="session_cleanup")
         self._invalidate_audio_lease(session_id)
         if self.s2s_audio is not None:
@@ -508,36 +523,75 @@ class ScenarioApplication:
         if task is not None and not task.done():
             task.cancel()
 
+    def _cancel_lighting_wave(self, session_id: str) -> None:
+        task = self._lighting_wave_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+        self._lighting_wave_sequences.pop(session_id, None)
+
+    def _schedule_lighting_wave_completion(
+        self, session_id: str, token: int, event_type: str, delay_ms: int,
+    ) -> None:
+        self._cancel_lighting_wave(session_id)
+        sequence = self._lighting_wave_sequences.get(session_id, 0) + 1
+        self._lighting_wave_sequences[session_id] = sequence
+
+        async def complete() -> None:
+            try:
+                await asyncio.sleep(max(0.0, float(delay_ms) / 1000.0))
+                state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
+                record = self.sessions.get(session_id)
+                if state is None or record is None or record.cancellation_token != token:
+                    return
+                next_sequence = self._lighting_wave_sequences.get(session_id, 0) + 1
+                self._lighting_wave_sequences[session_id] = next_sequence
+                await self._receive_canonical_event(Event(
+                    event_type, session_id, next_sequence, self.now(),
+                    "canonical_lighting_wave", {"token": token},
+                    f"lighting-wave:{session_id}:{sequence}:{event_type}",
+                    self.monotonic_now(),
+                ))
+            except asyncio.CancelledError:
+                return
+            finally:
+                if self._lighting_wave_tasks.get(session_id) is asyncio.current_task():
+                    self._lighting_wave_tasks.pop(session_id, None)
+
+        if not self.background_scheduler:
+            return
+        self._lighting_wave_tasks[session_id] = asyncio.create_task(
+            complete(), name=f"mishka-lighting-wave-{session_id}"
+        )
+
     def _schedule_menu_tutorial_steps(self, session_id: str, token: int, duration_ms: int) -> None:
         self._cancel_menu_tutorial(session_id)
         sequence = self._menu_tutorial_sequences.get(session_id, 0) + 1
         self._menu_tutorial_sequences[session_id] = sequence
-        interval = max(0.05, float(duration_ms) / 1000.0 / 7.0)
 
         async def advance() -> None:
             try:
-                for step in range(1, 8):
-                    # The sleep is only a cancellable production wakeup.
-                    # Canonical tutorial deadlines/steps remain owned by the
-                    # injected monotonic clock and deterministic test driver.
-                    await asyncio.sleep(interval)
+                started_at = self.monotonic_now()
+                for button, phase, offset_ms in EXHIBITION_MENU_PHASE_TIMINGS_MS:
+                    deadline = started_at + float(offset_ms) / 1000.0
+                    await asyncio.sleep(max(0.0, deadline - self.monotonic_now()))
                     state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
                     record = self.sessions.get(session_id)
                     if (state is None or record is None or record.cancellation_token != token
-                            or state.mode != "exhibition_menu_tutorial_buttons"):
+                            or state.mode not in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons"}):
                         return
                     next_sequence = self._menu_tutorial_sequences.get(session_id, 0) + 1
                     self._menu_tutorial_sequences[session_id] = next_sequence
                     await self._receive_canonical_event(Event(
                         "MenuTutorialStep", session_id, next_sequence, self.now(),
-                        "canonical_menu_tutorial_clock", {"step": step, "token": token},
-                        f"menu-tutorial:{session_id}:{sequence}:{step}", self.monotonic_now(),
+                        "canonical_menu_tutorial_clock",
+                        {"button": button, "phase": phase, "token": token},
+                        f"menu-tutorial:{session_id}:{sequence}:{button}:{phase}",
+                        self.monotonic_now(),
                     ))
             except asyncio.CancelledError:
                 return
             finally:
-                current = self._menu_tutorial_tasks.get(session_id)
-                if current is asyncio.current_task():
+                if self._menu_tutorial_tasks.get(session_id) is asyncio.current_task():
                     self._menu_tutorial_tasks.pop(session_id, None)
 
         if not self.background_scheduler:
@@ -701,15 +755,27 @@ class ScenarioApplication:
                 start_age_wave = getattr(self.led, "start_age_selection_wave", None)
                 if callable(start_wave):
                     pattern = str(effect.get("pattern") or "")
+                    wave_groups = None
                     if pattern == "age_digits_wave" and callable(start_age_wave):
                         lighting = start_age_wave(now=accepted_monotonic)
                     elif pattern == "age_digits_wave":
-                        lighting = start_wave(now=accepted_monotonic, groups=EXHIBITION_DIGIT_WAVE_GROUPS, hold_on_complete=True)
+                        wave_groups = EXHIBITION_DIGIT_WAVE_GROUPS
+                        lighting = start_wave(now=accepted_monotonic, groups=wave_groups, hold_on_complete=True)
+                    elif pattern == "menu_buttons_wave":
+                        wave_groups = EXHIBITION_MENU_WAVE_GROUPS
+                        lighting = start_wave(now=accepted_monotonic, groups=wave_groups, hold_on_complete=True)
                     else:
                         lighting = start_wave(now=accepted_monotonic, hold_on_complete=bool(effect.get("hold_on_complete", True)))
                     effect["lighting_effect"] = dict(lighting)
                     effect["generation"] = lighting.get("generation")
                     effect["resolution"] = "canonical_exhibition_wave_started"
+                    completion_event = str(effect.get("completion_event") or "")
+                    if completion_event in {"ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete"}:
+                        delay_ms = int(effect.get("completion_delay_ms") or
+                                       len(wave_groups or READINESS_WAVE_GROUPS) * EXHIBITION_WAVE_STAGE_MS)
+                        self._schedule_lighting_wave_completion(
+                            event.session_id, record.cancellation_token, completion_event, delay_ms,
+                        )
                 else:
                     effect["resolution"] = "canonical_wave_intent_recorded_without_effect_adapter"
             elif kind == "lighting_select_button":
@@ -807,6 +873,17 @@ class ScenarioApplication:
                 if preset == "EXHIBITION_MENU_TUTORIAL":
                     buttons = effect.get("buttons", ())
                     commands = tuple((element_id, 1) for button in buttons for element_id in BUTTON_ELEMENTS.get(int(button), ()))
+                elif preset == "EXHIBITION_MENU_TUTORIAL_DIGIT":
+                    buttons = effect.get("buttons", ())
+                    digit_button = int(effect.get("digit_button", 0))
+                    digit_element = BUTTON_DIGIT_ELEMENTS.get(digit_button, (None, None))[1]
+                    commands = tuple(
+                        (element_id, 1)
+                        for button in buttons
+                        for element_id in BUTTON_ELEMENTS.get(int(button), ())
+                    )
+                    if digit_element is not None:
+                        commands += ((digit_element, 1),)
                 else:
                     commands = LED_PRESETS.get(preset, ())
                 if preset == "TARGET":
@@ -885,8 +962,13 @@ class ScenarioApplication:
                         effect["generation"] = int(self._session_epochs.get(event.session_id, 0))
                         self._register_audio_lease(event.session_id, phrase_id, record.cancellation_token,
                                                    str(effect.get("playback_id")), str(effect.get("playback_lease") or ""))
-                        if phrase_id == "PHRASE_008" and snapshot.get("mode") == "exhibition_menu_tutorial_buttons":
-                            self._schedule_menu_tutorial_steps(event.session_id, record.cancellation_token, int(asset.get("duration_ms") or 18406))
+                        if phrase_id == "PHRASE_008" and snapshot.get("mode") in {
+                            "exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons",
+                        }:
+                            self._schedule_menu_tutorial_steps(
+                                event.session_id, record.cancellation_token,
+                                int(asset.get("duration_ms") or 18406),
+                            )
                 else:
                     _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="recorded_phrase_unavailable_visual_only")
                     self.record_audio_diagnostic("recorded_phrase_unavailable", phrase_id=phrase_id,
@@ -1130,6 +1212,20 @@ class ScenarioApplication:
                 return {"session_id": event.session_id, "state": active.mode if active else "idle",
                         "reason": "stale_exhibition_menu_tutorial_step", "outputs": [],
                         "canonical_state": active.snapshot() if active else {"mode": "idle", "handset": "down"}}
+        if (event.event_type == "ExhibitionMenuWaveComplete"
+                and getattr(self.canonical_runtime, "exhibition_mode", False)):
+            active = self.canonical_runtime.sessions.get(event.session_id)
+            record = self.sessions.get(event.session_id)
+            token = event.payload.get("token")
+            try:
+                token_matches = token is not None and int(token) == int(record.cancellation_token) if record is not None else False
+            except (TypeError, ValueError, OverflowError):
+                token_matches = False
+            if active is None or record is None or not token_matches:
+                return {"session_id": event.session_id, "state": active.mode if active else "idle",
+                        "reason": "stale_exhibition_menu_wave", "outputs": [],
+                        "canonical_state": active.snapshot() if active else {"mode": "idle", "handset": "down"}}
+
         if (event.event_type == "HandsetPlaced"
                 and getattr(self.canonical_runtime, "exhibition_mode", False)
                 and event.session_id not in self.canonical_runtime.sessions
@@ -1505,6 +1601,7 @@ class ScenarioApplication:
         self._welcome_timer_sequences.pop(session_id, None)
         self._cancel_menu_tutorial(session_id)
         self._menu_tutorial_sequences.pop(session_id, None)
+        self._cancel_lighting_wave(session_id)
         self._session_epochs[session_id] = self._session_epochs.get(session_id, 0) + 1
         self._invalidate_audio_lease(session_id)
         cleanup = await self._cancel_audio_completions(session_id, operation="reset")

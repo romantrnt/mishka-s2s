@@ -247,6 +247,12 @@ EXHIBITION_WAVE_STAGE_MS = 120
 EXHIBITION_WAVE_GROUPS: tuple[tuple[int, ...], ...] = READINESS_WAVE_GROUPS
 # Age prompt: only the seven digit LEDs remain lit; fill, pictogram, and compensation channels stay dark.
 EXHIBITION_DIGIT_WAVE_GROUPS: tuple[tuple[int, ...], ...] = tuple((BUTTON_DIGIT_ELEMENTS[button_id][1],) for button_id in range(1, 8))
+# Menu wave: all user-facing channels only. Compensation channels 5 and 16
+# are intentionally excluded; they only fill the large pictogram footprint
+# while a single button is lit and must not be part of the final menu state.
+EXHIBITION_MENU_WAVE_GROUPS: tuple[tuple[int, ...], ...] = tuple(
+    BUTTON_OUTPUT_ELEMENTS[button_id] for button_id in range(1, 8)
+)
 
 
 def quantize_brightness_percent(value: float, *, slots: int = EXHIBITION_PWM_SLOTS) -> tuple[float, int]:

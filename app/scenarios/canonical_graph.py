@@ -76,21 +76,27 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
     if event_type == "RfidRemoved":
         return target in {"anonymous_visual", "safety_handoff"}
     if event_type == "ExhibitionOnboardingComplete":
-        return current == "exhibition_onboarding_complete" and target == "exhibition_menu_tutorial_intro"
+        return current == "exhibition_onboarding_complete" and target == "exhibition_menu_tutorial_buttons"
     if event_type == "AudioCompleted":
         return (
             (current == "voice_welcome" and target == "exhibition_introduction")
             or (current == "exhibition_introduction" and target == "exhibition_name_question")
             or (current == "exhibition_name_question" and target == "exhibition_name_capture")
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
+            or (current == "exhibition_menu_repeat_listen" and target in {"exhibition_menu_repeat_listen", "exhibition_menu_replay_buttons", "menu_ready"})
             or (current == "exhibition_age_prompt" and target == "exhibition_age_hint")
             or (current == "exhibition_age_hint" and target == "exhibition_age_selection")
+            or (current == "exhibition_age_complete" and target == "exhibition_onboarding_complete")
             or (current == "exhibition_menu_tutorial_intro" and target == "exhibition_menu_tutorial_prompt")
             or (current == "exhibition_menu_tutorial_prompt" and target == "exhibition_menu_tutorial_buttons")
+            or (current in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons"} and target == "exhibition_menu_wave")
+            or (current == "exhibition_menu_repeat_prompt" and target == "exhibition_menu_repeat_listen")
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target == "fixed_story_menu")
         )
+    if event_type == "ExhibitionMenuWaveComplete":
+        return current == "exhibition_menu_wave" and target in {"exhibition_menu_repeat_prompt", "menu_ready"}
     if event_type == "MenuTutorialStep":
-        return current == "exhibition_menu_tutorial_buttons" and target in {"exhibition_menu_tutorial_buttons", "menu_ready"}
+        return current in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons"} and target in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons", "menu_ready"}
     if event_type == "TimeoutFired":
         return current in {"dialogue_suspended_ram", "story_suspended_ram"} and target == "dialogue_memory_expired"
     if event_type == "AnonymousStart":
@@ -137,6 +143,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             target in {"safety_handoff", "support_intake"}
             or (current == "exhibition_name_capture" and target == "exhibition_age_prompt")
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
+            or (current == "exhibition_menu_repeat_listen" and target in {"exhibition_menu_repeat_listen", "exhibition_menu_replay_buttons", "menu_ready"})
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_paused", "story_speech_analysis"})
             or (current == "story_speech_analysis" and target == "support_intake")
             or (current == "personal_story_theme" and target == "personal_story_generating")
