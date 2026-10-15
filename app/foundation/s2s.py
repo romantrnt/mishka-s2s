@@ -1813,9 +1813,10 @@ class _AudioOwnership:
 class AudioSynthesisQueue:
     _TERMINAL_STATES = frozenset({"finished", "cancelled", "failed"})
 
-    def __init__(self,tts,voice,playback,cancel,config,metrics,trace_generation_id=None,voice_mode="rvc_v2",fallback_mode="passthrough"):
+    def __init__(self,tts,voice,playback,cancel,config,metrics,trace_generation_id=None,voice_mode="rvc_v2",fallback_mode="passthrough",lifecycle_hook=None):
         self.tts,self.voice,self.playback,self.cancel,self.config=tts,voice,playback,cancel,config
         self.metrics=metrics
+        self.lifecycle_hook=lifecycle_hook
         self.trace_generation_id=trace_generation_id
         # Keep the conversion decision explicit on the queue.  The queue is
         # the actual user-turn boundary; relying on an absent ``settings``
@@ -1841,6 +1842,15 @@ class AudioSynthesisQueue:
         self._ownership: dict[int, _AudioOwnership] = {}
         self.owner = ""
         self.turn_id = ""
+        self._output_lifecycle_notified = False
+
+    async def _notify_lifecycle(self, phase: str, **details: Any) -> None:
+        hook = self.lifecycle_hook
+        if not callable(hook) or not self.session_id:
+            return
+        result = hook(self.session_id, phase, **details)
+        if inspect.isawaitable(result):
+            await result
 
     async def start(self,session_id,token):
         if self.worker is not None and not self.worker.done():
@@ -1854,6 +1864,7 @@ class AudioSynthesisQueue:
         self.queued_bytes=0; self.submitted_chunks=0; self.cancelled_chunks=0
         self.completed_chunks=0; self.failed_chunks=0; self.active_audio_bytes=0
         self._ownership={}
+        self._output_lifecycle_notified = False
         self.first_audio_ready=asyncio.Event(); self.failure_event=asyncio.Event()
         self.worker=asyncio.create_task(self._run(session_id,token), name=f"s2s-tts-{session_id}-{token}")
 
@@ -2072,6 +2083,9 @@ class AudioSynthesisQueue:
                     self._transition(chunk_index,"playing",audio_bytes=len(audio.samples)*4)
                     stage="playback"; started=time.perf_counter(); self.playback.active_token=token
                     self.metrics.event("playback_started", chunk_index=chunk_index, token=token)
+                    if not self._output_lifecycle_notified:
+                        self._output_lifecycle_notified = True
+                        await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
                     self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
                     if hasattr(self.metrics, "mark_playback_start"):
                         self.metrics.mark_playback_start(session_id)
@@ -2271,7 +2285,7 @@ class LocalS2SPipeline:
         self.generations.pop(session_id, None)
 
 class BoundedConversationEngine:
-    def __init__(self,llm,tts,voice,playback,config=None,metrics=None,*,allow_quick_replies=None,profile=None,settings=None):
+    def __init__(self,llm,tts,voice,playback,config=None,metrics=None,*,allow_quick_replies=None,profile=None,settings=None,lifecycle_hook=None):
         if settings is None:
             from .config import Settings, SettingsError
             try:
@@ -2301,6 +2315,15 @@ class BoundedConversationEngine:
         self.active_tasks: dict[str, asyncio.Task] = {}
         self.task_started_at: dict[str, float] = {}
         self.active_queues: dict[str, AudioSynthesisQueue] = {}
+        self.lifecycle_hook = lifecycle_hook
+
+    async def _notify_lifecycle(self, session_id: str, phase: str, **details: Any) -> None:
+        hook = self.lifecycle_hook
+        if not callable(hook):
+            return
+        result = hook(session_id, phase, **details)
+        if inspect.isawaitable(result):
+            await result
 
     def is_active(self, session_id: str) -> bool:
         task = self.active_tasks.get(session_id)
@@ -2319,6 +2342,7 @@ class BoundedConversationEngine:
             trace_generation_id=token,
             voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"),
             fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"),
+            lifecycle_hook=self.lifecycle_hook,
         )
         await queue.start(session_id, token)
         self.active_queues[session_id] = queue
@@ -2330,6 +2354,7 @@ class BoundedConversationEngine:
             await queue.submit(text)
             await queue.wait_first_audio(self.config.first_audio_gate_s)
             await queue.finish()
+            await self._notify_lifecycle(session_id, "listening", source="speak_text_finished")
             return TurnResult((text,), (), False)
         except asyncio.CancelledError:
             await queue.abort(session_id, invalidate=False)
@@ -2372,6 +2397,7 @@ class BoundedConversationEngine:
         if not self.topic_policy.check(text, context.allowed_topics, context.forbidden_topics): return TurnResult((),(),True,"unknown_topic")
         if context.turns>=context.max_turns or time.monotonic()-context.started_at>=context.max_duration_seconds: return TurnResult((),(),True,"bounded_limit")
         self.metrics.event("turn_started", source="text")
+        await self._notify_lifecycle(context.session_id, "processing", source="turn_started")
         # There is one conversational generation per installation session.
         # A new text/voice turn must invalidate and await the previous one
         # before replacing its queue, otherwise two LLM/TTS workers can race
@@ -2385,7 +2411,7 @@ class BoundedConversationEngine:
             trace_generation_id = token
         self.metrics.begin_voice_turn(context.session_id, generation_id=trace_generation_id)
         self.metrics.mark_voice(context.session_id, "llm_request", generation_id=trace_generation_id)
-        queue=AudioSynthesisQueue(self.tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"))
+        queue=AudioSynthesisQueue(self.tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"), lifecycle_hook=self.lifecycle_hook)
         queue_started=time.perf_counter(); await queue.start(context.session_id,token)
         task = current
         if task is not None:
@@ -2493,6 +2519,7 @@ class BoundedConversationEngine:
             await queue.finish(); self.metrics.observe_voice_stage(context.session_id, "queue", queue_started, generation_id=trace_generation_id); context.turns+=1; context.history=self._bound_history(context.history+[(text," ".join(chunks))], protect_last=True)
             self.metrics.mark_voice(context.session_id, "turn_complete", generation_id=trace_generation_id)
             self.metrics.finish_voice_turn(context.session_id, "completed", generation_id=trace_generation_id)
+            await self._notify_lifecycle(context.session_id, "listening", source="turn_finished")
             return TurnResult(tuple(chunks),tuple(actions),any(x.value=="return_to_scenario" for x in actions))
         except TTSQueueOverflowError:
             await queue.abort(context.session_id, invalidate=False)

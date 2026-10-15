@@ -189,6 +189,9 @@ def build_application(content_root: str | Path | None = None, settings: Settings
         weather = ProductionScheduleWeatherService(None, weather_config.timeout_s)
     app = ScenarioApplication(sessions, scenarios, profiles, RuleBasedIntentClassifier(), audio_output or RecordingAudio(), led_controller or RecordingLED(), publisher, now=time.time, threshold=settings.confidence_threshold, bounded_s2s=s2s, history=history, max_session_seconds=settings.session_timeout_s, idle_timeout_seconds=settings.session_idle_timeout_s, display=display_controller, schedule_weather=weather, allow_quick_replies=settings.profile == "mock", settings=settings, monotonic_now=monotonic_now or time.monotonic, background_scheduler=background_scheduler)
     app.s2s_audio=audio_pipeline; app.runtime_manager=runtime_manager; runtime_manager.audio_pipeline=audio_pipeline; app.runtime_status=runtime_manager.configuration(); app.settings=settings; app.metrics=metrics
+    # The bounded S2S engine owns the authoritative backend lifecycle. Let it
+    # drive the same canonical LED engine used by the physical stand and UI.
+    s2s.lifecycle_hook = app.dialogue_lifecycle
     if settings.profile != "mock":
         from .e2e_probe import ProductionE2EWarmupProbe
         runtime_manager.e2e_probe = ProductionE2EWarmupProbe(runtime_manager, audio_pipeline).run

@@ -12,7 +12,7 @@ from typing import Any, Callable
 from weakref import WeakSet
 
 from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, ProfileProvider, ScenarioRepository, SessionRecord, SessionRepository
-from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS
+from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .adapters import ProfileProviderError
 from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseResolver, SafetyClassifier, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
@@ -164,6 +164,42 @@ class ScenarioApplication:
         self._canonical_profiles: dict[str, dict[str, Any] | None] = {}
         self._canonical_schedule_refs: dict[str, str | None] = {}
         self.transition_authorizer = CanonicalLangGraphAuthorizer() if self.canonical_runtime is not None else None
+
+    async def _set_dialogue_lighting_phase(self, session_id: str, phase: str) -> dict[str, Any] | None:
+        """Drive the dialogue LED frame from the actual bounded-runtime phase.
+
+        The bear pictogram and button 7 digit are fixed anchors. Only button
+        fills animate, so the serial protocol remains the existing binary
+        element/state/transition contract and the same frame is visible in
+        the physical stand and the WebPanel.
+        """
+        runtime = self.canonical_runtime
+        state = runtime.sessions.get(session_id) if runtime is not None else None
+        if state is None or state.mode != "bear_dialogue" or state.handset != "up":
+            return None
+        phase = str(phase or "listening")
+        fills = tuple(BUTTON_FILL_ELEMENTS[button] for button in range(1, 8))
+        anchors = (PICTOGRAM_ELEMENTS[6], BUTTON_DIGIT_ELEMENTS[7][0])
+        if phase == "processing":
+            lighting = self.led.start_wave(
+                now=self.monotonic_now(),
+                groups=tuple((element_id,) for element_id in fills),
+                base_elements=anchors,
+                loop=True,
+                stage_duration_ms=520,
+            )
+        else:
+            phase = "output" if phase == "output" else "listening"
+            lighting = self.led.start_breathing(
+                now=self.monotonic_now(), elements=fills, base_elements=anchors, phase=phase,
+            )
+        self.runtime_status["dialogue_lighting_phase"] = phase
+        self.runtime_status["dialogue_lighting"] = dict(lighting)
+        return dict(lighting)
+
+    async def dialogue_lifecycle(self, session_id: str, phase: str, **details: Any) -> None:
+        """Callback used by bounded S2S when its backend phase changes."""
+        await self._set_dialogue_lighting_phase(session_id, phase)
 
     def record_audio_diagnostic(self, kind: str, **fields: Any) -> dict[str, Any]:
         item = {"kind": str(kind), "at_monotonic": self.monotonic_now(), **fields}
@@ -1024,6 +1060,8 @@ class ScenarioApplication:
                 effect["playback_id"] = f"{event.session_id}:{record.cancellation_token}:{effect.get('effect_id', phrase_id)}"
                 if asset and voice_open:
                     try:
+                        if snapshot.get("mode") == "bear_dialogue":
+                            await self._set_dialogue_lighting_phase(event.session_id, "output")
                         self.audio.play(phrase_id, str(asset["asset_path"]), record.cancellation_token)
                     except Exception as exc:
                         _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=False, resolution="audio_dispatch_failed")
@@ -1313,6 +1351,10 @@ class ScenarioApplication:
                     "outputs": [], "canonical_state": {"mode": "idle", "handset": "down"},
                     "correlation_id": event.correlation_id}
         result = await self._receive_canonical_event(event, transient_text)
+        if event.event_type in {"AudioCompleted", "AudioFailed"}:
+            state_after_audio = self.canonical_runtime.sessions.get(event.session_id)
+            if state_after_audio is not None and state_after_audio.mode == "bear_dialogue":
+                await self._set_dialogue_lighting_phase(event.session_id, "listening")
         if event.event_type in {"AudioCompleted", "AudioFailed"} and callback_lease is not None:
             self._cancel_audio_timeout(event.session_id)
             if self._active_audio.get(event.session_id) is callback_lease:

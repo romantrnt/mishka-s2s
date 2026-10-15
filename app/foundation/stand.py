@@ -314,8 +314,10 @@ class UARTLEDController:
         self.exhibition_effects.cancel_effects(clear=False)
         self.output.clear_all(transition_ms)
 
-    def start_breathing(self, *, now: float | None = None):
-        return self.exhibition_effects.start_breathing(now=now)
+    def start_breathing(self, *, now: float | None = None, elements=None, base_elements=None, phase: str = "breathing"):
+        return self.exhibition_effects.start_breathing(
+            now=now, elements=elements, base_elements=base_elements, phase=phase,
+        )
 
     def start_wave(self, *, now: float | None = None, groups=None, follow_up_groups=None,
                    hold_on_complete: bool = True, loop: bool = False, base_elements=None,
