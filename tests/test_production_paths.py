@@ -1,6 +1,7 @@
 from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime
 from app.foundation.lighting import (
     EXHIBITION_DIGIT_WAVE_GROUPS,
+    BUTTON_DIGIT_ELEMENTS,
     EXHIBITION_WAVE_GROUPS,
     ExhibitionLightingEngine,
     FakeLightingOutput,
@@ -27,7 +28,7 @@ def test_age_wave_has_full_button_phase_then_digit_hold():
     assert engine.snapshot()["wave_phase"] == "follow_up"
     engine.advance(1.68, force=True)
     assert engine.snapshot()["effect"] == "wave_hold"
-    assert engine.snapshot()["last_frame"]["active_elements"] == list(range(7, 14))
+    assert engine.snapshot()["last_frame"]["active_elements"] == sorted(BUTTON_DIGIT_ELEMENTS[button_id][1] for button_id in range(1, 8))
 
 
 def test_closing_wave_turns_every_channel_off():

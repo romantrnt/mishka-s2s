@@ -15,14 +15,14 @@ LIGHTING_ELEMENT_IDS: tuple[int, ...] = tuple(range(18))
 
 # Physical channel names are flat: 18 LED channels, IDs 0..17.
 BUTTON_FILL_ELEMENTS: Mapping[int, int] = {
-    1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6,
+    1: 14, 2: 13, 3: 10, 4: 9, 5: 6, 6: 3, 7: 1,
 }
 BUTTON_DIGIT_ELEMENTS: Mapping[int, tuple[int, int]] = {
-    button_id: (fill_id, 6 + button_id)
-    for button_id, fill_id in BUTTON_FILL_ELEMENTS.items()
+    1: (14, 15), 2: (13, 12), 3: (10, 11), 4: (9, 8),
+    5: (6, 7), 6: (3, 2), 7: (1, 0),
 }
-PICTOGRAM_ELEMENTS: Mapping[int, int] = {6: 14, 7: 15}
-COMPENSATION_ELEMENTS: Mapping[int, int] = {6: 16, 7: 17}
+PICTOGRAM_ELEMENTS: Mapping[int, int] = {6: 4, 7: 17}
+COMPENSATION_ELEMENTS: Mapping[int, int] = {6: 5, 7: 16}
 
 BUTTON_OUTPUT_ELEMENTS: Mapping[int, tuple[int, ...]] = {
     button_id: BUTTON_DIGIT_ELEMENTS[button_id]

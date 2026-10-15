@@ -2,18 +2,21 @@ const $ = id => document.getElementById(id);
 const BUTTON_IDS = [1, 2, 3, 4, 5, 6, 7];
 const LIGHTING_ELEMENT_IDS = Array.from({ length: 18 }, (_, id) => id);
 const ELEMENT_PRESENTATION = {
-  0: { kind: 'fill', buttonId: 1, color: 'red' }, 7: { kind: 'digit', buttonId: 1, color: 'white' },
-  1: { kind: 'fill', buttonId: 2, color: 'orange' }, 8: { kind: 'digit', buttonId: 2, color: 'white' },
-  2: { kind: 'fill', buttonId: 3, color: 'yellow' }, 9: { kind: 'digit', buttonId: 3, color: 'white' },
-  3: { kind: 'fill', buttonId: 4, color: 'green' }, 10: { kind: 'digit', buttonId: 4, color: 'white' },
-  4: { kind: 'fill', buttonId: 5, color: 'cyan' }, 11: { kind: 'digit', buttonId: 5, color: 'white' },
-  5: { kind: 'fill', buttonId: 6, color: 'blue' }, 12: { kind: 'digit', buttonId: 6, color: 'white' },
-  6: { kind: 'fill', buttonId: 7, color: 'purple' }, 13: { kind: 'digit', buttonId: 7, color: 'white' },
-  14: { kind: 'symbol', buttonId: 6, symbol: 'bear', color: 'brown' },
-  15: { kind: 'symbol', buttonId: 7, symbol: 'weather', color: 'skyblue' },
-  16: { kind: 'compensation', buttonId: 6, symbol: 'bear', color: 'blue' },
-  17: { kind: 'compensation', buttonId: 7, symbol: 'weather', color: 'purple' },
+  0: { kind: 'digit', buttonId: 7, color: 'white' }, 1: { kind: 'fill', buttonId: 7, color: 'purple' },
+  2: { kind: 'digit', buttonId: 6, color: 'white' }, 3: { kind: 'fill', buttonId: 6, color: 'blue' },
+  4: { kind: 'symbol', buttonId: 6, symbol: 'bear', color: 'brown' }, 5: { kind: 'compensation', buttonId: 6, symbol: 'bear', color: 'blue' },
+  6: { kind: 'fill', buttonId: 5, color: 'cyan' }, 7: { kind: 'digit', buttonId: 5, color: 'white' },
+  8: { kind: 'digit', buttonId: 4, color: 'white' }, 9: { kind: 'fill', buttonId: 4, color: 'green' },
+  10: { kind: 'fill', buttonId: 3, color: 'yellow' }, 11: { kind: 'digit', buttonId: 3, color: 'white' },
+  12: { kind: 'digit', buttonId: 2, color: 'white' }, 13: { kind: 'fill', buttonId: 2, color: 'orange' },
+  14: { kind: 'fill', buttonId: 1, color: 'red' }, 15: { kind: 'digit', buttonId: 1, color: 'white' },
+  16: { kind: 'compensation', buttonId: 7, symbol: 'weather', color: 'purple' }, 17: { kind: 'symbol', buttonId: 7, symbol: 'weather', color: 'skyblue' },
 };
+const ELEMENTS_BY_BUTTON = Object.fromEntries(BUTTON_IDS.map(buttonId => [
+  buttonId, Object.fromEntries(Object.entries(ELEMENT_PRESENTATION)
+    .filter(([, item]) => item.buttonId === buttonId)
+    .map(([elementId, item]) => [item.kind, Number(elementId)])),
+]));
 const LED_COLORS = {
   off: { label: 'OFF', className: 'led-off', css: '#8f999a' },
   invalid: { label: 'INVALID', className: 'led-invalid', css: '#d45555' },
@@ -741,10 +744,11 @@ function renderButtons(state, led, contract, lighting) {
     const enabled = Boolean(session.visual_only) ? guestButtons.has(id) : (guestMode ? guestButtons.has(id) : (sessionActive && (enabledButtons === null || enabledButtons.has(id))));
     const button = buttonRefs.get(id);
     if (!button) continue;
-    const fillId = id - 1;
-    const digitId = 6 + id;
-    const symbolId = id === 6 ? 14 : id === 7 ? 15 : null;
-    const compensationId = id === 6 ? 16 : id === 7 ? 17 : null;
+    const buttonElementIds = ELEMENTS_BY_BUTTON[id];
+    const fillId = buttonElementIds.fill;
+    const digitId = buttonElementIds.digit;
+    const symbolId = buttonElementIds.symbol ?? null;
+    const compensationId = buttonElementIds.compensation ?? null;
     const fillOn = lighting[fillId] === 1;
     const digitOn = lighting[digitId] === 1;
     const symbolOn = symbolId !== null && lighting[symbolId] === 1;
