@@ -28,7 +28,7 @@ class Event:
     monotonic_timestamp: float | None = None
 
 
-EVENT_TYPES = frozenset({"RfidPresented", "RfidRemoved", "AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "MenuTutorialStep"})
+EVENT_TYPES = frozenset({"RfidPresented", "RfidRemoved", "AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"})
 
 
 @dataclass

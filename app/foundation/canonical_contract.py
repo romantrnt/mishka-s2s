@@ -58,8 +58,9 @@ STATE_NAMES = frozenset({
     "exhibition_menu_replay_buttons", "menu_ready",
     "automatic_mood_check", "root_menu",
     "dialogue_suspended_ram", "dialogue_memory_expired", "game_menu", "game_active",
-    "fixed_story_menu", "fixed_story_playing", "story_speech_analysis",
-    "story_paused", "story_suspended_ram", "support_intake", "schedule_navigation",
+    "fixed_story_menu", "fixed_story_playing", "fixed_story_choice_wave",
+    "story_speech_analysis", "story_paused", "story_pause_announcement",
+    "story_resume_announcement", "story_suspended_ram", "support_intake", "schedule_navigation",
     "mood_report", "complaint_intake", "personal_story_theme",
     "personal_story_generating", "personal_story_validating", "personal_story_playing",
     "wellbeing_check", "safety_handoff", "bear_dialogue", "schedule_weather",
@@ -71,7 +72,7 @@ ALLOWED_EVENTS = frozenset({
     "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
     "StoryPositionUpdated", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected", "HardwareReconnected",
     "SessionCancel", "SessionReset", "AdultHandoffAcknowledged", "AdultResolved",
-    "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "MenuTutorialStep",
+    "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep",
 })
 PERSONA_FORBIDDEN = re.compile(
     r"\b(малыш|llm|tts|stt|vad|rfid|sqlite|api|langgraph|prompt|backend|state|tool|id)\b",
@@ -621,18 +622,28 @@ class FixedStoryManifest:
 
     def get_verified(self, story_id: str) -> dict[str, Any] | None:
         item = self.stories.get(story_id)
-        if not isinstance(item, dict) or item.get("rights_status") not in {"licensed", "public_domain", "owner_authored"}:
+        if not isinstance(item, dict) or item.get("rights_status") not in {"licensed", "public_domain", "owner_authored", "operator_approved"}:
             return None
-        for file_key, hash_key in (("exact_text_file", "text_sha256"), ("audio_file", "audio_sha256")):
-            filename, expected = item.get(file_key), item.get(hash_key)
-            if not isinstance(filename, str) or not isinstance(expected, str):
+        audio_filename, audio_expected = item.get("audio_file"), item.get("audio_sha256")
+        if not isinstance(audio_filename, str) or not isinstance(audio_expected, str):
+            return None
+        try:
+            audio_actual = hashlib.sha256((self.root / audio_filename).read_bytes()).hexdigest()
+        except OSError:
+            return None
+        if audio_actual != audio_expected:
+            return None
+        # Exact text is optional for operator-provided recorded stories.
+        # If present, it remains fail-closed and verified.
+        text_filename, text_expected = item.get("exact_text_file"), item.get("text_sha256")
+        if text_filename is not None or text_expected is not None:
+            if not isinstance(text_filename, str) or not isinstance(text_expected, str):
                 return None
-            path = self.root / filename
             try:
-                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                text_actual = hashlib.sha256((self.root / text_filename).read_bytes()).hexdigest()
             except OSError:
                 return None
-            if actual != expected:
+            if text_actual != text_expected:
                 return None
         return dict(item)
 
@@ -752,7 +763,7 @@ class CanonicalRuntime:
         state.timeout_at = state.dialogue_memory.expires_at
         audio_effect = next((item for item in effects if item.get("type") in {
             "speak", "play_fixed_story", "resume_fixed_story", "play_placeholder",
-            "speak_dynamic", "support_question", "support_response",
+            "story_audio_resume", "speak_dynamic", "support_question", "support_response",
         }), None)
         if audio_effect is not None:
             content_id = str(audio_effect.get("phrase_id") or audio_effect.get("story_id") or
@@ -1090,9 +1101,37 @@ class CanonicalRuntime:
             state.expected_inputs = ["speech", "handset_down"]
             state.state_version += 1
             return self._decision(state, [{"type": "capture_open"}], "exhibition_menu_repeat_listen_ready", clear_audio=True)
+        if event.event_type == "AudioCompleted" and state.mode == "story_pause_announcement":
+            if response_id != "PHRASE_062":
+                return self._decision(state, [], "story_pause_announcement_completion_ignored")
+            state.mode, state.substate = "story_paused", "story_paused_ready"
+            state.expected_inputs = ["button_6", "button_7", "handset_down"]
+            state.state_version += 1
+            return self._decision(state, [], "story_pause_announcement_completed", clear_audio=True)
+        if event.event_type == "AudioCompleted" and state.mode == "story_resume_announcement":
+            if response_id != "PHRASE_064":
+                return self._decision(state, [], "story_resume_announcement_completion_ignored")
+            state.mode, state.substate = "fixed_story_playing", "story_resumed_after_prompt"
+            state.expected_inputs = ["button_6", "button_7", "handset_down"]
+            state.state_version += 1
+            return self._decision(state, [{"type": "story_audio_resume", "story_id": state.active_story_id, "checkpoint": state.dialogue_memory.story_checkpoint}], "story_resumed_after_prompt", clear_audio=True)
+        if event.event_type == "StoryChoiceWaveComplete" and state.mode == "fixed_story_choice_wave":
+            state.mode, state.substate = "fixed_story_menu", "story_choice_ready"
+            state.expected_inputs = [f"button_{item}" for item in range(1, 6)] + ["button_7", "handset_down"]
+            state.state_version += 1
+            return self._decision(state, [{"type": "lighting_preset", "preset": "STORY_MENU"}], "story_choice_wave_complete", clear_audio=True)
         if event.event_type == "AudioCompleted" and state.mode in {"fixed_story_playing", "story_speech_analysis"}:
-            state.mode, state.state_version = "fixed_story_menu", state.state_version + 1
-            return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "fixed_story_completed", clear_audio=True)
+            state.mode, state.substate = "fixed_story_choice_wave", "story_finished"
+            state.expected_inputs = ["story_choice_wave_complete", "button_7", "handset_down"]
+            state.state_version += 1
+            return self._decision(state, [
+                {"type": "audio_stop"},
+                {"type": "lighting_preset", "preset": "STORY_MENU"},
+                {"type": "speak", "phrase_id": "PHRASE_066"},
+                {"type": "lighting_wave_intent", "pattern": "story_choice_wave", "groups": "story_choice",
+                 "base": "story_menu", "source": "canonical", "hold_on_complete": False,
+                 "completion_event": "StoryChoiceWaveComplete", "stage_ms": 420},
+            ], "fixed_story_finished", clear_audio=True)
         if event.event_type == "AudioFailed":
             state.audio_failure_code = str(event.payload.get("error_code") or event.payload.get("code") or "audio_failed")[:80]
             state.audio_status = "failed"
@@ -1214,11 +1253,12 @@ class CanonicalRuntime:
                 placeholder = self.stories.get_development_placeholder() if self.stories and self.allow_development_placeholders else None
                 state.pending_mode = None
                 state.mode = "fixed_story_playing"
-                state.expected_inputs = ["speech", "handset_down"]
+                state.expected_inputs = ["button_6", "button_7", "handset_down"]
+                story_wave = {"type": "lighting_wave_intent", "pattern": "story_playback_wave", "groups": "story_playback", "source": "canonical", "loop": True, "stage_ms": 620}
                 if verified is not None:
-                    return self._decision(state, [{"type": "lighting_preset", "preset": "STORY_PLAYBACK"}, {"type": "play_fixed_story", "story_id": story_id, "asset": verified["audio_file"]}], "fixed_story_started_after_handset")
+                    return self._decision(state, [story_wave, {"type": "play_fixed_story", "story_id": story_id, "asset": verified["audio_file"]}], "fixed_story_started_after_handset")
                 if placeholder is not None:
-                    return self._decision(state, [{"type": "lighting_preset", "preset": "STORY_PLAYBACK"}, {"type": "play_placeholder", "content_kind": "fixed_story", "story_id": story_id, "asset": placeholder["audio_file"], "development_only": True}], "fixed_story_placeholder_after_handset")
+                    return self._decision(state, [story_wave, {"type": "play_placeholder", "content_kind": "fixed_story", "story_id": story_id, "asset": placeholder["audio_file"], "development_only": True}], "fixed_story_placeholder_after_handset")
             if state.mode in {"game_menu", "fixed_story_menu", "support_intake", "personal_story_theme", "wellbeing_check", "bear_dialogue", "schedule_weather"}:
                 state.expected_inputs = ["button", "speech", "handset_down"]
                 return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "voice_open_activity")
@@ -1275,6 +1315,17 @@ class CanonicalRuntime:
                     "source": "exhibition_menu", "target_state": "menu_ready",
                     "downstream_owner": "exhibition_menu_boundary",
                 }
+                if button == 2:
+                    state.mode, state.substate = "fixed_story_menu", "story_menu_opened"
+                    state.menu_pressed_buttons = []
+                    state.expected_inputs = [f"button_{item}" for item in range(1, 6)] + ["button_7", "handset_down"]
+                    selection["target_state"] = "fixed_story_menu"
+                    selection["downstream_owner"] = "fixed_story_menu"
+                    return self._decision(state, [
+                        selection,
+                        {"type": "lighting_preset", "preset": "STORY_MENU"},
+                        {"type": "speak", "phrase_id": "PHRASE_054"},
+                    ], "fixed_story_menu_opened", clear_audio=True)
                 effects = [selection]
                 if button == 7:
                     # The current exhibition build has no live calendar/weather
@@ -1325,13 +1376,41 @@ class CanonicalRuntime:
                 return self._decision(state, [{"type": "mood_report", "value": mood, "input": f"button_{button}"}, {"type": "speak", "phrase_id": "PHRASE_017"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "mood_report")
             if state.mode in {"fixed_story_playing", "story_speech_analysis"}:
                 if button == 6:
-                    state.mode, state.state_version = "story_paused", state.state_version + 1
+                    state.mode, state.substate = "story_pause_announcement", "story_pause_requested"
+                    state.state_version += 1
                     state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": int(event.payload.get("offset_ms", 0))}
-                    return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "PAUSED"}], "story_paused_by_button")
+                    state.expected_inputs = ["audio_completed", "button_7", "handset_down"]
+                    return self._decision(state, [
+                        {"type": "story_audio_pause", "story_id": state.active_story_id},
+                        {"type": "lighting_wave_pause"},
+                        {"type": "lighting_story_pause_flash"},
+                        {"type": "speak", "phrase_id": "PHRASE_062"},
+                    ], "story_pause_requested", clear_audio=True)
                 if button == 7:
-                    state.mode, state.state_version = "root_menu", state.state_version + 1
-                    return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "story_stopped_by_button")
+                    state.mode, state.substate = "fixed_story_choice_wave", "story_stop_requested"
+                    state.state_version += 1
+                    state.expected_inputs = ["story_choice_wave_complete", "handset_down"]
+                    return self._decision(state, [
+                        {"type": "audio_stop"},
+                        {"type": "lighting_preset", "preset": "STORY_MENU"},
+                        {"type": "speak", "phrase_id": "PHRASE_066"},
+                        {"type": "lighting_wave_intent", "pattern": "story_choice_wave", "groups": "story_choice",
+                         "base": "story_menu", "source": "canonical", "hold_on_complete": False,
+                         "completion_event": "StoryChoiceWaveComplete", "stage_ms": 420},
+                    ], "story_stopped_by_button", clear_audio=True)
                 return self._decision(state, [{"type": "invalid_input", "button_id": button}], "invalid_story_input")
+            if state.mode in {"story_pause_announcement", "story_resume_announcement", "story_paused"} and button == 7:
+                state.mode, state.substate = "fixed_story_choice_wave", "story_stop_requested"
+                state.state_version += 1
+                state.expected_inputs = ["story_choice_wave_complete", "handset_down"]
+                return self._decision(state, [
+                    {"type": "audio_stop"},
+                    {"type": "lighting_preset", "preset": "STORY_MENU"},
+                    {"type": "speak", "phrase_id": "PHRASE_066"},
+                    {"type": "lighting_wave_intent", "pattern": "story_choice_wave", "groups": "story_choice",
+                     "base": "story_menu", "source": "canonical", "hold_on_complete": False,
+                     "completion_event": "StoryChoiceWaveComplete", "stage_ms": 420},
+                ], "story_stopped_by_button", clear_audio=True)
             if state.mode == "fixed_story_menu" and button == 7:
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "story_menu_back")
@@ -1373,13 +1452,10 @@ class CanonicalRuntime:
                     state.mode, state.state_version = "personal_story_generating", state.state_version + 1
                     brief = {"age_band": state.age_band, "theme": themes[button], "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ())), "display_name": state.display_name}
                     return self._decision(state, [{"type": "generate_personal_story", "brief": brief}], "personal_story_requested_by_button")
-            if state.mode == "story_paused":
-                if button == 6:
-                    state.mode, state.substate, state.state_version = "fixed_story_playing", "story_resume_requested", state.state_version + 1
-                    return self._decision(state, [{"type": "resume_fixed_story", "story_id": state.active_story_id, "checkpoint": state.dialogue_memory.story_checkpoint}], "story_resumed_by_button")
-                if button == 7:
-                    state.mode, state.substate, state.state_version = "root_menu", "story_exit_requested", state.state_version + 1
-                    return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "story_stopped_by_button")
+            if state.mode == "story_paused" and button == 6:
+                state.mode, state.substate, state.state_version = "story_resume_announcement", "story_resume_requested", state.state_version + 1
+                state.expected_inputs = ["audio_completed", "button_7", "handset_down"]
+                return self._decision(state, [{"type": "lighting_wave_resume"}, {"type": "speak", "phrase_id": "PHRASE_064"}], "story_resume_requested", clear_audio=True)
             if state.mode == "game_menu":
                 selected = GAME_CATALOG[(button - 1) % len(GAME_CATALOG)]
                 selected_level = max(int(selected["level"]), min(9, int(state.game_level)))
@@ -1429,10 +1505,12 @@ class CanonicalRuntime:
                     state.pending_mode = "fixed_story_playing"
                     state.mode = "awaiting_handset"
                     return self._decision(state, [{"type": "lighting", "elements": [14], "state": 1}, {"type": "visual", "view": "lift_handset"}], "story_handset_required")
-                state.mode = "fixed_story_playing"
+                state.mode, state.substate = "fixed_story_playing", "story_started"
+                state.expected_inputs = ["button_6", "button_7", "handset_down"]
+                story_wave = {"type": "lighting_wave_intent", "pattern": "story_playback_wave", "groups": "story_playback", "source": "canonical", "loop": True, "stage_ms": 620}
                 if verified is not None:
-                    return self._decision(state, [{"type": "lighting_preset", "preset": "STORY_PLAYBACK"}, {"type": "play_fixed_story", "story_id": story_id, "asset": verified["audio_file"]}], "fixed_story_started")
-                return self._decision(state, [{"type": "lighting_preset", "preset": "STORY_PLAYBACK"}, {"type": "play_placeholder", "content_kind": "fixed_story", "story_id": story_id, "asset": placeholder["audio_file"], "development_only": True}], "fixed_story_placeholder")
+                    return self._decision(state, [story_wave, {"type": "play_fixed_story", "story_id": story_id, "asset": verified["audio_file"]}], "fixed_story_started")
+                return self._decision(state, [story_wave, {"type": "play_placeholder", "content_kind": "fixed_story", "story_id": story_id, "asset": placeholder["audio_file"], "development_only": True}], "fixed_story_placeholder")
             if state.mode == "schedule_weather":
                 action = {1: "date", 2: "weather", 3: "what_next", 4: "where_now", 7: "back"}.get(button)
                 if action == "back":
@@ -1484,12 +1562,15 @@ class CanonicalRuntime:
                 return self._decision(state, [
                     {"type": "speak", "phrase_id": "PHRASE_074"},
                 ], "exhibition_menu_repeat_unclear", clear_audio=True)
-            if state.mode in {"fixed_story_playing", "story_speech_analysis"} and intent in {"pause", "pause_story", "stop", "stop_story", "exit_story"}:
-                state.mode, state.state_version = "story_paused", state.state_version + 1
+            if state.mode in {"fixed_story_playing", "story_speech_analysis"} and intent in {"pause", "pause_story"}:
+                state.mode, state.substate = "story_pause_announcement", "story_pause_requested"
+                state.state_version += 1
                 state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": int(event.payload.get("offset_ms", 0))}
-                if intent in {"stop_story", "exit_story"}:
-                    state.mode = "root_menu"
-                return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "PAUSED" if state.mode == "story_paused" else "ROOT_MENU"}], "story_paused" if state.mode == "story_paused" else "story_stopped")
+                return self._decision(state, [{"type": "story_audio_pause", "story_id": state.active_story_id}, {"type": "lighting_wave_pause"}, {"type": "lighting_story_pause_flash"}, {"type": "speak", "phrase_id": "PHRASE_062"}], "story_pause_requested", clear_audio=True)
+            if state.mode in {"fixed_story_playing", "story_speech_analysis"} and intent in {"stop", "stop_story", "exit_story"}:
+                state.mode, state.substate = "fixed_story_choice_wave", "story_stop_requested"
+                state.state_version += 1
+                return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "STORY_MENU"}, {"type": "speak", "phrase_id": "PHRASE_066"}, {"type": "lighting_wave_intent", "pattern": "story_choice_wave", "groups": "story_choice", "base": "story_menu", "hold_on_complete": False, "completion_event": "StoryChoiceWaveComplete", "stage_ms": 420}], "story_stopped", clear_audio=True)
             if state.mode in {"fixed_story_playing", "story_speech_analysis"} and intent == "emotional_reaction":
                 return self._decision(state, [{"type": "story_speech_analysis", "playback_continues": True, "intent": "emotional_reaction"}], "story_reaction_ignored")
             if state.mode in {"fixed_story_playing", "story_speech_analysis"}:
@@ -1550,8 +1631,8 @@ class CanonicalRuntime:
                 state.state_version += 1
                 return self._decision(state, [{"type": "typed_info_request", "kind": "where_now"}], "typed_info_requested")
             if state.mode == "story_paused" and intent in {"continue", "resume", "resume_story"}:
-                state.mode, state.state_version = "fixed_story_playing", state.state_version + 1
-                return self._decision(state, [{"type": "resume_fixed_story", "story_id": state.active_story_id, "checkpoint": state.dialogue_memory.story_checkpoint}], "story_resumed")
+                state.mode, state.substate, state.state_version = "story_resume_announcement", "story_resume_requested", state.state_version + 1
+                return self._decision(state, [{"type": "lighting_wave_resume"}, {"type": "speak", "phrase_id": "PHRASE_064"}], "story_resume_requested", clear_audio=True)
             if state.mode == "story_paused" and intent in {"stop", "free_speech"}:
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "story_returned_to_menu")

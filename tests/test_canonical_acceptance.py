@@ -19,19 +19,19 @@ def event(kind: str, seq: int, version: int, *, payload=None, source="acceptance
     return CanonicalEvent(kind, "acceptance", seq, version, source, payload or {}, correlation or f"corr-{seq}", timestamp)
 
 
-def test_catalog_is_single_canonical_boundary_and_reports_blockers():
+def test_catalog_is_single_canonical_boundary_and_reports_ready_content():
     catalog = CanonicalContentCatalog("content", allow_development_assets=False)
     document = catalog.get("canonical_product")
     report = catalog.report()
     assert document["contract"] == "canonical_product/v1"
     assert document["langgraph_authorization"] is True
-    assert len(document["states"]) == 43
+    assert len(document["states"]) == 50
     assert catalog.game("catch_light")["input"] == "button"
-    assert catalog.story("fixed_aibolit_v1") is None
-    assert report["ready"] is False
-    assert report["voice"]["approved_recorded_count"] == 0
+    assert catalog.story("fixed_aibolit_v1") is not None
+    assert report["ready"] is True
+    assert report["voice"]["approved_recorded_count"] == 108
     dev_catalog = CanonicalContentCatalog("content", allow_development_assets=True)
-    assert dev_catalog.story("fixed_aibolit_v1")["rights_status"] == "blocked"
+    assert dev_catalog.story("fixed_aibolit_v1")["rights_status"] == "operator_approved"
     with pytest.raises(KeyError):
         catalog.get("fixture_core")
 
@@ -83,12 +83,12 @@ def test_state_version_correlation_and_ram_ttl_are_fail_closed():
 
 def test_content_rights_and_generated_story_validation_block_unsafe_paths():
     manifest = FixedStoryManifest("content/stories/fixed_manifest.json", ".")
-    assert manifest.get_verified("fixed_aibolit_v1") is None
+    assert manifest.get_verified("fixed_aibolit_v1") is not None
     runtime = CanonicalRuntime(stories=manifest, allow_development_placeholders=False)
     runtime.handle(event("AnonymousStart", 1, 0))
     runtime.handle(event("ButtonPressed", 2, 1, payload={"button_id": 2}))
-    blocked = runtime.handle(event("ButtonPressed", 3, 2, payload={"button_id": 1}))
-    assert blocked["reason"] == "fixed_story_blocked"
+    started = runtime.handle(event("ButtonPressed", 3, 2, payload={"button_id": 1}))
+    assert started["reason"] == "fixed_story_started"
     valid, reason = validate_generated_story({"title": "Доброе путешествие", "text": "Герой нашёл спокойную дорогу и вернулся домой.", "age_band": "3-5", "estimated_duration_sec": 70, "safety_tags": ["safe"], "ending_state": "safe_resolved"}, {"age_band": "3-5", "theme": "dinosaurs"})
     assert (valid, reason) == (True, None)
     invalid, reason = validate_generated_story({"title": "Айболит", "text": "Секрет от взрослых.", "age_band": "3-5", "estimated_duration_sec": 70, "safety_tags": [], "ending_state": "safe_resolved"}, {"age_band": "3-5", "theme": "dinosaurs"})

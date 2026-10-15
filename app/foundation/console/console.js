@@ -32,6 +32,7 @@ let current = null;
 let lastSpokenCommand = 0;
 let lastResultCount = 0;
 let storySpeechGeneration = 0;
+let activeStoryPlayback = null;
 let mic = null;
 let ws = null;
 let wsHeartbeatTimer = null;
@@ -995,8 +996,8 @@ async function playGenericAsset(command, generation) {
 }
 
 async function playStoryAsset(command, generation) {
-  const response = await fetch(apiPath(`/stand/audio/story/${encodeURIComponent(command.payload.response_id)}`));
-  if (!response.ok) throw new Error(`story audio HTTP ${response.status}`);
+  const response = await fetch(apiPath('/stand/audio/story/' + encodeURIComponent(command.payload.response_id)));
+  if (!response.ok) throw new Error('story audio HTTP ' + response.status);
   const data = await response.arrayBuffer();
   const context = await unlockAudio();
   if (generation !== storySpeechGeneration || current?.session.node !== 'fixed_story_playing') return;
@@ -1005,18 +1006,61 @@ async function playStoryAsset(command, generation) {
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.connect(context.destination);
+  const playback = {
+    buffer, source, offset: 0, startedAt: context.currentTime, paused: false, generation,
+    sessionId: command.payload.session_id,
+    responseId: command.payload.response_id,
+    playbackLease: command.payload.playback_lease,
+    commandGeneration: command.payload.generation,
+  };
+  activeStoryPlayback = playback;
   activeSources.add(source);
   source.onended = () => {
     activeSources.delete(source);
+    if (playback.paused || activeStoryPlayback !== playback) return;
+    activeStoryPlayback = null;
     if (generation === storySpeechGeneration) {
-      $("audio-state").textContent = audioReady ? "AUDIO: READY" : "AUDIO: LOCKED";
-      // Silero/WAV playback has the same completion contract as the browser
-      // voice fallback: advance the story exactly once after the asset ends.
+      $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
       post('/stand/audio/completed', { session_id: command.payload.session_id, response_id: command.payload.response_id, playback_lease: command.payload.playback_lease, generation: command.payload.generation }).catch(() => {});
     }
   };
   source.start();
   post('/stand/audio/lifecycle', { response_id: command.payload.response_id, status: 'playing' }).catch(() => {});
+  $('audio-state').textContent = 'AUDIO: STORY / SILERO';
+}
+
+function pauseStoryAsset() {
+  const playback = activeStoryPlayback;
+  if (!playback || playback.paused || !audioContext) return;
+  playback.offset = Math.min(playback.buffer.duration, playback.offset + Math.max(0, audioContext.currentTime - playback.startedAt));
+  playback.paused = true;
+  try { playback.source.stop(); } catch (_) {}
+  activeSources.delete(playback.source);
+  $('audio-state').textContent = 'AUDIO: STORY PAUSED';
+}
+
+function resumeStoryAsset() {
+  const playback = activeStoryPlayback;
+  if (!playback || !playback.paused || !audioContext) return;
+  const source = audioContext.createBufferSource();
+  source.buffer = playback.buffer;
+  source.connect(audioContext.destination);
+  playback.source = source;
+  playback.startedAt = audioContext.currentTime;
+  playback.paused = false;
+  activeSources.add(source);
+  source.onended = () => {
+    activeSources.delete(source);
+    if (activeStoryPlayback !== playback) return;
+    activeStoryPlayback = null;
+    post('/stand/audio/completed', {
+      session_id: playback.sessionId || liveSessionId,
+      response_id: playback.responseId,
+      playback_lease: playback.playbackLease,
+      generation: playback.commandGeneration,
+    }).catch(() => {});
+  };
+  source.start(0, playback.offset);
   $('audio-state').textContent = 'AUDIO: STORY / SILERO';
 }
 
@@ -1030,6 +1074,14 @@ function speakCommands(state) {
     if (command.type === 'audio_stop') {
       interruptAudioForInput();
       window.speechSynthesis?.cancel();
+    }
+    if (command.type === 'audio_pause') {
+      pauseStoryAsset();
+      continue;
+    }
+    if (command.type === 'audio_resume') {
+      resumeStoryAsset();
+      continue;
     }
     if (command.type === 'audio_play' && command.payload.content_kind === 'phrase' && command.payload.asset_path) {
       const generation = ++storySpeechGeneration;
@@ -1234,6 +1286,7 @@ function interruptAudioForInput() {
     try { source.stop(); } catch (_) { /* already ended */ }
   }
   activeSources.clear();
+  activeStoryPlayback = null;
   nextAudioTime = audioContext ? audioContext.currentTime : 0;
   audioQueueTail = Promise.resolve();
   $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';

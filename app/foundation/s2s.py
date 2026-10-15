@@ -1559,6 +1559,9 @@ class SoundDevicePlaybackController:
         self._io_future: asyncio.Task[Any] | None = None
         self._play_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
+        self.position_samples = 0
+        self.start_position_samples = 0
+        self.last_playback_completed = True
 
     def _device_arg(self):
         value = self.device
@@ -1631,7 +1634,16 @@ class SoundDevicePlaybackController:
                 if generation != self._generation or audio.token != self.active_token:
                     return
                 samples = np.asarray(audio.samples, dtype=np.float32).reshape(-1, 1)
-                await self._run_io(lambda: stream.write(samples))
+                self.position_samples = int(self.start_position_samples)
+                self.start_position_samples = 0
+                self.last_playback_completed = False
+                for offset in range(0, len(samples), 2048):
+                    if generation != self._generation or audio.token != self.active_token:
+                        return
+                    chunk = samples[offset:offset + 2048]
+                    await self._run_io(lambda chunk=chunk: stream.write(chunk))
+                    self.position_samples += len(chunk)
+                self.last_playback_completed = True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

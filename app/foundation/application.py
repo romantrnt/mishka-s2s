@@ -25,6 +25,13 @@ logger = logging.getLogger("mishka.application")
 
 # PHRASE_008 is one approved 18.406 s WAV. These offsets are the measured
 # starts of each spoken digit and its following action phrase in that file.
+STORY_PLAYBACK_WAVE_GROUPS = tuple((BUTTON_FILL_ELEMENTS[button],) for button in range(1, 8))
+STORY_CHOICE_WAVE_GROUPS = tuple((BUTTON_FILL_ELEMENTS[button],) for button in range(1, 6))
+STORY_MENU_BASE_ELEMENTS = tuple(
+    [BUTTON_DIGIT_ELEMENTS[button][1] for button in range(1, 8)]
+    + [BUTTON_FILL_ELEMENTS[6], BUTTON_FILL_ELEMENTS[7]]
+)
+
 EXHIBITION_MENU_PHASE_TIMINGS_MS = (
     (1, "digit", 380), (1, "full", 1520),
     (2, "digit", 2800), (2, "full", 3690),
@@ -766,20 +773,79 @@ class ScenarioApplication:
                     elif pattern == "menu_buttons_wave":
                         wave_groups = EXHIBITION_MENU_WAVE_GROUPS
                         lighting = start_wave(now=accepted_monotonic, groups=wave_groups, hold_on_complete=True)
+                    elif pattern == "story_playback_wave":
+                        wave_groups = STORY_PLAYBACK_WAVE_GROUPS
+                        lighting = start_wave(
+                            now=accepted_monotonic, groups=wave_groups, hold_on_complete=True,
+                            loop=True, stage_duration_ms=int(effect.get("stage_ms") or 620),
+                        )
+                    elif pattern == "story_choice_wave":
+                        wave_groups = STORY_CHOICE_WAVE_GROUPS
+                        lighting = start_wave(
+                            now=accepted_monotonic, groups=wave_groups, hold_on_complete=False,
+                            base_elements=STORY_MENU_BASE_ELEMENTS,
+                            stage_duration_ms=int(effect.get("stage_ms") or 420),
+                        )
                     else:
                         lighting = start_wave(now=accepted_monotonic, hold_on_complete=bool(effect.get("hold_on_complete", True)))
                     effect["lighting_effect"] = dict(lighting)
                     effect["generation"] = lighting.get("generation")
                     effect["resolution"] = "canonical_exhibition_wave_started"
                     completion_event = str(effect.get("completion_event") or "")
-                    if completion_event in {"ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete"}:
+                    if completion_event in {"ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete"}:
                         delay_ms = int(effect.get("completion_delay_ms") or
-                                       len(wave_groups or READINESS_WAVE_GROUPS) * EXHIBITION_WAVE_STAGE_MS)
+                                       len(wave_groups or READINESS_WAVE_GROUPS) * int(effect.get("stage_ms") or EXHIBITION_WAVE_STAGE_MS))
                         self._schedule_lighting_wave_completion(
                             event.session_id, record.cancellation_token, completion_event, delay_ms,
                         )
                 else:
                     effect["resolution"] = "canonical_wave_intent_recorded_without_effect_adapter"
+            elif kind == "story_audio_pause":
+                pause = getattr(self.audio, "pause", None)
+                if callable(pause):
+                    outcome = pause()
+                    if inspect.isawaitable(outcome):
+                        await outcome
+                    effect["resolution"] = "story_audio_paused"
+                else:
+                    effect["resolution"] = "story_audio_pause_unavailable"
+            elif kind == "story_audio_resume":
+                story_id = str(effect.get("story_id") or "")
+                manifest = getattr(self.canonical_runtime, "stories", None)
+                verified = manifest.get_verified(story_id) if manifest else None
+                placeholder = manifest.get_development_placeholder() if manifest and self.allow_development_placeholders else None
+                asset = verified or placeholder
+                checkpoint = effect.get("checkpoint") if isinstance(effect.get("checkpoint"), dict) else {}
+                offset_ms = int(checkpoint.get("offset_ms") or 0)
+                if asset and voice_open:
+                    response_id = story_id if verified else f"placeholder:fixed_story:{story_id}"
+                    play_from = getattr(self.audio, "play_from", None)
+                    if callable(play_from):
+                        play_from(response_id, str(asset["audio_file"]), record.cancellation_token, offset_ms)
+                    else:
+                        self.audio.play(response_id, str(asset["audio_file"]), record.cancellation_token)
+                    effect["resolution"] = "story_audio_resumed"
+                    effect["offset_ms"] = offset_ms
+                else:
+                    effect["resolution"] = "story_audio_resume_unavailable"
+            elif kind == "lighting_wave_pause":
+                engine = getattr(self.led, "exhibition_effects", None)
+                pause_effect = getattr(engine, "pause_effect", None)
+                effect["lighting_effect"] = dict(pause_effect(now=accepted_monotonic)) if callable(pause_effect) else {"effect": "unavailable"}
+                effect["resolution"] = "story_wave_paused"
+            elif kind == "lighting_wave_resume":
+                engine = getattr(self.led, "exhibition_effects", None)
+                resume_effect = getattr(engine, "resume_effect", None)
+                effect["lighting_effect"] = dict(resume_effect(now=accepted_monotonic)) if callable(resume_effect) else {"effect": "unavailable"}
+                effect["resolution"] = "story_wave_resumed"
+            elif kind == "lighting_story_pause_flash":
+                fill_ids = tuple(BUTTON_FILL_ELEMENTS.values())
+                snapshot = getattr(getattr(self.led, "exhibition_effects", None), "last_frame", None) or {}
+                active = set(snapshot.get("active_elements") or ())
+                self.led.set_elements(tuple(LightingCommand(element_id, 0, 180) for element_id in fill_ids))
+                self.led.set_elements(tuple(LightingCommand(element_id, 1, 180) for element_id in fill_ids))
+                self.led.set_elements(tuple(LightingCommand(element_id, 1 if element_id in active else 0, 180) for element_id in fill_ids))
+                effect["resolution"] = "story_pause_fill_flash"
             elif kind == "lighting_select_button":
                 cancel_effects = getattr(self.led, "cancel_effects", None)
                 if callable(cancel_effects):

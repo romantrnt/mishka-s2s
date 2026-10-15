@@ -54,8 +54,12 @@ def main() -> None:
     fixed = CanonicalRuntime(stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
     fixed.handle(CanonicalEvent("AnonymousStart", "fixed", 1, 0, "test"), None)
     menu = fixed.handle(CanonicalEvent("ButtonPressed", "fixed", 2, 1, "test", {"button_id": 2}), None)
-    blocked = fixed.handle(CanonicalEvent("ButtonPressed", "fixed", 3, 2, "test", {"button_id": 1}), None)
-    assert menu["state"]["mode"] == "fixed_story_menu" and blocked["reason"] == "fixed_story_blocked"
+    assert menu["state"]["mode"] == "fixed_story_menu"
+    needs_handset = fixed.handle(CanonicalEvent("ButtonPressed", "fixed", 3, 2, "test", {"button_id": 1}), None)
+    assert needs_handset["reason"] == "story_handset_required"
+    started = fixed.handle(CanonicalEvent("HandsetLifted", "fixed", 4, 3, "test"), None)
+    assert started["reason"] == "fixed_story_started_after_handset"
+    assert started["state"]["active_story_id"] == "fixed_aibolit_v1"
     voice_readiness = VoiceManifest("content/audio/voice_manifest.json").readiness()
     assert voice_readiness["ready"]
     assert voice_readiness["approved_recorded_count"] == 108

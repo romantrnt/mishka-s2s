@@ -91,10 +91,14 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             or (current == "exhibition_menu_tutorial_prompt" and target == "exhibition_menu_tutorial_buttons")
             or (current in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons"} and target == "exhibition_menu_wave")
             or (current == "exhibition_menu_repeat_prompt" and target == "exhibition_menu_repeat_listen")
-            or (current in {"fixed_story_playing", "story_speech_analysis"} and target == "fixed_story_menu")
+            or (current in {"fixed_story_playing", "story_speech_analysis"} and target == "fixed_story_choice_wave")
+            or (current == "story_pause_announcement" and target in {"story_paused", "fixed_story_choice_wave"})
+            or (current == "story_resume_announcement" and target in {"fixed_story_playing", "fixed_story_choice_wave"})
         )
     if event_type == "ExhibitionMenuWaveComplete":
         return current == "exhibition_menu_wave" and target in {"exhibition_menu_repeat_prompt", "menu_ready"}
+    if event_type == "StoryChoiceWaveComplete":
+        return current == "fixed_story_choice_wave" and target == "fixed_story_menu"
     if event_type == "MenuTutorialStep":
         return current in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons"} and target in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons", "menu_ready"}
     if event_type == "TimeoutFired":
@@ -132,10 +136,11 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             or (current == "game_menu" and target == "game_active")
             or (current == "game_active" and target == "root_menu")
             or (current == "fixed_story_menu" and target in {"fixed_story_playing", "awaiting_handset", "root_menu"})
-            or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_paused", "root_menu"})
+            or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_pause_announcement", "fixed_story_choice_wave", "root_menu"})
+            or (current in {"story_pause_announcement", "story_resume_announcement", "story_paused"} and target in {"story_resume_announcement", "fixed_story_choice_wave", "root_menu"})
             or (current in {"support_intake", "bear_dialogue"} and target == "root_menu")
             or (current in {"game_menu", "fixed_story_menu"} and target == "root_menu")
-            or (current == "story_paused" and target in {"fixed_story_playing", "root_menu"})
+            or (current == "story_paused" and target in {"story_resume_announcement", "fixed_story_choice_wave", "root_menu"})
             or (current == "schedule_weather" and target == "root_menu")
         )
     if event_type == "VoiceIntentReady":

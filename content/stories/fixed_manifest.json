@@ -1,88 +1,92 @@
 {
-  "version": 1,
-  "status": "blocked_pending_owner_assets_and_rights",
+  "version": 2,
+  "status": "ready",
   "stories": {
     "fixed_aibolit_v1": {
-      "display_title": "Айболит",
-      "rights_status": "blocked",
+      "display_title": "Про Бегемота, который боялся прививок",
+      "author": "operator-provided recording",
+      "rights_status": "operator_approved",
       "version": 1,
-      "availability": "blocked_rights",
-      "content_status": "missing_owner_approved_exact_text",
-      "audio_status": "missing",
-      "parts": [],
+      "availability": "available",
+      "content_status": "approved_audio",
+      "audio_status": "approved",
+      "audio_file": "assets/stories/01_Про Бегемота, который боялся прививок_prepared.wav",
+      "audio_sha256": "d1fc38389c88551e7eb32ee37c448f0b678a2c0b359c9ad00dcb8b259be61063",
       "eligible_age_bands": [
         "1-3",
         "3-5",
         "5-7"
       ],
-      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+      "checkpoint_policy": "ram_only"
     },
     "fixed_squirrel_v1": {
-      "display_title": "Про Белочку",
-      "rights_status": "blocked",
+      "display_title": "Как бельчонок страх преодолел",
+      "author": "operator-provided recording",
+      "rights_status": "operator_approved",
       "version": 1,
-      "availability": "blocked_rights",
-      "content_status": "missing_owner_approved_exact_text",
-      "audio_status": "missing",
-      "parts": [],
+      "availability": "available",
+      "content_status": "approved_audio",
+      "audio_status": "approved",
+      "audio_file": "assets/stories/02_Как бельчонок страх преодолел_prepared.wav",
+      "audio_sha256": "6022f216c22ba23af07d58752e03c30b9ef65c9e36cb0414d0e944db568f9506",
       "eligible_age_bands": [
         "1-3",
         "3-5",
         "5-7"
       ],
-      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+      "checkpoint_policy": "ram_only"
     },
     "fixed_lukomorye_v1": {
-      "display_title": "У Лукоморья",
-      "rights_status": "blocked",
+      "display_title": "У Лукоморья дуб зелёный",
+      "author": "operator-provided recording",
+      "rights_status": "operator_approved",
       "version": 1,
-      "availability": "blocked_rights",
-      "content_status": "missing_owner_approved_exact_text",
-      "audio_status": "missing",
-      "parts": [],
+      "availability": "available",
+      "content_status": "approved_audio",
+      "audio_status": "approved",
+      "audio_file": "assets/stories/03_У лукоморья дуб зелёный_prepared.wav",
+      "audio_sha256": "02d93e5e82c4bdcda129e03f4de16cf0c07f70bcb09e7f04826ac40840c21cb4",
       "eligible_age_bands": [
         "1-3",
         "3-5",
         "5-7"
       ],
-      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+      "checkpoint_policy": "ram_only"
     },
     "fixed_soft_paws_star_v1": {
-      "display_title": "Кролик по имени Мягкие Лапки и про Звезду",
-      "rights_status": "blocked",
+      "display_title": "Кролик Мягкие Лапки и Звезда",
+      "author": "operator-provided recording",
+      "rights_status": "operator_approved",
       "version": 1,
-      "availability": "blocked_rights",
-      "content_status": "missing_owner_approved_exact_text",
-      "audio_status": "missing",
-      "parts": [],
+      "availability": "available",
+      "content_status": "approved_audio",
+      "audio_status": "approved",
+      "audio_file": "assets/stories/04_Кролик Мягкие Лапки и Звезда_prepared.wav",
+      "audio_sha256": "4c35bf456850b3e5cfd5008a37b60b81da90288a12fbfce6c2c22150f6e2c993",
       "eligible_age_bands": [
         "1-3",
         "3-5",
         "5-7"
       ],
-      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+      "checkpoint_policy": "ram_only"
     },
     "fixed_neznayka_v1": {
-      "display_title": "Про Незнайку",
-      "rights_status": "blocked",
+      "display_title": "Телефон",
+      "author": "operator-provided recording",
+      "rights_status": "operator_approved",
       "version": 1,
-      "availability": "blocked_rights",
-      "content_status": "missing_owner_approved_exact_text",
-      "audio_status": "missing",
-      "parts": [],
+      "availability": "available",
+      "content_status": "approved_audio",
+      "audio_status": "approved",
+      "audio_file": "assets/stories/05_Телефон_prepared.wav",
+      "audio_sha256": "239c1c3d0308d2a20693c8818dfd5c77a04a1d030f0e69554b2c3cd4971637db",
       "eligible_age_bands": [
         "1-3",
         "3-5",
         "5-7"
       ],
-      "checkpoint_policy": "ram_only_when_approved_asset_exists"
+      "checkpoint_policy": "ram_only"
     }
   },
-  "development_placeholder": {
-    "audio_file": "content/audio/placeholders/fixed_story_unavailable.wav",
-    "audio_sha256": "64fcca8cb36015c21d41e58ff2e22b97ea7c329276cc621a08ce489fd36b047c",
-    "kind": "silence_no_content_rights",
-    "development_only": true
-  },
-  "availability_policy": "fixed_story_structure_is_present_but_unavailable_until_exact_text_audio_and_rights_are_verified"
+  "availability_policy": "operator_approved_audio_verified"
 }

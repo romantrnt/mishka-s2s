@@ -317,9 +317,13 @@ class UARTLEDController:
     def start_breathing(self, *, now: float | None = None):
         return self.exhibition_effects.start_breathing(now=now)
 
-    def start_wave(self, *, now: float | None = None, groups=None, follow_up_groups=None, hold_on_complete: bool = True):
+    def start_wave(self, *, now: float | None = None, groups=None, follow_up_groups=None,
+                   hold_on_complete: bool = True, loop: bool = False, base_elements=None,
+                   stage_duration_ms: int | None = None):
         return self.exhibition_effects.start_wave(
-            now=now, groups=groups, follow_up_groups=follow_up_groups, hold_on_complete=hold_on_complete,
+            now=now, groups=groups, follow_up_groups=follow_up_groups,
+            hold_on_complete=hold_on_complete, loop=loop,
+            base_elements=base_elements, stage_duration_ms=stage_duration_ms,
         )
 
     def start_age_selection_wave(self, *, now: float | None = None):
@@ -402,8 +406,13 @@ class UARTAudioOutput:
     def play(self, response_id, asset_id, token):
         self.adapter.send({"type":"audio_play","payload":{"response_id":response_id,
                            "asset_id":asset_id,"token":token}})
+    def play_from(self, response_id, asset_id, token, offset_ms=0):
+        self.adapter.send({"type":"audio_play","payload":{"response_id":response_id,
+                           "asset_id":asset_id,"token":token,"offset_ms":int(offset_ms)}})
     def play_text(self, response_id, text, token):
         self.adapter.send({"type":"audio_play","payload":{"response_id":response_id,"resolved_text":text,"content_kind":"action","token":token}})
+    def pause(self): self.adapter.send({"type":"audio_pause","payload":{}})
+    def resume(self): self.adapter.send({"type":"audio_resume","payload":{}})
     def cancel(self, token): self.adapter.send({"type":"audio_stop","payload":{"token":token}})
 
 class UARTDisplayController:
@@ -418,11 +427,20 @@ class HeadlessAudioOutput:
     def __init__(self):
         self.on_play = None
         self.on_asset_play = None
+        self.on_pause = None
+        self.on_resume = None
         self.on_cancel = None
 
     def play(self, response_id, asset_id, token):
         if asset_id and callable(self.on_asset_play):
-            self.on_asset_play(str(response_id), str(asset_id), int(token))
+            self.on_asset_play(str(response_id), str(asset_id), int(token), 0)
+            return
+        if callable(self.on_play):
+            self.on_play(str(response_id), None)
+
+    def play_from(self, response_id, asset_id, token, offset_ms=0):
+        if asset_id and callable(self.on_asset_play):
+            self.on_asset_play(str(response_id), str(asset_id), int(token), int(offset_ms))
             return
         if callable(self.on_play):
             self.on_play(str(response_id), None)
@@ -430,6 +448,14 @@ class HeadlessAudioOutput:
     def play_text(self, response_id, text, token):
         if callable(self.on_play):
             self.on_play(str(response_id), str(text))
+
+    def pause(self):
+        if callable(self.on_pause):
+            return self.on_pause()
+
+    def resume(self):
+        if callable(self.on_resume):
+            return self.on_resume()
 
     def cancel(self, token):
         if callable(self.on_cancel):
@@ -523,6 +549,8 @@ class HardwareIntegrationStand:
         if isinstance(self.audio_output, HeadlessAudioOutput):
             self.audio_output.on_play = self._headless_audio_play
             self.audio_output.on_asset_play = self._headless_asset_play
+            self.audio_output.on_pause = self._pause_story_playback
+            self.audio_output.on_resume = self._resume_story_playback
             self.audio_output.on_cancel = lambda _token: self._cancel_response_audio()
         self._startup_state = "degraded" if self.hardware_mode == "physical" and self._lighting_status.get("state") != "available" else "ready"
         self._story_wav_cache: dict[str, bytes] = {}
@@ -714,20 +742,19 @@ class HardwareIntegrationStand:
         if resolved:
             self._schedule_response_audio(self.active_session_id, str(resolved))
 
-    def _headless_asset_play(self, response_id: str, asset_id: str, token: int) -> None:
-        """Play an immutable canonical WAV through the physical speaker.
-
-        The canonical application deliberately passes the resolved asset path
-        to its audio port. Physical mode must consume that path directly;
-        looking up legacy response text here would silently turn every
-        recorded phrase into a no-op after the old content catalog is removed.
-        """
+    def _headless_asset_play(self, response_id: str, asset_id: str, token: int, offset_ms: int = 0) -> None:
+        """Play an immutable canonical WAV through the physical speaker."""
         self._cancel_response_audio()
+        is_story = response_id in self.stories or response_id.startswith("placeholder:fixed_story:")
+        self._story_pause_requested = False if is_story else getattr(self, "_story_pause_requested", False)
         task = asyncio.create_task(
-            self._play_asset_audio(self.active_session_id, response_id, asset_id, token),
+            self._play_asset_audio(self.active_session_id, response_id, asset_id, token, int(offset_ms)),
             name=f"mishka-asset-audio-{response_id}",
         )
         self._response_audio_tasks.add(task)
+        if is_story:
+            self._active_story_task = task
+            self._active_story_id = response_id
         task.add_done_callback(
             lambda done: self._observe_detached_audio_task(
                 done, self._response_audio_tasks, operation="asset_audio",
@@ -735,7 +762,18 @@ class HardwareIntegrationStand:
             )
         )
 
-    async def _play_asset_audio(self, session_id: str, response_id: str, asset_id: str, token: int) -> None:
+    async def _pause_story_playback(self):
+        task = getattr(self, "_active_story_task", None)
+        if task is None or task.done():
+            return
+        self._story_pause_requested = True
+        await self.playback.stop()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _resume_story_playback(self):
+        return
+
+    async def _play_asset_audio(self, session_id: str, response_id: str, asset_id: str, token: int, offset_ms: int = 0) -> None:
         try:
             path = Path(asset_id).expanduser()
             if not path.is_absolute():
@@ -757,17 +795,29 @@ class HardwareIntegrationStand:
             samples = tuple(value / 32768.0 for value in struct.unpack(
                 "<%dh" % (len(raw_pcm) // 2), raw_pcm
             ))
+            is_story = response_id in self.stories or response_id.startswith("placeholder:fixed_story:")
+            start_sample = min(len(samples), max(0, int(int(offset_ms) * rate / 1000)))
+            if is_story:
+                self.playback.start_position_samples = start_sample
             self.playback.active_token = int(token)
             self.commands.append({
                 "at": time.time(), "type": "asset_audio_play", "response_id": response_id,
-                "asset_id": str(path), "samples": len(samples), "rate": rate, "token": int(token),
+                "asset_id": str(path), "samples": len(samples) - start_sample, "rate": rate,
+                "token": int(token), "offset_ms": int(offset_ms),
             })
             self.application._mark_audio_effect_lifecycle(response_id, "playing")
             recorder = getattr(self.application, "record_audio_diagnostic", None)
             if callable(recorder):
                 recorder("audio_playback_started", session_id=session_id, response_id=response_id,
                          content_id=response_id, asset_ref=str(path), playback_id=f"{session_id}:{response_id}:{token}")
-            await self.playback.play(AudioChunk(samples, rate, int(token), session_id))
+            await self.playback.play(AudioChunk(samples[start_sample:], rate, int(token), session_id))
+            completed = bool(getattr(self.playback, "last_playback_completed", True))
+            if is_story and not completed and getattr(self, "_story_pause_requested", False):
+                self._story_pause_requested = False
+                checkpoint_ms = int(getattr(self.playback, "position_samples", start_sample) * 1000 / rate)
+                self.commands.append({"at": time.time(), "type": "story_audio_paused", "story_id": response_id, "offset_ms": checkpoint_ms})
+                self.application._mark_audio_effect_lifecycle(response_id, "paused")
+                return
             self.application._mark_audio_effect_lifecycle(response_id, "finished")
             if callable(recorder):
                 recorder("audio_playback_finished", session_id=session_id, response_id=response_id,
@@ -1136,6 +1186,11 @@ class HardwareIntegrationStand:
                     elif str(payload.get("response_id", "")) == "RINGTONE":
                         payload["asset_path"] = "RINGTONE"
                         payload["content_kind"] = "asset"
+                if frame.type in {"audio_pause", "audio_resume"}:
+                    self._schedule_notification(
+                        self.hub.publish({"type": frame.type, "payload": dict(frame.payload)}),
+                        operation=f"{frame.type}_notification", session_id=self.active_session_id,
+                    )
                 if frame.type=="audio_stop":
                     self._cancel_story_audio()
                     self._cancel_response_audio()
