@@ -2,8 +2,8 @@
 
 Mishka uses one reviewed RVC v2 release:
 
-- `models/rvc/mishka-rvc-v2.pth`
-- `models/rvc/mishka-rvc-v2.index`
+- `models/rvc/mishka-rvc.pth`
+- `models/rvc/mishka-rvc.index`
 
 The worker is persistent and isolated from the ASGI process. It uses the
 project's main `.venv` and the runtime assets under `vendor/rvc/rvc/models`.
@@ -18,8 +18,8 @@ Canonical configuration is in `.env.example`:
 ```text
 RVC_PROJECT_ROOT=vendor/rvc
 RVC_PYTHON=.venv/bin/python
-RVC_MODEL_PATH=models/rvc/mishka-rvc-v2.pth
-RVC_INDEX_PATH=models/rvc/mishka-rvc-v2.index
+RVC_MODEL_PATH=models/rvc/mishka-rvc.pth
+RVC_INDEX_PATH=models/rvc/mishka-rvc.index
 RVC_FALLBACK_MODE=passthrough
 ```
 
