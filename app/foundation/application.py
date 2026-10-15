@@ -179,7 +179,7 @@ class ScenarioApplication:
             return None
         phase = str(phase or "listening")
         fills = tuple(BUTTON_FILL_ELEMENTS[button] for button in range(1, 8))
-        anchors = (PICTOGRAM_ELEMENTS[6], BUTTON_DIGIT_ELEMENTS[7][0])
+        anchors = (PICTOGRAM_ELEMENTS[6], BUTTON_DIGIT_ELEMENTS[7][1])
         if phase == "processing":
             lighting = self.led.start_wave(
                 now=self.monotonic_now(),
