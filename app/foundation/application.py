@@ -914,6 +914,12 @@ class ScenarioApplication:
                 cancel_effects = getattr(self.led, "cancel_effects", None)
                 effect["lighting_effect"] = dict(cancel_effects(clear=True)) if callable(cancel_effects) else {"effect": "unavailable"}
                 effect["resolution"] = "exhibition_effects_cancelled"
+            elif kind == "exhibition_menu_tutorial_skip":
+                # The canonical button edge is the user-facing skip gesture;
+                # cancel the scheduled recorded tutorial clock immediately so
+                # a late MenuTutorialStep cannot overwrite menu_ready.
+                self._cancel_menu_tutorial(event.session_id)
+                effect["resolution"] = "exhibition_menu_tutorial_clock_cancelled"
             elif kind == "standby_breathing_started":
                 start_breathing = getattr(self.led, "start_breathing", None)
                 if callable(start_breathing):

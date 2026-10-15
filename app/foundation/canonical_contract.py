@@ -224,6 +224,7 @@ class CanonicalState:
     menu_prompt_after_wave: bool = True
     menu_lit_buttons: list[int] = field(default_factory=list)
     menu_pressed_buttons: list[int] = field(default_factory=list)
+    menu_repeat_attempts: int = 0
     selected_menu_button: int | None = None
     selected_menu_action: str | None = None
     grammatical_gender: str = "neutral"
@@ -698,15 +699,80 @@ def validate_generated_story(candidate: Mapping[str, Any], brief: Mapping[str, A
 
 
 def normalize_exhibition_name(value: str) -> str | None:
-    """Normalize a short spoken name without retaining the original transcript."""
+    """Extract a spoken name from a short answer.
+
+    STT returns the whole utterance, not just the semantic slot.  In
+    particular, ``меня зовут Вася`` must produce ``Вася`` rather than the
+    first token (``меня``).  Keep only a bounded name-shaped prefix and never
+    retain the transcript itself in session state.
+    """
     text = " ".join(str(value or "").strip().split())
-    text = re.sub(r"^(?:меня зовут|мо[её] имя|я)\s+", "", text, flags=re.IGNORECASE)
-    text = text.strip(" .,!?:;")
-    if not text or len(text) > 40:
+    if not text or len(text) > 160:
         return None
-    if not re.fullmatch(r"[^\W\d_]+(?:[ '-][^\W\d_]+){0,2}", text, flags=re.UNICODE):
+    # Stop at normal sentence punctuation so a natural answer such as
+    # ``меня зовут Вася, мне семь`` cannot absorb the second clause.
+    text = re.split(r"[,.;!?…]", text, maxsplit=1)[0].strip(" -—:;")
+    cue = re.match(
+        r"^(?:меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я)\s+(.+)$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    candidate = cue.group(1).strip() if cue else text
+    stopwords = {
+        "меня", "зовут", "моё", "мое", "имя", "я", "это", "и", "мне",
+        "лет", "года", "год", "летний", "летняя",
+    }
+    parts = re.findall(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё-]*", candidate)
+    if not parts:
         return None
-    return text[:1].upper() + text[1:]
+    selected: list[str] = []
+    for part in parts[:3]:
+        if part.casefold() in stopwords:
+            break
+        if len(part) < 2 or len(part) > 32:
+            break
+        selected.append(part)
+    if not selected:
+        return None
+    name = " ".join(selected)
+    if not re.fullmatch(r"[^\W\d_]+(?:[ '-][^\W\d_]+){0,2}", name, flags=re.UNICODE):
+        return None
+    return name[:1].upper() + name[1:]
+
+
+_EXHIBITION_AGE_WORDS = {
+    "один": 1, "одна": 1, "раз": 1,
+    "два": 2, "две": 2,
+    "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7,
+}
+
+
+def normalize_exhibition_age(value: str) -> int | None:
+    """Extract an exact age 1..7 from a natural STT answer."""
+    text = " ".join(str(value or "").casefold().strip().split())
+    if not text or len(text) > 120:
+        return None
+    # Prefer an explicit one-digit age.  Do not accept a digit embedded in a
+    # larger number or a year.
+    match = re.search(r"(?<!\d)([1-7])(?!\d)", text)
+    if match:
+        return int(match.group(1))
+    for word, age in _EXHIBITION_AGE_WORDS.items():
+        if re.search(rf"(?<![а-яё]){re.escape(word)}(?![а-яё])", text):
+            return age
+    return None
+
+
+def normalize_exhibition_repeat_answer(value: str) -> str | None:
+    """Reduce a natural yes/no answer to the repeat-menu decision."""
+    text = " ".join(str(value or "").casefold().strip().split())
+    if not text:
+        return None
+    if re.search(r"\b(нет|неа|не хочу|не надо|не нужно|не повторяй|достаточно|понятно)\b", text):
+        return "no"
+    if re.search(r"\b(да|ага|угу|конечно|хочу|повтори|повторить|ещё раз|еще раз)\b", text):
+        return "yes"
+    return None
 
 
 class CanonicalRuntime:
@@ -721,6 +787,26 @@ class CanonicalRuntime:
             1: "fixed_aibolit_v1", 2: "fixed_squirrel_v1", 3: "fixed_lukomorye_v1",
             4: "fixed_soft_paws_star_v1", 5: "fixed_neznayka_v1",
         }.get(button)
+
+    @staticmethod
+    def _exhibition_age_band(age_years: int) -> str:
+        return "1-3" if age_years <= 3 else "4-5" if age_years <= 5 else "6-7"
+
+    def _select_exhibition_age(self, state: CanonicalState, age_years: int, *, source: str, now: float) -> dict[str, Any]:
+        band = self._exhibition_age_band(age_years)
+        policy = policy_for_band(band, source=source)
+        state.age_band, state.age_band_source = band, source
+        state.age_policy, state.age_years = policy.as_dict(), age_years
+        state.dialogue_memory.bounded_turns.append({"kind": "age_selection", "age": age_years, "age_band": band, "source": source})
+        state.dialogue_memory.touch(now)
+        state.mode, state.substate = "exhibition_age_complete", "awaiting_closing_audio"
+        state.expected_inputs = ["audio_completed", "handset_down"]
+        state.state_version += 1
+        return self._decision(state, [
+            {"type": "speak", "phrase_id": "PHRASE_107"},
+            {"type": "lighting_select_button", "button": age_years, "state": 1},
+            {"type": "exhibition_onboarding_step", "step": "age_selected", "age": age_years, "age_band": band, "source": source},
+        ], "exhibition_age_selected", clear_audio=True)
 
 
     def reset(self, session_id: str) -> None:
@@ -839,6 +925,7 @@ class CanonicalRuntime:
             state.menu_prompt_after_wave = True
             state.menu_lit_buttons = []
             state.menu_pressed_buttons = []
+            state.menu_repeat_attempts = 0
             state.selected_menu_button = None
             state.selected_menu_action = None
             state.state_version += 1
@@ -869,7 +956,7 @@ class CanonicalRuntime:
                             "buttons": list(state.menu_lit_buttons), "tutorial_step": step}
                 if step == 7:
                     state.mode, state.substate = "menu_ready", "menu_tutorial_complete"
-                    state.expected_inputs = [f"button_{button}" for button in range(1, 8)] + ["handset_down"]
+                    state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
                     return self._decision(state, [
                         lighting,
                         {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons)},
@@ -1020,10 +1107,11 @@ class CanonicalRuntime:
             if str(event.payload.get("response_id") or "") != "PHRASE_075":
                 return self._decision(state, [], "exhibition_age_hint_completion_ignored")
             state.mode, state.substate = "exhibition_age_selection", "awaiting_age_button"
-            state.expected_inputs = ["button_1", "button_2", "button_3", "handset_down"]
+            state.expected_inputs = [*(f"button_{button}" for button in range(1, 8)), "speech", "handset_down"]
             state.state_version += 1
             return self._decision(state, [
                 {"type": "lighting_wave_intent", "pattern": "age_digits_wave", "groups": "digits", "source": "canonical"},
+                {"type": "capture_open"},
                 {"type": "exhibition_onboarding_step", "step": "age_selection"},
             ], "exhibition_age_selection_started", clear_audio=True)
         if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_age_complete":
@@ -1076,12 +1164,13 @@ class CanonicalRuntime:
             if state.menu_prompt_after_wave:
                 state.mode, state.substate = "exhibition_menu_repeat_prompt", "awaiting_repeat_prompt_audio"
                 state.expected_inputs = ["audio_completed", "handset_down"]
+                state.menu_repeat_attempts = 0
                 return self._decision(state, [
                     {"type": "speak", "phrase_id": "PHRASE_009"},
                     {"type": "exhibition_menu_tutorial_step", "step": "repeat_prompt"},
                 ], "exhibition_menu_repeat_prompt_started")
             state.mode, state.substate = "menu_ready", "menu_tutorial_complete"
-            state.expected_inputs = [f"button_{button}" for button in range(1, 8)] + ["handset_down"]
+            state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
             return self._decision(state, [
                 {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons)},
             ], "exhibition_menu_replay_complete")
@@ -1090,6 +1179,7 @@ class CanonicalRuntime:
                 return self._decision(state, [], "exhibition_menu_repeat_prompt_completion_ignored")
             state.mode, state.substate = "exhibition_menu_repeat_listen", "awaiting_repeat_answer"
             state.expected_inputs = ["speech", "handset_down"]
+            state.menu_repeat_attempts = 0
             state.state_version += 1
             return self._decision(state, [
                 {"type": "capture_open"},
@@ -1297,7 +1387,24 @@ class CanonicalRuntime:
                 "exhibition_menu_repeat_prompt", "exhibition_menu_repeat_listen",
                 "exhibition_menu_replay_buttons",
             }:
-                return self._decision(state, [], "exhibition_menu_tutorial_input_ignored")
+                # A physical button press is an explicit child-friendly skip
+                # gesture.  Do not also activate the selected menu action on
+                # this same edge; the next press starts a clean menu action.
+                state.mode, state.substate = "menu_ready", "menu_tutorial_skipped"
+                state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
+                state.menu_lit_buttons = list(range(1, 8))
+                state.menu_pressed_buttons = []
+                state.menu_tutorial_phase = "skipped"
+                state.menu_repeat_attempts = 0
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "audio_stop"},
+                    {"type": "capture_close"},
+                    {"type": "exhibition_menu_tutorial_skip", "button": button},
+                    {"type": "exhibition_effects_cancelled"},
+                    {"type": "lighting_preset", "preset": "ROOT_MENU"},
+                    {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons), "skipped": True},
+                ], "exhibition_menu_tutorial_skipped", clear_audio=True)
             if self.exhibition_mode and state.mode == "menu_ready":
                 if button in state.menu_pressed_buttons:
                     return self._decision(state, [], "exhibition_menu_button_duplicate")
@@ -1364,23 +1471,9 @@ class CanonicalRuntime:
                 state.mode, state.expected_inputs, state.state_version = "wellbeing_check", ["button_1", "button_7", "speech"], state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "HELP"}, {"type": "support_question", "question": "pain_or_discomfort"}], "help_priority")
             if self.exhibition_mode and state.mode == "exhibition_age_selection":
-                age_bands = {1: "1-3", 2: "4-5", 3: "6-7"}
-                band = age_bands.get(button)
-                if band is None:
+                if button not in range(1, 8):
                     return self._decision(state, [], "exhibition_age_button_invalid")
-                policy = policy_for_band(band, source="exhibition_button")
-                state.age_band, state.age_band_source = band, "exhibition_button"
-                state.age_policy, state.age_years = policy.as_dict(), None
-                state.dialogue_memory.bounded_turns.append({"kind": "age_selection", "button": button, "age_band": band})
-                state.dialogue_memory.touch(now)
-                state.mode, state.substate = "exhibition_age_complete", "awaiting_closing_audio"
-                state.expected_inputs = ["audio_completed", "handset_down"]
-                state.state_version += 1
-                return self._decision(state, [
-                    {"type": "speak", "phrase_id": "PHRASE_107"},
-                    {"type": "lighting_select_button", "button": button, "state": 1},
-                    {"type": "exhibition_onboarding_step", "step": "age_selected", "age_band": band},
-                ], "exhibition_age_selected", clear_audio=True)
+                return self._select_exhibition_age(state, button, source="exhibition_button", now=now)
             if state.mode == "automatic_mood_check":
                 mood = "low" if button in {1, 2, 3} else "calm" if button in {4, 5} else "good"
                 state.mood_result = mood
@@ -1558,7 +1651,8 @@ class CanonicalRuntime:
             if state.handset != "up" and state.mode not in {"safety_handoff"}:
                 return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "voice_requires_handset")
             if self.exhibition_mode and state.mode == "exhibition_menu_repeat_listen":
-                if intent == "yes":
+                repeat_answer = normalize_exhibition_repeat_answer(transient_text or "") or (intent if intent in {"yes", "no"} else None)
+                if repeat_answer == "yes":
                     state.mode, state.substate = "exhibition_menu_replay_buttons", "awaiting_menu_audio"
                     state.expected_inputs = ["audio_completed", "handset_down"]
                     state.menu_tutorial_step = 0
@@ -1566,25 +1660,46 @@ class CanonicalRuntime:
                     state.menu_tutorial_audio_complete = False
                     state.menu_prompt_after_wave = False
                     state.menu_lit_buttons = []
+                    state.menu_repeat_attempts = 0
                     state.state_version += 1
                     return self._decision(state, [
                         {"type": "capture_close"},
                         {"type": "speak", "phrase_id": "PHRASE_008"},
                         {"type": "exhibition_menu_tutorial_step", "step": "menu_replay"},
                     ], "exhibition_menu_replay_started", clear_audio=True)
-                if intent == "no":
+                if repeat_answer == "no":
                     state.mode, state.substate = "menu_ready", "menu_repeat_declined"
-                    state.expected_inputs = [f"button_{button}" for button in range(1, 8)] + ["handset_down"]
+                    state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
                     state.state_version += 1
+                    state.menu_repeat_attempts = 0
                     return self._decision(state, [
                         {"type": "capture_close"},
                         {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons)},
                     ], "exhibition_menu_repeat_declined", clear_audio=True)
+                state.menu_repeat_attempts += 1
+                if state.menu_repeat_attempts >= 2:
+                    state.mode, state.substate = "menu_ready", "menu_repeat_defaulted"
+                    state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
+                    state.state_version += 1
+                    return self._decision(state, [
+                        {"type": "capture_close"},
+                        {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons), "repeat_defaulted": True},
+                        {"type": "lighting_preset", "preset": "ROOT_MENU"},
+                    ], "exhibition_menu_repeat_defaulted", clear_audio=True)
                 state.expected_inputs = ["audio_completed", "handset_down"]
                 state.state_version += 1
                 return self._decision(state, [
                     {"type": "speak", "phrase_id": "PHRASE_074"},
                 ], "exhibition_menu_repeat_unclear", clear_audio=True)
+            if self.exhibition_mode and state.mode == "exhibition_age_selection":
+                age_years = normalize_exhibition_age(transient_text or "")
+                if age_years is None:
+                    state.state_version += 1
+                    return self._decision(state, [
+                        {"type": "speak", "phrase_id": "PHRASE_074"},
+                        {"type": "capture_open"},
+                    ], "exhibition_age_unrecognized", clear_audio=True)
+                return self._select_exhibition_age(state, age_years, source="exhibition_voice", now=now)
             if state.mode in {"fixed_story_playing", "story_speech_analysis"} and intent in {"pause", "pause_story"}:
                 state.mode, state.substate = "story_pause_announcement", "story_pause_requested"
                 state.state_version += 1

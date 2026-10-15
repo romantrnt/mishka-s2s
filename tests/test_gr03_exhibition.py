@@ -1,7 +1,12 @@
 import asyncio
 
 from app.foundation.api import build_application
-from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime
+from app.foundation.canonical_contract import (
+    CanonicalEvent,
+    CanonicalRuntime,
+    normalize_exhibition_age,
+    normalize_exhibition_name,
+)
 from app.foundation.config import Settings
 from app.foundation.domain import Event
 
@@ -40,12 +45,13 @@ def to_age_selection(runtime, name="Меня зовут Аня"):
 
 
 def test_current_exhibition_onboarding_and_age_button_contract():
-    for button, band in ((1, "1-3"), (2, "4-5"), (3, "6-7")):
+    for button, band in ((1, "1-3"), (4, "4-5"), (6, "6-7")):
         runtime = to_age_selection(CanonicalRuntime(exhibition_mode=True, monotonic_now=lambda: 10.0))
         state = runtime.sessions["gr03"]
         selected = runtime.handle(ce("ButtonPressed", 9, state.state_version, "hid", {"button_id": button}))
         assert selected["reason"] == "exhibition_age_selected"
         assert selected["state"]["mode"] == "exhibition_age_complete"
+        assert selected["state"]["age_years"] == button
         assert selected["state"]["age_band"] == band
         assert selected["state"]["age_band_source"] == "exhibition_button"
         assert selected["state"]["age_policy"]["band"] == band
@@ -151,3 +157,73 @@ def test_button_before_welcome_cannot_enter_age_flow():
     assert early["reason"] == "exhibition_age_not_ready"
     assert early["state"]["mode"] == "voice_welcome"
     assert runtime.handle(ce("WelcomeTimerFired", 3, 1, "timer", monotonic=15.0))["reason"] == "welcome_started"
+
+
+def test_name_and_spoken_age_extract_slots_from_natural_answers():
+    assert normalize_exhibition_name("Меня зовут Вася") == "Вася"
+    assert normalize_exhibition_name("моё имя Маша-Поля") == "Маша-Поля"
+    assert normalize_exhibition_name("меня") is None
+    assert normalize_exhibition_age("мне семь лет") == 7
+    assert normalize_exhibition_age("мне 6") == 6
+    assert normalize_exhibition_age("мне десять") is None
+
+
+def test_exhibition_accepts_all_seven_exact_age_buttons_and_voice_age():
+    for button in range(1, 8):
+        runtime = to_age_selection(CanonicalRuntime(exhibition_mode=True, monotonic_now=lambda: 10.0))
+        state = runtime.sessions["gr03"]
+        selected = runtime.handle(ce("ButtonPressed", 9, state.state_version, "hid", {"button_id": button}))
+        assert selected["reason"] == "exhibition_age_selected"
+        assert selected["state"]["age_years"] == button
+
+    runtime = to_age_selection(CanonicalRuntime(exhibition_mode=True, monotonic_now=lambda: 10.0))
+    state = runtime.sessions["gr03"]
+    selected = runtime.handle(
+        ce("VoiceIntentReady", 9, state.state_version, "speech", {"intent": "free_speech", "safety_severity": "none"}),
+        transient_text="мне семь лет",
+    )
+    assert selected["reason"] == "exhibition_age_selected"
+    assert selected["state"]["age_years"] == 7
+    assert selected["state"]["age_band"] == "6-7"
+
+
+def test_menu_tutorial_can_be_skipped_and_unclear_repeat_is_bounded():
+    runtime = to_age_selection(CanonicalRuntime(exhibition_mode=True, monotonic_now=lambda: 10.0))
+    state = runtime.sessions["gr03"]
+    runtime.handle(ce("ButtonPressed", 9, state.state_version, "hid", {"button_id": 4}))
+    state = runtime.sessions["gr03"]
+    runtime.handle(ce("AudioCompleted", 10, state.state_version, "audio", {"response_id": "PHRASE_107"}))
+    state = runtime.sessions["gr03"]
+    runtime.handle(ce("ExhibitionOnboardingComplete", 11, state.state_version, "wave"))
+    state = runtime.sessions["gr03"]
+    skipped = runtime.handle(ce("ButtonPressed", 12, state.state_version, "hid", {"button_id": 6}))
+    assert skipped["reason"] == "exhibition_menu_tutorial_skipped"
+    assert skipped["state"]["mode"] == "menu_ready"
+
+    state.mode = "exhibition_menu_repeat_listen"
+    state.handset = "up"
+    state.menu_repeat_attempts = 0
+    first = runtime.handle(ce("VoiceIntentReady", 13, state.state_version, "speech", {"intent": "free_speech", "safety_severity": "none"}), transient_text="не понял")
+    assert first["reason"] == "exhibition_menu_repeat_unclear"
+    state = runtime.sessions["gr03"]
+    second = runtime.handle(ce("VoiceIntentReady", 14, state.state_version, "speech", {"intent": "free_speech", "safety_severity": "none"}), transient_text="опять не понял")
+    assert second["reason"] == "exhibition_menu_repeat_defaulted"
+    assert second["state"]["mode"] == "menu_ready"
+
+
+def test_s2s_does_not_publish_partial_open_say_block():
+    from app.foundation.s2s import MockLLMProvider, ResponseTagParser, StreamingTokenConsumer
+
+    async def run():
+        outputs = []
+
+        async def receive(item):
+            outputs.append(item)
+
+        await StreamingTokenConsumer().consume_parsed(
+            MockLLMProvider(["<say>Зебра живет. ", "В Африке.</say>"]),
+            [], "request", lambda: False, ResponseTagParser(), receive,
+        )
+        assert [item.value for item in outputs] == ["Зебра живет. В Африке."]
+
+    asyncio.run(run())

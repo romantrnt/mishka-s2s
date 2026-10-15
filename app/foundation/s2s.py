@@ -814,7 +814,14 @@ class StreamingTokenConsumer:
         return "".join(parts)
 
     async def consume_parsed(self, provider, messages, request_id, cancelled, parser, on_output, on_token=None):
-        """Parse allowlisted output and emit ``<say>`` text incrementally."""
+        """Parse allowlisted output and emit only complete ``<say>`` blocks.
+
+        An open speech tag is not a valid acoustic unit.  Emitting a sentence
+        before ``</say>`` lets an interrupted provider stream play a fragment
+        and then look like a successful response (the characteristic single
+        first-sound failure).  Keep the whole tagged block atomic; the audio
+        queue can still split it at safe sentence boundaries afterwards.
+        """
         buffer = ""
         say_text = ""
         in_say = False
@@ -853,12 +860,6 @@ class StreamingTokenConsumer:
                         continue
                     ready, buffer = safe_prefix(buffer, "</say>")
                     say_text += ready
-                    # Keep streaming latency, but never publish a partial
-                    # sentence: an EOF/error can still invalidate the open
-                    # <say> block.  Only a completed sentence is provisional.
-                    if re.search(r'[.!?…](?:["»)]*)?\s*$', say_text):
-                        await emit_say_fragment(say_text)
-                        say_text = ""
                     break
 
                 buffer = buffer.lstrip()
