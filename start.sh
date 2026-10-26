@@ -11,11 +11,18 @@ if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
 fi
 
 source "$ROOT/.venv/bin/activate"
+# Expose the CUDA libraries bundled with the pinned PyTorch wheel to
+# CTranslate2 and ONNX Runtime, regardless of Python import order.
+for cuda_lib in "$ROOT"/.venv/lib/python*/site-packages/nvidia/*/lib; do
+  if [[ -d "$cuda_lib" ]]; then
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$cuda_lib"
+  fi
+done
 export MISHKA_ROOT="$ROOT"
 export MISHKA_CACHE_ROOT="${MISHKA_CACHE_ROOT:-$ROOT/runtime/cache}"
 export MISHKA_ENV_FILE="${MISHKA_ENV_FILE:-$ROOT/.env}"
 export MISHKA_PORT="${MISHKA_PORT:-8000}"
-export OLLAMA_MODELS="${OLLAMA_MODELS:-$MISHKA_CACHE_ROOT/ollama}"
+# Ollama runs as a systemd service; its model store belongs to that daemon.
 
 # WSLg does not export its PulseAudio endpoint into non-interactive SSH
 # sessions. PortAudio/sounddevice otherwise starts with no host API and the

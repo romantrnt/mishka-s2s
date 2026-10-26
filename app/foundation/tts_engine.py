@@ -76,16 +76,10 @@ class SileroTTSEngine:
                 if device_name == "cuda" and not torch.cuda.is_available():
                     raise SileroTTSLoadError("Silero requested CUDA but CUDA is unavailable")
                 self._device = torch.device(device_name)
-                try:
-                    model = self._load_from_hub(torch)
-                    self._load_source = "torch.hub"
-                except Exception as hub_error:
-                    try:
-                        model = self._load_from_package(torch)
-                        self._load_source = "package_cache"
-                    except Exception as package_error:
-                        raise SileroTTSLoadError("Silero v5.5 hub and package-cache loading failed") from package_error
-                    self._load_error = type(hub_error).__name__
+                # Use the reviewed direct model artifact; avoid fetching
+                # unpinned torch.hub code during production startup.
+                model = self._load_from_package(torch)
+                self._load_source = "package_cache"
                 if hasattr(model, "to"):
                     moved = model.to(self._device)
                     if moved is not None:
