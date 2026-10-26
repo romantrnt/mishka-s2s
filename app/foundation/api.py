@@ -108,6 +108,9 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
         vad=EnergyVADAdapter(); stt=MockSpeechRecognizer()
         audio=LocalS2SPipeline(vad,stt,engine,config)
         return engine,audio,S2SRuntimeManager(settings,llm,tts,voice,engine,vad=vad,stt=stt,playback=playback)
+    # Complete PyTorch's import on the startup thread before VAD warmup or
+    # model workers can import it from other threads.
+    import torch
     if settings.llm_provider=="ollama":
         llm=OllamaLLMProvider(settings.ollama_base_url,settings.llm_model,config.llm_timeout_s,quantization=settings.llm_quantization,num_ctx=settings.llm_num_ctx,temperature=settings.llm_temperature,max_tokens=settings.llm_max_tokens,keep_alive=settings.llm_keep_alive,think=settings.llm_think,warmup_timeout_s=settings.llm_warmup_timeout_s)
     elif settings.llm_provider=="vllm":
@@ -243,15 +246,24 @@ def create_app(application=None, *, include_test_routes: bool = False):
                     await application.start_watchdog(lifecycle, manager)
             yield
         finally:
-            if hasattr(application, "stop_watchdog"):
-                await application.stop_watchdog()
-            if hasattr(application, "stop_idle_monitor"):
-                await application.stop_idle_monitor()
-            await lifecycle.stop()
-            if manager is not None:
-                await manager.close()
-            if hardware_owner is not None and hasattr(hardware_owner, "stop_hardware"):
-                await hardware_owner.stop_hardware()
+            try:
+                if hasattr(application, "stop_watchdog"):
+                    await application.stop_watchdog()
+                if hasattr(application, "stop_idle_monitor"):
+                    await application.stop_idle_monitor()
+                await lifecycle.stop()
+                if manager is not None:
+                    await manager.close()
+            finally:
+                owned_stand = getattr(_api.state, "stand", None)
+                hardware_stopped = False
+                try:
+                    if hardware_owner is not None and hasattr(hardware_owner, "stop_hardware"):
+                        await hardware_owner.stop_hardware()
+                        hardware_stopped = True
+                finally:
+                    if owned_stand is not None:
+                        await owned_stand.aclose(hardware_stopped=hardware_stopped)
 
     api = FastAPI(
         title="Мягкий телефон Мишки — production candidate",

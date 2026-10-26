@@ -58,7 +58,10 @@ def test_button_mapping_handset_gate_and_safety_handoff_survive_tag_removal():
     assert safety["state"]["mode"] == "safety_handoff"
     preserved = runtime.handle(event("RfidRemoved", 5, 4))
     assert preserved["state"]["mode"] == "safety_handoff"
-    resolved = runtime.handle(event("AdultResolved", 6, 5))
+    resolved = runtime.handle(event(
+        "AdultResolved", 6, 5,
+        payload={"incident_id": runtime.sessions["acceptance"].incident_id},
+    ), adult_resolution_authorized=True)
     assert resolved["state"]["mode"] == "root_menu"
 
 

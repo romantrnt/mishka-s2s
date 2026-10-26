@@ -60,3 +60,22 @@ def policy_for_band(band: str, *, source: str = "unknown") -> AgePolicy:
 def profile_context(profile: Mapping[str, Any] | None, *, now: datetime | None = None) -> dict[str, Any]:
     value = profile or {}; details = age_details(profile, now=now); policy = policy_for(profile, now=now)
     return {"profile_ref": str(value.get("profile_ref") or value.get("child_id")) if value.get("profile_ref") or value.get("child_id") else None, "display_name": str(value["display_name"])[:80] if isinstance(value.get("display_name"), str) and value["display_name"].strip() else None, "language": str(value.get("language") or "ru-RU"), "timezone": details["timezone"], "age_years": details["age_years"], "age_band": details["age_band"], "age_band_source": details["age_band_source"], "profile_data_incomplete": details["profile_data_incomplete"], "current_date": details["current_date"], "accessibility": {"motor": list(value.get("motor_flags") or [])[:8], "sensory": list(value.get("sensory_flags") or [])[:8], "communication": list(value.get("communication_flags") or [])[:8]}, "age_policy": policy.as_dict()}
+
+
+def trusted_canonical_age(state: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Use only a validated exhibition selection already owned by canonical state."""
+    value = state or {}
+    years, band, source = (value.get("age_years"), value.get("age_band"),
+                           value.get("age_band_source"))
+    if source not in {"exhibition_button", "exhibition_voice"}:
+        return None
+    if isinstance(years, bool) or not isinstance(years, int) or not 1 <= years <= 7:
+        return None
+    expected_band = "1-3" if years <= 3 else "4-5" if years <= 5 else "6-7"
+    if band != expected_band:
+        return None
+    policy = policy_for_band(expected_band, source=source).as_dict()
+    if value.get("age_policy") != policy:
+        return None
+    return {"age_years": years, "age_band": expected_band,
+            "age_band_source": source, "age_policy": policy}

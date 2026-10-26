@@ -496,9 +496,8 @@ class ProfileContext:
         profile = profile or {}
         from .age_policy import age_details
         details = age_details(profile)
-        age = profile.get("age")
         flags = tuple(str(item)[:40] for key in ("motor_flags", "sensory_flags", "communication_flags") for item in (profile.get(key) or [])[:4])
-        return cls(display_name=str(profile["display_name"])[:64] if profile.get("display_name") else None, age=int(age) if isinstance(age, int) and 0 <= age <= 18 else details.get("age_years"), age_band=str(details.get("age_band") or "3-5"), age_source=str(details.get("age_band_source") or "anonymous_default"), language=str(profile.get("language") or "ru-RU"), accessibility=flags)
+        return cls(display_name=str(profile["display_name"])[:64] if profile.get("display_name") else None, age=details.get("age_years"), age_band=str(details.get("age_band") or "3-5"), age_source=str(details.get("age_band_source") or "anonymous_default"), language=str(profile.get("language") or "ru-RU"), accessibility=flags)
 
     def prompt_fields(self) -> dict[str, Any]:
         return {key: value for key, value in (("display_name", self.display_name), ("age", self.age), ("age_band", self.age_band), ("age_source", self.age_source), ("language", self.language), ("accessibility", self.accessibility)) if value is not None}
@@ -813,7 +812,7 @@ class StreamingTokenConsumer:
             parts.append(token)
         return "".join(parts)
 
-    async def consume_parsed(self, provider, messages, request_id, cancelled, parser, on_output, on_token=None):
+    async def consume_parsed(self, provider, messages, request_id, cancelled, parser, on_output, on_token=None, on_say_closed=None):
         """Parse allowlisted output and emit only complete ``<say>`` blocks.
 
         An open speech tag is not a valid acoustic unit.  Emitting a sentence
@@ -855,6 +854,8 @@ class StreamingTokenConsumer:
                         say_text += buffer[:end]
                         buffer = buffer[end + len("</say>") :]
                         await emit_say_fragment(say_text)
+                        if on_say_closed is not None:
+                            await on_say_closed()
                         say_text = ""
                         in_say = False
                         continue
@@ -1896,14 +1897,31 @@ class AudioSynthesisQueue:
             if ownership.state not in self._TERMINAL_STATES:
                 self._transition(chunk_index, state)
     async def wait_first_audio(self, timeout_s: float) -> bool:
-        event=self.first_audio_ready
-        if event is None:
+        ready=self.first_audio_ready
+        failure=self.failure_event
+        if ready is None or failure is None:
             return False
+        if self.error is not None:
+            raise self.error
+        ready_task=asyncio.create_task(ready.wait())
+        failure_task=asyncio.create_task(failure.wait())
         try:
-            await asyncio.wait_for(event.wait(), timeout=max(0.01, timeout_s))
-            return True
-        except asyncio.TimeoutError:
-            return False
+            done, _ = await asyncio.wait(
+                (ready_task, failure_task),
+                timeout=max(0.01, timeout_s),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # A simultaneous failure must never be reported as ready.
+            if self.error is not None:
+                raise self.error
+            if failure_task in done:
+                raise RuntimeError("audio synthesis worker failed without an error")
+            return ready_task in done
+        finally:
+            for task in (ready_task, failure_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(ready_task, failure_task, return_exceptions=True)
 
     async def submit(self,text):
         if self.error is not None: raise self.error
@@ -2364,12 +2382,17 @@ class BoundedConversationEngine:
         return items[-getattr(self.config, "context_window", len(items)): ]
 
     async def run_text_turn(self,text,context,*,trace_generation_id=None):
+        remaining = context.max_duration_seconds - (time.monotonic() - context.started_at)
+        if context.turns >= context.max_turns or remaining <= 0:
+            return TurnResult((), (), True, "bounded_limit")
         try:
-            async with asyncio.timeout(self.config.max_turn_seconds):
+            async with asyncio.timeout(min(self.config.max_turn_seconds, remaining)):
                 return await self._run_text_turn(text, context, trace_generation_id=trace_generation_id)
         except TimeoutError:
             await self.cancel_session(context.session_id)
-            return TurnResult((), (), True, "turn_timeout")
+            reason = ("bounded_limit" if time.monotonic() - context.started_at >= context.max_duration_seconds
+                      else "turn_timeout")
+            return TurnResult((), (), True, reason)
 
     async def _run_text_turn(self,text,context,*,trace_generation_id=None):
         text=self.normalizer.normalize(text)
@@ -2457,6 +2480,11 @@ class BoundedConversationEngine:
                         self.metrics.event("first_audio_gate_entered", timeout_s=self.config.first_audio_gate_s)
                         await queue.wait_first_audio(self.config.first_audio_gate_s)
                         self.metrics.event("first_audio_gate_released")
+            async def flush_closed_say():
+                # Only a complete </say> block crosses the streaming audio
+                # boundary. An open or malformed tag remains buffered.
+                await close_chunks(chunker.flush())
+
             async def handle(item):
                 nonlocal spoken_chars, raw_spoken
                 if item.kind=="say":
@@ -2476,7 +2504,7 @@ class BoundedConversationEngine:
                     await close_chunks(chunker.feed(safe))
                 else: actions.append(item)
             async with asyncio.timeout(self.config.llm_timeout_s):
-                consume_task=asyncio.create_task(self.consumer.consume_parsed(provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,token_received), name=f"s2s-llm-{context.session_id}-{token}")
+                consume_task=asyncio.create_task(self.consumer.consume_parsed(provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,token_received,flush_closed_say), name=f"s2s-llm-{context.session_id}-{token}")
                 failure_task=asyncio.create_task(queue.failure_event.wait(), name=f"s2s-queue-failure-{{context.session_id}}-{{token}}") if queue.failure_event is not None else None
                 try:
                     if failure_task is None:
@@ -2490,6 +2518,10 @@ class BoundedConversationEngine:
                             raise queue.error
                         await consume_task
                 finally:
+                    if not consume_task.done():
+                        consume_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await consume_task
                     if failure_task is not None and not failure_task.done():
                         failure_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):

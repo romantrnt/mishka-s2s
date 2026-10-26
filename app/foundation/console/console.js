@@ -117,7 +117,7 @@ function post(path, body = {}) {
       const response = await fetchWithTimeout(path, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...body, session_id: session() })
+        body: JSON.stringify({ session_id: session(), ...body })
       });
       const raw = await response.text();
       let value;
@@ -947,6 +947,17 @@ function renderLog(id, items, meta, value, klass) {
   }
 }
 
+function audioIdentity(command) {
+  return {
+    session_id: command.payload.session_id,
+    response_id: command.payload.response_id,
+    playback_id: command.payload.playback_id,
+    playback_lease: command.payload.playback_lease,
+    generation: command.payload.generation,
+    token: command.payload.token,
+  };
+}
+
 async function playPhraseAsset(command, generation) {
   const response = await fetch(apiPath(`/stand/audio/phrase/${encodeURIComponent(command.payload.response_id)}`));
   if (!response.ok) throw new Error(`phrase audio HTTP ${response.status}`);
@@ -961,16 +972,12 @@ async function playPhraseAsset(command, generation) {
   activeSources.add(source);
   source.onended = () => {
     activeSources.delete(source);
-    post('/stand/audio/lifecycle', { response_id: command.payload.response_id, status: 'finished' }).catch(() => {});
-    const canonicalCompletion = command.payload.response_id === 'PHRASE_001' ||
-      ['PHRASE_007', 'PHRASE_008', 'PHRASE_016'].includes(command.payload.response_id) ||
-      String(command.payload.response_id || '').startsWith('PHRASE_');
-    if (generation === storySpeechGeneration && canonicalCompletion) {
-      post('/stand/audio/completed', { session_id: command.payload.session_id, response_id: command.payload.response_id, playback_lease: command.payload.playback_lease, generation: command.payload.generation }).catch(() => {});
-    }
+    if (generation !== storySpeechGeneration) return;
+    post('/stand/audio/lifecycle', {...audioIdentity(command), status: 'finished'}).catch(() => {});
+    post('/stand/audio/completed', audioIdentity(command)).catch(() => {});
   };
   source.start();
-  post('/stand/audio/lifecycle', { response_id: command.payload.response_id, status: 'playing' }).catch(() => {});
+  post('/stand/audio/lifecycle', {...audioIdentity(command), status: 'playing'}).catch(() => {});
   $('audio-state').textContent = 'AUDIO: PHRASE / WAV';
 }
 
@@ -1006,62 +1013,45 @@ async function playStoryAsset(command, generation) {
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.connect(context.destination);
+  const offset = Math.min(buffer.duration, Math.max(0, Number(command.payload.offset_ms || 0) / 1000));
   const playback = {
-    buffer, source, offset: 0, startedAt: context.currentTime, paused: false, generation,
-    sessionId: command.payload.session_id,
-    responseId: command.payload.response_id,
-    playbackLease: command.payload.playback_lease,
-    commandGeneration: command.payload.generation,
+    buffer, source, offset, startedAt: context.currentTime, paused: false, generation,
+    identity: audioIdentity(command),
   };
   activeStoryPlayback = playback;
   activeSources.add(source);
   source.onended = () => {
     activeSources.delete(source);
-    if (playback.paused || activeStoryPlayback !== playback) return;
+    if (playback.paused || activeStoryPlayback !== playback || generation !== storySpeechGeneration) return;
     activeStoryPlayback = null;
-    if (generation === storySpeechGeneration) {
-      $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
-      post('/stand/audio/completed', { session_id: command.payload.session_id, response_id: command.payload.response_id, playback_lease: command.payload.playback_lease, generation: command.payload.generation }).catch(() => {});
-    }
+    $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
+    post('/stand/audio/lifecycle', {...playback.identity, status: 'finished'}).catch(() => {});
+    post('/stand/audio/completed', playback.identity).catch(() => {});
   };
-  source.start();
-  post('/stand/audio/lifecycle', { response_id: command.payload.response_id, status: 'playing' }).catch(() => {});
+  source.start(0, offset);
+  post('/stand/audio/lifecycle', {...playback.identity, status: 'playing'}).catch(() => {});
   $('audio-state').textContent = 'AUDIO: STORY / SILERO';
 }
 
 function pauseStoryAsset() {
   const playback = activeStoryPlayback;
-  if (!playback || playback.paused || !audioContext) return;
+  if (!playback || playback.paused || !audioContext || playback.generation !== storySpeechGeneration) return;
   playback.offset = Math.min(playback.buffer.duration, playback.offset + Math.max(0, audioContext.currentTime - playback.startedAt));
   playback.paused = true;
   try { playback.source.stop(); } catch (_) {}
   activeSources.delete(playback.source);
+  post('/stand/audio/checkpoint', {
+    ...playback.identity, story_id: playback.identity.response_id,
+    offset_ms: Math.round(playback.offset * 1000),
+  }).catch(() => {});
+  post('/stand/audio/lifecycle', {...playback.identity, status: 'paused'}).catch(() => {});
   $('audio-state').textContent = 'AUDIO: STORY PAUSED';
 }
 
 function resumeStoryAsset() {
-  const playback = activeStoryPlayback;
-  if (!playback || !playback.paused || !audioContext) return;
-  const source = audioContext.createBufferSource();
-  source.buffer = playback.buffer;
-  source.connect(audioContext.destination);
-  playback.source = source;
-  playback.startedAt = audioContext.currentTime;
-  playback.paused = false;
-  activeSources.add(source);
-  source.onended = () => {
-    activeSources.delete(source);
-    if (activeStoryPlayback !== playback) return;
-    activeStoryPlayback = null;
-    post('/stand/audio/completed', {
-      session_id: playback.sessionId || liveSessionId,
-      response_id: playback.responseId,
-      playback_lease: playback.playbackLease,
-      generation: playback.commandGeneration,
-    }).catch(() => {});
-  };
-  source.start(0, playback.offset);
-  $('audio-state').textContent = 'AUDIO: STORY / SILERO';
+  // Canonical story_audio_resume issues a new owned audio_play with the saved
+  // millisecond checkpoint. Resuming this old source would duplicate playback.
+  return;
 }
 
 function speakCommands(state) {
@@ -1087,7 +1077,7 @@ function speakCommands(state) {
       const generation = ++storySpeechGeneration;
       playPhraseAsset(command, generation).catch(error => {
         if (generation !== storySpeechGeneration) return;
-        post('/stand/audio/failed', { session_id: command.payload.session_id, response_id: command.payload.response_id, playback_lease: command.payload.playback_lease, generation: command.payload.generation, error_code: 'browser_phrase_playback_failed' }).catch(() => {});
+        post('/stand/audio/failed', {...audioIdentity(command), error_code: 'browser_phrase_playback_failed' }).catch(() => {});
         showError(new Error(`Recorded phrase unavailable; audio path stopped: ${error.message}`));
       });
       continue;
@@ -1104,7 +1094,7 @@ function speakCommands(state) {
       const generation = ++storySpeechGeneration;
       playStoryAsset(command, generation).catch(error => {
         if (generation !== storySpeechGeneration || current?.session.node !== 'fixed_story_playing') return;
-        post('/stand/audio/failed', { session_id: command.payload.session_id, response_id: command.payload.response_id, playback_lease: command.payload.playback_lease, generation: command.payload.generation, error_code: 'browser_story_playback_failed' }).catch(() => {});
+        post('/stand/audio/failed', {...audioIdentity(command), error_code: 'browser_story_playback_failed' }).catch(() => {});
         showError(new Error('Silero story unavailable; audio path stopped: ' + error.message));
       });
       continue;

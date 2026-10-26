@@ -17,6 +17,16 @@ class Lifecycle(str, Enum):
 
 
 @dataclass(frozen=True)
+class PlaybackHandle:
+    session_id: str
+    generation: int
+    playback_id: str
+    playback_lease: str
+    response_id: str
+    token: int
+
+
+@dataclass(frozen=True)
 class Event:
     event_type: str
     session_id: str
@@ -28,7 +38,7 @@ class Event:
     monotonic_timestamp: float | None = None
 
 
-EVENT_TYPES = frozenset({"RfidPresented", "RfidRemoved", "AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"})
+EVENT_TYPES = frozenset({"RfidPresented", "RfidRemoved", "AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"})
 
 
 @dataclass
@@ -115,6 +125,7 @@ class LEDController(Protocol):
 
 class AudioOutput(Protocol):
     def play(self, response_id: str, asset_id: str | None, token: int) -> None: ...
+    def play_owned(self, handle: PlaybackHandle, asset_id: str, offset_ms: int = 0) -> None: ...
     def cancel(self, token: int) -> None: ...
 
 class DisplayController(Protocol):

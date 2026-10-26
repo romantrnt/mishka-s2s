@@ -32,7 +32,9 @@ def test_fake_pending_playback_has_bounded_canonical_timeout():
         assert app.last_canonical_state["audio_status"] == "failed"
         assert app.last_canonical_state["audio_failure_code"] == "audio_playback_timeout"
         assert sid not in app._active_audio
-        assert len(app.audio.commands) == 1
+        # Failed playback now owns an actual stop, so the fake adapter clears
+        # its pending command as the physical adapter clears its output.
+        assert not app.audio.commands
         assert len([item for item in app.audio_runtime_diagnostics if item["kind"] == "audio_playback_timeout"]) == 1
         state_version = app.last_canonical_state["state_version"]
         await asyncio.sleep(0.05)

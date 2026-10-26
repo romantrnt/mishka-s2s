@@ -172,9 +172,14 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             or (current == "story_paused" and target in {"story_resume_announcement", "fixed_story_choice_wave", "root_menu"})
             or (current == "schedule_weather" and target == "root_menu")
         )
+    if event_type == "DialogueFallback":
+        return current == "bear_dialogue" and target in {"bear_dialogue", "root_menu"}
     if event_type == "VoiceIntentReady":
         return (
             target in {"safety_handoff", "support_intake"}
+            or (current in {"fixed_story_playing", "story_speech_analysis"}
+                and target in {"story_pause_announcement", "fixed_story_choice_wave"})
+            or (current == "story_paused" and target == "story_resume_announcement")
             or (current == "exhibition_name_capture" and target == "exhibition_age_prompt")
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
             or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
@@ -219,7 +224,7 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
         "RfidPresented", "RfidRemoved", "AnonymousStart", "HandsetLifted", "HandsetPlaced",
         "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
-        "StoryPositionUpdated", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected",
+        "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected",
         "HardwareReconnected", "SessionCancel", "SessionReset", "AdultHandoffAcknowledged",
         "AdultResolved", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
         "StoryChoiceWaveComplete", "MenuTutorialStep",

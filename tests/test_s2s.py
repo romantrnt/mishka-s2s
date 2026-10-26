@@ -287,9 +287,11 @@ def test_tts_queue_overflow_cancels_generation_and_drains_chunks():
 
 
 def test_tts_queue_overflow_is_reported_separately_from_cancellation():
-    long_text = " ".join(["слово"] * 45)
+    # Three separately closed, valid speech blocks actually fill a size-one
+    # queue while the first block is in slow TTS.
+    tokens = [f"<say>Тестовая фраза номер {index}.</say>" for index in range(3)]
     engine = BoundedConversationEngine(
-        MockLLMProvider(tokens=[f"<say>{long_text}</say>"]),
+        MockLLMProvider(tokens=tokens),
         MockTTSProvider(delay_s=0.2),
         RVCProvider(),
         MockPlaybackController(),
@@ -888,3 +890,84 @@ def test_s2s_limits_are_loaded_and_enforced_from_environment(monkeypatch):
     engine = BoundedConversationEngine(MockLLMProvider(), MockTTSProvider(), RVCProvider(), MockPlaybackController(), config)
     assert len(engine._bound_history([(str(i), "response") for i in range(5)])) <= 2
     assert engine.history_chars <= 40
+
+
+def test_first_audio_gate_wakes_on_worker_failure_and_cleans_waiters():
+    async def flow():
+        queue, _cancel, token = _new_tts_queue(MockTTSProvider(fail=True), MockPlaybackController(), S2SConfig())
+        await queue.start("queue-test", token)
+        await queue.submit("Готовый блок.")
+        with pytest.raises(RuntimeError, match="mock TTS unavailable"):
+            await asyncio.wait_for(queue.wait_first_audio(5), 0.2)
+        assert queue.worker.done() and queue.failure_event.is_set()
+        assert not queue.first_audio_ready.is_set()
+    asyncio.run(flow())
+
+
+def test_first_audio_gate_failure_wins_simultaneous_ready_and_hangup_cleans_waiters():
+    async def flow():
+        queue, _cancel, token = _new_tts_queue(MockTTSProvider(), MockPlaybackController(), S2SConfig())
+        await queue.start("queue-test", token)
+        queue.error = RuntimeError("simultaneous failure")
+        queue.first_audio_ready.set()
+        queue.failure_event.set()
+        with pytest.raises(RuntimeError, match="simultaneous failure"):
+            await queue.wait_first_audio(5)
+        queue.error = None
+        queue.first_audio_ready.clear()
+        queue.failure_event.clear()
+        waiter = asyncio.create_task(queue.wait_first_audio(5))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        await queue.abort("queue-test")
+        assert not [task for task in asyncio.all_tasks() if task is not asyncio.current_task() and not task.done()]
+    asyncio.run(flow())
+
+
+def test_closed_say_plays_before_later_unfinished_tag_fails_and_stops_audio():
+    release = asyncio.Event()
+    class LLM:
+        async def stream(self, messages, request_id, cancelled):
+            yield "<say>Первая законченная фраза.</say>"
+            await release.wait()
+            yield "<say>Незаконченный ответ"
+    playback = MockPlaybackController()
+    engine = BoundedConversationEngine(LLM(), MockTTSProvider(), RVCProvider(), playback)
+    async def flow():
+        task = asyncio.create_task(engine.run_text_turn("fixture", context()))
+        for _ in range(100):
+            await asyncio.sleep(0.001)
+            if playback.played:
+                break
+        assert playback.played and not task.done()
+        release.set()
+        result = await task
+        assert result.fallback_reason == "provider_or_validation_failure"
+        assert playback.stops >= 1
+        assert not engine.active_queues
+    asyncio.run(flow())
+
+
+def test_hangup_during_first_audio_gate_cancels_generation_without_orphans():
+    started = asyncio.Event()
+    class BlockedTTS:
+        async def synthesize(self, text, token, cancelled):
+            started.set()
+            await asyncio.Event().wait()
+    playback = MockPlaybackController()
+    engine = BoundedConversationEngine(
+        MockLLMProvider(tokens=["<say>Законченная тестовая фраза.</say>"]),
+        BlockedTTS(), RVCProvider(), playback,
+    )
+    async def flow():
+        turn = asyncio.create_task(engine.run_text_turn("fixture", context()))
+        await asyncio.wait_for(started.wait(), 0.5)
+        await asyncio.wait_for(engine.cancel_session("s"), 0.5)
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        assert not playback.played
+        assert not engine.active_tasks and not engine.active_queues
+        assert not [task for task in asyncio.all_tasks() if task is not asyncio.current_task() and not task.done()]
+    asyncio.run(flow())

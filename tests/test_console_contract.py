@@ -22,9 +22,9 @@ def test_webpanel_has_current_handset_input_route_and_state_projection() -> None
 def test_welcome_phrase_completion_reaches_canonical_audio_endpoint():
     source = CONSOLE.read_text(encoding="utf-8")
     phrase_player = source[source.index("async function playPhraseAsset"):source.index("async function playStoryAsset")]
-    assert "command.payload.response_id === 'PHRASE_001'" in phrase_player
-    assert "generation === storySpeechGeneration" in phrase_player
-    assert "post('/stand/audio/completed', { session_id: command.payload.session_id, response_id: command.payload.response_id, playback_lease: command.payload.playback_lease, generation: command.payload.generation })" in phrase_player
+    assert "generation !== storySpeechGeneration" in phrase_player
+    assert "post('/stand/audio/completed', audioIdentity(command))" in phrase_player
+    assert "playback_id: command.payload.playback_id" in source
 
 
 def test_webpanel_observer_lifecycle_is_single_and_bounded():

@@ -7,6 +7,7 @@ import shutil
 import time
 import uuid
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from .config import Settings
@@ -126,8 +127,16 @@ class S2SRuntimeManager:
                 else:
                     checks = {}
                     for name, component in (("vad", self.vad), ("stt", self.stt), ("llm", self.llm), ("silero", self.tts), ("playback", self.playback)):
-                        checks[name] = component.readiness() if hasattr(component, "readiness") else {"ready": False, "reason": "readiness_unavailable"}
-                    failed = {name: value for name, value in checks.items() if not value.get("ready")}
+                        if not hasattr(component, "readiness"):
+                            value = {"ready": False, "reason": "readiness_unavailable"}
+                        else:
+                            value = component.readiness()
+                            if inspect.isawaitable(value):
+                                value = await value
+                            if not isinstance(value, Mapping) or not isinstance(value.get("ready"), bool):
+                                value = {"ready": False, "reason": "invalid_readiness"}
+                        checks[name] = value
+                    failed = {name: value for name, value in checks.items() if not value["ready"]}
                     if failed:
                         result = {"ok": False, "reason": "dependency_unavailable", "diagnostic": {"stage": "dependency_readiness", "failed": failed, "resources": resources}}
                     else:

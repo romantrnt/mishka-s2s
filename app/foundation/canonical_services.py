@@ -34,7 +34,8 @@ LED_PRESETS = {
     "ALL_ON": tuple((element_id, 1) for element_id in LIGHTING_ELEMENT_IDS),
     "ROOT_MENU": _button_lights(1, 2, 3, 4, 5, 6, 7),
     "GAME_MENU": _button_lights(1, 2, 3, 4, 5, 6, 7),
-    # Story chooser: all digits remain visible; only fills 6/7 are on.\n    "STORY_MENU": tuple((BUTTON_DIGIT_ELEMENTS[button][1], 1) for button in range(1, 8)) + ((BUTTON_FILL_ELEMENTS[6], 1), (BUTTON_FILL_ELEMENTS[7], 1)),
+    # Story chooser: all digits remain visible; only fills 6/7 are on.
+    "STORY_MENU": tuple((BUTTON_DIGIT_ELEMENTS[button][1], 1) for button in range(1, 8)) + ((BUTTON_FILL_ELEMENTS[6], 1), (BUTTON_FILL_ELEMENTS[7], 1)),
     "STORY_PLAYBACK": ((14, 1),),
     "SUPPORT": ((2, 1), (14, 1)),
     "PERSONAL_STORY": ((3, 1), (14, 1)),

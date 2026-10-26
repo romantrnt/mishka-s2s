@@ -24,7 +24,7 @@ logger = logging.getLogger("mishka.stand")
 from .api import build_application, create_app
 from .config import Settings, settings_with_compat_env
 from .events import EventValidationError, parse_event
-from .domain import Event, Lifecycle
+from .domain import EVENT_TYPES, Event, Lifecycle, PlaybackHandle
 from .hardware import (HardwareFrame, PTYUARTSimulator, PosixSerialTransport,
                        SerialHardwareAdapter, decode_frame, encode_frame)
 from .canonical_contract import FixedStoryManifest, canonical_state_nodes
@@ -405,6 +405,13 @@ class UARTLEDController:
 
 class UARTAudioOutput:
     def __init__(self, adapter: SerialHardwareAdapter): self.adapter=adapter
+    def play_owned(self, handle: PlaybackHandle, asset_id: str, offset_ms: int = 0):
+        self.adapter.send({"type": "audio_play", "payload": {
+            "response_id": handle.response_id, "asset_id": asset_id,
+            "asset_path": asset_id, "token": handle.token, "offset_ms": int(offset_ms),
+            "session_id": handle.session_id, "generation": handle.generation,
+            "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
+        }})
     def play(self, response_id, asset_id, token):
         self.adapter.send({"type":"audio_play","payload":{"response_id":response_id,
                            "asset_id":asset_id,"token":token}})
@@ -432,6 +439,11 @@ class HeadlessAudioOutput:
         self.on_pause = None
         self.on_resume = None
         self.on_cancel = None
+
+    def play_owned(self, handle: PlaybackHandle, asset_id: str, offset_ms: int = 0):
+        if not callable(self.on_asset_play):
+            raise RuntimeError("physical asset playback is unavailable")
+        self.on_asset_play(handle.response_id, str(asset_id), handle.token, int(offset_ms), handle)
 
     def play(self, response_id, asset_id, token):
         if asset_id and callable(self.on_asset_play):
@@ -744,13 +756,15 @@ class HardwareIntegrationStand:
         if resolved:
             self._schedule_response_audio(self.active_session_id, str(resolved))
 
-    def _headless_asset_play(self, response_id: str, asset_id: str, token: int, offset_ms: int = 0) -> None:
+    def _headless_asset_play(self, response_id: str, asset_id: str, token: int, offset_ms: int = 0,
+                             handle: PlaybackHandle | None = None) -> None:
         """Play an immutable canonical WAV through the physical speaker."""
         self._cancel_response_audio()
         is_story = response_id in self.stories or response_id.startswith("placeholder:fixed_story:")
         self._story_pause_requested = False if is_story else getattr(self, "_story_pause_requested", False)
+        session_id = handle.session_id if handle is not None else self.active_session_id
         task = asyncio.create_task(
-            self._play_asset_audio(self.active_session_id, response_id, asset_id, token, int(offset_ms)),
+            self._play_asset_audio(session_id, response_id, asset_id, token, int(offset_ms), handle),
             name=f"mishka-asset-audio-{response_id}",
         )
         self._response_audio_tasks.add(task)
@@ -760,7 +774,7 @@ class HardwareIntegrationStand:
         task.add_done_callback(
             lambda done: self._observe_detached_audio_task(
                 done, self._response_audio_tasks, operation="asset_audio",
-                session_id=self.active_session_id,
+                session_id=session_id,
             )
         )
 
@@ -770,12 +784,22 @@ class HardwareIntegrationStand:
             return
         self._story_pause_requested = True
         await self.playback.stop()
-        await asyncio.gather(task, return_exceptions=True)
+        return await task
 
     async def _resume_story_playback(self):
         return
 
-    async def _play_asset_audio(self, session_id: str, response_id: str, asset_id: str, token: int, offset_ms: int = 0) -> None:
+    @staticmethod
+    def _playback_lifecycle_identity(handle: PlaybackHandle | None) -> dict[str, Any]:
+        if handle is None:
+            return {}
+        return {
+            "session_id": handle.session_id, "generation": handle.generation,
+            "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
+        }
+
+    async def _play_asset_audio(self, session_id: str, response_id: str, asset_id: str, token: int,
+                                offset_ms: int = 0, handle: PlaybackHandle | None = None) -> None:
         try:
             path = Path(asset_id).expanduser()
             if not path.is_absolute():
@@ -807,7 +831,7 @@ class HardwareIntegrationStand:
                 "asset_id": str(path), "samples": len(samples) - start_sample, "rate": rate,
                 "token": int(token), "offset_ms": int(offset_ms),
             })
-            self.application._mark_audio_effect_lifecycle(response_id, "playing")
+            self.application._mark_audio_effect_lifecycle(response_id, "playing", **HardwareIntegrationStand._playback_lifecycle_identity(handle))
             recorder = getattr(self.application, "record_audio_diagnostic", None)
             if callable(recorder):
                 recorder("audio_playback_started", session_id=session_id, response_id=response_id,
@@ -818,9 +842,9 @@ class HardwareIntegrationStand:
                 self._story_pause_requested = False
                 checkpoint_ms = int(getattr(self.playback, "position_samples", start_sample) * 1000 / rate)
                 self.commands.append({"at": time.time(), "type": "story_audio_paused", "story_id": response_id, "offset_ms": checkpoint_ms})
-                self.application._mark_audio_effect_lifecycle(response_id, "paused")
-                return
-            self.application._mark_audio_effect_lifecycle(response_id, "finished")
+                self.application._mark_audio_effect_lifecycle(response_id, "paused", **HardwareIntegrationStand._playback_lifecycle_identity(handle))
+                return {"story_id": response_id, "offset_ms": checkpoint_ms}
+            self.application._mark_audio_effect_lifecycle(response_id, "finished", **HardwareIntegrationStand._playback_lifecycle_identity(handle))
             if callable(recorder):
                 recorder("audio_playback_finished", session_id=session_id, response_id=response_id,
                          content_id=response_id, asset_ref=str(path), playback_id=f"{session_id}:{response_id}:{token}")
@@ -831,25 +855,27 @@ class HardwareIntegrationStand:
                     or response_id.startswith("placeholder:fixed_story:")
                     or response_id.startswith("PHRASE_")):
                 self._audio_event_sequence += 1
-                lease = dict(getattr(self.application, "_active_audio", {}).get(session_id) or {})
+                if handle is None:
+                    return
                 await self.application.receive_async(
                     Event("AudioCompleted", session_id, self._audio_event_sequence,
                           time.time(), "physical_audio",
                           {"response_id": response_id, "token": int(token),
-                           "playback_lease": lease.get("playback_lease"),
-                           "generation": lease.get("generation")},
-                          f"audio-complete:{session_id}:{response_id}:{token}"),
+                           "playback_lease": handle.playback_lease,
+                           "generation": handle.generation,
+                           "playback_id": handle.playback_id},
+                          f"audio-complete:{handle.playback_id}"),
                 )
                 self._collect_events()
         except asyncio.CancelledError:
-            self.application._mark_audio_effect_lifecycle(response_id, "cancelled")
+            self.application._mark_audio_effect_lifecycle(response_id, "cancelled", **HardwareIntegrationStand._playback_lifecycle_identity(handle))
             recorder = getattr(self.application, "record_audio_diagnostic", None)
             if callable(recorder):
                 recorder("audio_playback_cancelled", session_id=session_id, response_id=response_id,
                          content_id=response_id, asset_ref=asset_id, playback_id=f"{session_id}:{response_id}:{token}")
             raise
         except Exception as exc:
-            self.application._mark_audio_effect_lifecycle(response_id, "failed", reason=type(exc).__name__)
+            self.application._mark_audio_effect_lifecycle(response_id, "failed", reason=type(exc).__name__, **HardwareIntegrationStand._playback_lifecycle_identity(handle))
             recorder = getattr(self.application, "record_audio_diagnostic", None)
             if callable(recorder):
                 recorder("audio_playback_failed", session_id=session_id, response_id=response_id,
@@ -864,15 +890,17 @@ class HardwareIntegrationStand:
                     or response_id.startswith("PHRASE_")):
                 return
             self._audio_event_sequence += 1
-            lease = dict(getattr(self.application, "_active_audio", {}).get(session_id) or {})
+            if handle is None:
+                return
             await self.application.receive_async(
                 Event("AudioFailed", session_id, self._audio_event_sequence, time.time(),
                       "physical_audio",
                       {"response_id": response_id, "token": int(token),
-                       "playback_lease": lease.get("playback_lease"),
-                       "generation": lease.get("generation"),
+                       "playback_lease": handle.playback_lease,
+                       "generation": handle.generation,
+                       "playback_id": handle.playback_id,
                        "error_code": "audio_playback_failed"},
-                      f"audio-failed:{session_id}:{response_id}:{token}"),
+                      f"audio-failed:{handle.playback_id}"),
             )
 
     def _on_hid_error(self, diagnostic: dict[str, Any], generation: int) -> None:
@@ -1000,9 +1028,14 @@ class HardwareIntegrationStand:
         self._story_audio_tasks.clear()
 
     def _cancel_response_audio(self) -> None:
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
         for task in tuple(self._response_audio_tasks):
-            task.cancel()
-        self._response_audio_tasks.clear()
+            if task is not current:
+                task.cancel()
+        self._response_audio_tasks.intersection_update({current} if current is not None else set())
 
     def _observe_detached_audio_task(self, task: asyncio.Task[Any], owner: set[asyncio.Task[Any]], *,
                                       operation: str, session_id: str | None = None) -> None:
@@ -1106,7 +1139,7 @@ class HardwareIntegrationStand:
         )
 
     def _observe_raw(self, direction: str, raw: bytes):
-        item={"at":time.time(),"direction":direction,"raw":raw.decode("utf-8","replace").rstrip()}
+        item={"at":time.time(),"direction":direction,"raw":"[UART payload omitted from diagnostics]"}
         try:
             frame=decode_frame(raw)
             if frame.type == "audio_pcm":
@@ -1116,14 +1149,14 @@ class HardwareIntegrationStand:
                 # larger and larger and stalled microphone ingress.
                 payload={key:value for key,value in frame.payload.items() if key!="data_b64"}
                 payload["pcm_bytes"]=len(str(frame.payload.get("data_b64", "")))*3//4
-                item["raw"]="[audio_pcm payload omitted from diagnostics]"
-                item["decoded"]={"type":frame.type,"sequence":frame.sequence,"payload":payload,"checksum":frame.checksum}
+                item["decoded"]={"type":frame.type,"sequence":frame.sequence,
+                                 "payload":{"pcm_bytes":payload["pcm_bytes"]}}
             else:
-                payload = dict(frame.payload)
-                if frame.type in {"rfid", "RfidPresented"} and "tag_id" in payload:
-                    payload.pop("tag_id", None)
-                    item["raw"] = "[rfid payload redacted]"
-                item["decoded"]={"type":frame.type,"sequence":frame.sequence,"payload":payload,"checksum":frame.checksum}
+                allowed = {"button_id", "state", "duration_ms", "encoding",
+                           "sample_rate", "channels"}
+                payload = {key: value for key, value in frame.payload.items()
+                           if key in allowed and isinstance(value, (str, int, float, bool))}
+                item["decoded"]={"type":frame.type,"sequence":frame.sequence,"payload":payload}
         except ValueError as exc: item["error"]=str(exc)
         self.raw_frames.append(item)
 
@@ -1145,20 +1178,7 @@ class HardwareIntegrationStand:
             try:
                 frame=decode_frame(raw+b"\n"); payload=dict(frame.payload)
                 if frame.type=="audio_play":
-                    # Enrich browser playback with the canonical lease.
                     response_id = str(payload.get("response_id") or "")
-                    active_audio = getattr(self.application, "_active_audio", {})
-                    lease_session = None
-                    lease = None
-                    for candidate_session, candidate in active_audio.items():
-                        if (str(candidate.get("content_id") or "") == response_id
-                                and str(candidate.get("token")) == str(payload.get("token"))):
-                            lease_session, lease = candidate_session, candidate
-                            break
-                    if lease is not None:
-                        payload["session_id"] = str(lease_session)
-                        payload["playback_lease"] = str(lease.get("playback_lease") or "")
-                        payload["generation"] = int(lease.get("generation", 0))
                     response=self.responses.get(response_id,{})
                     story=self.stories.get(str(payload.get("response_id")),{})
                     if response:
@@ -1176,6 +1196,7 @@ class HardwareIntegrationStand:
                         self._schedule_response_audio(self.active_session_id, text)
                     elif story:
                         payload["resolved_text"]=str(story.get("text",""))
+                        payload["asset_path"] = str(payload.get("asset_id") or story.get("audio_file") or "")
                         payload["content_kind"]="story"
                     elif str(payload.get("response_id", "")).startswith("placeholder:fixed_story:"):
                         payload["asset_path"] = str(payload.get("asset_id") or "")
@@ -1219,8 +1240,9 @@ class HardwareIntegrationStand:
         await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
 
     async def _publish_audio_completion(self, session_id: str, payload: dict[str, Any]) -> None:
-        self.results.append({"at":time.time(),"input":"audio_completion","result":payload})
-        failures = await self.hub.publish({"type":"stand_state","state":self.panel_snapshot(),"audio_completion":payload})
+        public = self._public_result(payload)
+        self.results.append({"at":time.time(),"input":"audio_completion","result":public})
+        failures = await self.hub.publish({"type":"stand_state","state":self.panel_snapshot(),"audio_completion":public})
         if failures:
             recorder = getattr(self.application, "_record_audio_completion_diagnostic", None)
             if callable(recorder):
@@ -1285,7 +1307,7 @@ class HardwareIntegrationStand:
         is_transport_error = isinstance(result, dict) and isinstance(result.get("error"), dict)
         if not quiet_pcm:
             self.latencies.append({"at":time.time(),"operation":message_type,"ms":round((time.perf_counter()-started)*1000,2)})
-            if result is not None: self.results.append({"at":time.time(),"input":message_type,"result":result})
+            if result is not None: self.results.append({"at":time.time(),"input":message_type,"result":self._public_result(result)})
             if not is_transport_error:
                 await self.hub.publish({"type":"stand_state","state":self.panel_snapshot()})
         return result
@@ -1417,8 +1439,12 @@ class HardwareIntegrationStand:
             and current.state not in {Lifecycle.ENDED, Lifecycle.IDLE}
         ]
         for stale_id in stale_ids:
-            await self.application.reset_session(stale_id)
+            stale_result = await self.application.reset_session(stale_id)
+            if stale_result.get("reset") is False:
+                return stale_result
         result=await self.application.reset_session(sid)
+        if result.get("reset") is False:
+            return result
         self.active_session_id=sid
         self.results.clear(); self.errors.clear(); self.commands.clear(); self.latencies.clear()
         self.raw_frames.clear()
@@ -1472,26 +1498,38 @@ class HardwareIntegrationStand:
 
     @staticmethod
     def _safe_trace_item(item: dict[str, Any]) -> dict[str, Any]:
-        allowed = {
-            "input", "normalized_event", "canonical_event", "state_before",
-            "state_after", "effects", "monotonic_timestamp",
-            "timer_started", "timer_deadline",
+        """Only project fixed protocol names and numeric timing metadata."""
+        event_names = EVENT_TYPES | {
+            "handset_up", "handset_down", "button", "text", "rfid",
+            "anonymous", "anonymous_start", "button_pressed",
+            "button_released", "button_hold", "button_long_hold",
         }
-        result = {key: item[key] for key in allowed if key in item}
+        states = set(canonical_state_nodes()) | {"idle"}
+        result: dict[str, Any] = {}
+        for key in ("input", "normalized_event", "canonical_event"):
+            if item.get(key) in event_names:
+                result[key] = item[key]
+        for key in ("state_before", "state_after"):
+            if item.get(key) in states:
+                result[key] = item[key]
+        for key in ("monotonic_timestamp", "timer_started", "timer_deadline"):
+            value = item.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                result[key] = value
+        effects = item.get("effects")
+        if isinstance(effects, list):
+            safe_effects = {"speak", "speak_dynamic", "stop_audio", "play_story",
+                            "led_pattern", "led", "audio", "display"}
+            result["effects"] = [effect for effect in effects if effect in safe_effects]
         audio = item.get("audio")
-        if isinstance(audio, str):
-            result["audio"] = audio[:120]
-        elif isinstance(audio, dict):
-            result["audio"] = {
-                key: audio[key] for key in ("status", "provider", "phrase_id", "response_id")
-                if key in audio and isinstance(audio[key], (str, int, float, bool))
-            }
+        if isinstance(audio, str) and audio.startswith("PHRASE_") and audio[7:].isdigit():
+            result["audio"] = audio
         return result
 
     @staticmethod
     def _safe_diagnostic_item(item: dict[str, Any]) -> dict[str, Any]:
         allowed = {
-            "kind", "code", "error", "reason", "status", "component",
+            "kind", "code", "status", "component", "stage", "error_code",
             "content_id", "asset_ref", "operation", "source",
             "generation", "at_monotonic",
         }
@@ -1617,7 +1655,11 @@ class HardwareIntegrationStand:
         audio_input = dict(self.audio_input.diagnostics()) if self.audio_input is not None else {"ready": True, "backend": "browser", "direction": "input", "state": "webpanel"}
         audio_input["stand_status"] = dict(self._headless_audio_status)
         audio_input["dropped_frames"] = int(self._headless_audio_dropped)
-        audio_readiness["runtime_diagnostics"] = list(getattr(self.application, "audio_runtime_diagnostics", ()))[-20:]
+        audio_readiness["runtime_diagnostics"] = [
+            self._safe_diagnostic_item(item) for item in
+            list(getattr(self.application, "audio_runtime_diagnostics", ()))[-20:]
+            if isinstance(item, dict)
+        ]
         audio_readiness["active_playback"] = next((item for item in reversed(audio_readiness["runtime_diagnostics"])
                                                     if item.get("kind") == "audio_playback_started"), None)
         audio_readiness["last_audio_error"] = next((item for item in reversed(audio_readiness["runtime_diagnostics"])
@@ -1630,8 +1672,19 @@ class HardwareIntegrationStand:
         "enabled_buttons":self._enabled_buttons(session),
                            "anonymous":session.anonymous if session else None,"retries":session.retries if session else 0},
                 "visual_only": session.visual_only if session else False,
-                "raw_frames":list(self.raw_frames),"commands":list(self.commands),
-                "events":list(self.publisher.events[-300:]),"results":list(self.results),
+                "raw_frames":[{"at":item.get("at"), "direction":item.get("direction"),
+                               "raw":"[UART payload omitted from diagnostics]",
+                               "decoded":{"type":(item.get("decoded") or {}).get("type"),
+                                          "sequence":(item.get("decoded") or {}).get("sequence"),
+                                          "payload":self._panel_payload((item.get("decoded") or {}).get("payload"))}}
+                              for item in self.raw_frames],
+                "commands":[{"at":item.get("at"), "type":item.get("type"),
+                             "sequence":item.get("sequence"),
+                             "payload":self._panel_payload(item.get("payload"))}
+                            for item in self.commands],
+                "events":[{key: item[key] for key in ("type", "event_type", "sequence", "timestamp", "source")
+                           if key in item} for item in self.publisher.events[-300:] if isinstance(item, dict)],
+                "results":list(self.results),
                 # lighting is canonical; led is UI compatibility derived
                 # from it, never from legacy led_pattern commands.
                 "led":led_projection,
@@ -1643,7 +1696,48 @@ class HardwareIntegrationStand:
                 "button_contract":button_contract(),
                 "latencies":list(self.latencies),"pipeline_metrics":self.application.runtime_manager.engine.metrics.snapshot(),
                 "graph":self.graph,
-                "errors":list(self.errors),"profile":self.settings.profile, "canonical_state":dict(getattr(self.application, "last_canonical_state", {}) or {}), "last_canonical_event":dict(getattr(self.application, "last_canonical_event", {}) or {}), "effects":list(getattr(self.application, "last_canonical_effects", []) or []), "canonical_trace":list(getattr(self.application, "canonical_trace", []) or []), "canonical_diagnostics":list(getattr(self.application, "canonical_diagnostics", []) or []), "audio_status":next((item.get("audio_status") for item in reversed(getattr(self.application, "last_canonical_effects", []) or []) if item.get("audio_status")), "idle")}
+                "errors":[self._safe_diagnostic_item(item) for item in self.errors if isinstance(item, dict)],
+                "profile":self.settings.profile,
+                "canonical_state":dict(getattr(self.application, "last_canonical_state", {}) or {}),
+                "last_canonical_event":{key: value for key, value in
+                    (getattr(self.application, "last_canonical_event", {}) or {}).items()
+                    if key in {"type", "sequence", "timestamp", "source"}},
+                "effects":[self._panel_payload(item) for item in
+                    (getattr(self.application, "last_canonical_effects", []) or [])],
+                "canonical_trace":[self._safe_trace_item(item) for item in
+                    (getattr(self.application, "canonical_trace", []) or []) if isinstance(item, dict)],
+                "canonical_diagnostics":[self._safe_diagnostic_item(item) for item in
+                    (getattr(self.application, "canonical_diagnostics", []) or []) if isinstance(item, dict)],
+                "audio_status":next((item.get("audio_status") for item in reversed(getattr(self.application, "last_canonical_effects", []) or []) if item.get("audio_status")), "idle")}
+
+    @classmethod
+    def _public_result(cls, value: Any) -> dict[str, Any]:
+        """One allowlist for stored results and WebSocket completions."""
+        if not isinstance(value, dict):
+            return {}
+        allowed = {
+            "session_id", "state", "state_version", "reason",
+            "audio_status", "pending", "barge_in", "correlation_id",
+        }
+        result = {key: value[key] for key in allowed if key in value
+                  and isinstance(value[key], (str, int, float, bool, type(None)))}
+        state = value.get("canonical_state")
+        if isinstance(state, dict):
+            result["canonical_state"] = {
+                key: state[key] for key in (
+                    "mode", "state_version", "handset", "audio_status",
+                    "safety_severity", "incident_id",
+                ) if key in state
+            }
+        if isinstance(value.get("outputs"), list):
+            result["outputs"] = [
+                cls._panel_payload(item) for item in value["outputs"][-20:]
+                if isinstance(item, dict)
+            ]
+        error = value.get("error")
+        if isinstance(error, dict) and isinstance(error.get("code"), str):
+            result["error"] = {"code": error["code"]}
+        return result
 
     @staticmethod
     def _panel_payload(value: Any) -> dict[str, Any]:
@@ -1655,7 +1749,7 @@ class HardwareIntegrationStand:
             "phrase_id", "content_kind", "asset_id", "asset_path",
             "audio_status", "asset_status", "effect",
             "pattern", "state", "generation", "sequence", "source",
-            "action", "type", "resolution",
+            "action", "type", "resolution", "targets", "pcm_bytes",
         }
         return {key: item for key, item in value.items() if key in allowed}
 
@@ -1742,24 +1836,38 @@ class HardwareIntegrationStand:
             "audio_status": source.get("audio_status", "idle"),
         }
 
-    def close(self):
+    async def aclose(self, *, hardware_stopped: bool = False):
+        """Cancel loop-owned tasks on the loop; release blocking workers off it."""
+        if getattr(self, "_closed", False):
+            return
+        led = getattr(getattr(self, "application", None), "led", None)
+        cancel_effects = getattr(led, "cancel_effects", None)
+        if callable(cancel_effects) and not hardware_stopped:
+            cancel_effects(clear=True)
+        self._cancel_story_audio()
+        self._cancel_response_audio()
+        await asyncio.to_thread(self.close, cancel_tasks=False, hardware_stopped=hardware_stopped)
+
+    def close(self, *, cancel_tasks: bool = True, hardware_stopped: bool = False):
         if getattr(self, "_closed", False):
             return
         self._closed = True
-        cancel_effects = getattr(getattr(self, "application", None), "led", None)
-        cancel_effects = getattr(cancel_effects, "cancel_effects", None)
-        if callable(cancel_effects):
-            cancel_effects(clear=True)
-        self._cancel_story_audio(); self._cancel_response_audio()
+        if cancel_tasks:
+            led = getattr(getattr(self, "application", None), "led", None)
+            cancel_effects = getattr(led, "cancel_effects", None)
+            if callable(cancel_effects) and not hardware_stopped:
+                cancel_effects(clear=True)
+            self._cancel_story_audio(); self._cancel_response_audio()
         self._hid_generation = getattr(self, "_hid_generation", 0) + 1
         self._physical_loop = None
-        if getattr(self, "audio_input", None) is not None:
+        if not hardware_stopped and getattr(self, "audio_input", None) is not None:
             self.audio_input.stop()
         if self.input_adapter is not None:
             self.input_adapter.close()
-        lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
-        if callable(lighting_output_close):
-            lighting_output_close()
+        if not hardware_stopped:
+            lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
+            if callable(lighting_output_close):
+                lighting_output_close()
         if self.lighting_serial is not None:
             self.lighting_serial.close()
         self.adapter.close(); self._uart_executor.shutdown(wait=True, cancel_futures=True)
@@ -1951,38 +2059,101 @@ def create_stand_app(settings: Settings | None = None):
         return Response(rendered, media_type="audio/wav", headers={"Cache-Control":"private, max-age=3600"})
     @api.post("/stand/audio/lifecycle")
     async def audio_lifecycle(payload: dict):
+        sid = str(payload.get("session_id") or "")
         response_id = str(payload.get("response_id") or "")
         status = str(payload.get("status") or "")
-        if not response_id or status not in {"queued", "playing", "finished", "cancelled", "failed", "unavailable"}:
-            return JSONResponse({"error": {"code": "validation_error", "message": "response_id and valid audio status are required"}}, status_code=422)
-        stand.application._mark_audio_effect_lifecycle(response_id, status, reason=payload.get("reason"))
+        playback_id = str(payload.get("playback_id") or "")
+        playback_lease = str(payload.get("playback_lease") or "")
+        try:
+            generation = int(payload["generation"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            generation = None
+        if (not sid or not response_id or not playback_id or not playback_lease
+                or generation is None
+                or status not in {"queued", "playing", "paused", "finished", "cancelled", "failed", "unavailable"}):
+            return JSONResponse({"error": {"code": "validation_error", "message": "playback identity and valid audio status are required"}}, status_code=422)
+        projected = stand.application._mark_audio_effect_lifecycle(
+            response_id, status, session_id=sid, generation=generation,
+            playback_id=playback_id, playback_lease=playback_lease,
+            reason=payload.get("reason"),
+        )
+        if not projected:
+            return {"response_id": response_id, "reason": "stale_audio_lifecycle"}
         await stand.hub.publish({"type": "stand_state", "state": stand.panel_snapshot()})
         return {"response_id": response_id, "audio_status": status}
+    @api.post("/stand/audio/checkpoint")
+    async def audio_checkpoint(payload: dict):
+        sid = str(payload.get("session_id") or "")
+        story_id = str(payload.get("story_id") or "")
+        playback_id = str(payload.get("playback_id") or "")
+        playback_lease = str(payload.get("playback_lease") or "")
+        try:
+            generation = int(payload["generation"])
+            offset_ms = int(payload["offset_ms"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return JSONResponse({"error": {"code": "validation_error", "message": "complete story checkpoint is required"}}, status_code=422)
+        app = stand.application
+        owner = app._paused_story_playback.get(sid)
+        state = app.canonical_runtime.sessions.get(sid)
+        if (not owner or not state or not story_id or not playback_id or not playback_lease
+                or generation != app._session_epochs.get(sid, 0)
+                or owner.get("generation") != generation
+                or owner.get("content_id") != story_id
+                or owner.get("playback_id") != playback_id
+                or owner.get("playback_lease") != playback_lease
+                or state.active_story_id != story_id
+                or state.mode not in {"story_pause_announcement", "story_paused"}
+                or offset_ms < 0):
+            return {"reason": "stale_story_checkpoint"}
+        verified = app.canonical_runtime.stories.get_verified(story_id)
+        if verified is not None:
+            offset_ms = min(offset_ms, int(verified.get("duration_ms") or offset_ms))
+        stand._audio_event_sequence += 1
+        result = await app.receive_async(Event(
+            "StoryPositionUpdated", sid, stand._audio_event_sequence, time.time(),
+            "browser_audio_checkpoint", {"story_id": story_id, "offset_ms": offset_ms},
+            f"story-position:{playback_id}",
+        ))
+        if result.get("reason") == "story_checkpoint_updated" and app._paused_story_playback.get(sid) is owner:
+            app._paused_story_playback.pop(sid, None)
+        stand._collect_events()
+        await stand.hub.publish({"type": "stand_state", "state": stand.panel_snapshot()})
+        return result
     @api.post("/stand/audio/failed")
     async def audio_failed(payload: dict):
         sid = str(payload.get("session_id") or "")
         response_id = str(payload.get("response_id") or "")
         playback_lease = payload.get("playback_lease")
+        playback_id = str(payload.get("playback_id") or "")
         generation = payload.get("generation")
         callback_token = payload.get("token")
         active_lease = stand.application._active_audio.get(sid)
+        # A legacy completion can be enriched only when its unique lease
+        # identifies the exact current execution. Lifecycle status never
+        # uses this fallback and always requires the supplied playback ID.
+        if (not playback_id and isinstance(active_lease, dict)
+                and response_id == str(active_lease.get("content_id") or "")
+                and playback_lease == active_lease.get("playback_lease")
+                and generation is not None
+                and int(generation) == int(active_lease.get("generation", -1))):
+            playback_id = str(active_lease.get("playback_id") or "")
         if (callback_token is None and isinstance(active_lease, dict)
                 and response_id == str(active_lease.get("content_id") or "")
                 and playback_lease == active_lease.get("playback_lease")
                 and generation is not None
                 and int(generation) == int(active_lease.get("generation", -1))):
             callback_token = active_lease.get("token")
-        if (not sid or not response_id or callback_token is None
+        if (not sid or not response_id or not playback_id or callback_token is None
                 or playback_lease is None or generation is None):
-            return JSONResponse({"error": {"code": "validation_error", "message": "session_id, response_id, playback_lease and generation are required"}}, status_code=422)
+            return JSONResponse({"error": {"code": "validation_error", "message": "complete playback identity is required"}}, status_code=422)
         stand._audio_event_sequence += 1
         result = await stand.application.receive_async(
             Event("AudioFailed", sid, stand._audio_event_sequence, time.time(), "browser_audio",
                   {"response_id": response_id, "token": callback_token,
-                   "playback_lease": playback_lease,
+                   "playback_id": playback_id, "playback_lease": playback_lease,
                    "generation": generation,
                    "error_code": str(payload.get("error_code") or "audio_playback_failed")[:80]},
-                  str(payload.get("correlation_id") or f"browser-audio-failed:{sid}:{stand._audio_event_sequence}"))
+                  str(payload.get("correlation_id") or f"browser-audio-failed:{playback_id}"))
         )
         stand._collect_events()
         await stand.hub.publish({"type": "stand_state", "state": stand.panel_snapshot()})
@@ -1993,25 +2164,35 @@ def create_stand_app(settings: Settings | None = None):
         sid = str(payload.get("session_id") or "")
         response_id = str(payload.get("response_id") or "")
         playback_lease = payload.get("playback_lease")
+        playback_id = str(payload.get("playback_id") or "")
         generation = payload.get("generation")
         callback_token = payload.get("token")
         active_lease = stand.application._active_audio.get(sid)
+        # A legacy completion can be enriched only when its unique lease
+        # identifies the exact current execution. Lifecycle status never
+        # uses this fallback and always requires the supplied playback ID.
+        if (not playback_id and isinstance(active_lease, dict)
+                and response_id == str(active_lease.get("content_id") or "")
+                and playback_lease == active_lease.get("playback_lease")
+                and generation is not None
+                and int(generation) == int(active_lease.get("generation", -1))):
+            playback_id = str(active_lease.get("playback_id") or "")
         if (callback_token is None and isinstance(active_lease, dict)
                 and response_id == str(active_lease.get("content_id") or "")
                 and playback_lease == active_lease.get("playback_lease")
                 and generation is not None
                 and int(generation) == int(active_lease.get("generation", -1))):
             callback_token = active_lease.get("token")
-        if (not sid or not response_id or callback_token is None
+        if (not sid or not response_id or not playback_id or callback_token is None
                 or playback_lease is None or generation is None):
-            return JSONResponse({"error": {"code": "validation_error", "message": "session_id, response_id, playback_lease and generation are required"}}, status_code=422)
+            return JSONResponse({"error": {"code": "validation_error", "message": "complete playback identity is required"}}, status_code=422)
         stand._audio_event_sequence += 1
         result = await stand.application.receive_async(
             Event("AudioCompleted", sid, stand._audio_event_sequence, time.time(), "browser_audio",
                   {"response_id": response_id, "token": callback_token,
-                   "playback_lease": playback_lease,
+                   "playback_id": playback_id, "playback_lease": playback_lease,
                    "generation": generation},
-                  str(payload.get("correlation_id") or f"browser-audio:{sid}:{stand._audio_event_sequence}"))
+                  str(payload.get("correlation_id") or f"browser-audio-complete:{playback_id}"))
         )
         stand._collect_events()
         await stand.hub.publish({"type": "stand_state", "state": stand.panel_snapshot()})

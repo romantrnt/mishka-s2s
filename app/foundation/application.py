@@ -8,13 +8,15 @@ import logging
 import time
 import uuid
 from collections import deque
+from dataclasses import replace
 from typing import Any, Callable
 from weakref import WeakSet
 
-from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, ProfileProvider, ScenarioRepository, SessionRecord, SessionRepository
+from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, PlaybackHandle, ProfileProvider, ScenarioRepository, SessionRecord, SessionRepository
 from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .adapters import ProfileProviderError
+from .age_policy import trusted_canonical_age
 from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseResolver, SafetyClassifier, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
 from .config import settings_from_compat_env
 from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest, validate_generated_story
@@ -122,9 +124,16 @@ class ScenarioApplication:
         self._last_audio_cleanup: dict[str, Any] | None = None
         self.audio_cleanup_timeout_seconds = max(0.01, float(getattr(settings, "audio_cleanup_timeout_s", 1.0)))
         self._session_epochs: dict[str, int] = {}
+        self._session_revisions: dict[str, int] = {}
+        # A physical reset owns cleanup until it has finished publishing.
+        # New ingress for that session waits without holding a global lock.
+        self._session_reset_waiters: dict[str, tuple[asyncio.Task[Any], asyncio.Future[None]]] = {}
         # One active immutable playback lease per session. Adapter callbacks
         # must match it before entering the canonical state machine.
         self._active_audio: dict[str, dict[str, Any]] = {}
+        # Browser pause reports position after the pause command is published.
+        # Retain only that immutable story execution until its one checkpoint.
+        self._paused_story_playback: dict[str, dict[str, Any]] = {}
         self._audio_timeout_tasks: dict[str, asyncio.Task[Any]] = {}
         self._audio_timeout_sequences: dict[str, int] = {}
         self._welcome_timers: dict[str, asyncio.Task[Any]] = {}
@@ -181,7 +190,10 @@ class ScenarioApplication:
         fills = tuple(BUTTON_FILL_ELEMENTS[button] for button in range(1, 8))
         anchors = (PICTOGRAM_ELEMENTS[6], BUTTON_DIGIT_ELEMENTS[7][1])
         if phase == "processing":
-            lighting = self.led.start_wave(
+            start_wave = getattr(self.led, "start_wave", None)
+            if not callable(start_wave):
+                return None
+            lighting = start_wave(
                 now=self.monotonic_now(),
                 groups=tuple((element_id,) for element_id in fills),
                 base_elements=anchors,
@@ -190,7 +202,10 @@ class ScenarioApplication:
             )
         else:
             phase = "output" if phase == "output" else "listening"
-            lighting = self.led.start_breathing(
+            start_breathing = getattr(self.led, "start_breathing", None)
+            if not callable(start_breathing):
+                return None
+            lighting = start_breathing(
                 now=self.monotonic_now(), elements=fills, base_elements=anchors, phase=phase,
             )
         self.runtime_status["dialogue_lighting_phase"] = phase
@@ -210,16 +225,18 @@ class ScenarioApplication:
 
     def _cancel_audio_timeout(self, session_id: str) -> None:
         task = self._audio_timeout_tasks.pop(session_id, None)
-        if task is not None and not task.done():
+        if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
 
     async def _audio_playback_watchdog(self, session_id: str, content_id: str, token: int,
-                                       playback_lease: str, generation: int) -> None:
-        timeout_s = max(0.01, float(getattr(self.settings, "playback_timeout_s", 60.0)))
+                                       playback_id: str, playback_lease: str,
+                                       generation: int, timeout_s: float) -> None:
         try:
             await asyncio.sleep(timeout_s)
             lease = self._active_audio.get(session_id)
-            if not lease or lease.get("content_id") != content_id or lease.get("playback_lease") != playback_lease:
+            if (not lease or lease.get("content_id") != content_id
+                    or lease.get("playback_id") != playback_id
+                    or lease.get("playback_lease") != playback_lease):
                 return
             self.record_audio_diagnostic("audio_playback_timeout", session_id=session_id,
                                         content_id=content_id, generation=generation,
@@ -230,10 +247,10 @@ class ScenarioApplication:
             state_version = current.state_version if current is not None else 0
             await self.receive_async(Event(
                 "AudioFailed", session_id, sequence, self.now(), "audio_watchdog",
-                {"response_id": content_id, "token": token, "playback_lease": playback_lease,
-                 "generation": generation, "error_code": "audio_playback_timeout",
-                 "state_version": state_version},
-                "audio-timeout:" + session_id + ":" + content_id + ":" + str(generation),
+                {"response_id": content_id, "token": token, "playback_id": playback_id,
+                 "playback_lease": playback_lease, "generation": generation,
+                 "error_code": "audio_playback_timeout", "state_version": state_version},
+                "audio-timeout:" + playback_id,
                 self.monotonic_now(),
             ))
         except asyncio.CancelledError:
@@ -243,18 +260,43 @@ class ScenarioApplication:
                 self._audio_timeout_tasks.pop(session_id, None)
 
     def _register_audio_lease(self, session_id: str, content_id: str, token: int, playback_id: str,
-                              playback_lease: str | None = None) -> None:
+                              playback_lease: str | None = None, *, duration_ms: int | None = None) -> None:
         self._cancel_audio_timeout(session_id)
         generation = int(self._session_epochs.get(session_id, 0))
         lease_value = str(playback_lease or "")
+        timeout_s = max(0.01, float(getattr(self.settings, "playback_timeout_s", 60.0)))
+        if duration_ms is not None:
+            timeout_s = max(timeout_s, max(0, int(duration_ms)) / 1000 + 10.0)
         self._active_audio[session_id] = {
             "content_id": str(content_id), "token": int(token), "playback_id": str(playback_id),
             "playback_lease": lease_value, "generation": generation, "status": "queued",
+            "timeout_s": timeout_s,
         }
         self._audio_timeout_tasks[session_id] = asyncio.create_task(
-            self._audio_playback_watchdog(session_id, str(content_id), int(token), lease_value, generation),
+            self._audio_playback_watchdog(
+                session_id, str(content_id), int(token), str(playback_id),
+                lease_value, generation, timeout_s,
+            ),
             name="mishka-audio-timeout-" + session_id,
         )
+
+    def _play_owned_audio(self, session_id: str, response_id: str, asset_id: str,
+                          token: int, effect: dict[str, Any], *, offset_ms: int = 0,
+                          duration_ms: int | None = None) -> PlaybackHandle:
+        lease = str(effect.get("playback_lease") or "")
+        if not lease:
+            raise ValueError("canonical playback lease is required")
+        handle = PlaybackHandle(
+            session_id=session_id, generation=int(self._session_epochs.get(session_id, 0)),
+            playback_id=f"{session_id}:{uuid.uuid4().hex}", playback_lease=lease,
+            response_id=response_id, token=int(token),
+        )
+        self.audio.play_owned(handle, asset_id, offset_ms=offset_ms)
+        effect["playback_id"] = handle.playback_id
+        effect["generation"] = handle.generation
+        self._register_audio_lease(session_id, response_id, token, handle.playback_id, lease,
+                                   duration_ms=duration_ms)
+        return handle
 
     def _audio_callback_is_current(self, event: Event) -> bool:
         lease = self._active_audio.get(event.session_id)
@@ -276,6 +318,8 @@ class ScenarioApplication:
             response_id == lease["content_id"] and token_matches and generation_matches
             and int(lease.get("generation", -1)) == int(self._session_epochs.get(event.session_id, 0))
             and payload.get("playback_lease") == lease.get("playback_lease")
+            and (payload.get("playback_id") is None
+                 or payload.get("playback_id") == lease.get("playback_id"))
         )
         if not current:
             self._record_audio_completion_diagnostic(
@@ -296,33 +340,41 @@ class ScenarioApplication:
                 reason=status,
             )
 
-    def _mark_audio_effect_lifecycle(self, response_id: str, status: str, *, reason: str | None = None) -> None:
-        """Project actual adapter lifecycle back to the canonical effect."""
-        allowed = {"queued", "playing", "finished", "cancelled", "failed", "unavailable"}
-        if status not in allowed:
-            return
+    def _mark_audio_effect_lifecycle(
+        self, response_id: str, status: str, *,
+        session_id: str | None = None, generation: int | None = None,
+        playback_id: str | None = None, playback_lease: str | None = None,
+        reason: str | None = None,
+    ) -> bool:
+        """Project only the exact playback execution into its effect."""
+        allowed = {"queued", "playing", "paused", "finished", "cancelled", "failed", "unavailable"}
+        if (status not in allowed or not session_id or generation is None
+                or not playback_id or not playback_lease):
+            return False
         for effect in self.last_canonical_effects:
-            kind = str(effect.get("type") or "")
-            matches = (
-                str(effect.get("phrase_id") or "") == str(response_id)
-                or str(effect.get("story_id") or "") == str(response_id)
-                or str(effect.get("effect_id") or "") == str(response_id)
-            )
-            if not matches and kind not in {"play_fixed_story", "resume_fixed_story", "play_placeholder", "speak", "support_question", "support_response"}:
+            if (effect.get("session_id") != session_id
+                    or effect.get("playback_id") != playback_id
+                    or effect.get("playback_lease") != playback_lease
+                    or effect.get("generation") != generation):
                 continue
-            if not matches and kind in {"play_fixed_story", "resume_fixed_story", "play_placeholder"}:
-                matches = str(effect.get("story_id") or "") == str(response_id).split(":")[-1]
-            if not matches:
+            if response_id not in {
+                str(effect.get("phrase_id") or ""), str(effect.get("story_id") or ""),
+                str(effect.get("content_id") or ""),
+                str(effect.get("response_id") or ""),
+                str(effect.get("story_id") or "") and
+                "placeholder:fixed_story:" + str(effect.get("story_id")),
+            }:
                 continue
             effect["audio_status"] = status
-            effect["audio_started"] = status in {"playing", "finished", "cancelled"}
+            effect["audio_started"] = status in {"playing", "paused", "finished", "cancelled"}
             effect["audio_played"] = status == "finished"
             effect["audio_cancelled"] = status == "cancelled"
             effect["audio_failed"] = status == "failed"
             effect["audio_unavailable"] = status == "unavailable"
             if reason:
                 effect["audio_failure_reason"] = str(reason)[:80]
-            break
+            return True
+        return False
 
     def _iter_sessions(self) -> tuple[SessionRecord, ...]:
         iterator = getattr(self.sessions, "iter_sessions", None)
@@ -754,7 +806,41 @@ class ScenarioApplication:
                     due.append(result)
         return due
 
-    async def _receive_canonical_event(self, event: Event, transient_text: str | None = None) -> dict[str, Any]:
+    async def _resolve_adult_incident_internal(self, session_id: str, incident_id: str) -> dict[str, Any]:
+        """Server-owned resolution seam; no external route or caller identity policy.
+
+        An authenticated adult/incident authorization adapter must be designed
+        before this seam is exposed in production.
+        """
+        state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
+        if state is None:
+            return {"reason": "adult_resolved_ignored", "outputs": [], "canonical_state": {"mode": "idle"}}
+        sequence = state.last_sequence_by_source.get("internal_adult_resolution", 0) + 1
+        return await self._receive_canonical_event(Event(
+            "AdultResolved", session_id, sequence, self.now(), "internal_adult_resolution",
+            {"incident_id": incident_id}, f"adult-resolution:{uuid.uuid4().hex}",
+            self.monotonic_now(),
+        ), adult_resolution_authorized=True)
+
+    async def _receive_canonical_event(self, event: Event, transient_text: str | None = None,
+                                       *, adult_resolution_authorized: bool = False,
+                                       dialogue_fallback_authorized: bool = False) -> dict[str, Any]:
+        try:
+            return await self._receive_canonical_event_inner(
+                event, transient_text,
+                adult_resolution_authorized=adult_resolution_authorized,
+                dialogue_fallback_authorized=dialogue_fallback_authorized,
+            )
+        finally:
+            waiter = self._session_reset_waiters.get(event.session_id)
+            if waiter is not None and waiter[0] is asyncio.current_task():
+                self._session_reset_waiters.pop(event.session_id, None)
+                if not waiter[1].done():
+                    waiter[1].set_result(None)
+
+    async def _receive_canonical_event_inner(self, event: Event, transient_text: str | None = None,
+                                             *, adult_resolution_authorized: bool = False,
+                                             dialogue_fallback_authorized: bool = False) -> dict[str, Any]:
         """Bridge canonical decisions to application-owned effects.
 
         The contract engine never touches audio, capture, LEDs or providers.
@@ -762,9 +848,6 @@ class ScenarioApplication:
         """
         profile = None
         tag_id = None
-        if event.event_type == "RfidRemoved":
-            self._canonical_profiles.pop(event.session_id, None)
-            self._canonical_schedule_refs.pop(event.session_id, None)
         if event.event_type == "RfidPresented":
             try:
                 profile = self.profiles.resolve(str(event.payload.get("tag_id", "")))
@@ -787,7 +870,9 @@ class ScenarioApplication:
             event_type=event_type, session_id=event.session_id, sequence=event.sequence,
             state_version=state_version, source=event.source, payload=payload,
             correlation_id=event.correlation_id, timestamp=event.timestamp, monotonic_timestamp=accepted_monotonic,
-        ), profile, transient_text=transient_text)
+        ), profile, transient_text=transient_text,
+           adult_resolution_authorized=adult_resolution_authorized,
+           dialogue_fallback_authorized=dialogue_fallback_authorized)
         snapshot, effects = decision["state"], decision["effects"]
         exhibition_reset = bool(decision.get("reset_session"))
         self.last_canonical_state = dict(snapshot)
@@ -814,6 +899,52 @@ class ScenarioApplication:
                 "outputs": [{"type": "transition_rejected", "authorization": authorization}],
                 "canonical_state": rejected_state,
             }
+        # A newer event owns this session as soon as its transition is
+        # accepted. Handset reset also fences work that is currently awaiting
+        # a provider before any cleanup await can yield.
+        # The simulated acknowledgement is a child of the current delivery
+        # decision, not a competing ingress event. External acknowledgements
+        # still acquire a new revision.
+        child_ack = (
+            (event.event_type == "AdultHandoffAcknowledged" and event.source == "adult_handoff_simulator")
+            or (event.event_type == "StoryPositionUpdated" and event.source == "audio_pause")
+            or (event.event_type == "DialogueFallback" and dialogue_fallback_authorized)
+        )
+        previous_version = previous_state.state_version if previous_state is not None else -1
+        takes_ownership = bool(effects) or snapshot.get("state_version") != previous_version or exhibition_reset
+        revision = self._session_revisions.get(event.session_id, 0) + (1 if takes_ownership and not child_ack else 0)
+        self._session_revisions[event.session_id] = revision
+        if event.event_type == "HandsetPlaced" or exhibition_reset:
+            self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
+            self._paused_story_playback.pop(event.session_id, None)
+        if (event.event_type in {"HandsetPlaced", "RfidRemoved", "SessionCancel", "SessionReset"}
+                or (previous_state is not None and previous_state.mode == "bear_dialogue"
+                    and snapshot.get("mode") != "bear_dialogue")
+                or (event.event_type == "RfidPresented"
+                    and previous_state is not None
+                    and previous_state.profile_ref != snapshot.get("profile_ref"))):
+            self.conversation_contexts.pop(event.session_id, None)
+        if exhibition_reset:
+            self._session_reset_waiters[event.session_id] = (
+                asyncio.current_task(), asyncio.get_running_loop().create_future()
+            )
+        epoch = self._session_epochs.get(event.session_id, 0)
+        state_owner = self.canonical_runtime.sessions.get(event.session_id)
+
+        def still_current() -> bool:
+            return (
+                self._session_revisions.get(event.session_id) == revision
+                and self._session_epochs.get(event.session_id, 0) == epoch
+                and self.canonical_runtime.sessions.get(event.session_id) is state_owner
+            )
+
+        def stale_result() -> dict[str, Any]:
+            current_state = self.canonical_runtime.sessions.get(event.session_id)
+            current_snapshot = current_state.snapshot() if current_state is not None else {"mode": "idle", "handset": "down"}
+            return {"reason": "stale_session_generation", "state": current_snapshot["mode"],
+                    "state_version": current_snapshot.get("state_version", 0),
+                    "outputs": [], "canonical_state": current_snapshot}
+
         record = self.sessions.get(event.session_id)
         if record is None:
             record = SessionRecord(event.session_id, self.installation_id, event.correlation_id or str(uuid.uuid4()))
@@ -831,18 +962,29 @@ class ScenarioApplication:
         # reports its asynchronous lifecycle.
         self.last_canonical_effects = effects
         audio_failure: dict[str, Any] | None = None
+        deferred_effects: list[dict[str, Any]] = []
         if not exhibition_reset:
             self.sessions.save(record)
         # Do not populate the profile cache before the first RFID is handled.
         # CanonicalRuntime uses the missing session/profile boundary to detect
         # the first read; pre-populating it made the first tag look repeated.
+        if event.event_type == "RfidRemoved" and snapshot.get("profile_ref") is None:
+            self._canonical_profiles.pop(event.session_id, None)
+            self._canonical_schedule_refs.pop(event.session_id, None)
         if event.event_type == "RfidPresented":
-            self._canonical_profiles[event.session_id] = profile
-            self._canonical_schedule_refs[event.session_id] = (profile or {}).get("schedule_ref") or (profile or {}).get("profile_ref")
-            if (decision["reason"] in {"rfid_identified", "unknown_tag"}
+            identity_accepted = (
+                decision["reason"] in {"rfid_identified", "unknown_tag"}
+                and snapshot.get("profile_ref") == (profile or {}).get("profile_ref")
+            )
+            if identity_accepted:
+                self._canonical_profiles[event.session_id] = profile
+                self._canonical_schedule_refs[event.session_id] = (profile or {}).get("schedule_ref") or (profile or {}).get("profile_ref")
+            if (identity_accepted
                     and not getattr(self.canonical_runtime, "exhibition_mode", False)):
                 await self._run_readiness_wave_async(record, effects)
         for effect_index, effect in enumerate(effects):
+            if not still_current():
+                return stale_result()
             # Canonical effects use ``type``; the readiness wave is an
             # existing diagnostic compatibility projection and uses ``action``.
             # Never expose an opaque ``unknown`` effect id to the UI.
@@ -897,9 +1039,27 @@ class ScenarioApplication:
             elif kind == "story_audio_pause":
                 pause = getattr(self.audio, "pause", None)
                 if callable(pause):
+                    paused_owner = self._active_audio.get(event.session_id)
+                    if (paused_owner is not None
+                            and paused_owner.get("content_id") == effect.get("story_id")):
+                        self._paused_story_playback[event.session_id] = dict(paused_owner)
                     outcome = pause()
                     if inspect.isawaitable(outcome):
-                        await outcome
+                        outcome = await outcome
+                    if not still_current():
+                        return stale_result()
+                    if isinstance(outcome, dict) and str(outcome.get("story_id") or "") == str(effect.get("story_id") or ""):
+                        offset_ms = max(0, int(outcome.get("offset_ms") or 0))
+                        checkpoint = await self._receive_canonical_event(Event(
+                            "StoryPositionUpdated", event.session_id, event.sequence,
+                            self.now(), "audio_pause",
+                            {"story_id": effect.get("story_id"), "offset_ms": offset_ms},
+                            f"{event.correlation_id or event.sequence}:pause-position",
+                        ))
+                        if not still_current():
+                            return stale_result()
+                        effect["checkpoint"] = checkpoint.get("canonical_state", {}).get("story_checkpoint")
+                        self._paused_story_playback.pop(event.session_id, None)
                     effect["resolution"] = "story_audio_paused"
                 else:
                     effect["resolution"] = "story_audio_pause_unavailable"
@@ -913,11 +1073,13 @@ class ScenarioApplication:
                 offset_ms = int(checkpoint.get("offset_ms") or 0)
                 if asset and voice_open:
                     response_id = story_id if verified else f"placeholder:fixed_story:{story_id}"
-                    play_from = getattr(self.audio, "play_from", None)
-                    if callable(play_from):
-                        play_from(response_id, str(asset["audio_file"]), record.cancellation_token, offset_ms)
-                    else:
-                        self.audio.play(response_id, str(asset["audio_file"]), record.cancellation_token)
+                    remaining_ms = max(0, int(asset.get("duration_ms") or 0) - offset_ms)
+                    self._play_owned_audio(
+                        event.session_id, response_id, str(asset["audio_file"]),
+                        record.cancellation_token, effect, offset_ms=offset_ms,
+                        duration_ms=remaining_ms if verified else None,
+                    )
+                    self._paused_story_playback.pop(event.session_id, None)
                     effect["resolution"] = "story_audio_resumed"
                     effect["offset_ms"] = offset_ms
                 else:
@@ -1001,7 +1163,18 @@ class ScenarioApplication:
                     effect["audio_cleanup"] = await self._cancel_audio_owner(
                         self.bounded_s2s, event.session_id, operation="audio_stop",
                     )
+                if not still_current():
+                    return stale_result()
+                if self.s2s_audio is not None and self.s2s_audio is not self.bounded_s2s:
+                    effect["s2s_cleanup"] = await self._cancel_audio_owner(
+                        self.s2s_audio, event.session_id, operation="audio_stop",
+                    )
             elif kind == "adult_handoff_request":
+                incident_id = str(snapshot.get("incident_id") or "")
+                if not incident_id:
+                    effect["resolution"] = "adult_handoff_incident_missing"
+                    continue
+                effect["incident_id"] = incident_id
                 if self.adult_handoff is None:
                     effect["resolution"] = "adult_handoff_unavailable"
                     effect["fallback_phrase_id"] = "PHRASE_091"
@@ -1010,11 +1183,13 @@ class ScenarioApplication:
                         self.audio.play("PHRASE_091", str(asset["asset_path"]), record.cancellation_token)
                     continue
                 handoff_id = f"{event.session_id}:{event.correlation_id or event.sequence}"
-                request = {"incident_id": handoff_id, "handoff_id": handoff_id, "session_id": event.session_id, "profile_ref": snapshot.get("profile_ref"), "correlation_id": event.correlation_id, "severity": effect.get("severity"), "category": "urgent" if effect.get("severity") == "urgent" else "other", "safe_summary": "Ребёнок попросил взрослого", "location_device_id": self.installation_id, "created_at": self.now(), "delivery": "pending", "state_version": snapshot.get("state_version")}
+                request = {"incident_id": incident_id, "handoff_id": handoff_id, "session_id": event.session_id, "profile_ref": snapshot.get("profile_ref"), "correlation_id": event.correlation_id, "severity": effect.get("severity"), "category": "urgent" if effect.get("severity") == "urgent" else "other", "safe_summary": "Ребёнок попросил взрослого", "location_device_id": self.installation_id, "created_at": self.now(), "delivery": "pending", "state_version": snapshot.get("state_version")}
                 try:
                     delivery = self.adult_handoff.request(request)
                     if inspect.isawaitable(delivery):
                         delivery = await delivery
+                    if not still_current():
+                        return stale_result()
                     if not isinstance(delivery, dict):
                         raise TypeError("adult_handoff response must be an object")
                     effect["delivery"] = dict(delivery)
@@ -1022,10 +1197,12 @@ class ScenarioApplication:
                         effect["resolution"] = "adult_handoff_pending"
                         continue
                     effect["resolution"] = "adult_handoff_simulated" if delivery.get("simulated") else "adult_handoff_acknowledged"
-                    acknowledgement = await self._receive_canonical_event(Event("AdultHandoffAcknowledged", event.session_id, event.sequence, self.now(), "adult_handoff_simulator", {"handoff_id": handoff_id, "simulated": bool(delivery.get("simulated"))}, f"{event.correlation_id or handoff_id}:ack"))
+                    acknowledgement = await self._receive_canonical_event(Event("AdultHandoffAcknowledged", event.session_id, event.sequence, self.now(), "adult_handoff_simulator", {"handoff_id": handoff_id, "incident_id": incident_id, "simulated": bool(delivery.get("simulated"))}, f"{event.correlation_id or handoff_id}:ack"))
                     effect["acknowledgement"] = {"reason": acknowledgement.get("reason"), "simulated": bool(delivery.get("simulated"))}
                     effects.extend(acknowledgement.get("outputs", []))
                 except Exception as exc:
+                    if not still_current():
+                        return stale_result()
                     effect["resolution"] = "adult_handoff_delivery_failed"
                     effect["fallback_phrase_id"] = "PHRASE_091"
                     asset = self.voice_manifest.resolve("PHRASE_091")
@@ -1078,10 +1255,10 @@ class ScenarioApplication:
                 asset = verified or placeholder
                 if asset and voice_open:
                     response_id = story_id if verified else f"placeholder:fixed_story:{story_id}"
-                    self.audio.play(response_id, str(asset["audio_file"]), record.cancellation_token)
+                    self._play_owned_audio(event.session_id, response_id, str(asset["audio_file"]),
+                                           record.cancellation_token, effect,
+                                           duration_ms=asset.get("duration_ms"))
                     _set_audio_effect_status(effect, asset_status="approved" if verified else "placeholder", queued=True)
-                    self._register_audio_lease(event.session_id, response_id, record.cancellation_token,
-                                               str(effect.get("effect_id")), str(effect.get("playback_lease") or ""))
                     effect["resolution"] = "resumed_verified_story" if verified else "resumed_development_placeholder"
                 else:
                     _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="resume_requires_verified_story_asset")
@@ -1089,19 +1266,18 @@ class ScenarioApplication:
                 # The runtime has already verified rights and both SHA-256s.
                 if voice_open:
                     response_id = str(effect["story_id"])
-                    self.audio.play(response_id, str(effect["asset"]), record.cancellation_token)
+                    self._play_owned_audio(event.session_id, response_id, str(effect["asset"]),
+                                           record.cancellation_token, effect,
+                                           duration_ms=effect.get("duration_ms"))
                     _set_audio_effect_status(effect, asset_status="approved", queued=True)
-                    self._register_audio_lease(event.session_id, response_id, record.cancellation_token,
-                                               str(effect.get("effect_id")), str(effect.get("playback_lease") or ""))
                 else:
                     _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="story_audio_requires_handset")
             elif kind == "play_placeholder":
                 if voice_open:
                     response_id = f"placeholder:{effect['content_kind']}:{effect['story_id']}"
-                    self.audio.play(response_id, str(effect["asset"]), record.cancellation_token)
+                    self._play_owned_audio(event.session_id, response_id, str(effect["asset"]),
+                                           record.cancellation_token, effect)
                     _set_audio_effect_status(effect, asset_status="placeholder", queued=True)
-                    self._register_audio_lease(event.session_id, response_id, record.cancellation_token,
-                                               str(effect.get("effect_id")), str(effect.get("playback_lease") or ""))
                 else:
                     _set_audio_effect_status(effect, asset_status="placeholder", queued=False, resolution="placeholder_audio_requires_handset")
                 effect["resolution"] = "development_placeholder_no_rights_or_content"
@@ -1128,7 +1304,10 @@ class ScenarioApplication:
                     try:
                         if snapshot.get("mode") == "bear_dialogue":
                             await self._set_dialogue_lighting_phase(event.session_id, "output")
-                        self.audio.play(phrase_id, str(asset["asset_path"]), record.cancellation_token)
+                            if not still_current():
+                                return stale_result()
+                        self._play_owned_audio(event.session_id, phrase_id, str(asset["asset_path"]),
+                                               record.cancellation_token, effect)
                     except Exception as exc:
                         _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=False, resolution="audio_dispatch_failed")
                         effect["audio_failure_type"] = type(exc).__name__
@@ -1141,9 +1320,6 @@ class ScenarioApplication:
                         logger.exception("canonical phrase dispatch failed", extra={"phrase_id": phrase_id, "session_id": event.session_id})
                     else:
                         _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=True)
-                        effect["generation"] = int(self._session_epochs.get(event.session_id, 0))
-                        self._register_audio_lease(event.session_id, phrase_id, record.cancellation_token,
-                                                   str(effect.get("playback_id")), str(effect.get("playback_lease") or ""))
                         if phrase_id == "PHRASE_008" and snapshot.get("mode") in {
                             "exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons",
                         }:
@@ -1160,16 +1336,13 @@ class ScenarioApplication:
                     audio_failure = {"response_id": phrase_id, "token": record.cancellation_token,
                                      "error_code": str(diagnosis.get("code") or "content_unavailable")[:80]}
             elif kind in {"support_question", "support_response"}:
-                if kind == "support_question":
-                    phrase = {"pain_or_discomfort": "PHRASE_084", "fear": "PHRASE_085"}.get(str(effect.get("question")), "PHRASE_094")
-                else:
-                    phrase = "PHRASE_071" if str(effect.get("kind")) == "concern" else "PHRASE_094"
-                effect["phrase_id"] = phrase
+                phrase = str(effect["phrase_id"])
                 diagnosis = self.voice_manifest.diagnose(phrase)
                 asset = self.voice_manifest.resolve(phrase)
                 if asset and voice_open:
                     try:
-                        self.audio.play(phrase, str(asset["asset_path"]), record.cancellation_token)
+                        self._play_owned_audio(event.session_id, phrase, str(asset["asset_path"]),
+                                               record.cancellation_token, effect)
                     except Exception as exc:
                         _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=False, resolution="audio_dispatch_failed")
                         self.record_audio_diagnostic("audio_dispatch_failed", phrase_id=phrase, content_id=phrase,
@@ -1179,8 +1352,7 @@ class ScenarioApplication:
                                          "error_code": "audio_dispatch_failed", "detail": type(exc).__name__}
                     else:
                         _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=True)
-                        self._register_audio_lease(event.session_id, phrase, record.cancellation_token,
-                                                   str(effect.get("effect_id")), str(effect.get("playback_lease") or ""))
+
                 else:
                     _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="recorded_phrase_unavailable_visual_only")
                     self.record_audio_diagnostic("recorded_phrase_unavailable", phrase_id=phrase, content_id=phrase,
@@ -1193,19 +1365,49 @@ class ScenarioApplication:
                 effect["resolution"] = "offer_requires_explicit_button_or_speech"
             elif kind == "bounded_dialogue_turn":
                 effect["response_policy"] = "bounded_validated_dialogue"
-                if self.bounded_s2s is None or not voice_open or not (transient_text or "").strip():
+                fallback_reason = None
+                if not voice_open or not (transient_text or "").strip():
                     effect["resolution"] = "bounded_dialogue_unavailable_visual_only"
+                elif self.bounded_s2s is None:
+                    effect["resolution"] = "bounded_dialogue_unavailable_visual_only"
+                    fallback_reason = "provider_unavailable"
                 else:
                     try:
                         turn = await self.bounded_s2s.run_text_turn(
-                            str(transient_text), self._canonical_audio_context(event.session_id)
+                            str(transient_text), self._bounded_dialogue_context(event.session_id)
                         )
-                        effect["resolution"] = "bounded_dialogue_completed" if turn.fallback_reason is None else "bounded_dialogue_fallback"
-                        effect["fallback_reason"] = turn.fallback_reason
+                        if not still_current():
+                            return stale_result()
+                        fallback_reason = turn.fallback_reason or (
+                            "dialogue_exit" if turn.return_to_scenario else None
+                        )
+                        effect["resolution"] = ("bounded_dialogue_completed" if fallback_reason is None
+                                                else "bounded_dialogue_fallback")
+                        effect["fallback_reason"] = fallback_reason
                         effect["chunks"] = list(turn.chunks)
                     except Exception as exc:
+                        if not still_current():
+                            return stale_result()
+                        logger.exception("bounded dialogue turn failed", extra={"session_id": event.session_id})
                         effect["resolution"] = "bounded_dialogue_fallback"
                         effect["fallback_reason"] = type(exc).__name__
+                        fallback_reason = "provider_or_validation_failure"
+                if fallback_reason is not None and still_current():
+                    fallback = await self._receive_canonical_event(Event(
+                        "DialogueFallback", event.session_id, event.sequence, self.now(),
+                        "bounded_dialogue", {"reason": fallback_reason},
+                        f"{event.correlation_id or event.session_id}:dialogue-fallback",
+                        self.monotonic_now(),
+                    ), dialogue_fallback_authorized=True)
+                    if not still_current():
+                        return stale_result()
+                    effect["fallback"] = {
+                        "reason": fallback.get("reason"), "phrase_id": (
+                            "PHRASE_095" if fallback_reason in {"bounded_limit", "dialogue_exit"}
+                            else "PHRASE_104"
+                        ),
+                    }
+                    deferred_effects.extend(fallback.get("outputs") or [])
             elif kind == "generate_personal_story":
                 brief = effect.get("brief") if isinstance(effect.get("brief"), dict) else {}
                 age_band = brief.get("age_band", "3-5")
@@ -1274,6 +1476,9 @@ class ScenarioApplication:
                 except (ScheduleWeatherProviderError, ValueError) as exc:
                     effect["resolution"] = "typed_information_unavailable"
                     effect["error"] = str(exc)
+        if not still_current():
+            return stale_result()
+        effects.extend(deferred_effects)
         if audio_failure is not None and event.event_type not in {"AudioFailed", "AudioCompleted"}:
             failure = await self._receive_canonical_event(Event(
                 "AudioFailed", event.session_id, event.sequence + 1, self.now(),
@@ -1293,7 +1498,6 @@ class ScenarioApplication:
         if exhibition_reset:
             # Bump before cancelling providers so late audio/STT/model work
             # cannot be accepted by the next physical session.
-            self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
             reset_cleanup = await self._cleanup_session_resources(event.session_id)
             self.canonical_runtime.reset(event.session_id)
             self._canonical_profiles.pop(event.session_id, None)
@@ -1330,8 +1534,10 @@ class ScenarioApplication:
                 },
                 event.correlation_id,
             )
+        if not exhibition_reset and not still_current():
+            return stale_result()
         self.publisher.publish(published_event)
-        final_state = dict(snapshot) if exhibition_reset else self.canonical_runtime.sessions.get(event.session_id).snapshot()
+        final_state = dict(snapshot) if exhibition_reset else self.canonical_runtime.sessions[event.session_id].snapshot()
         self.last_canonical_state = dict(final_state)
         hook = self.state_update_hook
         if callable(hook):
@@ -1341,6 +1547,8 @@ class ScenarioApplication:
                     await update
             except Exception:
                 logger.exception("canonical state update hook failed", extra={"session_id": event.session_id})
+        if not exhibition_reset and not still_current():
+            return stale_result()
         return {"reason": decision["reason"], "state": final_state.get("mode"),
                 "state_version": final_state.get("state_version"), "outputs": effects,
                 "canonical_state": final_state,
@@ -1352,6 +1560,13 @@ class ScenarioApplication:
         """Start an anonymous visual session from a pre-auth physical button."""
     async def receive_async(self, event: Event, transient_text: str | None = None) -> dict[str, Any]:
         """Ingress for the single canonical runtime and LangGraph boundary."""
+        waiter = self._session_reset_waiters.get(event.session_id)
+        if waiter is not None and waiter[0] is not asyncio.current_task():
+            if event.event_type in {"AudioCompleted", "AudioFailed"}:
+                return {"session_id": event.session_id, "state": "idle",
+                        "reason": "stale_session_generation", "outputs": [],
+                        "canonical_state": {"mode": "idle", "handset": "down"}}
+            await waiter[1]
         await self.expire_idle_sessions()
         if self.canonical_runtime is None:
             return {"session_id": event.session_id, "state": Lifecycle.IDLE.value,
@@ -1428,13 +1643,15 @@ class ScenarioApplication:
                     "outputs": [], "canonical_state": {"mode": "idle", "handset": "down"},
                     "correlation_id": event.correlation_id}
         result = await self._receive_canonical_event(event, transient_text)
+        if result.get("reason") == "stale_session_generation":
+            return result
         if event.event_type in {"AudioCompleted", "AudioFailed"}:
             state_after_audio = self.canonical_runtime.sessions.get(event.session_id)
             if state_after_audio is not None and state_after_audio.mode == "bear_dialogue":
                 await self._set_dialogue_lighting_phase(event.session_id, "listening")
         if event.event_type in {"AudioCompleted", "AudioFailed"} and callback_lease is not None:
-            self._cancel_audio_timeout(event.session_id)
             if self._active_audio.get(event.session_id) is callback_lease:
+                self._cancel_audio_timeout(event.session_id)
                 callback_lease["status"] = "finished" if event.event_type == "AudioCompleted" else "failed"
                 self._active_audio.pop(event.session_id, None)
         if (event.event_type in {"SpeechReceived", "VoiceIntentReady"}
@@ -1473,6 +1690,22 @@ class ScenarioApplication:
                 "audio_status": "ignored", "audio_flow": "stale_input",
                 "barge_in": False, "pending": False}
 
+    def _bounded_dialogue_context(self, session_id: str):
+        """Reuse one bounded conversation within one physical/profile owner."""
+        state = self.canonical_runtime.sessions.get(session_id)
+        fresh = self._canonical_audio_context(session_id)
+        owner = (self._session_epochs.get(session_id, 0),
+                 state.profile_ref if state is not None else None)
+        current = self.conversation_contexts.get(session_id)
+        if current is not None and getattr(current, "_owner", None) == owner:
+            current.node_id = fresh.node_id
+            current.profile = fresh.profile
+            current.system_prompt = fresh.system_prompt
+            return current
+        fresh._owner = owner
+        self.conversation_contexts[session_id] = fresh
+        return fresh
+
     def _canonical_audio_context(self, session_id: str):
         # LocalS2SPipeline needs a bounded context object for VAD/STT
         # bookkeeping. Canonical voice turns never pass through its LLM/TTS
@@ -1490,15 +1723,21 @@ class ScenarioApplication:
             if state.display_name:
                 private_profile.setdefault("display_name", state.display_name)
             private_profile["age_band"] = state.age_band
-            if state.age_years is not None:
-                private_profile["age"] = state.age_years
             state_snapshot["onboarding_name_collected"] = bool(state.onboarding_name_collected)
             state_snapshot["dialogue_memory"] = {
                 "status": state.dialogue_memory.status,
                 "turns": list(state.dialogue_memory.bounded_turns),
             }
         prompt = build_system_prompt(profile=private_profile or None, state=state_snapshot)
-        return ConversationContext(session_id, "canonical_product", str(state_snapshot.get("mode") or "bear_dialogue"), ("greetings", "clinic", "weather", "games", "stories", "feelings", "questions"), ("diagnosis", "medicine", "secret", "personal_data"), 5, 120, 2, profile=ProfileContext.from_profile(private_profile or None), system_prompt=prompt)
+        profile_context = ProfileContext.from_profile(private_profile or None)
+        selected_age = trusted_canonical_age(state_snapshot)
+        if selected_age is not None:
+            profile_context = replace(
+                profile_context, age=selected_age["age_years"],
+                age_band=selected_age["age_band"],
+                age_source=selected_age["age_band_source"],
+            )
+        return ConversationContext(session_id, "canonical_product", str(state_snapshot.get("mode") or "bear_dialogue"), ("greetings", "clinic", "weather", "games", "stories", "feelings", "questions"), ("diagnosis", "medicine", "secret", "personal_data"), 5, 120, 2, profile=profile_context, system_prompt=prompt)
 
     async def _complete_canonical_audio_turn(self, session_id: str, sequence: int, pending: asyncio.Task[Any], epoch: int, correlation_id: str) -> None:
         try:
@@ -1516,7 +1755,8 @@ class ScenarioApplication:
                   f"{correlation_id}:audio:{sequence}"),
             audio_result.stt.text,
         )
-        await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
+        if payload.get("reason") != "stale_session_generation" and self._session_epochs.get(session_id, 0) == epoch:
+            await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
 
     async def _receive_canonical_audio(self, session_id: str, samples: tuple[float, ...], sequence: int, *, wait_for_turn: bool) -> dict[str, Any]:
         session = self.sessions.get(session_id)
@@ -1528,13 +1768,19 @@ class ScenarioApplication:
             return {**self._result(session, [], "late_or_duplicate_audio"), "pending": False}
         if session.handset_up is not True:
             return {**self._result(session, [], "audio_not_listening"), "audio_status": "handset_required", "pending": False, "barge_in": False}
-        voice_open = True
+        epoch = self._session_epochs.get(session_id, 0)
         session.last_sequence, session.last_activity_at = sequence, self.now()
         context = self._canonical_audio_context(session_id)
         from .s2s import TurnResult
         async def no_llm_turn(_text: str, _generation: int):
             return TurnResult((), (), False, None)
         audio_result = await self.s2s_audio.feed_audio(session_id, samples, context, wait_for_turn=wait_for_turn, turn_handler=no_llm_turn)
+        current = self.sessions.get(session_id)
+        if (current is not session or session.state == Lifecycle.ENDED
+                or not session.handset_up or self._session_epochs.get(session_id, 0) != epoch):
+            return {"session_id": session_id, "state": "idle", "outputs": [],
+                    "reason": "stale_session_generation", "audio_status": "ignored",
+                    "pending": False, "barge_in": False}
         barge_outputs = [{"action": "barge_in", "status": "previous_output_cancelled"}] if audio_result.barge_in else []
         if audio_result.pending is not None:
             epoch = self._session_epochs.get(session_id, 0)
@@ -1549,8 +1795,9 @@ class ScenarioApplication:
             result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
             return result
         if audio_result.turn is not None and audio_result.turn.fallback_reason:
-            asset = self.voice_manifest.resolve("PHRASE_091")
-            if asset and voice_open: self.audio.play("PHRASE_091", str(asset["asset_path"]), session.cancellation_token)
+            # This is an STT/VAD ingress retry, not an adult-handoff failure.
+            # Keep it visual/diagnostic until a canonical retry phrase is
+            # authorized for every mode; never dispatch untracked audio.
             return {**self._result(session, barge_outputs + [{"action": "audio_retry", "reason": audio_result.turn.fallback_reason}], "audio_retry"), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
         self.sessions.save(session)
         return {**self._result(session, barge_outputs, audio_result.ingress_status), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
@@ -1795,12 +2042,30 @@ class ScenarioApplication:
         return self._result(session, [], "session_created")
 
     async def reset_session(self, session_id: str) -> dict[str, Any]:
+        incident = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
+        if incident is not None and incident.safety_severity == "urgent":
+            # A generic operator reset is not an AdultResolved event. Stop
+            # in-flight work while preserving the visible incident.
+            self._session_epochs[session_id] = self._session_epochs.get(session_id, 0) + 1
+            self._session_revisions[session_id] = self._session_revisions.get(session_id, 0) + 1
+            record = self.sessions.get(session_id)
+            self._invalidate_audio_lease(session_id)
+            if record is not None:
+                record.cancellation_token += 1
+                self.audio.cancel(record.cancellation_token)
+                self.sessions.save(record)
+            await self._cleanup_session_resources(session_id)
+            state = incident.snapshot()
+            self.last_canonical_state = dict(state)
+            return {"session_id": session_id, "state": state["mode"], "reset": False,
+                    "reason": "safety_handoff_active", "canonical_state": state}
         self._cancel_welcome_timer(session_id)
         self._welcome_timer_sequences.pop(session_id, None)
         self._cancel_menu_tutorial(session_id)
         self._menu_tutorial_sequences.pop(session_id, None)
         self._cancel_lighting_wave(session_id)
         self._session_epochs[session_id] = self._session_epochs.get(session_id, 0) + 1
+        self._session_revisions[session_id] = self._session_revisions.get(session_id, 0) + 1
         self._invalidate_audio_lease(session_id)
         cleanup = await self._cancel_audio_completions(session_id, operation="reset")
         if self.bounded_s2s is not None:

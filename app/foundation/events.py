@@ -24,6 +24,10 @@ def parse_event(payload: dict[str, Any], session_id: str, sequence: int, source:
     name = aliases.get(event_name, event_name)
     if name not in EVENT_TYPES:
         raise EventValidationError("unknown event type")
+    if name in {"AdultResolved", "DialogueFallback"}:
+        # Generic API/UART frames have no authority to assert internal
+        # resolution or provider outcomes, regardless of payload/source.
+        raise EventValidationError("internal event is not accepted from generic ingress")
     clean = {k: v for k, v in payload.items() if k != "audio"}
     if name == "RfidPresented" and (not isinstance(clean.get("tag_id"), str) or len(clean["tag_id"]) > 128):
         raise EventValidationError("RFID tag_id must be a string of at most 128 characters")

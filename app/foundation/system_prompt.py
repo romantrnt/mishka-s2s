@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
-from .age_policy import profile_context
+from .age_policy import profile_context, trusted_canonical_age
 
 MISHKA_SYSTEM_PROMPT_VERSION = "avatar-v2-canonical"
 
@@ -108,6 +108,10 @@ def build_system_prompt(*, profile: Mapping[str, Any] | None, state: Mapping[str
     context.pop("profile_ref", None)
     if current_date is not None: context["current_date"] = str(current_date)
     state = state or {}
+    selected_age = trusted_canonical_age(state)
+    if selected_age is not None:
+        context.update(selected_age)
+        context["profile_data_incomplete"] = False
     runtime = {"scenario": state.get("mode") or state.get("node") or "idle", "active_prompt": state.get("active_prompt_id"), "handset": state.get("handset") or "down", "active_story": state.get("active_story_id"), "active_game": state.get("active_game_id"), "expected_inputs": list(state.get("expected_inputs") or [])[:8], "safety_state": state.get("safety_severity") or "none", "dialogue_memory": (state.get("dialogue_memory") or {}).get("status", "active") if isinstance(state.get("dialogue_memory"), Mapping) else "active"}
 
     def fact_block(value: Mapping[str, Any] | None) -> dict[str, Any]:

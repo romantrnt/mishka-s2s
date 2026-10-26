@@ -141,6 +141,14 @@ class RecordingAudio:
     def __init__(self): self.commands=[]; self.token=0
     def play(self, response_id, asset_id, token):
         if token == self.token: self.commands.append({"response_id":response_id,"asset_id":asset_id,"token":token})
+    def play_owned(self, handle, asset_id, offset_ms=0):
+        if handle.token == self.token:
+            self.commands.append({
+                "response_id": handle.response_id, "asset_id": asset_id, "token": handle.token,
+                "session_id": handle.session_id, "generation": handle.generation,
+                "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
+                "offset_ms": int(offset_ms),
+            })
     def play_text(self, response_id, text, token):
         if token == self.token:
             self.commands.append({"response_id":response_id,"resolved_text":text,"content_kind":"action","token":token})
