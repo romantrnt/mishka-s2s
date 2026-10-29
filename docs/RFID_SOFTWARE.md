@@ -24,8 +24,16 @@ Physical writer work is bounded and generation-fenced before lines/retries. A li
 
 Guest admission does not depend on optional identity provider availability. identity_ready means provider availability, not current child authorization. reader_ready remains false and synthetic never claims production_ready.
 
-Regression evidence is delivered separately in the implementation report: immutable baseline comparison; typed identity, privacy/age, lookup/session races; real canonical→application→UARTLEDController/effect-engine trace; serial writer ordering; ASGI auth/admission; UI and Node checks. TestClient and simulator-tail coverage remain explicitly incomplete on this executor; no production module was faked to claim full pass. Real profiles, secrets, devices and external services were not used.
+Regression evidence is delivered separately in the implementation report: immutable baseline comparison; typed identity, privacy/age, lookup/session races; real canonical→application→UARTLEDController/effect-engine trace; serial writer ordering; ASGI auth/admission; UI and Node checks. The remaining TestClient/simulator hang was traced to sandbox-denied local socketpair writes, not an application or package fix. Standard per-command approved local IPC execution completes the bounded simulator/lifespan/transport suite on canonical Python3.12.3. No OS/security setting, production module or asyncio transport was changed. Real profiles, secrets, devices and external services were not used.
 
 ## Release and rollback
 
 Work remains on feat/rfid-production-20261029; no push/merge/deploy is part of this software phase. Do not enable production identity until Max provides reader/UID/topology, trusted decision/schema/scopes/expiry/revocation and firmware contracts, then physical acceptance is completed. No real DB migration is invented or applied. Disabling optional identity returns to the dark guest path; code rollback uses ordinary revert commits, preserving history.
+
+## HTTP/PTY acceptance boundary
+
+The dedicated tests/test_rfid_http_acceptance.py exercises actual ASGI HTTP middleware/routes and encoded CRC/sequence-checked PTY frames. Positive cases explicitly assume control-plane READY on the same real StartupLifecycle object after first asserting the genuine mock startup is DEGRADED/full_e2e_warmup_required. They do not forge a nonmock E2E result, monkeypatch admits_users, or disable auth/owner/privacy checks. /ready remains503 and production_ready=false. A separate default-mock regression proves authenticated RFID remains503, unauthenticated access remains401, and no lookup/session is created.
+
+The positive cases verify authorized ready→lift→hangup, pending lookup→guest lift→hangup→late allow rejection, redacted public state, dark reset, and bounded lifespan shutdown. A cancellation-resistant test fixture is always released/drained inside the client context. This is synthetic control-plane acceptance, not speech-model readiness, a TCP-server deployment test, real RFID/backend integration or physical LED acceptance.
+
+Tests need normal local AF_UNIX/socketpair IPC for worker-thread/event-loop wakeups. If managed execution denies send with EPERM, preserve the failure evidence and request the standard explicit per-command approval; do not alter OS/security settings, replace the transport or add heartbeat workarounds to production. Canonical validation uses isolated Python3.12.3 and declared lightweight package pins; no torch/CUDA/models or real data are required for this test boundary.
