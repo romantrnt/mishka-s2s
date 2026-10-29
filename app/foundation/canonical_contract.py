@@ -47,7 +47,7 @@ GAME_CATALOG = (
     {"game_id": "free_color_music", "level": 0, "input": "button"},
 )
 STATE_NAMES = frozenset({
-    "idle", "rfid_identified", "anonymous_visual", "visual_welcome",
+    "idle", "rfid_lookup", "rfid_ready", "rfid_identified", "anonymous_visual", "visual_welcome",
     "awaiting_handset", "voice_welcome", "exhibition_introduction",
     "exhibition_name_question", "exhibition_name_capture", "exhibition_age_prompt",
     "exhibition_age_hint", "exhibition_age_selection", "exhibition_age_complete",
@@ -67,6 +67,7 @@ STATE_NAMES = frozenset({
     "soft_end", "session_closed",
 })
 ALLOWED_EVENTS = frozenset({
+    "IdentityLookupSucceeded", "IdentityLookupFailed", "IdentityReadyExpired", "IdentityAuthorizationExpired",
     "RfidPresented", "RfidRemoved", "AnonymousStart", "HandsetLifted", "HandsetPlaced",
     "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
     "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
@@ -214,6 +215,11 @@ class CanonicalState:
     history_tail: list[str] = field(default_factory=list)
     profile_ref: str | None = None
     profile_status: str = "anonymous"
+    identity_request_id: str | None = None
+    identity_lookup_deadline: float | None = None
+    identity_ready_deadline: float | None = None
+    identity_expires_monotonic: float | None = None
+    identity_capabilities: list[str] = field(default_factory=list)
     age_band: str = "3-5"
     age_band_source: str = "anonymous_default"
     display_name: str | None = None
@@ -260,6 +266,8 @@ class CanonicalState:
         value = asdict(self)
         value.pop("seen_correlations", None)
         value.pop("last_sequence_by_source", None)
+        for private_key in ("identity_request_id", "identity_capabilities", "identity_expires_monotonic", "identity_lookup_deadline", "identity_ready_deadline"):
+            value.pop(private_key, None)
         # Profile display fields and schedule links stay inside the protected profile boundary.
         value.pop("display_name", None)
         value.pop("schedule_ref", None)
@@ -796,10 +804,11 @@ def normalize_exhibition_repeat_answer(value: str) -> str | None:
 
 class CanonicalRuntime:
     """In-memory state machine with stale-event, effect and RAM-TTL guarantees."""
-    def __init__(self, *, now: Callable[[], float] = _utc_now, monotonic_now: Callable[[], float] = time.monotonic, stories: FixedStoryManifest | None = None, allow_development_placeholders: bool = False, exhibition_mode: bool = False) -> None:
+    def __init__(self, *, now: Callable[[], float] = _utc_now, monotonic_now: Callable[[], float] = time.monotonic, stories: FixedStoryManifest | None = None, allow_development_placeholders: bool = False, exhibition_mode: bool = False, optional_identity: bool = False) -> None:
         self.now, self.monotonic_now, self.stories, self.sessions = now, monotonic_now, stories, {}
         self.allow_development_placeholders = bool(allow_development_placeholders)
         self.exhibition_mode = bool(exhibition_mode)
+        self.optional_identity = bool(optional_identity)
     @staticmethod
     def _story_id_for_button(button: int) -> str | None:
         return {
@@ -814,8 +823,9 @@ class CanonicalRuntime:
     def _select_exhibition_age(self, state: CanonicalState, age_years: int, *, source: str, now: float) -> dict[str, Any]:
         band = self._exhibition_age_band(age_years)
         policy = policy_for_band(band, source=source)
-        state.age_band, state.age_band_source = band, source
-        state.age_policy, state.age_years = policy.as_dict(), age_years
+        if not (state.profile_status == "identified" and state.age_band_source == "profile_dob"):
+            state.age_band, state.age_band_source = band, source
+            state.age_policy, state.age_years = policy.as_dict(), age_years
         state.dialogue_memory.bounded_turns.append({"kind": "age_selection", "age": age_years, "age_band": band, "source": source})
         state.dialogue_memory.touch(now)
         state.mode, state.substate = "exhibition_age_complete", "awaiting_closing_audio"
@@ -865,6 +875,29 @@ class CanonicalRuntime:
                               schedule_ref=str(value.get("schedule_ref")) if value.get("schedule_ref") else None,
                               game_level=max(0, min(9, prior_level)))
 
+    def clear_identity(self, state: CanonicalState) -> None:
+        """Scrub private/derived identity without resolving a safety incident."""
+        fresh = self._new_state(state.session_id, None)
+        for name in (
+            "profile_ref", "profile_status", "display_name", "grammatical_gender",
+            "language", "timezone", "age_band", "age_band_source", "age_years",
+            "age_policy", "profile_data_incomplete", "current_date",
+            "accessibility_policy", "schedule_ref", "onboarding_name_collected",
+        ):
+            setattr(state, name, getattr(fresh, name))
+        state.history_tail.clear()
+        state.dialogue_memory.clear()
+        state.pending_tool = None
+        state.pending_mode = None
+        state.active_story_id = state.active_game_id = None
+        state.game_level = state.game_attempts = state.game_hint_stage = state.game_success_streak = 0
+        state.game_parameters = {}
+        state.mood_result = None
+        state.identity_request_id = None
+        state.identity_lookup_deadline = state.identity_ready_deadline = None
+        state.identity_expires_monotonic = None
+        state.identity_capabilities = []
+
     def _decision(self, state: CanonicalState, effects: list[dict[str, Any]], reason: str, *,
                   reset_session: bool = False, clear_audio: bool = False) -> dict[str, Any]:
         # Physical release/hold and timer acknowledgements do not change the
@@ -911,7 +944,8 @@ class CanonicalRuntime:
     def handle(self, event: CanonicalEvent, profile: Mapping[str, Any] | None = None, *,
                transient_text: str | None = None,
                adult_resolution_authorized: bool = False,
-               dialogue_fallback_authorized: bool = False) -> dict[str, Any]:
+               dialogue_fallback_authorized: bool = False,
+               identity_event_authorized: bool = False) -> dict[str, Any]:
         event.validate()
         now = event.timestamp or self.now()
         monotonic_now = event.monotonic_timestamp if event.monotonic_timestamp is not None else self.monotonic_now()
@@ -925,6 +959,8 @@ class CanonicalRuntime:
             self.sessions[event.session_id] = state
         # Authority is an out-of-band server argument, never event.source or
         # client-controlled payload. Untrusted resolve does not consume sequence.
+        if event.event_type in {"IdentityLookupSucceeded", "IdentityLookupFailed", "IdentityReadyExpired", "IdentityAuthorizationExpired"} and not identity_event_authorized:
+            return self._decision(state, [], "identity_outcome_untrusted")
         if event.event_type == "AdultResolved" and not adult_resolution_authorized:
             return self._decision(state, [], "adult_resolution_untrusted")
         if event.event_type == "DialogueFallback" and not dialogue_fallback_authorized:
@@ -948,18 +984,61 @@ class CanonicalRuntime:
             if state.mode in {"dialogue_suspended_ram", "story_suspended_ram"}:
                 state.mode = "dialogue_memory_expired"
         effects: list[dict[str, Any]] = []
+        if self.optional_identity and event.event_type in {"IdentityLookupSucceeded", "IdentityLookupFailed"}:
+            if state.mode != "rfid_lookup" or event.payload.get("request_id") != state.identity_request_id:
+                return self._decision(state, [], "stale_identity_lookup")
+            if (event.event_type == "IdentityLookupSucceeded" and profile
+                    and state.identity_lookup_deadline is not None
+                    and monotonic_now < state.identity_lookup_deadline
+                    and float(event.payload.get("expires_monotonic") or 0) > monotonic_now):
+                fresh = self._new_state(state.session_id, profile)
+                for field_name in ("profile_ref", "profile_status", "display_name", "grammatical_gender", "language", "timezone", "age_band", "age_band_source", "age_years", "age_policy", "profile_data_incomplete", "current_date", "accessibility_policy", "schedule_ref"):
+                    setattr(state, field_name, getattr(fresh, field_name))
+                state.identity_capabilities = list(event.payload.get("capabilities") or [])
+                state.identity_expires_monotonic = float(event.payload["expires_monotonic"])
+                state.identity_ready_deadline = min(float(event.payload["ready_deadline"]), state.identity_expires_monotonic)
+                state.identity_lookup_deadline = None
+                state.mode, state.expected_inputs = "rfid_ready", ["handset_up"]
+                state.state_version += 1
+                return self._decision(state, [{"type": "rfid_ready_lighting"}], "rfid_ready")
+            self.clear_identity(state)
+            state.mode, state.expected_inputs = "idle", ["handset_up"]
+            state.state_version += 1
+            return self._decision(state, [{"type": "identity_cleared"}, {"type": "lighting_dark"}], "identity_lookup_failed")
+        if self.optional_identity and event.event_type in {"IdentityReadyExpired", "IdentityAuthorizationExpired"}:
+            if not state.identity_request_id or event.payload.get("request_id") != state.identity_request_id:
+                return self._decision(state, [], "stale_identity_expiry")
+            deadline = state.identity_ready_deadline if state.mode == "rfid_ready" else state.identity_expires_monotonic
+            if deadline is None or monotonic_now < deadline:
+                return self._decision(state, [], "identity_expiry_not_due")
+            self.clear_identity(state)
+            state.state_version += 1
+            effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}]
+            if state.safety_severity == "urgent" and state.mode == "safety_handoff":
+                return self._decision(state, effects + [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "identity_expired_safety_preserved")
+            state.mode = "session_closed" if state.handset == "up" else "idle"
+            state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
+            return self._decision(state, effects + [{"type": "lighting_dark"}], "identity_expired")
+        if self.optional_identity and state.mode == "session_closed" and event.event_type == "HandsetPlaced":
+            state.handset, state.mode, state.expected_inputs = "down", "idle", ["handset_up"]
+            state.state_version += 1
+            return self._decision(state, [{"type": "lighting_dark"}], "closed_handset_placed")
         if (state.safety_severity == "urgent" and state.mode == "safety_handoff"
                 and event.event_type in {"SessionCancel", "SessionReset", "AnonymousStart", "RfidPresented"}):
             # Administrative/session lifecycle operations cannot silently
             # stand in for an adult's explicit incident resolution.
             state.state_version += 1
+            if event.event_type != "RfidPresented":
+                self.clear_identity(state)
+                return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
             return self._decision(state, [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
-        if event.event_type == "SessionCancel":
-            state.dialogue_memory.clear(); state.mode = "soft_end"; state.state_version += 1
-            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_preset", "preset": "READY"}], "soft_end")
-        if event.event_type == "SessionReset":
-            state.dialogue_memory.clear(); state.mode = "session_closed"; state.state_version += 1
-            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_preset", "preset": "READY"}], "session_closed")
+        if event.event_type in {"SessionCancel", "SessionReset"}:
+            self.clear_identity(state)
+            state.mode = ("session_closed" if state.handset == "up" else "idle") if self.optional_identity else ("soft_end" if event.event_type == "SessionCancel" else "session_closed")
+            state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
+            state.state_version += 1
+            lighting = {"type": "lighting_dark"} if self.optional_identity else {"type": "lighting_preset", "preset": "READY"}
+            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}, lighting], "soft_end" if event.event_type == "SessionCancel" else "session_closed")
         # A closed/soft-ended session is inert until a new RFID or explicit
         # anonymous start creates a fresh scenario context. Stray handset,
         # audio and button events must not resurrect it.
@@ -1092,15 +1171,14 @@ class CanonicalRuntime:
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "clear_private_display"}], "ram_ttl_expired")
             return self._decision(state, [], "timeout_not_due")
         if event.event_type == "RfidRemoved":
-            state.dialogue_memory.clear()
-            state.profile_ref, state.profile_status = None, "anonymous"
+            self.clear_identity(state)
             if state.mode == "safety_handoff":
                 # Removing a tag cannot dismiss an active safeguarding
                 # incident; the incident remains until AdultResolved.
                 state.state_version += 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}], "rfid_removed_safety_preserved")
-            state.mode, state.expected_inputs, state.state_version = "anonymous_visual", ["handset_up"], state.state_version + 1
-            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "clear_private_display"}], "rfid_removed")
+            state.mode, state.expected_inputs, state.state_version = ("session_closed" if self.optional_identity and state.handset == "up" else "idle" if self.optional_identity else "anonymous_visual"), (["handset_down"] if self.optional_identity and state.handset == "up" else ["handset_up"]), state.state_version + 1
+            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "clear_private_display"}, {"type": "identity_cleared"}, {"type": "lighting_dark"}], "rfid_removed")
         if event.event_type == "DialogueFallback":
             if state.mode != "bear_dialogue" or state.handset != "up":
                 return self._decision(state, [], "dialogue_fallback_ignored")
@@ -1307,6 +1385,15 @@ class CanonicalRuntime:
                                           {"type": "content_blocked", "error_code": state.audio_failure_code},
                                           {"type": "lighting_preset", "preset": "ERROR_RECOVERABLE"}],
                                   "audio_failed_safe_stop", clear_audio=True)
+        if event.event_type == "RfidPresented" and self.optional_identity:
+            if state.handset == "up" or state.mode not in {"idle", "rfid_lookup", "rfid_ready"}:
+                return self._decision(state, [], "rfid_active_session_ignored")
+            self.clear_identity(state)
+            state.identity_request_id = str(event.payload.get("request_id") or "")
+            state.identity_lookup_deadline = float(event.payload["lookup_deadline"])
+            state.mode, state.expected_inputs = "rfid_lookup", ["handset_up", "identity_lookup_result"]
+            state.state_version += 1
+            return self._decision(state, [{"type": "identity_cleared"}, {"type": "lighting_dark"}, {"type": "identity_lookup_start"}], "identity_lookup_started")
         if event.event_type == "RfidPresented" and self.exhibition_mode:
             return self._decision(state, [], "exhibition_rfid_ignored")
         if event.event_type == "RfidPresented":
@@ -1334,17 +1421,21 @@ class CanonicalRuntime:
                 {"type": "lighting_preset", "preset": "ALL_ON"},
             ], reason)
         if event.event_type == "AnonymousStart":
-            state.profile_ref, state.profile_status, state.age_band, state.age_band_source = None, "anonymous", "3-5", "anonymous_default"
-            state.mode, state.state_version = "anonymous_visual", state.state_version + 1
-            return self._decision(state, [{"type": "lighting", "elements": [14], "state": 1}], "anonymous_started")
+            self.clear_identity(state)
+            state.mode, state.state_version = ("session_closed" if self.optional_identity and state.handset == "up" else "idle" if self.optional_identity else "anonymous_visual"), state.state_version + 1
+            effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}]
+            effects.append({"type": "lighting_dark"} if self.optional_identity else {"type": "lighting", "elements": [14], "state": 1})
+            return self._decision(state, effects, "anonymous_started")
         if event.event_type == "HandsetPlaced":
             if self.exhibition_mode and state.safety_severity == "urgent":
+                self.clear_identity(state)
                 state.handset = "down"
                 state.state_version += 1
                 state.expected_inputs = ["adult_resolution"]
                 return self._decision(state, [
                     {"type": "audio_stop"}, {"type": "capture_close"},
                     {"type": "lighting_preset", "preset": "SAFE_STOP"},
+                    {"type": "identity_cleared"},
                 ], "handset_down_safety_preserved")
             if self.exhibition_mode:
                 # Exhibition handset-down is a hard physical-session boundary.
@@ -1365,7 +1456,7 @@ class CanonicalRuntime:
                     {"type": "welcome_timer_cancelled", "deadline_monotonic": prior_deadline},
                     {"type": "exhibition_effects_cancelled"},
                     {"type": "exhibition_reset"},
-                    {"type": "standby_breathing_started"},
+                    {"type": "standby_dark_started"},
                 ], "exhibition_reset", reset_session=True)
             state.handset = "down"
             if state.mode == "voice_welcome" and state.welcome_status == "pending":
@@ -1393,6 +1484,13 @@ class CanonicalRuntime:
             state.state_version += 1
             return self._decision(state, effects, "handset_down")
         if event.event_type == "HandsetLifted":
+            preserve_lighting = state.mode == "rfid_ready"
+            if self.optional_identity and state.mode in {"rfid_lookup", "rfid_ready"}:
+                if state.mode == "rfid_lookup" or (state.identity_ready_deadline is not None and monotonic_now >= state.identity_ready_deadline):
+                    self.clear_identity(state)
+                state.identity_ready_deadline = None
+                state.identity_lookup_deadline = None
+                state.mode = "idle"
             state.handset = "up"; state.state_version += 1
             if state.mode == "idle":
                 state.mode = "voice_welcome"
@@ -1401,7 +1499,7 @@ class CanonicalRuntime:
                 state.welcome_deadline_monotonic = monotonic_now + EXHIBITION_WELCOME_DELAY_SECONDS
                 state.welcome_status = "pending"
                 return self._decision(state, [
-                    {"type": "lighting_wave_intent", "pattern": "handset_lift_wave", "source": "canonical"},
+                    {"type": "lighting_wave_intent", "pattern": "handset_lift_wave", "source": "canonical", **({"preserve_current": True} if preserve_lighting else {})},
                     {"type": "play_asset", "asset_id": "assets/sounds/ringtone.wav", "content_id": "RINGTONE"},
                     {"type": "welcome_timer_scheduled", "phrase_id": "PHRASE_001",
                      "delay_seconds": EXHIBITION_WELCOME_DELAY_SECONDS,
@@ -1866,7 +1964,8 @@ class CanonicalRuntime:
                         {"type": "capture_open"},
                         {"type": "exhibition_name_rejected"},
                     ], "exhibition_name_unrecognized")
-                state.display_name = name
+                if state.profile_status != "identified":
+                    state.display_name = name
                 state.onboarding_name_collected = True
                 state.dialogue_memory.bounded_turns.append({"kind": "name", "value": name})
                 state.dialogue_memory.touch(now)

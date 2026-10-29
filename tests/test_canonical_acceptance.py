@@ -25,7 +25,7 @@ def test_catalog_is_single_canonical_boundary_and_reports_ready_content():
     report = catalog.report()
     assert document["contract"] == "canonical_product/v1"
     assert document["langgraph_authorization"] is True
-    assert len(document["states"]) == 50
+    assert len(document["states"]) == 52
     assert catalog.game("catch_light")["input"] == "button"
     assert catalog.story("fixed_aibolit_v1") is not None
     assert report["ready"] is True

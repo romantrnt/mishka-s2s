@@ -31,7 +31,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -71,7 +75,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -111,7 +119,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -151,7 +163,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -191,7 +207,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -231,7 +251,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -271,7 +295,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -311,7 +339,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -351,7 +383,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -391,7 +427,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -431,7 +471,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -471,10 +515,14 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
-      "lighting_preset": "READY",
+      "lighting_preset": "OFF",
       "audio_policy": "application_owned",
       "timeout_policy": "explicit",
       "persistence_policy": "minimal",
@@ -511,7 +559,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -551,7 +603,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -591,7 +647,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -631,7 +691,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -671,7 +735,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -711,7 +779,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -751,7 +823,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -791,7 +867,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -831,7 +911,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -871,7 +955,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -911,7 +999,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -951,7 +1043,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -991,7 +1087,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1031,7 +1131,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1071,7 +1175,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1111,7 +1219,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1151,7 +1263,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1191,7 +1307,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1231,7 +1351,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1271,7 +1395,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1311,7 +1439,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1351,7 +1483,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1391,7 +1527,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "audio_completed",
       "lighting_preset": "READY",
@@ -1431,7 +1571,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "audio_completed",
       "lighting_preset": "READY",
@@ -1471,7 +1615,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "menu_tutorial_step",
       "lighting_preset": "READY",
@@ -1512,7 +1660,11 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "ExhibitionMenuWaveComplete"
+        "ExhibitionMenuWaveComplete",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "menu_wave_complete",
       "lighting_preset": "READY",
@@ -1553,7 +1705,11 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "ExhibitionMenuWaveComplete"
+        "ExhibitionMenuWaveComplete",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "audio_completed",
       "lighting_preset": "READY",
@@ -1594,7 +1750,11 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "ExhibitionMenuWaveComplete"
+        "ExhibitionMenuWaveComplete",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "speech",
       "lighting_preset": "READY",
@@ -1635,7 +1795,11 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "ExhibitionMenuWaveComplete"
+        "ExhibitionMenuWaveComplete",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "audio_completed",
       "lighting_preset": "READY",
@@ -1675,7 +1839,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "button_1..7",
       "lighting_preset": "READY",
@@ -1716,7 +1884,11 @@
         "StoryPositionUpdated",
         "TimeoutFired",
         "VoiceIntentReady",
-        "WelcomeTimerFired"
+        "WelcomeTimerFired",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1756,7 +1928,11 @@
         "StoryPositionUpdated",
         "TimeoutFired",
         "VoiceIntentReady",
-        "WelcomeTimerFired"
+        "WelcomeTimerFired",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1796,7 +1972,11 @@
         "StoryPositionUpdated",
         "TimeoutFired",
         "VoiceIntentReady",
-        "WelcomeTimerFired"
+        "WelcomeTimerFired",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1836,7 +2016,11 @@
         "StoryPositionUpdated",
         "TimeoutFired",
         "VoiceIntentReady",
-        "WelcomeTimerFired"
+        "WelcomeTimerFired",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1876,7 +2060,11 @@
         "StoryPositionUpdated",
         "TimeoutFired",
         "VoiceIntentReady",
-        "WelcomeTimerFired"
+        "WelcomeTimerFired",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "READY",
@@ -1915,7 +2103,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "STORY_MENU",
@@ -1955,7 +2147,11 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "STORY_PLAYBACK",
@@ -1995,10 +2191,102 @@
         "AdultHandoffAcknowledged",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
-        "MenuTutorialStep"
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
       ],
       "expected_input": "contextual",
       "lighting_preset": "STORY_PLAYBACK",
+      "audio_policy": "application_owned",
+      "timeout_policy": "explicit",
+      "persistence_policy": "minimal",
+      "success_transition": "explicit",
+      "retry_transition": "explicit",
+      "cancel_transition": "soft_end",
+      "error_transition": "safe_stop",
+      "state_version": 1
+    },
+    "rfid_lookup": {
+      "allowed_events": [
+        "RfidPresented",
+        "RfidRemoved",
+        "AnonymousStart",
+        "HandsetLifted",
+        "HandsetPlaced",
+        "ButtonPressed",
+        "ButtonReleased",
+        "ButtonHeld",
+        "ButtonLongHeld",
+        "SpeechStarted",
+        "SpeechEnded",
+        "VoiceIntentReady",
+        "AudioStarted",
+        "AudioCompleted",
+        "AudioFailed",
+        "StoryPositionUpdated",
+        "TimeoutFired",
+        "WelcomeTimerFired",
+        "HardwareDisconnected",
+        "HardwareReconnected",
+        "SessionCancel",
+        "SessionReset",
+        "AdultHandoffAcknowledged",
+        "AdultResolved",
+        "ExhibitionOnboardingComplete",
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
+      ],
+      "expected_input": "identity_result_or_handset",
+      "lighting_preset": "OFF",
+      "audio_policy": "application_owned",
+      "timeout_policy": "explicit",
+      "persistence_policy": "minimal",
+      "success_transition": "explicit",
+      "retry_transition": "explicit",
+      "cancel_transition": "soft_end",
+      "error_transition": "safe_stop",
+      "state_version": 1
+    },
+    "rfid_ready": {
+      "allowed_events": [
+        "RfidPresented",
+        "RfidRemoved",
+        "AnonymousStart",
+        "HandsetLifted",
+        "HandsetPlaced",
+        "ButtonPressed",
+        "ButtonReleased",
+        "ButtonHeld",
+        "ButtonLongHeld",
+        "SpeechStarted",
+        "SpeechEnded",
+        "VoiceIntentReady",
+        "AudioStarted",
+        "AudioCompleted",
+        "AudioFailed",
+        "StoryPositionUpdated",
+        "TimeoutFired",
+        "WelcomeTimerFired",
+        "HardwareDisconnected",
+        "HardwareReconnected",
+        "SessionCancel",
+        "SessionReset",
+        "AdultHandoffAcknowledged",
+        "AdultResolved",
+        "ExhibitionOnboardingComplete",
+        "MenuTutorialStep",
+        "IdentityLookupSucceeded",
+        "IdentityLookupFailed",
+        "IdentityReadyExpired",
+        "IdentityAuthorizationExpired"
+      ],
+      "expected_input": "handset_or_expiry",
+      "lighting_preset": "RFID_WAVE_TO_BREATHING",
       "audio_policy": "application_owned",
       "timeout_policy": "explicit",
       "persistence_policy": "minimal",

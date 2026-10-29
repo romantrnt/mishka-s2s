@@ -630,6 +630,18 @@ function buttonLegendSummary(contract) {
   return `Buttons: ${contract.entries.map(entry => `${entry.id} - ${entry.label}`).join(', ')}.`;
 }
 
+function cardStatusProjection(state) {
+  // Render only the canonical mode. Card and profile payloads are private.
+  switch (state.canonical_state?.mode) {
+    case 'rfid_lookup':
+      return { label: 'Проверка карты', hint: 'Можно поднять трубку и начать гостевой сценарий.', tone: 'state-warn' };
+    case 'rfid_ready':
+      return { label: 'Карта принята · поднимите трубку', hint: 'Поднимите трубку, чтобы начать.', tone: 'state-ok' };
+    default:
+      return { label: 'Нет активной карты', hint: '', tone: 'state-warn' };
+  }
+}
+
 function render(state) {
   state = normalizeState(state);
   if (!state) { showError("Invalid stand state"); return; }
@@ -660,7 +672,10 @@ function render(state) {
   $('pipeline').textContent = JSON.stringify(state.pipeline_metrics, null, 2);
   updateGuide(state, contract);
   const standby = ['NONE', 'IDLE', 'STANDBY'].includes(state.session.state);
-  const runtimeLabel = standby ? 'Ожидание действия' : handsetUp ? 'Трубка поднята' : 'Трубка опущена';
+  const cardStatus = cardStatusProjection(state);
+  const cardPendingOrReady = ['rfid_lookup', 'rfid_ready'].includes(state.canonical_state?.mode);
+  setRuntimeValue('device-card', cardStatus.label, cardStatus.tone);
+  const runtimeLabel = cardPendingOrReady ? cardStatus.label : standby ? 'Тёмное ожидание' : handsetUp ? 'Трубка поднята' : 'Трубка опущена';
   if ($('runtime-state')) $('runtime-state').textContent = runtimeLabel;
   document.getElementById('handset-state').textContent = handsetUp ? 'HANDSET UP' : sessionState === 'ENDED' ? 'HANDSET DOWN / ENDED' : 'HANDSET DOWN'; document.getElementById('device-handset').textContent = handsetUp ? 'UP' : 'DOWN';
   const deviceState = standby ? 'STANDBY' : handsetUp ? 'UP' : 'DOWN';
@@ -668,7 +683,7 @@ function render(state) {
   const deviceMode = document.getElementById('device-mode');
   if (deviceMode) deviceMode.textContent = state.transport?.hardware?.acceptance === 'physical' ? 'PHYSICAL' : 'SIMULATOR';
   const displayNode = state.session.state === 'ENDED' ? 'session_closed' : (state.session.node || state.session.state);
-  $('phone-display').textContent = displayNode;
+  $('phone-display').textContent = cardPendingOrReady ? cardStatus.label : standby ? 'Тёмное ожидание' : displayNode;
   const latestAudioCommand = state.commands.filter(item => item.type === 'audio_play' || item.type === 'audio_stop').sort((a, b) => b.sequence - a.sequence)[0];
   document.getElementById('audio-state').textContent = latestAudioCommand?.type === 'audio_play'
     ? 'AUDIO: PLAYING' : audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
@@ -811,6 +826,9 @@ function renderRuntimeStatus() {
   setRuntimeValue('simulated-status', readiness.simulated_hardware_ready ? 'available' : readiness.simulated_hardware_ready === false ? 'unavailable' : 'unknown', readiness.simulated_hardware_ready ? 'state-ok' : 'state-bad');
   setRuntimeValue('physical-status', readiness.physical_hardware_ready ? 'available' : readiness.physical_hardware_ready === false ? 'unavailable' : 'unknown', readiness.physical_hardware_ready ? 'state-ok' : 'state-warn');
   setRuntimeValue('audio-content-status', readiness.audio_content_ready ? 'approved' : readiness.audio_content_ready === false ? 'not approved' : 'unknown', readiness.audio_content_ready ? 'state-ok' : 'state-warn');
+  setRuntimeValue('guest-status', readiness.guest_ready ? 'ready' : readiness.guest_ready === false ? 'not ready' : 'unknown', readiness.guest_ready ? 'state-ok' : 'state-warn');
+  setRuntimeValue('identity-status', readiness.identity_ready ? 'ready' : readiness.identity_ready === false ? 'not ready' : 'unknown', readiness.identity_ready ? 'state-ok' : 'state-warn');
+  setRuntimeValue('reader-status', readiness.reader_ready ? 'ready' : readiness.reader_ready === false ? 'not ready' : 'unknown', readiness.reader_ready ? 'state-ok' : 'state-warn');
   setRuntimeValue('production-status', readiness.production_ready ? 'ready' : readiness.production_ready === false ? 'not ready' : 'unknown', readiness.production_ready ? 'state-ok' : 'state-warn');
   const reason = readiness.production_ready === false ? (readiness.physical_hardware_ready === false ? 'physical hardware unavailable' : readiness.content?.voice?.status || 'degraded') : '—';
   if ($('degraded-reason')) $('degraded-reason').textContent = reason.replaceAll('_', ' ');
@@ -851,7 +869,7 @@ function renderLightingElements(lighting) {
     ? 'WAVE ' + (Number(lightingEffect.wave_stage || 0) + 1) + '/' + (lightingEffect.last_frame?.wave_total_stages || 7)
     : waveHeld
       ? 'WAVE HELD · ' + (heldElements.length === 14 ? 'DIGITS' : 'ALL')
-      : 'WAVE IDLE';
+      : LIGHTING_ELEMENT_IDS.every(id => lighting[id] === 0) ? 'LIGHTS OFF' : 'WAVE IDLE';
   if ($('wave-state')) {
     $('wave-state').textContent = wave?.active
       ? 'WAVE ' + wave.stage + '/' + wave.total_stages
@@ -1107,6 +1125,8 @@ function speakCommands(state) {
 
 function updateGuide(state, contract) {
     const labels = {
+    rfid_lookup: ['Проверка карты', 'Можно поднять трубку и начать гостевой сценарий.'],
+    rfid_ready: ['Карта принята', 'Поднимите трубку, чтобы начать.'],
     game_menu: ['1 · Игры', 'Выберите игру кнопкой.'],
     game_active: ['1 · Игра', 'Следуйте текущей подсветке.'],
     fixed_story_menu: ['2 · Сказки', 'Выберите одну из пяти разрешённых сказок кнопками 1–5.'],
@@ -1126,7 +1146,8 @@ function updateGuide(state, contract) {
     exhibition_menu_replay_buttons: ['Меню · повтор', 'Повторная синхронная подсветка без финального вопроса.'],
     menu_ready: ['Меню готово', 'Выберите действие кнопкой 1–7.']
   };
-  const node = String(state.session.node || '');
+  const node = ['rfid_lookup', 'rfid_ready'].includes(state.canonical_state?.mode)
+    ? state.canonical_state.mode : String(state.session.node || '');
   const guideMap = document.querySelector('.guide-map');
   if (guideMap) guideMap.hidden = node === 'bear_dialogue';
   const map = {

@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.foundation.config import Settings
+from app.foundation.lighting import LIGHTING_ELEMENT_IDS
 from app.foundation.stand import HardwareIntegrationStand
 
 
@@ -36,6 +37,8 @@ async def scenario() -> dict[str, object]:
         check(health["status"] in {"ready", "degraded"}, "health is unavailable")
         check(stand.input_adapter is None, "simulator created a physical HID reader")
         check(stand.application.canonical_runtime.sessions == {}, "startup created a session")
+        dark = {str(element_id): 0 for element_id in LIGHTING_ELEMENT_IDS}
+        check(stand.snapshot()["physical_lighting"] == dark, "startup did not leave all 18 lighting channels off")
 
         lifted = await stand.inject_physical({"type": "SpaceReleased", "_source": "clean_process_smoke", "_sequence": 1})
         check(lifted.get("reason") == "exhibition_handset_lifted", "SpaceReleased missed canonical ingress")
@@ -52,17 +55,19 @@ async def scenario() -> dict[str, object]:
         check(stand.application.canonical_runtime.sessions == {}, "reset left a canonical session")
         reset_health = stand.health_snapshot()
         check(reset_health["canonical_state"] == "idle" and reset_health["handset"] == "down", "reset did not return to standby")
+        check(stand.snapshot()["physical_lighting"] == dark, "reset did not turn all 18 lighting channels off")
 
         return {
             "status": "ok",
             "health_status": health["status"],
             "startup": {"state": health["canonical_state"], "handset": health["handset"]},
             "trace": [
-                "startup", "handset_down", "standby_breathing", "SpaceReleased",
+                "startup", "handset_down", "dark_standby", "SpaceReleased",
                 "HandsetLifted", "wave", "welcome_timer", "welcome",
                 "SpacePressed", "full_reset", "shutdown",
             ],
             "personal_data_output": False,
+            "acceptance": "synthetic_simulator_only",
         }
     finally:
         stand.close()

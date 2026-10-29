@@ -32,7 +32,7 @@ def test_exhibition_runtime_down_is_hard_reset_and_stale_timer_is_inert() -> Non
     assert down["state"]["welcome_deadline_monotonic"] is None
     assert down["state"]["dialogue_memory"]["status"] == "active"
     assert down["state"]["dialogue_memory"]["storage"] == "ram_only"
-    assert {e["type"] for e in down["effects"]} >= {"audio_stop", "capture_close", "exhibition_effects_cancelled", "exhibition_reset", "standby_breathing_started"}
+    assert {e["type"] for e in down["effects"]} >= {"audio_stop", "capture_close", "exhibition_effects_cancelled", "exhibition_reset", "standby_dark_started"}
     stale = runtime.handle(ce("WelcomeTimerFired", 1, 2, 15.0, "timer"))
     assert stale["effects"] == []
 
@@ -142,8 +142,9 @@ def test_stand_start_lift_down_lift_trace_uses_simulator_effect_owner() -> None:
         stand = HardwareIntegrationStand(Settings(profile="mock", hardware_mode="simulator", content_root="content"))
         try:
             startup = stand.snapshot()
-            assert startup["lighting_effects"]["effect"] == "breathing"
+            assert startup["lighting_effects"]["effect"] == "idle"
             assert startup["lighting_effects"]["elements"] == list(LIGHTING_ELEMENT_IDS)
+            assert all(value == 0 for value in startup["physical_lighting"].values())
             up = await stand.inject_physical({"type": "SpaceReleased", "_source": "gr02", "_sequence": 1})
             assert up["reason"] == "exhibition_handset_lifted"
             assert sum(e.get("type") == "lighting_wave_intent" for e in up["outputs"]) == 1
@@ -153,7 +154,7 @@ def test_stand_start_lift_down_lift_trace_uses_simulator_effect_owner() -> None:
             assert sum(e.get("type") == "lighting_wave_intent" for e in duplicate["outputs"]) == 0
             down = await stand.inject_physical({"type": "SpacePressed", "_source": "gr02", "_sequence": 3})
             assert down["reason"] == "exhibition_reset"
-            assert stand.snapshot()["lighting_effects"]["effect"] == "breathing"
+            assert stand.snapshot()["lighting_effects"]["effect"] == "idle"
             assert stand.snapshot()["canonical_state"]["mode"] == "idle"
             up2 = await stand.inject_physical({"type": "SpaceReleased", "_source": "gr02", "_sequence": 4})
             assert up2["reason"] == "exhibition_handset_lifted"
@@ -177,7 +178,7 @@ def test_aud03_lossless_physical_projection_and_fake_clock_smoke() -> None:
                 assert set(harness.stand.panel_snapshot()["physical_lighting"]) == ids
 
             startup = harness.snapshot()
-            assert startup["lighting_effects"]["effect"] == "breathing"
+            assert startup["lighting_effects"]["effect"] == "idle"
             assert startup["lighting_effects"]["scheduler"] == "manual_fake_clock"
             assert startup["lighting_effects"]["task_active"] is False
             assert_projection()
@@ -192,7 +193,7 @@ def test_aud03_lossless_physical_projection_and_fake_clock_smoke() -> None:
 
             down = await harness.space_pressed()
             assert down["reason"] == "exhibition_reset"
-            assert harness.snapshot()["lighting_effects"]["effect"] == "breathing"
+            assert harness.snapshot()["lighting_effects"]["effect"] == "idle"
             assert harness.snapshot()["lighting_effects"]["scheduler"] == "manual_fake_clock"
             assert_projection()
         finally:

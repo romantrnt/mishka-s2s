@@ -15,6 +15,7 @@ from .application import ScenarioApplication
 from .schedule_weather import DemoScheduleWeatherService, ProductionScheduleWeatherService, YandexWeatherProvider
 from .canonical_services import CanonicalContentCatalog
 from .config import Settings, settings_with_compat_env
+from .identity import DisabledIdentityResolver, SyntheticIdentityResolver
 from .events import parse_event
 from .observability import Metrics, StructuredEventPublisher
 from .repositories import HistoryProviderError, InMemoryHistoryRepository, InMemorySessionRepository, SQLiteRepository
@@ -160,7 +161,7 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
 def build_application(content_root: str | Path | None = None, settings: Settings | None = None,
                       *, audio_output=None, led_controller=None,
                       playback_override: PlaybackController | None = None, display_controller=None,
-                      monotonic_now=None, background_scheduler: bool = True):
+                      monotonic_now=None, background_scheduler: bool = True, identity_resolver=None):
     settings=settings or Settings.from_env()
     settings = settings_with_compat_env(settings, ("MISHKA_PROFILE_DB", "MISHKA_CONTENT_ROOT"))
     settings = _normalize_paths(settings).validate()
@@ -169,7 +170,7 @@ def build_application(content_root: str | Path | None = None, settings: Settings
     scenarios = CanonicalContentCatalog(str(root), allow_development_assets=(settings.profile in {"mock", "local_cpu", "local_gpu"} or str(settings.hardware_mode).lower() != "physical")); metrics = Metrics(latency_limit=settings.observability_latency_limit, event_limit=settings.observability_event_limit, watchdog_limit=settings.observability_watchdog_limit); publisher = StructuredEventPublisher()
     s2s,audio_pipeline,runtime_manager=_build_s2s(settings,root,playback_override)
     profile_db = settings.profile_db
-    if settings.runtime_mode == "exhibition":
+    if settings.runtime_mode == "exhibition" or settings.identity_mode == "optional_rfid":
         # Exhibition is deliberately self-contained: no RFID/profile provider,
         # SQLite session persistence, or clinical identity gate is constructed.
         sessions = InMemorySessionRepository(); history = InMemoryHistoryRepository()
@@ -183,6 +184,9 @@ def build_application(content_root: str | Path | None = None, settings: Settings
             raise RuntimeError("MISHKA_PROFILE_DB is required for production profile integration")
         sessions = SQLiteRepository(profile_db); history = sessions
         profiles = SQLiteProfileProvider(profile_db)
+    if identity_resolver is None:
+        identity_resolver = (SyntheticIdentityResolver({}, clock=monotonic_now or time.monotonic)
+                             if settings.identity_provider == "synthetic" else DisabledIdentityResolver())
     weather_config = settings.weather_configuration()
     if weather_config.provider == "demo":
         weather = DemoScheduleWeatherService()
@@ -190,7 +194,7 @@ def build_application(content_root: str | Path | None = None, settings: Settings
         weather = ProductionScheduleWeatherService(YandexWeatherProvider.from_settings(settings), weather_config.timeout_s)
     else:
         weather = ProductionScheduleWeatherService(None, weather_config.timeout_s)
-    app = ScenarioApplication(sessions, scenarios, profiles, RuleBasedIntentClassifier(), audio_output or RecordingAudio(), led_controller or RecordingLED(), publisher, now=time.time, threshold=settings.confidence_threshold, bounded_s2s=s2s, history=history, max_session_seconds=settings.session_timeout_s, idle_timeout_seconds=settings.session_idle_timeout_s, display=display_controller, schedule_weather=weather, allow_quick_replies=settings.profile == "mock", settings=settings, monotonic_now=monotonic_now or time.monotonic, background_scheduler=background_scheduler)
+    app = ScenarioApplication(sessions, scenarios, profiles, RuleBasedIntentClassifier(), audio_output or RecordingAudio(), led_controller or RecordingLED(), publisher, now=time.time, threshold=settings.confidence_threshold, bounded_s2s=s2s, history=history, max_session_seconds=settings.session_timeout_s, idle_timeout_seconds=settings.session_idle_timeout_s, display=display_controller, schedule_weather=weather, allow_quick_replies=settings.profile == "mock", settings=settings, monotonic_now=monotonic_now or time.monotonic, background_scheduler=background_scheduler, identity_resolver=identity_resolver)
     app.s2s_audio=audio_pipeline; app.runtime_manager=runtime_manager; runtime_manager.audio_pipeline=audio_pipeline; app.runtime_status=runtime_manager.configuration(); app.settings=settings; app.metrics=metrics
     # The bounded S2S engine owns the authoritative backend lifecycle. Let it
     # drive the same canonical LED engine used by the physical stand and UI.
@@ -232,10 +236,6 @@ def create_app(application=None, *, include_test_routes: bool = False):
         try:
             if hardware_owner is not None and hasattr(hardware_owner, "start_hardware"):
                 await hardware_owner.start_hardware()
-                led = getattr(getattr(hardware_owner, "application", hardware_owner), "led", None)
-                start_breathing = getattr(led, "start_breathing", None)
-                if callable(start_breathing):
-                    start_breathing()
             if manager is None:
                 lifecycle.dependency_failed("runtime", "manager_unavailable")
             else:
@@ -247,6 +247,8 @@ def create_app(application=None, *, include_test_routes: bool = False):
             yield
         finally:
             try:
+                if hasattr(application, "shutdown_identity"):
+                    await application.shutdown_identity()
                 if hasattr(application, "stop_watchdog"):
                     await application.stop_watchdog()
                 if hasattr(application, "stop_idle_monitor"):
@@ -416,9 +418,11 @@ def create_app(application=None, *, include_test_routes: bool = False):
             and lifecycle_status.get("state") == "DEGRADED"
             and lifecycle_status.get("reason") == "resource_capacity_insufficient"
         )
+        optional_identity = getattr(settings, "identity_mode", "guest_only") == "optional_rfid"
+        identity_status = application.identity_status() if hasattr(application, "identity_status") else {"identity_ready": False, "reader_ready": False, "synthetic": False}
         software_runtime_usable = bool(
             lifecycle_admission
-            and bool(profile_status.get("ready"))
+            and (optional_identity or bool(profile_status.get("ready")))
             and bool(history_status.get("ready"))
             and bool(graph_status.get("ready"))
         )
@@ -434,6 +438,7 @@ def create_app(application=None, *, include_test_routes: bool = False):
             and content_production_ready
             and security_ready
             and launcher_provenance_ready
+            and (not optional_identity or bool(identity_status.get("identity_ready") and identity_status.get("reader_ready") and not identity_status.get("synthetic")))
             and bool(profile_status.get("ready"))
             and bool(history_status.get("ready"))
             and bool(graph_status.get("ready"))
@@ -442,6 +447,10 @@ def create_app(application=None, *, include_test_routes: bool = False):
             response.status_code = 200 if software_runtime_usable else 503
         return {
             "ready": software_runtime_usable,
+            "guest_ready": software_runtime_usable,
+            "identity_ready": bool(identity_status.get("identity_ready")),
+            "reader_ready": bool(identity_status.get("reader_ready")),
+            "identity": identity_status,
             "readiness_contract": "software_admission",
             "degraded": not software_runtime_usable,
             "software_runtime_usable": software_runtime_usable,
@@ -460,6 +469,7 @@ def create_app(application=None, *, include_test_routes: bool = False):
             "production_blockers": [
                 code for code, blocked in (
                     ("simulator_hardware", simulated_hardware),
+                    ("rfid_physical_contract_unavailable", optional_identity and not bool(identity_status.get("reader_ready") and identity_status.get("identity_ready") and not identity_status.get("synthetic"))),
                     ("software_runtime_unusable", not software_runtime_usable),
                     ("content_not_production_ready", not content_production_ready),
                     ("mutation_policy_unconfigured_or_unsafe", not security_ready),

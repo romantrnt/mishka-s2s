@@ -314,19 +314,22 @@ class UARTLEDController:
         self.exhibition_effects.cancel_effects(clear=False)
         self.output.clear_all(transition_ms)
 
-    def start_breathing(self, *, now: float | None = None, elements=None, base_elements=None, phase: str = "breathing"):
+    def start_breathing(self, *, now: float | None = None, elements=None, base_elements=None, phase: str = "breathing", preserve_current: bool = False):
         return self.exhibition_effects.start_breathing(
-            now=now, elements=elements, base_elements=base_elements, phase=phase,
+            now=now, elements=elements, base_elements=base_elements, phase=phase, preserve_current=preserve_current,
         )
 
     def start_wave(self, *, now: float | None = None, groups=None, follow_up_groups=None,
                    hold_on_complete: bool = True, loop: bool = False, base_elements=None,
-                   stage_duration_ms: int | None = None):
+                   stage_duration_ms: int | None = None, preserve_current: bool = False):
         return self.exhibition_effects.start_wave(
             now=now, groups=groups, follow_up_groups=follow_up_groups,
             hold_on_complete=hold_on_complete, loop=loop,
-            base_elements=base_elements, stage_duration_ms=stage_duration_ms,
+            base_elements=base_elements, stage_duration_ms=stage_duration_ms, preserve_current=preserve_current,
         )
+
+    def start_rfid_ready(self, *, now: float | None = None):
+        return self.exhibition_effects.start_rfid_ready(now=now)
 
     def start_age_selection_wave(self, *, now: float | None = None):
         return self.exhibition_effects.start_wave(
@@ -741,11 +744,13 @@ class HardwareIntegrationStand:
         self._hid_status = {"state": "stopped", "generation": stopped_generation}
         self._physical_loop = None
         lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
-        if callable(lighting_output_close):
-            lighting_output_close()
-        if self.lighting_serial is not None:
-            self.lighting_serial.close()
-            self.lighting_serial = None
+        try:
+            if callable(lighting_output_close):
+                await asyncio.to_thread(lighting_output_close)
+        finally:
+            if self.lighting_serial is not None:
+                self.lighting_serial.close()
+                self.lighting_serial = None
 
     def _headless_audio_play(self, response_id: str, text: str | None):
         resolved = text
@@ -1642,11 +1647,6 @@ class HardwareIntegrationStand:
         # hardware state because it aggregates away the physical channel layout.
         physical_lighting = {str(element_id): int(lighting[str(element_id)]) for element_id in LIGHTING_ELEMENT_IDS}
         led_projection = canonical_led_state_from_lighting(lighting)
-        # Explicit compatibility calls made through the old diagnostic helper
-        # remain visible when no canonical element has been changed. Production
-        # scenario effects always have a canonical lighting snapshot.
-        if not any(int(value) for value in lighting.values()) and self.commands:
-            led_projection = canonical_led_state(self.commands)
         input_diagnostics = self.input_adapter.diagnostics() if self.input_adapter is not None else {"backend": "hid" if self.hardware_mode == "physical" else "fake", "ready": self.hardware_mode != "physical"}
         input_diagnostics["stand_status"] = dict(getattr(self, "_hid_status", {"state": "not_started"}))
         if self._input_start_error is not None:
@@ -1664,7 +1664,9 @@ class HardwareIntegrationStand:
                                                     if item.get("kind") == "audio_playback_started"), None)
         audio_readiness["last_audio_error"] = next((item for item in reversed(audio_readiness["runtime_diagnostics"])
                                                     if item.get("kind") in {"audio_playback_failed", "audio_dispatch_failed", "recorded_phrase_unavailable"}), None)
-        return {"transport":{"kind":"pty_uart_jsonl_crc32","slave_path":self.pty.slave_path,
+        identity_status = self.application.identity_status() if hasattr(self.application, "identity_status") else {"identity_ready": False, "reader_ready": False}
+        return {"identity": identity_status, "identity_ready": bool(identity_status.get("identity_ready")), "reader_ready": bool(identity_status.get("reader_ready")),
+                "transport":{"kind":"pty_uart_jsonl_crc32","slave_path":self.pty.slave_path,
                              "protocol_version":"1","story_audio_mode":"silero_wav","hardware":self.adapter.health()},
                 "session":{"session_id":self.active_session_id,"state":session.state.value if session else "NONE",
                            "node":session.current_node if session else None,"scenario":session.scenario_id if session else None,
@@ -1745,7 +1747,7 @@ class HardwareIntegrationStand:
             return {}
         allowed = {
             "button_id", "node_id", "from", "to", "reason", "status",
-            "response_id", "session_id", "playback_lease",
+            "response_id", "session_id", "playback_lease", "playback_id", "token", "offset_ms", "duration_ms",
             "phrase_id", "content_kind", "asset_id", "asset_path",
             "audio_status", "asset_status", "effect",
             "pattern", "state", "generation", "sequence", "source",
@@ -1796,7 +1798,7 @@ class HardwareIntegrationStand:
             payload = item.get("payload")
             if isinstance(payload, dict):
                 allowed = {"response_id", "session_id", "playback_lease",
-                           "generation", "content_kind", "asset_id", "asset_path",
+                           "generation", "playback_id", "token", "offset_ms", "duration_ms", "content_kind", "asset_id", "asset_path",
                            "audio_status", "asset_status", "story_audio_mode"}
                 result["payload"] = {key: payload[key] for key in allowed if key in payload}
             return result
@@ -1810,6 +1812,9 @@ class HardwareIntegrationStand:
             return result
 
         return {
+            "identity": dict(source.get("identity") or {}),
+            "identity_ready": bool(source.get("identity_ready")),
+            "reader_ready": bool(source.get("reader_ready")),
             "transport": {"kind": source.get("transport", {}).get("kind"), "story_audio_mode": source.get("transport", {}).get("story_audio_mode"), "hardware": {"connected": source.get("transport", {}).get("hardware", {}).get("connected")}},
             "session": {key: session[key] for key in ("state", "node", "scenario", "handset_up", "enabled_buttons", "visual_only", "retries") if key in session},
             "visual_only": bool(source.get("visual_only")),
@@ -1840,6 +1845,9 @@ class HardwareIntegrationStand:
         """Cancel loop-owned tasks on the loop; release blocking workers off it."""
         if getattr(self, "_closed", False):
             return
+        shutdown_identity = getattr(self.application, "shutdown_identity", None)
+        if callable(shutdown_identity):
+            await shutdown_identity()
         led = getattr(getattr(self, "application", None), "led", None)
         cancel_effects = getattr(led, "cancel_effects", None)
         if callable(cancel_effects) and not hardware_stopped:
@@ -1852,6 +1860,9 @@ class HardwareIntegrationStand:
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        cancel_identity = getattr(self.application, "cancel_identity_work", None)
+        if callable(cancel_identity):
+            cancel_identity()
         if cancel_tasks:
             led = getattr(getattr(self, "application", None), "led", None)
             cancel_effects = getattr(led, "cancel_effects", None)
@@ -1864,14 +1875,18 @@ class HardwareIntegrationStand:
             self.audio_input.stop()
         if self.input_adapter is not None:
             self.input_adapter.close()
-        if not hardware_stopped:
-            lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
-            if callable(lighting_output_close):
-                lighting_output_close()
-        if self.lighting_serial is not None:
-            self.lighting_serial.close()
-        self.adapter.close(); self._uart_executor.shutdown(wait=True, cancel_futures=True)
-        self._audio_executor.shutdown(wait=True, cancel_futures=True); self.pty.close()
+        try:
+            if not hardware_stopped:
+                lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
+                if callable(lighting_output_close):
+                    lighting_output_close()
+        finally:
+            if self.lighting_serial is not None:
+                self.lighting_serial.close()
+            self.adapter.close()
+            self._uart_executor.shutdown(wait=True, cancel_futures=True)
+            self._audio_executor.shutdown(wait=True, cancel_futures=True)
+            self.pty.close()
 
 
 def decode_wav(raw: bytes) -> tuple[tuple[float, ...], int]:
@@ -2198,7 +2213,7 @@ def create_stand_app(settings: Settings | None = None):
         await stand.hub.publish({"type": "stand_state", "state": stand.panel_snapshot()})
         return result
     @api.post("/stand/rfid")
-    async def rfid(payload:dict): return transport_response(await stand.inject("rfid",{"tag_id":str(payload.get("tag_id",""))},payload.get("session_id")))
+    async def rfid(payload:dict): return transport_response(await stand.inject("rfid",{"tag_id":payload.get("tag_id","")},payload.get("session_id")))
     @api.post("/stand/handset")
     async def handset(payload:dict):
         sid = payload.get("session_id")
