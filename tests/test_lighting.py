@@ -90,8 +90,10 @@ def test_physical_lighting_reconnects_before_next_command_after_transport_loss()
     output = PhysicalLightingOutput(adapter)
     adapter._ready = False
     output.set_element(0, 1, 100)
-    output.close()
+    output.flush()
     assert transport.writes == [b"0,1,100\n"]
+    output.close()
+    assert transport.writes[-18:] == [f"{element_id},0,0\n".encode("ascii") for element_id in LIGHTING_ELEMENT_IDS]
     adapter.close()
 
 
@@ -180,14 +182,14 @@ def test_standby_breathing_uses_one_second_binary_transition_serial_batches():
         output = PhysicalLightingOutput(adapter)
         engine = ExhibitionLightingEngine(output, monotonic_now=lambda: 0.0, background_scheduler=False)
         engine.start_breathing(now=0.0)
-        output._writer.submit(lambda: None).result()
+        output.flush()
         on_wire = transport.writes[-18:]
         assert on_wire == [
             f"{element_id},1,{EXHIBITION_BREATHING_PHASE_MS}\n".encode("ascii")
             for element_id in LIGHTING_ELEMENT_IDS
         ]
         engine.advance(1.0)
-        output._writer.submit(lambda: None).result()
+        output.flush()
         off_wire = transport.writes[-18:]
         assert off_wire == [
             f"{element_id},0,{EXHIBITION_BREATHING_PHASE_MS}\n".encode("ascii")

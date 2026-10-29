@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import inspect
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -313,6 +314,8 @@ class ExhibitionLightingEngine:
         self._wave_stage_ms = EXHIBITION_WAVE_STAGE_MS
         self.wave_phase = "idle"
         self._wave_hold_on_complete = True
+        self._rfid_ready = False
+        self._rfid_stage_at: float | None = None
 
     @property
     def task_active(self) -> bool:
@@ -340,7 +343,13 @@ class ExhibitionLightingEngine:
                 self.advance()
                 # Non-authoritative production wakeup only. The injected
                 # monotonic clock remains the sole effect-time source.
-                await asyncio.sleep(EXHIBITION_BREATHING_TICK_MS / 1000.0)
+                wakeup_s = EXHIBITION_BREATHING_TICK_MS / 1000.0
+                if self._rfid_ready and self._rfid_stage_at is not None:
+                    # Wake at the owned stage boundary rather than rounding
+                    # every 120 ms dwell up to two 100 ms polling intervals.
+                    remaining = self._rfid_stage_at + self._wave_stage_ms / 1000.0 - self.monotonic_now()
+                    wakeup_s = min(wakeup_s, max(0.001, remaining))
+                await asyncio.sleep(wakeup_s)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -412,6 +421,9 @@ class ExhibitionLightingEngine:
 
     def _start_generation(self, effect: str, now: float) -> int:
         self._cancel_task()
+        invalidate = getattr(self.output, "invalidate_pending", None)
+        if callable(invalidate):
+            invalidate()
         self.generation += 1
         self.effect = effect
         self.started_at_monotonic = float(now)
@@ -428,11 +440,14 @@ class ExhibitionLightingEngine:
         self._breathing_elements = frozenset(LIGHTING_ELEMENT_IDS)
         self._breathing_base_elements = frozenset()
         self.breathing_phase = "breathing"
+        self._rfid_ready = False
+        self._rfid_stage_at = None
         return self.generation
 
     def start_breathing(
         self, *, now: float | None = None, elements: Sequence[int] | None = None,
         base_elements: Sequence[int] | None = None, phase: str = "breathing",
+        preserve_current: bool = False,
     ) -> dict[str, object]:
         now = self.monotonic_now() if now is None else float(now)
         normalized_elements = frozenset(_element_id(int(element_id)) for element_id in (elements or LIGHTING_ELEMENT_IDS))
@@ -447,7 +462,8 @@ class ExhibitionLightingEngine:
         self._breathing_elements = normalized_elements
         self._breathing_base_elements = normalized_base
         self.breathing_phase = str(phase or "breathing")
-        self.output.clear_all()
+        if not preserve_current:
+            self.output.clear_all()
         self.advance(now, force=True)
         self._schedule(generation)
         return self.snapshot()
@@ -462,6 +478,7 @@ class ExhibitionLightingEngine:
         loop: bool = False,
         base_elements: Sequence[int] | None = None,
         stage_duration_ms: int | None = None,
+        preserve_current: bool = False,
     ) -> dict[str, object]:
         now = self.monotonic_now() if now is None else float(now)
         normalized = tuple(tuple(_element_id(int(element_id)) for element_id in group) for group in (groups or EXHIBITION_WAVE_GROUPS))
@@ -478,6 +495,22 @@ class ExhibitionLightingEngine:
         self._wave_stage_ms = max(20, int(stage_duration_ms or EXHIBITION_WAVE_STAGE_MS))
         self.wave_phase = "primary"
         self._wave_hold_on_complete = bool(hold_on_complete)
+        if not preserve_current:
+            self.output.clear_all()
+        self.advance(now, force=True)
+        self._schedule(generation)
+        return self.snapshot()
+
+    def start_rfid_ready(self, *, now: float | None = None) -> dict[str, object]:
+        """Own the acknowledgement wave and continuous breathing as one effect.
+
+        Each RFID stage gets its full dwell even after a delayed wakeup. The
+        ordinary wave keeps its existing elapsed-clock semantics.
+        """
+        now = self.monotonic_now() if now is None else float(now)
+        generation = self._start_generation("wave", now)
+        self._rfid_ready = True
+        self.wave_phase = "rfid_ready"
         self.output.clear_all()
         self.advance(now, force=True)
         self._schedule(generation)
@@ -485,6 +518,9 @@ class ExhibitionLightingEngine:
 
     def cancel_effects(self, *, clear: bool = True) -> dict[str, object]:
         self._cancel_task()
+        invalidate = getattr(self.output, "invalidate_pending", None)
+        if callable(invalidate):
+            invalidate()
         self.generation += 1
         self.effect = "idle"
         self.started_at_monotonic = None
@@ -501,13 +537,21 @@ class ExhibitionLightingEngine:
         self.breathing_phase = "breathing"
         self.wave_phase = "idle"
         self._wave_hold_on_complete = True
+        self._rfid_ready = False
+        self._rfid_stage_at = None
         if clear:
             self.output.clear_all()
+            self.frame_count += 1
+            self.last_frame = {
+                "effect": "idle", "phase": "dark_idle", "state": 0,
+                "transition_ms": 0, "protocol": "binary_transition",
+                "frame_index": self.frame_count, "commands": len(LIGHTING_ELEMENT_IDS),
+            }
+            self._notify_frame(dict(self.last_frame))
         return self.snapshot()
 
     def reset_to_standby(self, *, now: float | None = None) -> dict[str, object]:
-        self.cancel_effects(clear=True)
-        return self.start_breathing(now=now)
+        return self.cancel_effects(clear=True)
 
     def advance(self, now: float | None = None, *, force: bool = False) -> dict[str, object] | None:
         if self.effect in {"idle", "wave_paused"} or self.started_at_monotonic is None:
@@ -550,7 +594,33 @@ class ExhibitionLightingEngine:
 
         groups = self._wave_groups
         stage = int(elapsed_ms // self._wave_stage_ms)
+        if self._rfid_ready:
+            # Do not skip required stages when the event loop wakes late, or
+            # finish the sequence while the final stage is still fading.
+            if self._rfid_stage_at is not None and (
+                (now - self._rfid_stage_at) * 1000.0 + 1e-6 < self._wave_stage_ms
+            ):
+                return None
+            stage = self.wave_stage + 1
+            self._rfid_stage_at = now
         if stage >= len(groups):
+            if self._rfid_ready:
+                generation = self.generation
+                self.wave_stage = len(groups)
+                self._emit(self._all_binary_commands(1, self._wave_stage_ms), {
+                    "effect": "wave_complete", "phase": "rfid_ready",
+                    "at_monotonic": now, "wave_stage": self.wave_stage,
+                    "active_elements": list(LIGHTING_ELEMENT_IDS), "held": True,
+                })
+                # A synchronous frame hook may replace/cancel this owner.
+                if generation != self.generation or not self._rfid_ready:
+                    return None
+                self._rfid_ready = False
+                self.effect = "breathing"
+                self.breathing_phase = "rfid_ready"
+                self.started_at_monotonic = now
+                self.last_emit_key = None
+                return self.advance(now, force=True)
             if self._wave_loop:
                 self.started_at_monotonic = now
                 self.wave_stage = -1
@@ -614,6 +684,10 @@ class ExhibitionLightingEngine:
         frame = dict(self.last_frame or {})
         return {"active": self.effect != "idle", "effect": self.effect, "generation": self.generation, "clock": "monotonic_injected", "task_active": self.task_active, "scheduler": "background_wakeup" if self.background_scheduler else "manual_fake_clock", "phase": self.breathing_phase if self.effect == "breathing" else self.wave_phase, "breathing_elements": sorted(self._breathing_elements), "breathing_base_elements": sorted(self._breathing_base_elements), "wave_stage": self.wave_stage, "wave_phase": self.wave_phase, "wave_loop": self._wave_loop, "wave_stage_ms": self._wave_stage_ms, "frame_count": self.frame_count, "state": frame.get("state"), "transition_ms": frame.get("transition_ms"), "protocol": frame.get("protocol"), "brightness_percent": frame.get("brightness_percent"), "requested_brightness_percent": frame.get("requested_brightness_percent"), "on_slots": frame.get("on_slots"), "pwm_slots": frame.get("pwm_slots"), "elements": list(LIGHTING_ELEMENT_IDS), "last_frame": frame, "last_error": dict(self.last_error) if self.last_error else None}
 
+
+
+class _IncompleteLightingLineError(ConnectionError):
+    """A partial or unconfirmed CSV line cannot safely be replayed."""
 
 
 class SerialLightingAdapter:
@@ -704,18 +778,49 @@ class SerialLightingAdapter:
             command = LightingCommand(**command)
         self.send_batch((command,))
 
-    def send_batch(self, commands: Sequence[LightingCommand]) -> None:
+    def _write_line(self, payload: bytes) -> None:
+        # PosixSerialTransport already completes partial os.write calls. Also
+        # support transports that return byte counts: complete this one line
+        # before checking generation again, so a reset cannot splice CSV lines.
+        offset = 0
+        deadline = time.monotonic() + self.timeout_s
+        try:
+            while offset < len(payload):
+                if offset and time.monotonic() >= deadline:
+                    raise TimeoutError("lighting serial line write timed out")
+                remaining = payload[offset:]
+                written = self.transport.write(remaining)
+                if written is None:
+                    written = len(remaining)
+                if isinstance(written, bool) or not isinstance(written, int) or not 0 < written <= len(remaining):
+                    raise IOError("invalid lighting serial write count")
+                offset += written
+        except Exception as exc:
+            # The production transport completes os.write calls internally,
+            # but an exception does not expose how many bytes reached the
+            # device. Treat that outcome as potentially partial as well.
+            from .hardware import PosixSerialTransport
+            if offset or isinstance(self.transport, PosixSerialTransport):
+                raise _IncompleteLightingLineError("lighting serial line interrupted after partial or unconfirmed write") from exc
+            raise
+
+    def send_batch(self, commands: Sequence[LightingCommand], *, is_current=None) -> bool:
         validated = tuple(
             command if isinstance(command, LightingCommand) else LightingCommand(**command)
             for command in commands
         )
         with self._lock:
+            if callable(is_current) and not is_current():
+                return False
             if not self.is_ready():
                 raise ConnectionError("lighting serial adapter is not ready")
             try:
                 for command in validated:
-                    self.transport.write(command.to_wire())
+                    if callable(is_current) and not is_current():
+                        return False
+                    self._write_line(command.to_wire())
                     self._sent += 1
+                return True
             except Exception as exc:
                 first_error = {
                     "exception_type": type(exc).__name__,
@@ -724,6 +829,10 @@ class SerialLightingAdapter:
                 self._failed += 1
                 self._ready = False
                 self._last_error = {**first_error, "attempt": 1}
+                if isinstance(exc, _IncompleteLightingLineError):
+                    raise ConnectionError("lighting serial write failed after incomplete line") from exc
+                if callable(is_current) and not is_current():
+                    return False
                 # USB-serial CDC devices can transiently stop accepting a
                 # burst while the firmware is consuming the previous line.
                 # LED writes are idempotent, so reconnect and retry the full
@@ -731,12 +840,17 @@ class SerialLightingAdapter:
                 # from killing the canonical breathing/wave task.
                 try:
                     self.transport.close()
+                    if callable(is_current) and not is_current():
+                        return False
                     self.transport.open()
                     self._ready = True
                     for command in validated:
-                        self.transport.write(command.to_wire())
+                        if callable(is_current) and not is_current():
+                            return False
+                        self._write_line(command.to_wire())
                         self._sent += 1
                     self._last_error = None
+                    return True
                 except Exception as retry_exc:
                     self._ready = False
                     self._last_error = {
@@ -768,37 +882,104 @@ class SerialLightingAdapter:
 
 
 class PhysicalLightingOutput:
-    """Canonical lighting state with an ordered background serial writer.
+    """Desired lighting targets with one bounded, ordered serial writer.
 
-    USB CDC writes may block while the Arduino drains its input buffer. The
-    FIFO worker keeps command order without freezing the asyncio event loop.
+    Generation checks fence every pending line and retry. One CSV line already
+    being written can finish after invalidation; terminal dark follows
+    it. Flush means host writes completed, never firmware acknowledgement.
     """
 
-    def __init__(self, adapter: SerialLightingAdapter) -> None:
+    def __init__(self, adapter: SerialLightingAdapter, *, max_pending_batches: int = 32) -> None:
+        if isinstance(max_pending_batches, bool) or not isinstance(max_pending_batches, int) or max_pending_batches < 2:
+            raise ValueError("max_pending_batches must be an integer of at least two")
         self.adapter = adapter
         self.state = LightingState()
         self._generation = 0
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mishka-lighting-io")
+        self._pending: deque[tuple[int, tuple[LightingCommand, ...]]] = deque()
+        self._max_pending_batches = max_pending_batches
+        self._draining = False
+        self._in_flight = False
+        self._closing = False
         self._closed = False
-        self._last_async_error: dict[str, str] | None = None
+        self._last_async_error: dict[str, object] | None = None
+        self._generation_error: dict[str, object] | None = None
+        self._submitted_batches = 0
+        self._written_batches = 0
+        self._dropped_batches = 0
+        self._failed_batches = 0
+        self._overflow_batches = 0
 
-    def _write_batch(self, commands: tuple[LightingCommand, ...]) -> None:
+    def _is_current(self, generation: int) -> bool:
+        with self._lock:
+            return generation == self._generation
+
+    def _write_batch(self, generation: int, commands: tuple[LightingCommand, ...]) -> bool:
+        if not self._is_current(generation):
+            return False
         if hasattr(self.adapter, "is_ready") and not self.adapter.is_ready():
             reconnect = getattr(self.adapter, "reconnect", None)
             if not callable(reconnect):
                 raise ConnectionError("lighting serial adapter is not ready")
             reconnect()
-        self.adapter.send_batch(commands)
+        return self.adapter.send_batch(commands, is_current=lambda: self._is_current(generation))
 
-    def _consume_write(self, future) -> None:
-        try:
-            future.result()
-        except Exception as exc:
-            self._last_async_error = {
-                "exception_type": type(exc).__name__,
-                "detail": str(exc)[:200],
-            }
+    def _drain_pending(self) -> None:
+        while True:
+            with self._condition:
+                if not self._pending:
+                    self._draining = False
+                    self._condition.notify_all()
+                    return
+                generation, commands = self._pending.popleft()
+                self._in_flight = True
+            try:
+                written = self._write_batch(generation, commands)
+                with self._condition:
+                    if written:
+                        self._written_batches += 1
+                    else:
+                        self._dropped_batches += 1
+            except Exception as exc:
+                with self._condition:
+                    error = {
+                        "exception_type": type(exc).__name__,
+                        "detail": str(exc)[:200], "generation": generation,
+                    }
+                    self._last_async_error = error
+                    self._failed_batches += 1
+                    if generation == self._generation:
+                        self._generation_error = error
+                        # Stop the failed producer's queued backlog. A new
+                        # generation/reset may explicitly reconcile output.
+                        self._dropped_batches += len(self._pending)
+                        self._pending.clear()
+            finally:
+                with self._condition:
+                    self._in_flight = False
+                    self._condition.notify_all()
+
+    def _enqueue_locked(self, commands: tuple[LightingCommand, ...]) -> None:
+        if len(self._pending) + int(self._in_flight) >= self._max_pending_batches:
+            self._overflow_batches += 1
+            raise BufferError("lighting output queue is full")
+        if self._generation_error is not None:
+            raise ConnectionError("lighting output requires a new generation after failure")
+        self._pending.append((self._generation, commands))
+        self._submitted_batches += 1
+        for command in commands:
+            self.state.apply(command)
+        if not self._draining:
+            self._draining = True
+            self._writer.submit(self._drain_pending)
+
+    def _invalidate_locked(self) -> None:
+        self._generation += 1
+        self._dropped_batches += len(self._pending)
+        self._pending.clear()
+        self._generation_error = None
 
     def set_element(self, element_id: int, state: int, transition_ms: int = 0) -> None:
         self.set_elements((LightingCommand(element_id, state, transition_ms),))
@@ -808,36 +989,82 @@ class PhysicalLightingOutput:
             command if isinstance(command, LightingCommand) else LightingCommand(**command)
             for command in commands
         )
+        if len(validated) > len(LIGHTING_ELEMENT_IDS):
+            raise ValueError("a lighting batch must contain at most eighteen commands")
         with self._lock:
-            if self._closed:
+            if self._closed or self._closing:
                 raise ConnectionError("lighting output is closed")
-            for command in validated:
-                self.state.apply(command)
-            future = self._writer.submit(self._write_batch, validated)
-            future.add_done_callback(self._consume_write)
+            self._enqueue_locked(validated)
 
     def clear_all(self, transition_ms: int = 0) -> None:
-        self.set_elements(tuple(
+        commands = tuple(
             LightingCommand(element_id, 0, transition_ms)
             for element_id in LIGHTING_ELEMENT_IDS
-        ))
+        )
+        with self._lock:
+            if self._closed or self._closing:
+                raise ConnectionError("lighting output is closed")
+            self._invalidate_locked()
+            self._enqueue_locked(commands)
 
     def invalidate_pending(self) -> None:
         with self._lock:
-            self._generation += 1
+            if self._closing or self._closed:
+                return
+            self._invalidate_locked()
+
+    def flush(self, timeout_s: float = 2.0) -> None:
+        """Wait a bounded time for host writes; expose timeout or write failure."""
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        with self._condition:
+            while self._pending or self._in_flight or self._draining:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("lighting output drain timed out")
+                self._condition.wait(remaining)
+            if self._generation_error is not None:
+                raise ConnectionError("lighting serial write failed during drain")
+
+    def reset_dark(self, timeout_s: float = 2.0) -> None:
+        self.clear_all()
+        self.flush(timeout_s)
 
     def snapshot(self) -> dict[str, int]:
         with self._lock:
             return self.state.snapshot()
 
-    def close(self) -> None:
+    def close(self, timeout_s: float = 2.0) -> None:
         with self._lock:
             if self._closed:
-                return
-            self._closed = True
-        self._writer.shutdown(wait=True, cancel_futures=True)
+                # A timed-out close can be checked again after the blocked
+                # transport write has returned.
+                already_closed = True
+            else:
+                already_closed = False
+                self._closing = True
+                self._invalidate_locked()
+                self._enqueue_locked(tuple(LightingCommand(element_id, 0) for element_id in LIGHTING_ELEMENT_IDS))
+        try:
+            self.flush(timeout_s)
+        finally:
+            if not already_closed:
+                with self._lock:
+                    self._closed = True
+                self._writer.shutdown(wait=False)
 
     def diagnostics(self) -> dict:
-        return {"backend": "serial", "state": self.snapshot(),
+        with self._lock:
+            output = {
+                "state": self.state.snapshot(), "state_kind": "desired_targets",
+                "generation": self._generation, "closed": self._closed,
+                "pending_batches": len(self._pending), "in_flight": self._in_flight,
+                "max_pending_batches": self._max_pending_batches,
+                "submitted_batches": self._submitted_batches,
+                "written_batches": self._written_batches,
+                "dropped_batches": self._dropped_batches,
+                "failed_batches": self._failed_batches,
+                "overflow_batches": self._overflow_batches,
                 "async_error": dict(self._last_async_error) if self._last_async_error else None,
-                **self.adapter.diagnostics()}
+                "firmware_acknowledged": False,
+            }
+        return {"backend": "serial", **self.adapter.diagnostics(), **output}
