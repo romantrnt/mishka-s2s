@@ -38,7 +38,8 @@ class Event:
     monotonic_timestamp: float | None = None
 
 
-EVENT_TYPES = frozenset({"RfidPresented", "RfidRemoved", "AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"})
+IDENTITY_INTERNAL_EVENT_TYPES = frozenset({"IdentityLookupSucceeded", "IdentityLookupFailed", "IdentityReadyExpired", "IdentityAuthorizationExpired"})
+EVENT_TYPES = frozenset({"RfidPresented", "RfidRemoved", "AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"}) | IDENTITY_INTERNAL_EVENT_TYPES
 
 
 @dataclass

@@ -128,6 +128,13 @@ class Settings:
 
     profile: str = "mock"
     runtime_mode: str = "exhibition"
+    # Child-data authorization is independent of operator authentication and
+    # exhibition/clinical scenario policy. No production provider is assumed.
+    identity_mode: str = "guest_only"
+    identity_provider: str = "disabled"
+    rfid_lookup_timeout_s: float = 2.0
+    rfid_ready_ttl_s: float = 60.0
+    rfid_debounce_s: float = 0.5
     host: str = "0.0.0.0"
     port: int = 8000
     policy_version: str = CANONICAL_POLICY.version
@@ -282,6 +289,23 @@ class Settings:
             raise SettingsError("MISHKA_PROFILE is unsupported")
         if self.runtime_mode not in {"exhibition", "clinical"}:
             raise SettingsError("MISHKA_RUNTIME_MODE must be exhibition or clinical")
+        if self.identity_mode not in {"guest_only", "optional_rfid"}:
+            raise SettingsError("MISHKA_IDENTITY_MODE must be guest_only or optional_rfid")
+        if self.identity_mode == "optional_rfid" and self.runtime_mode != "exhibition":
+            raise SettingsError("optional_rfid currently requires the exhibition session policy")
+        if self.identity_provider not in {"disabled", "synthetic"}:
+            raise SettingsError("MISHKA_IDENTITY_PROVIDER is unsupported")
+        if self.identity_mode == "guest_only" and self.identity_provider != "disabled":
+            raise SettingsError("guest_only identity requires the disabled provider")
+        if self.identity_provider == "synthetic" and (self.profile != "mock" or self.hardware_mode not in {"fake", "simulator"}):
+            raise SettingsError("synthetic identity requires mock profile and fake/simulator hardware")
+        for name, value, lower, upper in (
+                ("MISHKA_RFID_LOOKUP_TIMEOUT_S", self.rfid_lookup_timeout_s, 0.05, 30.0),
+                ("MISHKA_RFID_READY_TTL_S", self.rfid_ready_ttl_s, 0.1, 3600.0),
+                ("MISHKA_RFID_DEBOUNCE_S", self.rfid_debounce_s, 0.0, 5.0)):
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or not lower <= value <= upper):
+                raise SettingsError(f"{name} must be finite and within supported bounds")
         if self.audio_policy not in {"recorded_catalog"}:
             raise SettingsError("MISHKA_AUDIO_POLICY is unsupported")
         if self.hid_policy not in {"space_lifecycle"}:
@@ -427,6 +451,11 @@ class Settings:
         graph_backend = _text("MISHKA_GRAPH_BACKEND", "langgraph").lower()
         settings = cls(
             profile=profile, runtime_mode=_text("MISHKA_RUNTIME_MODE", "exhibition").lower(), host=_text("MISHKA_HOST", "0.0.0.0"), port=_int("MISHKA_PORT", 8000),
+            identity_mode=_text("MISHKA_IDENTITY_MODE", "guest_only").lower(),
+            identity_provider=_text("MISHKA_IDENTITY_PROVIDER", "disabled").lower(),
+            rfid_lookup_timeout_s=_float("MISHKA_RFID_LOOKUP_TIMEOUT_S", 2.0),
+            rfid_ready_ttl_s=_float("MISHKA_RFID_READY_TTL_S", 60.0),
+            rfid_debounce_s=_float("MISHKA_RFID_DEBOUNCE_S", 0.5),
             policy_version=_text("MISHKA_POLICY_VERSION", CANONICAL_POLICY.version),
             no_voice_recording=_bool("NO_VOICE_RECORDING", True), content_root=_text("MISHKA_CONTENT_ROOT", "content"),
             profile_db=_text("MISHKA_PROFILE_DB", "runtime/data/profiles.sqlite3"), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False), mutation_auth_policy=_text("MISHKA_MUTATION_AUTH_POLICY", "token_required").lower(),
@@ -477,6 +506,11 @@ class Settings:
             config_source = "process-environment"
         return {
             "mode": self.runtime_mode,
+            "identity_mode": self.identity_mode,
+            "identity_provider": self.identity_provider,
+            "rfid_lookup_timeout_s": self.rfid_lookup_timeout_s,
+            "rfid_ready_ttl_s": self.rfid_ready_ttl_s,
+            "rfid_debounce_s": self.rfid_debounce_s,
             "scenario_id": self.scenario_id,
             "graph_backend": self.graph_backend,
             # Deprecated projection retained for old health consumers.
