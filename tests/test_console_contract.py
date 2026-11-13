@@ -84,13 +84,13 @@ def test_webpanel_allows_microphone_on_exhibition_name_capture_and_tracks_live_e
     html = (CONSOLE.parent / "index.html").read_text(encoding="utf-8")
     assert "exhibition_name_capture" in source
     assert "exhibition_age_selection" in source
-    assert "console.js?v=20261029-rfid-status-" in html
+    assert "console.js?v=20261110-json-profile-" in html
     assert 'id="wave-state">LIGHTS OFF<' in html
     assert "Тёмное ожидание" in html
     assert "BREATHING" not in html
 
 
-def test_webpanel_projects_only_backend_rfid_modes_without_private_payloads():
+def test_webpanel_projects_only_backend_profile_modes_without_private_payloads():
     script = r"""
 const assert = require('assert');
 const fs = require('fs');
@@ -105,12 +105,12 @@ const project = mode => context.cardStatusProjection({
   canonical_state: {mode, tag_id: 'PRIVATE_UID', display_name: 'PRIVATE_NAME', profile: {secret: 'PRIVATE_PROFILE'}},
   identity: {status: 'authorized', tag_id: 'PRIVATE_UID'}
 });
-assert.strictEqual(project('rfid_lookup').label, 'Проверка карты');
-assert.strictEqual(project('rfid_ready').label, 'Карта принята · поднимите трубку');
+assert.strictEqual(project('rfid_lookup').label, 'Нет активной карты');
+assert.strictEqual(project('profile_ready').label, 'Карта принята · поднимите трубку');
 for (const mode of ['idle', 'voice_welcome', 'unknown', 'PRIVATE_UID']) {
   assert.strictEqual(project(mode).label, 'Нет активной карты');
 }
-assert(!JSON.stringify([project('rfid_lookup'), project('rfid_ready')]).includes('PRIVATE_'));
+assert(!JSON.stringify([project('rfid_lookup'), project('profile_ready')]).includes('PRIVATE_'));
 """
     result = subprocess.run(["node", "-e", script, str(CONSOLE)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr

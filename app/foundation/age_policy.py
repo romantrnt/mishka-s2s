@@ -31,6 +31,13 @@ POLICIES = {
 def age_details(profile: Mapping[str, Any] | None, *, now: datetime | None = None) -> dict[str, Any]:
     value = profile or {}; raw = value.get("date_of_birth")
     result = {"age_years": None, "age_band": "3-5", "age_band_source": "anonymous_default" if not profile else "profile_missing_default", "profile_data_incomplete": bool(profile) and not isinstance(raw, str), "current_date": None, "timezone": str(value.get("timezone") or "Europe/Moscow")}
+    if (type(value.get("age_years")) is int and 0 <= value["age_years"] <= 130
+            and value.get("age_source") == "data14_age_years"):
+        years = value["age_years"]
+        result.update(age_years=years, age_band="1-3" if years <= 3 else "3-5" if years <= 5 else "5-7",
+                      age_band_source="data14_age_years",
+                      profile_data_incomplete=value.get("birth_data_state") != "complete")
+        return result
     try:
         zone = ZoneInfo(result["timezone"]); today = now.astimezone(zone).date() if now else datetime.now(zone).date(); result["current_date"] = today.isoformat()
         born = date.fromisoformat(raw) if isinstance(raw, str) else None

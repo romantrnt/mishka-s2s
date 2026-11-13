@@ -314,8 +314,8 @@ class ExhibitionLightingEngine:
         self._wave_stage_ms = EXHIBITION_WAVE_STAGE_MS
         self.wave_phase = "idle"
         self._wave_hold_on_complete = True
-        self._rfid_ready = False
-        self._rfid_stage_at: float | None = None
+        self._profile_ready = False
+        self._profile_stage_at: float | None = None
 
     @property
     def task_active(self) -> bool:
@@ -344,10 +344,10 @@ class ExhibitionLightingEngine:
                 # Non-authoritative production wakeup only. The injected
                 # monotonic clock remains the sole effect-time source.
                 wakeup_s = EXHIBITION_BREATHING_TICK_MS / 1000.0
-                if self._rfid_ready and self._rfid_stage_at is not None:
+                if self._profile_ready and self._profile_stage_at is not None:
                     # Wake at the owned stage boundary rather than rounding
                     # every 120 ms dwell up to two 100 ms polling intervals.
-                    remaining = self._rfid_stage_at + self._wave_stage_ms / 1000.0 - self.monotonic_now()
+                    remaining = self._profile_stage_at + self._wave_stage_ms / 1000.0 - self.monotonic_now()
                     wakeup_s = min(wakeup_s, max(0.001, remaining))
                 await asyncio.sleep(wakeup_s)
         except asyncio.CancelledError:
@@ -440,8 +440,8 @@ class ExhibitionLightingEngine:
         self._breathing_elements = frozenset(LIGHTING_ELEMENT_IDS)
         self._breathing_base_elements = frozenset()
         self.breathing_phase = "breathing"
-        self._rfid_ready = False
-        self._rfid_stage_at = None
+        self._profile_ready = False
+        self._profile_stage_at = None
         return self.generation
 
     def start_breathing(
@@ -501,16 +501,16 @@ class ExhibitionLightingEngine:
         self._schedule(generation)
         return self.snapshot()
 
-    def start_rfid_ready(self, *, now: float | None = None) -> dict[str, object]:
+    def start_profile_ready(self, *, now: float | None = None) -> dict[str, object]:
         """Own the acknowledgement wave and continuous breathing as one effect.
 
-        Each RFID stage gets its full dwell even after a delayed wakeup. The
+        Each profile-ready stage gets its full dwell even after a delayed wakeup. The
         ordinary wave keeps its existing elapsed-clock semantics.
         """
         now = self.monotonic_now() if now is None else float(now)
         generation = self._start_generation("wave", now)
-        self._rfid_ready = True
-        self.wave_phase = "rfid_ready"
+        self._profile_ready = True
+        self.wave_phase = "profile_ready"
         self.output.clear_all()
         self.advance(now, force=True)
         self._schedule(generation)
@@ -537,8 +537,8 @@ class ExhibitionLightingEngine:
         self.breathing_phase = "breathing"
         self.wave_phase = "idle"
         self._wave_hold_on_complete = True
-        self._rfid_ready = False
-        self._rfid_stage_at = None
+        self._profile_ready = False
+        self._profile_stage_at = None
         if clear:
             self.output.clear_all()
             self.frame_count += 1
@@ -594,30 +594,30 @@ class ExhibitionLightingEngine:
 
         groups = self._wave_groups
         stage = int(elapsed_ms // self._wave_stage_ms)
-        if self._rfid_ready:
+        if self._profile_ready:
             # Do not skip required stages when the event loop wakes late, or
             # finish the sequence while the final stage is still fading.
-            if self._rfid_stage_at is not None and (
-                (now - self._rfid_stage_at) * 1000.0 + 1e-6 < self._wave_stage_ms
+            if self._profile_stage_at is not None and (
+                (now - self._profile_stage_at) * 1000.0 + 1e-6 < self._wave_stage_ms
             ):
                 return None
             stage = self.wave_stage + 1
-            self._rfid_stage_at = now
+            self._profile_stage_at = now
         if stage >= len(groups):
-            if self._rfid_ready:
+            if self._profile_ready:
                 generation = self.generation
                 self.wave_stage = len(groups)
                 self._emit(self._all_binary_commands(1, self._wave_stage_ms), {
-                    "effect": "wave_complete", "phase": "rfid_ready",
+                    "effect": "wave_complete", "phase": "profile_ready",
                     "at_monotonic": now, "wave_stage": self.wave_stage,
                     "active_elements": list(LIGHTING_ELEMENT_IDS), "held": True,
                 })
                 # A synchronous frame hook may replace/cancel this owner.
-                if generation != self.generation or not self._rfid_ready:
+                if generation != self.generation or not self._profile_ready:
                     return None
-                self._rfid_ready = False
+                self._profile_ready = False
                 self.effect = "breathing"
-                self.breathing_phase = "rfid_ready"
+                self.breathing_phase = "profile_ready"
                 self.started_at_monotonic = now
                 self.last_emit_key = None
                 return self.advance(now, force=True)

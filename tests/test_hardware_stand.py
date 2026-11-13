@@ -111,17 +111,6 @@ def test_canonical_set_element_remains_independent_from_readiness_groups():
         stand.close()
 
 
-def test_first_rfid_readiness_wave_reconciles_to_canonical_lighting():
-    stand = HardwareIntegrationStand(settings=Settings(profile="mock", runtime_mode="clinical").validate())
-    try:
-        result = run(stand.inject("rfid", {"tag_id": CHILD_TAG}, "readiness-reconcile"))
-        assert result["reason"] == "rfid_identified"
-        lighting = stand.snapshot()["lighting"]
-        assert all(lighting[str(element_id)] == 1 for element_id in LIGHTING_ELEMENT_IDS)
-        assert sum(lighting.values()) == 18
-        assert set(map(int, lighting)) == set(LIGHTING_ELEMENT_IDS)
-    finally:
-        stand.close()
 
 
 def test_malformed_led_state_is_degraded_not_silent_idle():
@@ -160,7 +149,6 @@ def test_malformed_json_values_are_rejected_as_protocol_errors():
 def test_duplicate_pcm_sequence_is_rejected_while_vad_is_collecting():
     stand=HardwareIntegrationStand(settings=fixture_settings())
     try:
-        run(stand.inject("rfid",{"tag_id":CHILD_TAG},"audio-duplicate"))
         run(stand.inject("handset",{"state":"up"},"audio-duplicate"))
         run(stand.inject("button",{"button_id":3},"audio-duplicate"))
         first=run(stand.application.receive_audio_async("audio-duplicate",(0.0,)*512,100))
@@ -175,7 +163,6 @@ def test_concurrent_pcm_frames_do_not_duplicate_vad_acknowledgement():
     stand=HardwareIntegrationStand(settings=fixture_settings())
     try:
         async def flow():
-            await stand.inject("rfid", {"tag_id":CHILD_TAG}, "pcm-order")
             await stand.inject("handset", {"state":"up"}, "pcm-order")
             await stand.inject("button", {"button_id":3}, "pcm-order")
             for _ in range(10):
@@ -198,7 +185,6 @@ def test_live_pcm_collecting_does_not_broadcast_full_state_per_frame():
     stand.hub.publish=record
     try:
         async def flow():
-            await stand.inject("rfid", {"tag_id":CHILD_TAG}, "pcm-bandwidth")
             await stand.inject("handset", {"state":"up"}, "pcm-bandwidth")
             await stand.inject("button", {"button_id":3}, "pcm-bandwidth")
             published.clear()
@@ -265,7 +251,7 @@ def test_stand_api_and_console_assets_are_registered():
     api=create_stand_app(Settings(profile="mock", hardware_mode="fake")); stand=api.state.stand
     try:
         paths={route.path for route in api.routes}
-        assert {"/console","/stand/state","/stand/graph","/stand/rfid","/stand/handset","/stand/button","/stand/button-released","/stand/button-hold","/stand/button-long-hold","/stand/text","/stand/raw","/stand/audio/wav","/stand/audio/pcm","/stand/ws"}<=paths
+        assert {"/console","/stand/state","/stand/graph","/stand/handset","/stand/button","/stand/button-released","/stand/button-hold","/stand/button-long-hold","/stand/text","/stand/raw","/stand/audio/wav","/stand/audio/pcm","/stand/ws"}<=paths
         endpoint=next(route.endpoint for route in api.routes if route.path=="/console")
         assert str(endpoint().path).endswith("console/index.html")
         ws_route=next(route for route in api.routes if route.path=="/stand/ws")

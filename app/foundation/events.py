@@ -5,13 +5,11 @@ import time
 from typing import Any
 
 from .domain import EVENT_TYPES, IDENTITY_INTERNAL_EVENT_TYPES, Event
-from .identity import IdentityValidationError, validate_uid
 
 EVENT_LIMIT_BYTES = 16_384
 _BUTTON_EVENTS = frozenset({"ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld"})
 _PLAYBACK_FIELDS = frozenset({"response_id", "content_id", "token", "generation", "playback_lease", "playback_id"})
 _EVENT_FIELDS = {
-    "RfidPresented": frozenset({"tag_id", "reader_generation", "connection_epoch"}),
     "SpeechReceived": frozenset({"text"}),
     **{name: frozenset({"button_id", "duration_ms"}) for name in _BUTTON_EVENTS},
     **{name: _PLAYBACK_FIELDS for name in ("AudioStarted", "AudioCompleted")},
@@ -27,18 +25,15 @@ _EVENT_FIELDS = {
 _INTEGER_FIELDS = frozenset({"button_id", "button", "duration_ms", "offset_ms", "step", "token", "generation", "reader_generation", "connection_epoch", "state_version", "length"})
 _PUBLIC_FIELDS = {
     **_EVENT_FIELDS,
-    "RfidPresented": frozenset({"profile_resolved", "unknown_tag"}),
     "SpeechReceived": frozenset({"length"}),
     **{name: frozenset({"status"}) for name in IDENTITY_INTERNAL_EVENT_TYPES},
 }
-_ALIASES = {"anonymous":"AnonymousStart", "anonymous_start":"AnonymousStart", "rfid":"RfidPresented", "handset_up":"HandsetLifted", "handset_down":"HandsetPlaced", "SpacePressed":"HandsetPlaced", "SpaceReleased":"HandsetLifted", "space_pressed":"HandsetPlaced", "space_released":"HandsetLifted", "button":"ButtonPressed", "button_pressed":"ButtonPressed", "button_released":"ButtonReleased", "button_hold":"ButtonHeld", "button_long_hold":"ButtonLongHeld", "text":"SpeechReceived", "hardware_disconnected":"HardwareDisconnected"}
+_ALIASES = {"anonymous":"AnonymousStart", "anonymous_start":"AnonymousStart", "handset_up":"HandsetLifted", "handset_down":"HandsetPlaced", "SpacePressed":"HandsetPlaced", "SpaceReleased":"HandsetLifted", "space_pressed":"HandsetPlaced", "space_released":"HandsetLifted", "button":"ButtonPressed", "button_pressed":"ButtonPressed", "button_released":"ButtonReleased", "button_hold":"ButtonHeld", "button_long_hold":"ButtonLongHeld", "text":"SpeechReceived", "hardware_disconnected":"HardwareDisconnected"}
 
 
 def _safe_field(name: str, value: Any) -> bool:
     if name in _INTEGER_FIELDS:
         return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 2**63 - 1
-    if name in {"profile_resolved", "unknown_tag"}:
-        return isinstance(value, bool)
     if name == "status":
         return isinstance(value, str) and value in {"authorized", "unknown", "denied", "unavailable"}
     return (isinstance(value, str) and 0 < len(value) <= 128
@@ -84,11 +79,6 @@ def parse_event(payload: dict[str, Any], session_id: str, sequence: int, source:
     if "state_version" in payload and not _safe_field("state_version", payload["state_version"]):
         raise EventValidationError("state_version must be a nonnegative integer")
     clean = _project_payload(name, payload, public=False)
-    if name == "RfidPresented":
-        try:
-            clean["tag_id"] = validate_uid(payload.get("tag_id"))
-        except IdentityValidationError:
-            raise EventValidationError("RFID tag_id must be nonempty and at most 128 characters") from None
     if name in _BUTTON_EVENTS and clean.get("button_id") not in {1,2,3,4,5,6,7}:
         raise EventValidationError("button_id must be 1..7")
     if name in {"ButtonHeld", "ButtonLongHeld"} and (not isinstance(clean.get("duration_ms"), int) or not 0 <= clean["duration_ms"] <= 120_000):

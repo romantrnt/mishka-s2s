@@ -11,7 +11,7 @@ pytestmark = pytest.mark.integration
 def test_foundation_api_exposes_liveness_readiness_mock_and_websocket_contract():
     app = create_app(include_test_routes=True)
     paths = {route.path for route in app.routes}
-    assert {"/", "/health", "/live", "/ready", "/session/start", "/mock/rfid", "/mock/handset", "/mock/button", "/mock/text", "/mock/session/{session_id}", "/session/reset", "/ws/{session_id}"} <= paths
+    assert {"/", "/health", "/live", "/ready", "/session/start", "/mock/handset", "/mock/button", "/mock/text", "/mock/session/{session_id}", "/session/reset", "/ws/{session_id}"} <= paths
     route=next(route for route in app.routes if route.path=="/ws/{session_id}")
     assert route.dependant.websocket_param_name=="websocket"
 
@@ -40,7 +40,7 @@ def test_production_surface_excludes_mock_and_session_control_routes():
 def test_test_surface_keeps_fixture_control_routes():
     app = create_app(include_test_routes=True)
     paths = {route.path for route in app.routes}
-    assert "/mock/rfid" in paths
+    assert "/mock/rfid" not in paths
     assert "/mock/text" in paths
     assert "/session/start" in paths
     assert "/session/reset" in paths
@@ -54,7 +54,7 @@ def test_offline_http_transport_start_validation_and_reset():
     assert readiness["lifecycle"]["state"] == "BOOTING"
     assert readiness["lifecycle"]["user_available"] is False
     assert asyncio.run(routes["/internal/s2s/warmup"]())["ok"] is True
-    assert routes["/session/start"]({"session_id":"transport"})["state"]=="WAITING_RFID"
+    assert routes["/session/start"]({"session_id":"transport"})["state"]=="WAITING_PROFILE"
     with pytest.raises(ValueError): asyncio.run(routes["/mock/button"]({"session_id":"transport","button_id":9}))
     assert asyncio.run(routes["/session/reset"]({"session_id":"transport"}))["state"]=="RESET"
 

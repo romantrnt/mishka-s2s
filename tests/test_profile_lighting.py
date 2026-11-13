@@ -48,7 +48,7 @@ def test_reset_is_dark_idle_and_does_not_restart_breathing():
 
 def test_ready_exact_wave_to_breathing_trace_has_no_inserted_off():
     engine = _engine()
-    engine.start_rfid_ready(now=0.0)
+    engine.start_profile_ready(now=0.0)
     generation = engine.generation
     for stage in range(1, 7):
         engine.advance(stage * 0.12)
@@ -70,7 +70,7 @@ def test_ready_exact_wave_to_breathing_trace_has_no_inserted_off():
     assert all(command.state == 1 for batch in batches[-2:] for command in batch)
     assert engine.generation == generation
     assert engine.effect == "breathing"
-    assert engine.snapshot()["phase"] == "rfid_ready"
+    assert engine.snapshot()["phase"] == "profile_ready"
     assert engine.advance(1.839) is None
     engine.advance(1.84)
     assert engine.output.batches[-1] == _all(0, 1000)
@@ -79,7 +79,7 @@ def test_ready_exact_wave_to_breathing_trace_has_no_inserted_off():
 def test_delayed_ready_poll_does_not_skip_stages_or_final_dwell():
     frames = []
     engine = _engine(frame_hook=frames.append)
-    engine.start_rfid_ready(now=0.0)
+    engine.start_profile_ready(now=0.0)
     engine.advance(10.0)
     assert engine.wave_stage == 1
     assert engine.advance(10.01, force=True) is None
@@ -95,7 +95,7 @@ def test_delayed_ready_poll_does_not_skip_stages_or_final_dwell():
 @pytest.mark.parametrize("at", [0.3, 0.84])
 def test_lift_preempts_ready_without_clear_or_late_breathing(at):
     engine = _engine()
-    engine.start_rfid_ready(now=0.0)
+    engine.start_profile_ready(now=0.0)
     if at == 0.84:
         _finish_ready(engine)
     before = len(engine.output.batches)
@@ -124,7 +124,7 @@ def test_cancel_during_completion_hook_fences_owned_breathing():
             engine.cancel_effects(clear=True)
 
     engine = _engine(frame_hook=on_frame)
-    engine.start_rfid_ready(now=0.0)
+    engine.start_profile_ready(now=0.0)
     _finish_ready(engine)
     assert engine.effect == "idle"
     assert engine.output.batches[-1] == _all(0)
@@ -431,7 +431,7 @@ def test_background_owner_wakes_at_120ms_boundaries_and_continues_same_generatio
                 engine.cancel_effects(clear=False)
 
         monkeypatch.setattr(asyncio, "sleep", wakeup)
-        engine.start_rfid_ready(now=0.0)
+        engine.start_profile_ready(now=0.0)
         generation = engine.generation
         task = engine._task
         await task

@@ -140,19 +140,32 @@ from app.foundation.stand import create_stand_app
 if __name__ == "__main__":
     import uvicorn
 
-    application = create_stand_app()
-    host = os.getenv("MISHKA_HOST", "0.0.0.0")
+    from app.foundation.config import Settings
+    from app.foundation.max_client_runtime import build_configured_app, MaxClientStartupError
     port = resolve_port()
+    settings = Settings.from_env()
+    try:
+        application = build_configured_app(settings, create_stand_app)
+    except MaxClientStartupError as error:
+        print(f"MISHKA startup failed: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
+    if settings.max_client_source == "local_demo":
+        print("MISHKA: local demo identity source; synthetic data, not production.", flush=True)
+    host = os.getenv("MISHKA_HOST", "0.0.0.0")
     log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
     log_config.setdefault("filters", {})["stand_access_redaction"] = {"()": StandAccessLogRedactionFilter}
     log_config["handlers"]["access"].setdefault("filters", []).append("stand_access_redaction")
     # Uvicorn's WebSocket handshake access lines are emitted through the
     # uvicorn.error logger, while HTTP access lines use uvicorn.access.
     log_config["handlers"]["default"].setdefault("filters", []).append("stand_access_redaction")
-    uvicorn.run(
-        application,
-        host=host,
-        port=port,
-        log_level=os.getenv("MISHKA_LOG_LEVEL", "info"),
-        log_config=log_config,
-    )
+    try:
+        uvicorn.run(
+            application,
+            host=host,
+            port=port,
+            log_level=os.getenv("MISHKA_LOG_LEVEL", "info"),
+            log_config=log_config,
+        )
+    finally:
+        if not application.state.stand._closed:
+            asyncio.run(application.state.stand.aclose())

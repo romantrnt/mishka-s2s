@@ -94,10 +94,10 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return False
     if current == target:
         return True
-    if event_type == "RfidPresented":
-        return target in {"visual_welcome", "anonymous_visual", "rfid_lookup"}
-    if event_type == "RfidRemoved":
-        return target in {"anonymous_visual", "safety_handoff", "idle", "session_closed"}
+    if event_type == "ClientProfileReady":
+        return current in {"idle", "profile_ready"} and target == "profile_ready"
+    if event_type == "ClientProfileCleared":
+        return target in {"idle", "session_closed", "safety_handoff"}
     if event_type == "ExhibitionOnboardingComplete":
         return current == "exhibition_onboarding_complete" and target == "exhibition_menu_tutorial_buttons"
     if event_type == "AudioCompleted":
@@ -126,8 +126,6 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return current in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons"} and target in {"exhibition_menu_tutorial_buttons", "exhibition_menu_replay_buttons", "menu_ready"}
     if event_type == "TimeoutFired":
         return current in {"dialogue_suspended_ram", "story_suspended_ram"} and target == "dialogue_memory_expired"
-    if event_type in {"IdentityLookupSucceeded", "IdentityLookupFailed"}:
-        return current == "rfid_lookup" and target in {"rfid_ready", "idle"}
     if event_type in {"IdentityReadyExpired", "IdentityAuthorizationExpired"}:
         return target in {"idle", "session_closed", "safety_handoff"}
     if event_type == "AnonymousStart":
@@ -225,8 +223,8 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
     target = str(state.get("target_mode") or "")
     event_type = str(state.get("event_type") or "")
     valid = current in STATE_NAMES and target in STATE_NAMES and event_type in {
-        "IdentityLookupSucceeded", "IdentityLookupFailed", "IdentityReadyExpired", "IdentityAuthorizationExpired",
-        "RfidPresented", "RfidRemoved", "AnonymousStart", "HandsetLifted", "HandsetPlaced",
+        "ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired",
+        "AnonymousStart", "HandsetLifted", "HandsetPlaced",
         "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
         "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected",

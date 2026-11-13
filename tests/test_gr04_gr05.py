@@ -1,5 +1,4 @@
 from app.foundation.api import build_application
-from app.foundation.adapters import ExhibitionProfileProvider
 from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime
 from app.foundation.config import Settings
 from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
@@ -59,11 +58,13 @@ def test_current_onboarding_reset_is_idempotent_and_clears_private_state():
     assert duplicate["reason"] == "handset_already_placed"
 
 
-def test_gr05_exhibition_is_explicit_no_profile_runtime():
-    settings = Settings(profile="mock", runtime_mode="exhibition", profile_db="/definitely/not/used.sqlite3")
+def test_gr05_exhibition_is_explicit_guest_runtime_without_local_patient_provider():
+    settings = Settings(profile="mock", runtime_mode="exhibition", history_db="/definitely/not/used.sqlite3")
     assert settings.validate().runtime_mode == "exhibition"
     app, *_ = build_application(settings=settings)
-    assert isinstance(app.profiles, ExhibitionProfileProvider)
+    assert not hasattr(app, "profiles")
+    assert not hasattr(app, "identity_resolver")
+    assert app.max_json is False
     assert app.canonical_runtime.exhibition_mode is True
     assert type(app.sessions).__name__ == "InMemorySessionRepository"
     assert app.canonical_runtime.sessions == {}
@@ -75,4 +76,6 @@ def test_gr05_clinical_mode_requires_explicit_configuration():
     assert settings.validate().runtime_mode == "clinical"
     app, *_ = build_application(settings=settings)
     assert app.canonical_runtime.exhibition_mode is False
-    assert type(app.profiles).__name__ == "MockProfileProvider"
+    assert not hasattr(app, "profiles")
+    assert not hasattr(app, "identity_resolver")
+    assert app.max_json is False

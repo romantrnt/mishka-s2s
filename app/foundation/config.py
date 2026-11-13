@@ -131,16 +131,18 @@ class Settings:
     # Child-data authorization is independent of operator authentication and
     # exhibition/clinical scenario policy. No production provider is assumed.
     identity_mode: str = "guest_only"
-    identity_provider: str = "disabled"
-    rfid_lookup_timeout_s: float = 2.0
-    rfid_ready_ttl_s: float = 60.0
-    rfid_debounce_s: float = 0.5
+    max_client_source: str = "disabled"
+    max_client_bundle: str = ""
+    max_demo_state: str = ""
+    max_demo_port: int = 19443
+    max_synthetic_data: bool = False
+    profile_ready_ttl_s: float = 60.0
     host: str = "0.0.0.0"
     port: int = 8000
     policy_version: str = CANONICAL_POLICY.version
     no_voice_recording: bool = True
     content_root: str = "content"
-    profile_db: str = "runtime/data/profiles.sqlite3"
+    history_db: str = "runtime/data/session_history.sqlite3"
     stand_access_token: str = ""
     allow_query_token: bool = False
     mutation_auth_policy: str = "token_required"
@@ -289,20 +291,38 @@ class Settings:
             raise SettingsError("MISHKA_PROFILE is unsupported")
         if self.runtime_mode not in {"exhibition", "clinical"}:
             raise SettingsError("MISHKA_RUNTIME_MODE must be exhibition or clinical")
-        if self.identity_mode not in {"guest_only", "optional_rfid"}:
-            raise SettingsError("MISHKA_IDENTITY_MODE must be guest_only or optional_rfid")
-        if self.identity_mode == "optional_rfid" and self.runtime_mode != "exhibition":
-            raise SettingsError("optional_rfid currently requires the exhibition session policy")
-        if self.identity_provider not in {"disabled", "synthetic"}:
-            raise SettingsError("MISHKA_IDENTITY_PROVIDER is unsupported")
-        if self.identity_mode == "guest_only" and self.identity_provider != "disabled":
-            raise SettingsError("guest_only identity requires the disabled provider")
-        if self.identity_provider == "synthetic" and (self.profile != "mock" or self.hardware_mode not in {"fake", "simulator"}):
-            raise SettingsError("synthetic identity requires mock profile and fake/simulator hardware")
+        if self.identity_mode not in {"guest_only", "max_json"}:
+            raise SettingsError("MISHKA_IDENTITY_MODE must be guest_only or max_json")
+        if self.identity_mode == "max_json" and self.runtime_mode != "exhibition":
+            raise SettingsError("max_json currently requires the exhibition session policy")
+        if self.max_client_source not in {"disabled", "local_demo"}:
+            raise SettingsError("External Max service acceptance is pending; only local_demo is supported")
+        if self.max_client_source == "local_demo":
+            if (self.identity_mode != "max_json" or self.runtime_mode != "exhibition"
+                    or self.max_synthetic_data is not True
+                    or self.profile not in {"mock", "local_cpu", "local_gpu"}):
+                raise SettingsError("local_demo requires explicit synthetic exhibition configuration")
+            from pathlib import Path
+            if not all(value and Path(value).is_absolute() for value in (self.max_client_bundle, self.max_demo_state)):
+                raise SettingsError("local_demo requires absolute package and existing state paths")
+            if type(self.max_demo_port) is not int or not 1024 <= self.max_demo_port <= 65535:
+                raise SettingsError("local_demo requires a valid unprivileged loopback port")
+        elif self.max_synthetic_data or self.max_client_bundle or self.max_demo_state:
+            raise SettingsError("Max client settings require an explicit local_demo source")
+        if self.identity_mode == "max_json":
+            injected_mock = self.profile == "mock" and self.hardware_mode in {"fake", "simulator"}
+            live_demo = (self.max_client_source == "local_demo" and self.max_synthetic_data
+                         and self.profile in {"local_cpu", "local_gpu"} and self.hardware_mode == "physical")
+            if not (injected_mock or live_demo):
+                raise SettingsError("max_json requires mock injection or explicitly synthetic live-demo hardware")
+            if live_demo and (self.allow_degraded_hardware or not self.hid_device or not self.lighting_device
+                              or not self.stand_access_token or self.allow_query_token):
+                raise SettingsError("live_demo requires explicit devices, fail-closed hardware and header/cookie authentication")
+
+
         for name, value, lower, upper in (
-                ("MISHKA_RFID_LOOKUP_TIMEOUT_S", self.rfid_lookup_timeout_s, 0.05, 30.0),
-                ("MISHKA_RFID_READY_TTL_S", self.rfid_ready_ttl_s, 0.1, 3600.0),
-                ("MISHKA_RFID_DEBOUNCE_S", self.rfid_debounce_s, 0.0, 5.0)):
+                ("MISHKA_PROFILE_READY_TTL_S", self.profile_ready_ttl_s, 0.1, 3600.0),
+):
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or not lower <= value <= upper):
                 raise SettingsError(f"{name} must be finite and within supported bounds")
@@ -421,7 +441,7 @@ class Settings:
         )
 
     def redacted_snapshot(self) -> dict[str, Any]:
-        secret = {"stand_access_token", "profile_db", "yandex_weather_api_key"}
+        secret = {"stand_access_token", "history_db", "yandex_weather_api_key"}
         data = asdict(self)
         return {key: value for key, value in data.items() if key not in secret}
 
@@ -442,6 +462,11 @@ class Settings:
 
     @classmethod
     def from_env(cls, *, validate: bool = True) -> "Settings":
+        # Fail explicitly rather than silently accepting retired UID/provider config.
+        for retired in ("MISHKA_IDENTITY_PROVIDER", "MISHKA_RFID_LOOKUP_TIMEOUT_S",
+                        "MISHKA_RFID_READY_TTL_S", "MISHKA_RFID_DEBOUNCE_S", "MISHKA_PROFILE_DB"):
+            if retired in os.environ:
+                raise SettingsError(f"{retired} is removed from the JSON-only build; see MAX_JSON_RUNBOOK_RU.md")
         profile = _text("MISHKA_PROFILE", "mock").lower()
         validation_default = "mock" if profile == "mock" else "ollama"
         legacy_scenario_engine = _text("MISHKA_SCENARIO_ENGINE", "").lower()
@@ -452,13 +477,15 @@ class Settings:
         settings = cls(
             profile=profile, runtime_mode=_text("MISHKA_RUNTIME_MODE", "exhibition").lower(), host=_text("MISHKA_HOST", "0.0.0.0"), port=_int("MISHKA_PORT", 8000),
             identity_mode=_text("MISHKA_IDENTITY_MODE", "guest_only").lower(),
-            identity_provider=_text("MISHKA_IDENTITY_PROVIDER", "disabled").lower(),
-            rfid_lookup_timeout_s=_float("MISHKA_RFID_LOOKUP_TIMEOUT_S", 2.0),
-            rfid_ready_ttl_s=_float("MISHKA_RFID_READY_TTL_S", 60.0),
-            rfid_debounce_s=_float("MISHKA_RFID_DEBOUNCE_S", 0.5),
+            max_client_source=_text("MISHKA_MAX_CLIENT_SOURCE", "disabled").lower(),
+            max_client_bundle=_text("MISHKA_MAX_CLIENT_BUNDLE", ""),
+            max_demo_state=_text("MISHKA_MAX_DEMO_STATE", ""),
+            max_demo_port=_int("MISHKA_MAX_DEMO_PORT", 19443),
+            max_synthetic_data=_bool("MISHKA_MAX_SYNTHETIC_DATA", False),
+            profile_ready_ttl_s=_float("MISHKA_PROFILE_READY_TTL_S", 60.0),
             policy_version=_text("MISHKA_POLICY_VERSION", CANONICAL_POLICY.version),
             no_voice_recording=_bool("NO_VOICE_RECORDING", True), content_root=_text("MISHKA_CONTENT_ROOT", "content"),
-            profile_db=_text("MISHKA_PROFILE_DB", "runtime/data/profiles.sqlite3"), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False), mutation_auth_policy=_text("MISHKA_MUTATION_AUTH_POLICY", "token_required").lower(),
+            history_db=_text("MISHKA_HISTORY_DB", "runtime/data/session_history.sqlite3"), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False), mutation_auth_policy=_text("MISHKA_MUTATION_AUTH_POLICY", "token_required").lower(),
             audio_output_device=_text("AUDIO_OUTPUT_DEVICE", ""), audio_input_device=_text("AUDIO_INPUT_DEVICE", ""), vad_device=_text("MISHKA_VAD_DEVICE", "cpu").lower(),
             max_input_chars=_int("MAX_INPUT_CHARS", 512), session_timeout_s=_int("MISHKA_MAX_SESSION_SECONDS", 1200),
             session_idle_timeout_s=_int("MISHKA_SESSION_IDLE_TTL_SECONDS", 300), confidence_threshold=_float("INTENT_CONFIDENCE_THRESHOLD", 0.6),
@@ -507,10 +534,7 @@ class Settings:
         return {
             "mode": self.runtime_mode,
             "identity_mode": self.identity_mode,
-            "identity_provider": self.identity_provider,
-            "rfid_lookup_timeout_s": self.rfid_lookup_timeout_s,
-            "rfid_ready_ttl_s": self.rfid_ready_ttl_s,
-            "rfid_debounce_s": self.rfid_debounce_s,
+            "profile_ready_ttl_s": self.profile_ready_ttl_s,
             "scenario_id": self.scenario_id,
             "graph_backend": self.graph_backend,
             # Deprecated projection retained for old health consumers.
@@ -543,7 +567,7 @@ class Settings:
 # keep legacy tests/demo adapters from reimplementing env parsing themselves.
 _COMPAT_ENV_FIELDS = {
     "MISHKA_PROFILE": "profile",
-    "MISHKA_PROFILE_DB": "profile_db",
+    "MISHKA_HISTORY_DB": "history_db",
     "STAND_ACCESS_TOKEN": "stand_access_token",
     "MISHKA_VOICE_CONVERSION": "voice_conversion",
     "MISHKA_SCENARIO_ID": "scenario_id",

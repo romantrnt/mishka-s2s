@@ -633,9 +633,7 @@ function buttonLegendSummary(contract) {
 function cardStatusProjection(state) {
   // Render only the canonical mode. Card and profile payloads are private.
   switch (state.canonical_state?.mode) {
-    case 'rfid_lookup':
-      return { label: 'Проверка карты', hint: 'Можно поднять трубку и начать гостевой сценарий.', tone: 'state-warn' };
-    case 'rfid_ready':
+    case 'profile_ready':
       return { label: 'Карта принята · поднимите трубку', hint: 'Поднимите трубку, чтобы начать.', tone: 'state-ok' };
     default:
       return { label: 'Нет активной карты', hint: '', tone: 'state-warn' };
@@ -673,7 +671,7 @@ function render(state) {
   updateGuide(state, contract);
   const standby = ['NONE', 'IDLE', 'STANDBY'].includes(state.session.state);
   const cardStatus = cardStatusProjection(state);
-  const cardPendingOrReady = ['rfid_lookup', 'rfid_ready'].includes(state.canonical_state?.mode);
+  const cardPendingOrReady = ['profile_ready'].includes(state.canonical_state?.mode);
   setRuntimeValue('device-card', cardStatus.label, cardStatus.tone);
   const runtimeLabel = cardPendingOrReady ? cardStatus.label : standby ? 'Тёмное ожидание' : handsetUp ? 'Трубка поднята' : 'Трубка опущена';
   if ($('runtime-state')) $('runtime-state').textContent = runtimeLabel;
@@ -773,7 +771,7 @@ function renderButtons(state, led, contract, lighting) {
     const colorDef = LED_COLORS[fillPresentation?.color] || LED_COLORS.invalid;
     const buttonLabel = contract.valid ? contract.labels[id] : colorDef.label;
     for (const led of Object.values(LED_COLORS)) button.classList.remove(led.className);
-    button.classList.remove('led-target', 'rfid-wave');
+    button.classList.remove('led-target', 'profile-wave');
     button.style.removeProperty('--led-color');
     button.classList.add(colorDef.className);
     button.classList.toggle('led-on', fillOn);
@@ -1125,8 +1123,7 @@ function speakCommands(state) {
 
 function updateGuide(state, contract) {
     const labels = {
-    rfid_lookup: ['Проверка карты', 'Можно поднять трубку и начать гостевой сценарий.'],
-    rfid_ready: ['Карта принята', 'Поднимите трубку, чтобы начать.'],
+    profile_ready: ['Карта принята', 'Поднимите трубку, чтобы начать.'],
     game_menu: ['1 · Игры', 'Выберите игру кнопкой.'],
     game_active: ['1 · Игра', 'Следуйте текущей подсветке.'],
     fixed_story_menu: ['2 · Сказки', 'Выберите одну из пяти разрешённых сказок кнопками 1–5.'],
@@ -1146,7 +1143,7 @@ function updateGuide(state, contract) {
     exhibition_menu_replay_buttons: ['Меню · повтор', 'Повторная синхронная подсветка без финального вопроса.'],
     menu_ready: ['Меню готово', 'Выберите действие кнопкой 1–7.']
   };
-  const node = ['rfid_lookup', 'rfid_ready'].includes(state.canonical_state?.mode)
+  const node = ['profile_ready'].includes(state.canonical_state?.mode)
     ? state.canonical_state.mode : String(state.session.node || '');
   const guideMap = document.querySelector('.guide-map');
   if (guideMap) guideMap.hidden = node === 'bear_dialogue';

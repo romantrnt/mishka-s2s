@@ -10,12 +10,11 @@ from dataclasses import asdict
 from collections import deque
 from pathlib import Path
 
-from .adapters import (ExhibitionProfileProvider, ProfileProviderError, SQLiteProfileProvider, RecordingAudio, RecordingLED, RuleBasedIntentClassifier)
+from .adapters import (RecordingAudio, RecordingLED, RuleBasedIntentClassifier)
 from .application import ScenarioApplication
 from .schedule_weather import DemoScheduleWeatherService, ProductionScheduleWeatherService, YandexWeatherProvider
 from .canonical_services import CanonicalContentCatalog
 from .config import Settings, settings_with_compat_env
-from .identity import DisabledIdentityResolver, SyntheticIdentityResolver
 from .events import parse_event
 from .observability import Metrics, StructuredEventPublisher
 from .repositories import HistoryProviderError, InMemoryHistoryRepository, InMemorySessionRepository, SQLiteRepository
@@ -44,7 +43,7 @@ def _project_path(value: str, *, keep_bare_command: bool = False) -> str:
 
 def _normalize_paths(settings: Settings) -> Settings:
     values = asdict(settings)
-    for field in ("content_root", "profile_db", "silero_cache_path", "rvc_project_root", "rvc_model", "rvc_index", "rvc_tmp_dir", "warmup_pcm_path"):
+    for field in ("content_root", "history_db", "silero_cache_path", "rvc_project_root", "rvc_model", "rvc_index", "rvc_tmp_dir", "warmup_pcm_path"):
         if values.get(field):
             values[field] = _project_path(str(values[field]))
     if values.get("rvc_python"):
@@ -66,7 +65,7 @@ def _prepare_runtime_dirs(settings: Settings) -> None:
         Path(settings.silero_cache_path).parent,
     }
     if settings.runtime_mode != "exhibition":
-        paths.add(Path(settings.profile_db).parent)
+        paths.add(Path(settings.history_db).parent)
     for path in paths:
         path.mkdir(parents=True, exist_ok=True)
 
@@ -102,7 +101,6 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
     vad: VADAdapter; stt: SpeechRecognizer
     if settings.profile=="mock":
         from .s2s import MockLLMProvider, MockPlaybackController, MockSpeechRecognizer, MockTTSProvider
-        from .adapters import MockProfileProvider
         playback=playback_override or MockPlaybackController()
         llm=MockLLMProvider(); tts=MockTTSProvider(); voice=RVCProvider()
         engine=BoundedConversationEngine(llm,CachedTTSProvider(tts),voice,playback,config,allow_quick_replies=True,profile=settings.profile,settings=settings)
@@ -161,32 +159,25 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
 def build_application(content_root: str | Path | None = None, settings: Settings | None = None,
                       *, audio_output=None, led_controller=None,
                       playback_override: PlaybackController | None = None, display_controller=None,
-                      monotonic_now=None, background_scheduler: bool = True, identity_resolver=None):
+                      monotonic_now=None, background_scheduler: bool = True):
     settings=settings or Settings.from_env()
-    settings = settings_with_compat_env(settings, ("MISHKA_PROFILE_DB", "MISHKA_CONTENT_ROOT"))
+    settings = settings_with_compat_env(settings, ("MISHKA_HISTORY_DB", "MISHKA_CONTENT_ROOT"))
     settings = _normalize_paths(settings).validate()
     _prepare_runtime_dirs(settings)
     root = Path(content_root).resolve() if content_root is not None else Path(settings.content_root).resolve()
     scenarios = CanonicalContentCatalog(str(root), allow_development_assets=(settings.profile in {"mock", "local_cpu", "local_gpu"} or str(settings.hardware_mode).lower() != "physical")); metrics = Metrics(latency_limit=settings.observability_latency_limit, event_limit=settings.observability_event_limit, watchdog_limit=settings.observability_watchdog_limit); publisher = StructuredEventPublisher()
     s2s,audio_pipeline,runtime_manager=_build_s2s(settings,root,playback_override)
-    profile_db = settings.profile_db
-    if settings.runtime_mode == "exhibition" or settings.identity_mode == "optional_rfid":
+    history_db = settings.history_db
+    if settings.runtime_mode == "exhibition":
         # Exhibition is deliberately self-contained: no RFID/profile provider,
         # SQLite session persistence, or clinical identity gate is constructed.
         sessions = InMemorySessionRepository(); history = InMemoryHistoryRepository()
-        profiles = ExhibitionProfileProvider()
     elif settings.profile == "mock":
-        from .adapters import MockProfileProvider
         sessions = InMemorySessionRepository(); history = InMemoryHistoryRepository()
-        profiles = MockProfileProvider()
     else:
-        if not profile_db:
-            raise RuntimeError("MISHKA_PROFILE_DB is required for production profile integration")
-        sessions = SQLiteRepository(profile_db); history = sessions
-        profiles = SQLiteProfileProvider(profile_db)
-    if identity_resolver is None:
-        identity_resolver = (SyntheticIdentityResolver({}, clock=monotonic_now or time.monotonic)
-                             if settings.identity_provider == "synthetic" else DisabledIdentityResolver())
+        if not history_db:
+            raise RuntimeError("MISHKA_HISTORY_DB is required for legacy session/history storage; patient lookup is removed")
+        sessions = SQLiteRepository(history_db); history = sessions
     weather_config = settings.weather_configuration()
     if weather_config.provider == "demo":
         weather = DemoScheduleWeatherService()
@@ -194,7 +185,7 @@ def build_application(content_root: str | Path | None = None, settings: Settings
         weather = ProductionScheduleWeatherService(YandexWeatherProvider.from_settings(settings), weather_config.timeout_s)
     else:
         weather = ProductionScheduleWeatherService(None, weather_config.timeout_s)
-    app = ScenarioApplication(sessions, scenarios, profiles, RuleBasedIntentClassifier(), audio_output or RecordingAudio(), led_controller or RecordingLED(), publisher, now=time.time, threshold=settings.confidence_threshold, bounded_s2s=s2s, history=history, max_session_seconds=settings.session_timeout_s, idle_timeout_seconds=settings.session_idle_timeout_s, display=display_controller, schedule_weather=weather, allow_quick_replies=settings.profile == "mock", settings=settings, monotonic_now=monotonic_now or time.monotonic, background_scheduler=background_scheduler, identity_resolver=identity_resolver)
+    app = ScenarioApplication(sessions, scenarios, RuleBasedIntentClassifier(), audio_output or RecordingAudio(), led_controller or RecordingLED(), publisher, now=time.time, threshold=settings.confidence_threshold, bounded_s2s=s2s, history=history, max_session_seconds=settings.session_timeout_s, idle_timeout_seconds=settings.session_idle_timeout_s, display=display_controller, schedule_weather=weather, allow_quick_replies=settings.profile == "mock", settings=settings, monotonic_now=monotonic_now or time.monotonic, background_scheduler=background_scheduler)
     app.s2s_audio=audio_pipeline; app.runtime_manager=runtime_manager; runtime_manager.audio_pipeline=audio_pipeline; app.runtime_status=runtime_manager.configuration(); app.settings=settings; app.metrics=metrics
     # The bounded S2S engine owns the authoritative backend lifecycle. Let it
     # drive the same canonical LED engine used by the physical stand and UI.
@@ -205,7 +196,7 @@ def build_application(content_root: str | Path | None = None, settings: Settings
     app.history_repository=history
     return app, scenarios, metrics, publisher
 
-def create_app(application=None, *, include_test_routes: bool = False):
+def create_app(application=None, *, include_test_routes: bool = False, admission_guard=None):
     try:
         from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
         from fastapi.responses import JSONResponse
@@ -223,7 +214,7 @@ def create_app(application=None, *, include_test_routes: bool = False):
         # {"external": true} even though the stand had validated content.
         scenarios = getattr(application, "scenarios", None)
         metrics = getattr(application, "metrics", None) or Metrics()
-    lifecycle = StartupLifecycle()
+    lifecycle = StartupLifecycle(admission_guard=admission_guard)
     manager = getattr(application, "runtime_manager", None)
 
     @asynccontextmanager
@@ -244,28 +235,41 @@ def create_app(application=None, *, include_test_routes: bool = False):
                     await application.start_idle_monitor()
                 if hasattr(application, "start_watchdog"):
                     await application.start_watchdog(lifecycle, manager)
+            boundary = getattr(application, "_max_client_boundary", None)
+            if boundary is not None:
+                boundary.start()
             yield
         finally:
-            try:
-                if hasattr(application, "shutdown_identity"):
-                    await application.shutdown_identity()
-                if hasattr(application, "stop_watchdog"):
-                    await application.stop_watchdog()
-                if hasattr(application, "stop_idle_monitor"):
-                    await application.stop_idle_monitor()
-                await lifecycle.stop()
-                if manager is not None:
-                    await manager.close()
-            finally:
-                owned_stand = getattr(_api.state, "stand", None)
-                hardware_stopped = False
+            lifecycle.begin_shutdown()
+            cleanup_errors = []
+            operations = [getattr(application, name, None) for name in
+                          ("shutdown_identity", "stop_watchdog", "stop_idle_monitor")]
+            operations.append(lifecycle.stop)
+            if manager is not None:
+                operations.append(manager.close)
+            for operation in operations:
+                if operation is not None:
+                    try:
+                        await operation()
+                    except BaseException as error:
+                        cleanup_errors.append(error)
+            owned_stand = getattr(_api.state, "stand", None)
+            hardware_stopped = False
+            if hardware_owner is not None and hasattr(hardware_owner, "stop_hardware"):
                 try:
-                    if hardware_owner is not None and hasattr(hardware_owner, "stop_hardware"):
-                        await hardware_owner.stop_hardware()
-                        hardware_stopped = True
-                finally:
-                    if owned_stand is not None:
-                        await owned_stand.aclose(hardware_stopped=hardware_stopped)
+                    await hardware_owner.stop_hardware()
+                    hardware_stopped = True
+                except BaseException as error:
+                    cleanup_errors.append(error)
+            if owned_stand is not None:
+                try:
+                    await owned_stand.aclose(hardware_stopped=hardware_stopped)
+                except BaseException as error:
+                    cleanup_errors.append(error)
+            if len(cleanup_errors) == 1:
+                raise cleanup_errors[0]
+            if cleanup_errors:
+                raise BaseExceptionGroup("Application cleanup was incomplete", cleanup_errors)
 
     api = FastAPI(
         title="Мягкий телефон Мишки — production candidate",
@@ -277,8 +281,6 @@ def create_app(application=None, *, include_test_routes: bool = False):
 
     @api.exception_handler(ValueError)
     async def invalid_event(_request, exc): return JSONResponse(status_code=422,content={"error":{"code":"invalid_event","message":str(exc)}})
-    @api.exception_handler(ProfileProviderError)
-    async def profile_provider_failure(_request, exc): return JSONResponse(status_code=503,content={"error":{"code":"profile_provider_unavailable","message":str(exc)}})
     @api.exception_handler(HistoryProviderError)
     async def history_provider_failure(_request, exc): return JSONResponse(status_code=503, content={"error":{"code":"history_provider_unavailable","message":str(exc)}})
     sequence_counters: dict[str, int] = {}
@@ -334,8 +336,9 @@ def create_app(application=None, *, include_test_routes: bool = False):
             return operational_stand.health_snapshot()
         manager=getattr(application,"runtime_manager",None)
         warmup=getattr(manager,"last_warmup",None) if manager is not None else None
-        provider = getattr(application, "profiles", None)
-        profile_status = provider.readiness() if provider is not None and hasattr(provider, "readiness") else {"ready": False, "provider": type(provider).__name__ if provider is not None else None, "reason": "profile_provider_readiness_unavailable"}
+        profile_status = {"ready": not application.max_json or application.identity_status()["identity_ready"], "provider": "max_json" if application.max_json else "guest_only",
+                          "provider_state": "client_owned" if application.max_json else "not_configured",
+                          "schema_state": "not_applicable", "reason": "no_local_patient_database"}
         engine=getattr(getattr(application, "runtime_manager", None), "engine", None)
         resources=application.resource_snapshot() if hasattr(application, "resource_snapshot") else (engine.resource_snapshot() if engine is not None and hasattr(engine, "resource_snapshot") else {})
         metrics.observe_resources(resources)
@@ -344,13 +347,13 @@ def create_app(application=None, *, include_test_routes: bool = False):
         simulated_hardware = str(hardware.get("state", "")).lower() in {"simulator", "fake", "degraded"}
         return {"status":"ok", "profile":getattr(application,"runtime_status",{}).get("profile","external"),
                 "degraded": simulated_hardware, "software_runtime_usable": True,
-                "production_ready": False if simulated_hardware else None,
-                "physical_hardware_ready": not simulated_hardware,
+                "production_ready": False if simulated_hardware or application.max_json else None,
+                "physical_hardware_ready": False,  # No live hardware owner in this fallback.
                 "observability":{"resources":resources,"metrics":metrics.snapshot(),"warmup_history":{"last_successful":getattr(manager,"last_successful_warmup",None),"last_failed":getattr(manager,"last_failed_warmup",None),"active_probe_correlation_id":getattr(manager,"active_probe_correlation_id",None)},"last_recovery":getattr(manager,"last_recovery",None)},
                 "lifecycle": lifecycle.snapshot(), "warmup": warmup,
                 "models_loaded":bool(warmup and warmup.get("ok")), "no_voice_recording":True,
-                "profile_provider":type(provider).__name__, "profile_provider_ready":bool(profile_status.get("ready")),
-                "profile_db_configured":bool(getattr(getattr(application, "settings", None), "profile_db", "")),
+                "profile_provider":profile_status["provider"], "profile_provider_ready":bool(profile_status.get("ready")),
+                "history_db_configured":bool(getattr(getattr(application, "settings", None), "history_db", "")),
                 "dependencies": dependency_identity(profile_status, runtime_status)}
     @api.get("/live")
     def live(): return {"live":True}
@@ -391,8 +394,9 @@ def create_app(application=None, *, include_test_routes: bool = False):
             "provider": "langgraph", "strict": True, "ready": False,
             "reason": "canonical_authorizer_unavailable",
         })
-        provider = getattr(application, "profiles", None)
-        profile_status = provider.readiness() if provider is not None and hasattr(provider, "readiness") else {"ready": False, "provider": type(provider).__name__ if provider is not None else None, "reason": "profile_provider_readiness_unavailable"}
+        profile_status = {"ready": not application.max_json or application.identity_status()["identity_ready"], "provider": "max_json" if application.max_json else "guest_only",
+                          "provider_state": "client_owned" if application.max_json else "not_configured",
+                          "schema_state": "not_applicable", "reason": "no_local_patient_database"}
         history_repo = getattr(application, "history_repository", None)
         history_status = (history_repo.readiness() if history_repo is not None and hasattr(history_repo, "readiness")
                           else {"ready": False, "provider": type(history_repo).__name__ if history_repo is not None else None,
@@ -408,6 +412,13 @@ def create_app(application=None, *, include_test_routes: bool = False):
         voice_report = content_report.get("voice", {}) if isinstance(content_report, dict) else {}
         audio_content_ready = bool(voice_report.get("approved_recorded_count", 0) >= voice_report.get("required_recorded_count", 1))
         settings = getattr(application, "settings", None)
+        local_demo = getattr(settings, "max_client_source", "disabled") == "local_demo"
+        physical_hardware_ready = not simulated_hardware
+        if local_demo:
+            owner = getattr(api.state, "stand", None)
+            physical_hardware_ready = False
+            if owner is not None:
+                physical_hardware_ready = owner.physical_hardware_ready()
         security_ready = bool(getattr(settings, "mutation_policy_ready", False))
         provenance = settings.operational_snapshot().get("provenance", {}) if settings is not None else {}
         launcher_provenance_ready = provenance.get("entrypoint") == "run_stand.py"
@@ -418,10 +429,11 @@ def create_app(application=None, *, include_test_routes: bool = False):
             and lifecycle_status.get("state") == "DEGRADED"
             and lifecycle_status.get("reason") == "resource_capacity_insufficient"
         )
-        optional_identity = getattr(settings, "identity_mode", "guest_only") == "optional_rfid"
+        optional_identity = getattr(settings, "identity_mode", "guest_only") == "max_json"
         identity_status = application.identity_status() if hasattr(application, "identity_status") else {"identity_ready": False, "reader_ready": False, "synthetic": False}
         software_runtime_usable = bool(
             lifecycle_admission
+            and (not local_demo or physical_hardware_ready)
             and (optional_identity or bool(profile_status.get("ready")))
             and bool(history_status.get("ready"))
             and bool(graph_status.get("ready"))
@@ -432,7 +444,8 @@ def create_app(application=None, *, include_test_routes: bool = False):
             and all(bool(value) for value in content_report.get("fixed_stories", {}).values())
         )
         production_ready = bool(
-            not simulated_hardware
+            not local_demo
+            and not simulated_hardware
             and software_runtime_usable
             and content_ready
             and content_production_ready
@@ -458,7 +471,7 @@ def create_app(application=None, *, include_test_routes: bool = False):
             "headless_ready": software_runtime_usable,
             "webpanel_ready": True,
             "simulated_hardware_ready": simulated_hardware,
-            "physical_hardware_ready": not simulated_hardware,
+            "physical_hardware_ready": physical_hardware_ready,
             "audio_content_ready": audio_content_ready,
             "security": {
                 "mutation_auth_policy": getattr(settings, "mutation_auth_policy", "unconfigured"),
@@ -469,7 +482,9 @@ def create_app(application=None, *, include_test_routes: bool = False):
             "production_blockers": [
                 code for code, blocked in (
                     ("simulator_hardware", simulated_hardware),
-                    ("rfid_physical_contract_unavailable", optional_identity and not bool(identity_status.get("reader_ready") and identity_status.get("identity_ready") and not identity_status.get("synthetic"))),
+                    ("synthetic_demo_data", local_demo),
+                    ("physical_hardware_unavailable", local_demo and not physical_hardware_ready),
+                    ("max_client_production_acceptance_pending", optional_identity and not bool(identity_status.get("reader_ready") and identity_status.get("identity_ready") and not identity_status.get("synthetic"))),
                     ("software_runtime_unusable", not software_runtime_usable),
                     ("content_not_production_ready", not content_production_ready),
                     ("mutation_policy_unconfigured_or_unsafe", not security_ready),
@@ -492,8 +507,6 @@ def create_app(application=None, *, include_test_routes: bool = False):
     if include_test_routes:
         @api.post("/session/start")
         def start(payload:dict): return application.start_session(str(payload.get("session_id","mock")),str(payload.get("correlation_id","")) or None)
-        @api.post("/mock/rfid")
-        async def rfid(payload:dict): return await dispatch(str(payload.get("session_id","mock")), {"type":"rfid","tag_id":payload.get("tag_id")}, payload.get("sequence"))
         @api.post("/mock/handset")
         async def handset(payload:dict): return await dispatch(str(payload.get("session_id","mock")), {"type":"handset_up" if payload.get("state","up")=="up" else "handset_down"}, payload.get("sequence"))
         @api.post("/mock/button")
@@ -549,6 +562,12 @@ def create_app(application=None, *, include_test_routes: bool = False):
         try:
             while True:
                 payload=await websocket.receive_json()
+                if not lifecycle.admits_users():
+                    await websocket.send_json({"type": "admission_error", "error": {
+                        "code": "runtime_unavailable", "user_available": False,
+                        "state": lifecycle.snapshot()["state"],
+                    }})
+                    continue
                 if payload.get("session_id") not in {None,session_id}:
                     await websocket.send_json({"error":{"code":"session_binding","message":"payload session_id does not match WebSocket path"}}); continue
                 try: await websocket.send_json(await dispatch(session_id,payload))

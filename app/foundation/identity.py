@@ -1,7 +1,7 @@
-"""Private identity boundary. No production reader or authorization service is implied.
+"""Bounded local profile validation and lifetime, not patient lookup or authorization.
 
-UIDs are transient lookup inputs. An operator token, a legacy profile row, or a
-matching UID alone never creates a child-data grant.
+Max supplies a validated card. These types constrain only what the scenario
+engine may keep/use, while operator authentication remains separate.
 """
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 import math
 import re
-import time
-from typing import Any, Callable, Literal, Mapping, Protocol
+from typing import Any, Literal, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -37,9 +36,6 @@ def _bounded_text(value: Any, field_name: str, maximum: int) -> str:
     return value
 
 
-def validate_uid(uid: Any) -> str:
-    """Validate an opaque UID without changing case, leading zeroes or spacing."""
-    return _bounded_text(uid, "RFID tag_id", 128)
 
 
 def normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
@@ -90,6 +86,13 @@ def normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         if born > datetime.now(zone).date():
             raise IdentityValidationError("date_of_birth must not be in the future")
         result["date_of_birth"] = born.isoformat()
+    if "age_years" in profile:
+        age = profile["age_years"]
+        if (type(age) is not int or not 0 <= age <= 130
+                or profile.get("age_source") != "data14_age_years"
+                or profile.get("birth_data_state") not in {"complete", "needs_clarification"}):
+            raise IdentityValidationError("invalid DATA-14 age provenance")
+        result.update(age_years=age, age_source="data14_age_years", birth_data_state=profile["birth_data_state"])
     if "grammatical_gender" in profile:
         if profile["grammatical_gender"] not in ("masculine", "feminine", "neutral"):
             raise IdentityValidationError("grammatical_gender is unsupported")
@@ -127,7 +130,7 @@ class IdentityDecision:
 
 
 def validate_identity_decision(decision: Any, now: float) -> IdentityDecision:
-    """Fail closed for every injected resolver, including malformed test doubles."""
+    """Validate a bounded local profile lease; this does not query or authorize a patient."""
     unavailable = IdentityDecision("unavailable")
     if (not isinstance(decision, IdentityDecision) or not isinstance(decision.status, str)
             or decision.status not in _IDENTITY_STATUSES):
@@ -147,56 +150,3 @@ def validate_identity_decision(decision: Any, now: float) -> IdentityDecision:
     except (IdentityValidationError, TypeError, ValueError):
         return unavailable
     return IdentityDecision("authorized", profile, decision.capabilities, float(decision.expires_monotonic))
-
-
-class IdentityResolver(Protocol):
-    async def resolve(self, uid: str, installation_id: str, request_id: str) -> IdentityDecision: ...
-    def readiness(self) -> dict[str, Any]: ...
-
-
-class DisabledIdentityResolver:
-    async def resolve(self, uid: str, installation_id: str, request_id: str) -> IdentityDecision:
-        return IdentityDecision("unavailable")
-
-    def readiness(self) -> dict[str, Any]:
-        return {"provider": "disabled", "ready": False, "synthetic": False,
-                "production_ready": False, "reason": "disabled"}
-
-
-class SyntheticIdentityResolver:
-    """Explicit fixture decisions only; never automatically authorize a UID.
-
-    Settings restrict this provider to mock + fake/simulator deployments. No
-    fixtures are loaded from environment, disk, legacy SQLite or real services.
-    """
-    def __init__(self, fixtures: Mapping[str, IdentityDecision], *,
-                 clock: Callable[[], float] = time.monotonic, lease_s: float = 60.0) -> None:
-        if (isinstance(lease_s, bool) or not isinstance(lease_s, (int, float))
-                or not math.isfinite(lease_s) or not 0 < lease_s <= 3600):
-            raise IdentityValidationError("synthetic lease_s must be positive and bounded")
-        self._clock = clock
-        self._lease_s = float(lease_s)
-        # Snapshot validated profiles so later caller mutations cannot change
-        # the fixture that was explicitly supplied at construction.
-        now = self._clock()
-        self._fixtures = {validate_uid(uid): validate_identity_decision(decision, now)
-                          for uid, decision in fixtures.items()}
-
-    async def resolve(self, uid: str, installation_id: str, request_id: str) -> IdentityDecision:
-        try:
-            uid = validate_uid(uid)
-        except IdentityValidationError:
-            return IdentityDecision("unavailable")
-        now = self._clock()
-        decision = validate_identity_decision(self._fixtures.get(uid, IdentityDecision("unknown")), now)
-        if decision.status != "authorized":
-            return decision
-        # A child reference must be independent of the presented card token.
-        if decision.profile["profile_ref"] == uid or decision.profile.get("schedule_ref") == uid:
-            return IdentityDecision("unavailable")
-        return IdentityDecision("authorized", decision.profile, decision.capabilities,
-                                min(decision.expires_monotonic, now + self._lease_s))
-
-    def readiness(self) -> dict[str, Any]:
-        return {"provider": "synthetic", "ready": True, "synthetic": True,
-                "production_ready": False, "reason": "synthetic_fixture_only"}

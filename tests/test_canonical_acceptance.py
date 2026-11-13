@@ -25,7 +25,7 @@ def test_catalog_is_single_canonical_boundary_and_reports_ready_content():
     report = catalog.report()
     assert document["contract"] == "canonical_product/v1"
     assert document["langgraph_authorization"] is True
-    assert len(document["states"]) == 52
+    assert len(document["states"]) == 50  # Direct profile_ready replaces three legacy RFID/lookup states.
     assert catalog.game("catch_light")["input"] == "button"
     assert catalog.story("fixed_aibolit_v1") is not None
     assert report["ready"] is True
@@ -41,14 +41,14 @@ def test_profile_dob_and_accessibility_policy_are_deterministic():
     band, source = age_band_from_profile({"date_of_birth": "2020-10-12", "timezone": "UTC"}, now=now)
     assert (band, source) == ("5-7", "profile_dob")
     runtime = CanonicalRuntime()
-    result = runtime.handle(event("RfidPresented", 1, 0, payload={}), {"profile_ref": "opaque", "date_of_birth": "2020-10-12", "trigger_topics": [{"topic_id": "loss", "status": "active", "handling": "adult_neutral"}]})
+    result = {"state": runtime._new_state("acceptance", {"profile_ref": "opaque", "date_of_birth": "2020-10-12", "trigger_topics": [{"topic_id": "loss", "status": "active", "handling": "adult_neutral"}]}).snapshot()}
     assert result["state"]["profile_status"] == "identified"
     assert result["state"]["age_band_source"] == "profile_dob"
     assert result["state"]["accessibility_policy"]["content_constraints"] == ("adult_neutral",)
     assert "display_name" not in result["state"] and "schedule_ref" not in result["state"]
 
 
-def test_button_mapping_handset_gate_and_safety_handoff_survive_tag_removal():
+def test_button_mapping_handset_gate_and_safety_handoff_survive_no_profile_clear():
     runtime = CanonicalRuntime()
     assert runtime.handle(event("AnonymousStart", 1, 0))["state"]["mode"] == "anonymous_visual"
     gated = runtime.handle(event("ButtonPressed", 2, 1, payload={"button_id": 6}))
@@ -56,10 +56,10 @@ def test_button_mapping_handset_gate_and_safety_handoff_survive_tag_removal():
     runtime.handle(event("HandsetLifted", 3, 2))
     safety = runtime.handle(event("VoiceIntentReady", 4, 3, payload={"intent": "request_adult", "safety_severity": "none"}))
     assert safety["state"]["mode"] == "safety_handoff"
-    preserved = runtime.handle(event("RfidRemoved", 5, 4))
+    preserved = runtime.handle(event("ClientProfileCleared", 5, 4), identity_event_authorized=True)
     assert preserved["state"]["mode"] == "safety_handoff"
     resolved = runtime.handle(event(
-        "AdultResolved", 6, 5,
+        "AdultResolved", 6, runtime.sessions["acceptance"].state_version,
         payload={"incident_id": runtime.sessions["acceptance"].incident_id},
     ), adult_resolution_authorized=True)
     assert resolved["state"]["mode"] == "root_menu"

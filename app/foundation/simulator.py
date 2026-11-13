@@ -32,11 +32,9 @@ class FakeMonotonicClock:
 class SimulatorAcceptanceHarness:
     """Small reusable driver for GR-01–GR-07 regression scenarios."""
 
-    def __init__(self, settings: Settings | None = None, *, identity_resolver: Any = None):
+    def __init__(self, settings: Settings | None = None):
         settings = settings or Settings(
             profile="mock", runtime_mode="exhibition", hardware_mode="simulator", content_root="content",
-            identity_mode="optional_rfid" if identity_resolver is not None else "guest_only",
-            identity_provider="synthetic" if identity_resolver is not None else "disabled",
         )
         if settings.profile != "mock" or settings.hardware_mode != "simulator":
             raise ValueError("acceptance harness requires mock providers and simulator hardware")
@@ -50,11 +48,6 @@ class SimulatorAcceptanceHarness:
         self.stand.application.monotonic_now = self.clock.now
         self.stand.application.canonical_runtime.monotonic_now = self.clock.now
         self.stand.application.led.exhibition_effects.monotonic_now = self.clock.now
-        if identity_resolver is not None:
-            # Explicit synthetic fixtures enter through the application's
-            # identity boundary; the harness owns no authorization state.
-            self.stand.application.identity_resolver = identity_resolver
-
     def _next_sequence(self, sequence: int | None) -> int:
         if sequence is None:
             self._sequence += 1
@@ -72,25 +65,8 @@ class SimulatorAcceptanceHarness:
         return await self.stand.inject_physical({"type": "ButtonPressed", "button_id": button_number,
                                                  "_source": "simulator", "_sequence": self._next_sequence(sequence)})
 
-    async def present_card(self, uid: str, *, wait_for_lookup: bool = False) -> dict[str, Any]:
-        """Present an opaque synthetic UID through canonical UART ingress.
 
-        Return the ingress acknowledgement. Explicitly wait for the backend
-        lookup before inspecting a ready/failed state when a test needs it.
-        """
-        result = await self.stand.inject("rfid", {"tag_id": uid}, "stand")
-        if wait_for_lookup:
-            await self.wait_for_lookup()
-        return result
 
-    async def wait_for_lookup(self, timeout_s: float = 3.0) -> None:
-        """Wait for the current backend task without cancelling its owner."""
-        task = getattr(self.stand.application, "_identity_lookup_tasks", {}).get("stand")
-        if task is not None:
-            await asyncio.wait_for(asyncio.shield(task), timeout=max(0.01, float(timeout_s)))
-
-    async def remove_card(self) -> dict[str, Any]:
-        return await self.stand.inject_physical({"type": "RfidRemoved", "_source": "simulator_rfid", "_sequence": self._next_sequence(None)})
 
     async def speech_result(self, text: str) -> dict[str, Any]:
         # parse_event redacts speech to length before canonical ingress.

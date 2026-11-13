@@ -136,8 +136,8 @@ class SimulatedAdultHandoff:
 
 class TypedInfoRenderer:
     """Render only typed provider facts; it never asks an LLM for information."""
-    def __init__(self, service: Any, profile: Mapping[str, Any] | None, tag_id: str | None) -> None:
-        self.service, self.profile, self.tag_id = service, profile, tag_id
+    def __init__(self, service: Any, profile: Mapping[str, Any] | None, schedule_ref: str | None) -> None:
+        self.service, self.profile, self.schedule_ref = service, profile, schedule_ref
 
     @staticmethod
     def _schedule_text(item: Mapping[str, Any], *, include_location: bool) -> str:
@@ -167,13 +167,13 @@ class TypedInfoRenderer:
         # Production services expose independent typed calls so a weather
         # outage does not make the child's schedule unavailable, and vice versa.
         if kind == "weather" and callable(getattr(self.service, "weather", None)):
-            weather = await self.service.weather(dict(self.profile), self.tag_id or "", allow_demo=allow_demo)
+            weather = await self.service.weather(dict(self.profile), self.schedule_ref or "", allow_demo=allow_demo)
             return {"kind": kind, "text": weather["summary"], "source": weather["source"]}
         if kind in {"what_next", "where_now"} and callable(getattr(self.service, "schedule", None)):
-            schedule = await self.service.schedule(dict(self.profile), self.tag_id or "")
+            schedule = await self.service.schedule(dict(self.profile), self.schedule_ref or "")
             item = schedule[0 if kind == "what_next" else -1]
             return {"kind": kind, "text": self._schedule_text(item, include_location=kind == "where_now")}
-        report = await self.service.build(dict(self.profile), self.tag_id or "")
+        report = await self.service.build(dict(self.profile), self.schedule_ref or "")
         report = validate_report(report, allow_demo=allow_demo)
         if kind == "weather":
             return {"kind": kind, "text": report["weather"]["summary"], "source": report["source"]}

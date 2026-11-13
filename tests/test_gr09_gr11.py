@@ -83,6 +83,8 @@ def test_stand_health_routes_are_read_only_and_webpanel_optional():
 def test_simulator_harness_is_deterministic_for_welcome_reset_and_stale_hid():
     async def scenario():
         harness = SimulatorAcceptanceHarness()
+        # Test-only control admission: this unit harness has no lifecycle warmup.
+        harness.stand._admits_physical_users = lambda: True
         try:
             assert harness.health()["canonical_state"] == "idle"
             first = await harness.space_released(1)

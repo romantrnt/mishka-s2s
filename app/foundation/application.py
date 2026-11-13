@@ -14,14 +14,13 @@ from dataclasses import replace
 from typing import Any, Callable
 from weakref import WeakSet
 
-from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, PlaybackHandle, ProfileProvider, ScenarioRepository, SessionRecord, SessionRepository
+from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, PlaybackHandle, ScenarioRepository, SessionRecord, SessionRepository
 from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
-from .adapters import ProfileProviderError
 from .age_policy import trusted_canonical_age
 from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseResolver, SafetyClassifier, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
 from .config import settings_from_compat_env
-from .identity import DisabledIdentityResolver, IdentityDecision, IdentityValidationError, SyntheticIdentityResolver, validate_identity_decision, validate_uid
+from .identity import IdentityDecision, IdentityValidationError, validate_identity_decision
 from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest, validate_generated_story
 from .system_prompt import build_system_prompt
 from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
@@ -84,26 +83,18 @@ class ScenarioApplication:
         "audio_too_long",
     })
 
-    def __init__(self, sessions: SessionRepository, scenarios: ScenarioRepository, profiles: ProfileProvider, classifier: IntentClassifier, audio: AudioOutput, led: LEDController, publisher: EventPublisher, now=time.time, installation_id="default", threshold=0.6, bounded_s2s=None, history=None, max_session_seconds=1200, idle_timeout_seconds: float | None = None, display: DisplayController | None = None, schedule_weather: Any = None, allow_quick_replies: bool | None = None, settings: Any = None, adult_handoff: Any = None, monotonic_now=time.monotonic, background_scheduler: bool = True, identity_resolver: Any = None):
-        self.sessions, self.scenarios, self.profiles, self.classifier, self.audio, self.led, self.publisher = sessions, scenarios, profiles, classifier, audio, led, publisher
+    def __init__(self, sessions: SessionRepository, scenarios: ScenarioRepository, classifier: IntentClassifier, audio: AudioOutput, led: LEDController, publisher: EventPublisher, now=time.time, installation_id="default", threshold=0.6, bounded_s2s=None, history=None, max_session_seconds=1200, idle_timeout_seconds: float | None = None, display: DisplayController | None = None, schedule_weather: Any = None, allow_quick_replies: bool | None = None, settings: Any = None, adult_handoff: Any = None, monotonic_now=time.monotonic, background_scheduler: bool = True):
+        self.sessions, self.scenarios, self.classifier, self.audio, self.led, self.publisher = sessions, scenarios, classifier, audio, led, publisher
         self.now, self.monotonic_now, self.installation_id, self.threshold = now, monotonic_now, installation_id, threshold
         self.background_scheduler = bool(background_scheduler)
         self.settings = settings if settings is not None else settings_from_compat_env()
         settings = self.settings
-        self.optional_identity = str(getattr(settings, "identity_mode", "guest_only")) == "optional_rfid"
-        self.identity_resolver = identity_resolver if identity_resolver is not None else (
-            SyntheticIdentityResolver({}, clock=self.monotonic_now)
-            if self.optional_identity and getattr(settings, "identity_provider", "disabled") == "synthetic"
-            else DisabledIdentityResolver()
-        )
-        self._identity_lookup_tasks: dict[str, asyncio.Task[Any]] = {}
+        self.max_json = str(getattr(settings, "identity_mode", "guest_only")) == "max_json"
+        self._max_client_boundary = None
+        self.optional_identity = self.max_json
         self._identity_deadline_tasks: dict[str, asyncio.Task[Any]] = {}
         self._identity_requests: dict[str, dict[str, Any]] = {}
-        self._identity_provider_tasks: set[asyncio.Task[Any]] = set()
-        self._identity_worker_limit = 8
         self._identity_shutdown = False
-        self._identity_fingerprint_key = os.urandom(32)
-        self._identity_recent_scan: tuple[bytes, float] | None = None
         profile = str(getattr(settings, "profile", None) or "mock").strip().lower()
         self.display = display
         self.schedule_weather = schedule_weather
@@ -192,18 +183,17 @@ class ScenarioApplication:
         self.transition_authorizer = CanonicalLangGraphAuthorizer() if self.canonical_runtime is not None else None
 
     def identity_status(self) -> dict[str, Any]:
-        """Safe readiness only; the lookup provider never implies a real reader."""
-        try:
-            readiness = self.identity_resolver.readiness()
-        except Exception:
-            readiness = {}
-        if not isinstance(readiness, dict):
-            readiness = {}
-        synthetic = readiness.get("synthetic") is True
-        return {"identity_ready": self.optional_identity and readiness.get("ready") is True,
-                "reader_ready": False, "synthetic": synthetic,
-                "pending": len(self._identity_lookup_tasks), "production_ready": False,
-                "provider": "synthetic" if synthetic else "disabled"}
+        """Safe readiness only; starting a client never implies a connected real reader."""
+        if self.max_json:
+            return {"identity_ready": self._max_client_boundary is not None and self._max_client_boundary._healthy,
+                    "reader_ready": bool(self.settings.max_client_source == "local_demo"
+                                         and self._max_client_boundary is not None
+                                         and self._max_client_boundary._reader_ready),
+                    "synthetic": True, "synthetic_data": True, "pending": 0,
+                    "source": self.settings.max_client_source,
+                    "production_ready": False, "provider": "max_json"}
+        return {"identity_ready": False, "reader_ready": False, "synthetic": False,
+                "pending": 0, "production_ready": False, "provider": "guest_only"}
 
     def _identity_result(self, session_id: str, reason: str) -> dict[str, Any]:
         state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
@@ -218,7 +208,7 @@ class ScenarioApplication:
             current_task = asyncio.current_task()
         except RuntimeError:
             current_task = None
-        for registry in (self._identity_lookup_tasks, self._identity_deadline_tasks):
+        for registry in (self._identity_deadline_tasks,):
             task = registry.pop(session_id, None)
             if task is not None and task is not current_task and not task.done():
                 with contextlib.suppress(RuntimeError):
@@ -227,22 +217,51 @@ class ScenarioApplication:
         self._canonical_schedule_refs.pop(session_id, None)
         self.conversation_contexts.pop(session_id, None)
 
+    def _revoke_local_profile(self, session_id: str) -> None:
+        """Fence an app-owned termination before any cleanup await.
+
+        Not used for Max's incoming clear/replacement: those must preserve
+        the source's newly started request.
+        """
+        if not self.max_json:
+            return
+        boundary = self._max_client_boundary
+        if boundary is not None and boundary.session_id == session_id:
+            boundary.clear_client()
+        self._drop_identity_owner(session_id)
+        self._session_epochs[session_id] = self._session_epochs.get(session_id, 0) + 1
+        self._session_revisions[session_id] = self._session_revisions.get(session_id, 0) + 1
+        state = self.canonical_runtime.sessions.get(session_id)
+        if state is not None:
+            self.canonical_runtime.clear_identity(state)
+            state.state_version += 1
+            if state.safety_severity != "urgent":
+                state.mode = "session_closed" if state.handset == "up" else "idle"
+                state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
+            self.last_canonical_state = state.snapshot()
+        record = self.sessions.get(session_id)
+        if record is not None:
+            record.child_id, record.anonymous = None, True
+            if state is not None:
+                record.current_node = state.mode
+            self.sessions.save(record)
+
     def cancel_identity_work(self) -> None:
         """Synchronous authority revocation for Stand.close, also outside a loop."""
         self._identity_shutdown = True
-        self._identity_recent_scan = None
-        for session_id in set(self._identity_requests) | set(self._identity_lookup_tasks) | set(self._identity_deadline_tasks):
+        if self.max_json and self._max_client_boundary is not None:
+            self._revoke_local_profile(self._max_client_boundary.session_id)
+        for session_id in set(self._identity_requests) | set(self._identity_deadline_tasks):
             self._drop_identity_owner(session_id)
-        for task in tuple(self._identity_provider_tasks):
-            if not task.done():
-                with contextlib.suppress(RuntimeError):
-                    task.cancel()
-
     async def shutdown_identity(self) -> dict[str, int]:
         """Revoke first, then drain a bounded amount of provider work."""
-        tasks = set(self._identity_provider_tasks) | set(self._identity_lookup_tasks.values()) | set(self._identity_deadline_tasks.values())
+        tasks = set(self._identity_deadline_tasks.values())
         tasks.discard(asyncio.current_task())
-        self.cancel_identity_work()
+        try:
+            if self.max_json and self._max_client_boundary is not None:
+                await self._max_client_boundary.close()
+        finally:
+            self.cancel_identity_work()
         if tasks:
             _, pending = await asyncio.wait(tasks, timeout=self.audio_cleanup_timeout_seconds)
         else:
@@ -293,9 +312,7 @@ class ScenarioApplication:
                 self._drop_identity_owner(session_id)
                 continue
             now = self.monotonic_now()
-            if state.mode == "rfid_lookup":
-                deadline, kind = state.identity_lookup_deadline, "IdentityLookupFailed"
-            elif state.mode == "rfid_ready":
+            if state.mode == "profile_ready":
                 deadline, kind = state.identity_ready_deadline, "IdentityReadyExpired"
             else:
                 deadline, kind = state.identity_expires_monotonic, "IdentityAuthorizationExpired"
@@ -312,56 +329,6 @@ class ScenarioApplication:
         return Event(kind, session_id, sequence, self.now(), "internal_identity", payload,
                      "identity:" + uuid.uuid4().hex, self.monotonic_now())
 
-    async def _lookup_identity(self, session_id: str, request: dict[str, Any], uid: str) -> None:
-        provider: asyncio.Task[Any] | None = None
-        try:
-            decision = IdentityDecision("unavailable")
-            # Account for detached cancellation-resistant providers as well as
-            # current requests; repeated cards cannot grow native work forever.
-            if len(self._identity_provider_tasks) < self._identity_worker_limit:
-                provider = asyncio.create_task(self.identity_resolver.resolve(
-                    uid, self.installation_id, request["request_id"]), name="mishka-identity-provider")
-                self._identity_provider_tasks.add(provider)
-                def finished(task: asyncio.Task[Any]) -> None:
-                    self._identity_provider_tasks.discard(task)
-                    self._consume_detached_audio_cancel(task)
-                provider.add_done_callback(finished)
-                done, _ = await asyncio.wait({provider}, timeout=max(0.0, request["lookup_deadline"] - self.monotonic_now()))
-                if done:
-                    decision = validate_identity_decision(provider.result(), self.monotonic_now())
-            if self._identity_shutdown or self._identity_requests.get(session_id) is not request:
-                return
-            now = self.monotonic_now()
-            payload = {"request_id": request["request_id"]}
-            profile = None
-            kind = "IdentityLookupFailed"
-            if decision.status == "authorized" and now < request["lookup_deadline"]:
-                # Neither a provider bug nor an opaque child reference may turn
-                # the scanned UID into a profile/schedule identifier.
-                if decision.profile["profile_ref"] != uid and decision.profile.get("schedule_ref") != uid:
-                    kind = "IdentityLookupSucceeded"
-                    profile = dict(decision.profile) if "personalize" in decision.capabilities else {"profile_ref": decision.profile["profile_ref"]}
-                    if "schedule" in decision.capabilities and decision.profile.get("schedule_ref"):
-                        profile["schedule_ref"] = decision.profile["schedule_ref"]
-                    else:
-                        profile.pop("schedule_ref", None)
-                    payload.update(expires_monotonic=decision.expires_monotonic,
-                                   ready_deadline=min(decision.expires_monotonic, now + float(getattr(self.settings, "rfid_ready_ttl_s", 60.0))),
-                                   capabilities=sorted(decision.capabilities))
-            await self._receive_canonical_event(self._identity_event(session_id, kind, payload),
-                identity_event_authorized=True, identity_profile=profile)
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            # Provider values and exception text may contain the UID or profile.
-            if self._identity_requests.get(session_id) is request:
-                await self._receive_canonical_event(self._identity_event(session_id, "IdentityLookupFailed",
-                    {"request_id": request["request_id"]}), identity_event_authorized=True)
-        finally:
-            if provider is not None and not provider.done():
-                provider.cancel()
-            if self._identity_lookup_tasks.get(session_id) is asyncio.current_task():
-                self._identity_lookup_tasks.pop(session_id, None)
 
     async def _set_dialogue_lighting_phase(self, session_id: str, phase: str) -> dict[str, Any] | None:
         """Drive the dialogue LED frame from the actual bounded-runtime phase.
@@ -703,7 +670,14 @@ class ScenarioApplication:
                 continue
             if self._session_has_active_work(session.session_id):
                 continue
-            await self._cleanup_session_resources(session.session_id)
+            self._revoke_local_profile(session.session_id)
+            cleanup_result = await self._cleanup_session_resources(session.session_id)
+            if cleanup_result.get("cleanup_stale"):
+                continue
+            state = self.canonical_runtime.sessions.get(session.session_id)
+            if self.max_json and state is not None and state.safety_severity == "urgent":
+                # Idle expiry cannot stand in for an adult's incident resolution.
+                continue
             outputs = self._end(session, "idle_timeout", session.last_sequence)
             self.sessions.save(session)
             self._idle_expiration_count += 1
@@ -831,6 +805,7 @@ class ScenarioApplication:
             action, outcome, error = "none", "detected", None
             try:
                 if session_id:
+                    self._revoke_local_profile(session_id)
                     await self._cleanup_session_resources(session_id)
                     action, outcome = "session_cleanup", "cleaned"
                 elif lifecycle is not None:
@@ -1043,7 +1018,10 @@ class ScenarioApplication:
                                        identity_event_authorized: bool = False,
                                        identity_profile: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
-            if self.optional_identity and not event.event_type.startswith("Identity"):
+            waiter = self._session_reset_waiters.get(event.session_id)
+            if waiter is not None and waiter[0] is not asyncio.current_task():
+                await waiter[1]
+            if self.optional_identity and not event.event_type.startswith("Identity") and event.event_type not in {"ClientProfileReady", "ClientProfileCleared"}:
                 await self.expire_identity_leases()
             return await self._receive_canonical_event_inner(
                 event, transient_text,
@@ -1070,68 +1048,43 @@ class ScenarioApplication:
         This boundary is the sole place where declared effects become calls.
         """
         profile = None
-        lookup_request = None
-        lookup_uid = None
+        profile_request = None
         current = self.canonical_runtime.sessions.get(event.session_id)
         if self.optional_identity:
             if self._identity_shutdown:
                 return self._identity_result(event.session_id, "identity_shutdown")
             for other_id, other in tuple(self.canonical_runtime.sessions.items()):
                 if other_id != event.session_id and (other.handset == "up"
-                        or other.mode in {"rfid_lookup", "rfid_ready"}
+                        or other.mode == "profile_ready"
                         or other.safety_severity == "urgent"):
                     return self._identity_result(event.session_id, "installation_busy")
-        if event.event_type in {"IdentityLookupSucceeded", "IdentityLookupFailed", "IdentityReadyExpired", "IdentityAuthorizationExpired"}:
+        if event.event_type in {"ClientProfileReady", "ClientProfileCleared"}:
+            if not self.max_json or not identity_event_authorized:
+                return self._identity_result(event.session_id, "client_profile_untrusted")
+            if event.event_type == "ClientProfileReady":
+                if self._max_client_boundary is None or event.payload.get("client_generation") != self._max_client_boundary.generation:
+                    return self._identity_result(event.session_id, "stale_client_generation")
+                if current is not None and (current.handset == "up" or current.mode not in {"idle", "profile_ready"}):
+                    return self._identity_result(event.session_id, "profile_active_session_ignored")
+                checked = validate_identity_decision(IdentityDecision("authorized", identity_profile,
+                    frozenset({"personalize"}), event.payload.get("expires_monotonic", 0)), self.monotonic_now())
+                if checked.status != "authorized":
+                    return self._identity_result(event.session_id, "invalid_client_profile")
+                profile = checked.profile
+                profile_request = {"request_id": event.payload["request_id"]}
+        if event.event_type in {"IdentityReadyExpired", "IdentityAuthorizationExpired"}:
             request = self._identity_requests.get(event.session_id)
             if not identity_event_authorized:
                 return self._identity_result(event.session_id, "identity_outcome_untrusted")
             if (not self.optional_identity or request is None or current is None
                     or request["request_id"] != event.payload.get("request_id")
                     or current.identity_request_id != request["request_id"]):
-                return self._identity_result(event.session_id, "stale_identity_lookup")
-            if event.event_type == "IdentityLookupSucceeded":
-                checked = validate_identity_decision(IdentityDecision("authorized", identity_profile,
-                    frozenset(event.payload.get("capabilities") or ()), event.payload.get("expires_monotonic", 0)), self.monotonic_now())
-                if checked.status != "authorized" or self.monotonic_now() >= request["lookup_deadline"]:
-                    event = replace(event, event_type="IdentityLookupFailed", payload={"request_id": request["request_id"]})
-                else:
-                    profile = checked.profile
-        if event.event_type == "RfidPresented" and self.optional_identity:
-            # Ignore an in-call card before invoking any provider or parsing a
-            # UID into diagnostics. Physical card values stay in this stack.
-            if current is not None and (current.handset == "up" or current.mode not in {"idle", "rfid_lookup", "rfid_ready"}):
-                return self._identity_result(event.session_id, "rfid_active_session_ignored")
-            try:
-                lookup_uid = validate_uid(event.payload.get("tag_id"))
-            except IdentityValidationError:
-                return self._identity_result(event.session_id, "invalid_rfid")
-            fingerprint = hashlib.blake2b(lookup_uid.encode("utf-8"), key=self._identity_fingerprint_key, digest_size=16).digest()
-            owned = self._identity_requests.get(event.session_id)
-            if owned is not None and owned["fingerprint"] == fingerprint and current is not None and current.mode in {"rfid_lookup", "rfid_ready"}:
-                return self._identity_result(event.session_id, "rfid_repeated")
-            recent = self._identity_recent_scan
-            if recent is not None:
-                if self.monotonic_now() - recent[1] >= float(getattr(self.settings, "rfid_debounce_s", 0.5)):
-                    self._identity_recent_scan = None
-                elif recent[0] == fingerprint:
-                    return self._identity_result(event.session_id, "rfid_debounced")
-            accepted_at = self.monotonic_now()
-            lookup_request = {"request_id": uuid.uuid4().hex, "fingerprint": fingerprint,
-                              "accepted_monotonic": accepted_at,
-                              "lookup_deadline": accepted_at + float(getattr(self.settings, "rfid_lookup_timeout_s", 2.0))}
-            event = replace(event, payload={"request_id": lookup_request["request_id"], "lookup_deadline": lookup_request["lookup_deadline"]})
-        elif event.event_type == "RfidPresented":
-            try:
-                profile = self.profiles.resolve(str(event.payload.get("tag_id", "")))
-            except ProfileProviderError:
-                return {"reason": "profile_unavailable", "outputs": [{"action": "safe_stop"}]}
+                return self._identity_result(event.session_id, "stale_profile_context")
         requested_version = event.payload.get("state_version") if isinstance(event.payload, dict) else None
         state_version = int(requested_version) if isinstance(requested_version, int) else (current.state_version if current else 0)
         previous_state = copy.deepcopy(current)
         event_type = "VoiceIntentReady" if event.event_type == "SpeechReceived" else event.event_type
         payload = dict(event.payload)
-        if event.event_type == "RfidPresented" and not self.optional_identity:
-            payload = {"profile_resolved": bool(profile)}
         accepted_monotonic = event.monotonic_timestamp if event.monotonic_timestamp is not None else self.monotonic_now()
         if event.event_type == "SpeechReceived":
             text = transient_text or ""
@@ -1185,24 +1138,31 @@ class ScenarioApplication:
         )
         previous_version = previous_state.state_version if previous_state is not None else -1
         takes_ownership = bool(effects) or snapshot.get("state_version") != previous_version or exhibition_reset
+        if (takes_ownership and self.max_json and self._max_client_boundary is not None
+                and event.session_id == self._max_client_boundary.session_id
+                and (event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart"}
+                     or (event.event_type == "HandsetLifted" and snapshot.get("profile_status") != "identified"))):
+            # Fence Max only after canonical acceptance. Duplicate/stale handset
+            # edges must not clear one side while the other retains its context.
+            self._max_client_boundary.clear_client()
         revision = self._session_revisions.get(event.session_id, 0) + (1 if takes_ownership and not child_ack else 0)
         self._session_revisions[event.session_id] = revision
-        if lookup_request is not None and decision["reason"] == "identity_lookup_started":
-            self._identity_recent_scan = (lookup_request["fingerprint"], lookup_request["accepted_monotonic"])
         next_owner = self.canonical_runtime.sessions.get(event.session_id)
         identity_owner_changed = bool(self.optional_identity and previous_state is not None
             and previous_state.identity_request_id != getattr(next_owner, "identity_request_id", None))
         identity_ended = bool(previous_state is not None and previous_state.profile_ref
                               and getattr(next_owner, "profile_ref", None) is None)
-        if event.event_type == "HandsetPlaced" or exhibition_reset or identity_owner_changed or identity_ended:
+        if (identity_ended and self.max_json and event.event_type != "ClientProfileCleared"
+                and self._max_client_boundary is not None
+                and self._max_client_boundary.session_id == event.session_id):
+            self._max_client_boundary.clear_client()
+        if (takes_ownership and event.event_type == "HandsetPlaced") or exhibition_reset or identity_owner_changed or identity_ended:
             self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
             self._paused_story_playback.pop(event.session_id, None)
-        if (event.event_type in {"HandsetPlaced", "RfidRemoved", "AnonymousStart", "SessionCancel", "SessionReset"}
+        if ((takes_ownership and event.event_type in {"HandsetPlaced", "AnonymousStart", "SessionCancel", "SessionReset"})
                 or (previous_state is not None and previous_state.mode == "bear_dialogue"
-                    and snapshot.get("mode") != "bear_dialogue")
-                or (event.event_type == "RfidPresented"
-                    and previous_state is not None
-                    and previous_state.profile_ref != snapshot.get("profile_ref"))):
+                    and snapshot.get("mode") != "bear_dialogue")):
+
             self.conversation_contexts.pop(event.session_id, None)
         if exhibition_reset:
             self._session_reset_waiters[event.session_id] = (
@@ -1227,21 +1187,19 @@ class ScenarioApplication:
 
         if identity_owner_changed or identity_ended:
             # Fence all private context/audio before any provider cleanup await.
-            # The replacement lookup is installed only after this event commits.
+            # The replacement profile context is installed only after this event commits.
             self._drop_identity_owner(event.session_id)
             self._invalidate_audio_lease(event.session_id)
             old_record = self.sessions.get(event.session_id)
             if old_record is not None:
                 old_record.cancellation_token += 1
                 self.audio.cancel(old_record.cancellation_token)
-            await self._cleanup_session_resources(event.session_id, identity_request=lookup_request)
+            await self._cleanup_session_resources(event.session_id, identity_request=profile_request)
             if not still_current():
                 return stale_result()
 
-        if lookup_request is not None and decision["reason"] == "identity_lookup_started":
-            # Own the accepted scan before cleanup/hooks can yield; a duplicate
-            # arriving during those awaits cannot replace or renew its deadline.
-            self._identity_requests[event.session_id] = lookup_request
+        if event.event_type == "ClientProfileReady" and decision["reason"] == "profile_ready":
+            self._identity_requests[event.session_id] = profile_request
 
         record = self.sessions.get(event.session_id)
         if record is None:
@@ -1253,8 +1211,7 @@ class ScenarioApplication:
         record.handset_up = snapshot.get("handset") == "up"
         record.scenario_id, record.scenario_version = "canonical", "canonical_product/v1"
         record.current_node, record.last_sequence = snapshot.get("mode"), event.sequence
-        # Physical RFID values never enter SessionRecord or analytics; only the protected resolver sees them.
-        record.rfid_tag = None
+        # The stored reference identifies this context generation, not a patient or card.
         record.last_activity_at = self.now()
         record.state = Lifecycle.ENDED if snapshot.get("mode") in {"soft_end", "session_closed"} else Lifecycle.ACTIVE
         # Keep the same mutable effect objects visible while a playback adapter
@@ -1264,27 +1221,13 @@ class ScenarioApplication:
         deferred_effects: list[dict[str, Any]] = []
         if not exhibition_reset:
             self.sessions.save(record)
-        # Do not populate the profile cache before the first RFID is handled.
-        # CanonicalRuntime uses the missing session/profile boundary to detect
-        # the first read; pre-populating it made the first tag look repeated.
-        if (event.event_type in {"RfidRemoved", "AnonymousStart", "SessionCancel", "SessionReset"}
+        if (event.event_type in {"AnonymousStart", "SessionCancel", "SessionReset"}
                 and snapshot.get("profile_ref") is None):
             self._canonical_profiles.pop(event.session_id, None)
             self._canonical_schedule_refs.pop(event.session_id, None)
-        if event.event_type == "IdentityLookupSucceeded" and decision["reason"] == "rfid_ready":
+        if event.event_type == "ClientProfileReady" and decision["reason"] == "profile_ready":
             self._canonical_profiles[event.session_id] = dict(profile or {})
             self._canonical_schedule_refs[event.session_id] = (profile or {}).get("schedule_ref")
-        if event.event_type == "RfidPresented" and not self.optional_identity:
-            identity_accepted = (
-                decision["reason"] in {"rfid_identified", "unknown_tag"}
-                and snapshot.get("profile_ref") == ((profile or {}).get("profile_ref") or (profile or {}).get("child_id"))
-            )
-            if identity_accepted:
-                self._canonical_profiles[event.session_id] = profile
-                self._canonical_schedule_refs[event.session_id] = (profile or {}).get("schedule_ref") or (profile or {}).get("profile_ref")
-            if (identity_accepted
-                    and not getattr(self.canonical_runtime, "exhibition_mode", False)):
-                await self._run_readiness_wave_async(record, effects)
         for effect_index, effect in enumerate(effects):
             if not still_current():
                 return stale_result()
@@ -1299,11 +1242,9 @@ class ScenarioApplication:
                 effect.setdefault("session_id", event.session_id)
                 effect.setdefault("generation", int(self._session_epochs.get(event.session_id, 0)))
             if kind == "identity_cleared":
-                if lookup_request is None:
+                if profile_request is None:
                     self._drop_identity_owner(event.session_id)
                 effect["resolution"] = "private_identity_cleared"
-            elif kind == "identity_lookup_start":
-                effect["resolution"] = "identity_lookup_scheduled"
             elif kind in {"lighting_dark", "standby_dark_started"}:
                 cancel_effects = getattr(self.led, "cancel_effects", None)
                 if callable(cancel_effects):
@@ -1311,13 +1252,13 @@ class ScenarioApplication:
                 else:
                     self.led.clear_all()
                 effect["resolution"] = "canonical_lighting_dark"
-            elif kind == "rfid_ready_lighting":
-                start_ready = getattr(self.led, "start_rfid_ready", None)
+            elif kind == "profile_ready_lighting":
+                start_ready = getattr(self.led, "start_profile_ready", None)
                 if callable(start_ready):
                     effect["lighting_effect"] = dict(start_ready(now=accepted_monotonic))
-                    effect["resolution"] = "canonical_rfid_ready_started"
+                    effect["resolution"] = "canonical_profile_ready_started"
                 else:
-                    effect["resolution"] = "rfid_ready_lighting_unavailable"
+                    effect["resolution"] = "profile_ready_lighting_unavailable"
             elif kind == "lighting_wave_intent":
                 start_wave = getattr(self.led, "start_wave", None)
                 start_age_wave = getattr(self.led, "start_age_selection_wave", None)
@@ -1856,17 +1797,6 @@ class ScenarioApplication:
         if not exhibition_reset:
             self.sessions.save(record)
         published_event = event
-        if event.event_type == "RfidPresented":
-            # The physical tag is resolved only inside the protected profile
-            # boundary; it must never enter the common event stream.
-            published_event = Event(
-                event.event_type, event.session_id, event.sequence, event.timestamp,
-                event.source, {
-                    "profile_resolved": snapshot.get("profile_status") == "identified",
-                    "unknown_tag": snapshot.get("profile_status") != "identified",
-                },
-                event.correlation_id,
-            )
         if not exhibition_reset and not still_current():
             return stale_result()
         self.publisher.publish(published_event)
@@ -1882,11 +1812,7 @@ class ScenarioApplication:
                 logger.exception("canonical state update hook failed", extra={"session_id": event.session_id})
         if not exhibition_reset and not still_current():
             return stale_result()
-        if lookup_request is not None and decision["reason"] == "identity_lookup_started":
-            self._identity_requests[event.session_id] = lookup_request
-            self._identity_lookup_tasks[event.session_id] = asyncio.create_task(
-                self._lookup_identity(event.session_id, lookup_request, lookup_uid), name="mishka-identity-lookup")
-        elif self.optional_identity and self._identity_scope_live(event.session_id):
+        if self.optional_identity and self._identity_scope_live(event.session_id):
             self._schedule_identity_deadline(event.session_id)
         return {"reason": decision["reason"], "state": final_state.get("mode"),
                 "state_version": final_state.get("state_version"), "outputs": effects,
@@ -1899,6 +1825,11 @@ class ScenarioApplication:
         """Start an anonymous visual session from a pre-auth physical button."""
     async def receive_async(self, event: Event, transient_text: str | None = None) -> dict[str, Any]:
         """Ingress for the single canonical runtime and LangGraph boundary."""
+        from .domain import EVENT_TYPES
+        if event.event_type not in EVENT_TYPES:
+            return self._identity_result(event.session_id, "unsupported_event")
+        if event.event_type in {"ClientProfileReady", "ClientProfileCleared"}:
+            return self._identity_result(event.session_id, "max_json_requires_private_client_boundary")
         waiter = self._session_reset_waiters.get(event.session_id)
         if waiter is not None and waiter[0] is not asyncio.current_task():
             if event.event_type in {"AudioCompleted", "AudioFailed"}:
@@ -2393,6 +2324,29 @@ class ScenarioApplication:
         return self._result(session, [], "session_created")
 
     async def reset_session(self, session_id: str) -> dict[str, Any]:
+        boundary = self._max_client_boundary
+        if not self.max_json or boundary is None or boundary.session_id != session_id:
+            return await self._reset_session_inner(session_id)
+        waiter = self._session_reset_waiters.get(session_id)
+        if waiter is not None and waiter[0] is not asyncio.current_task():
+            await waiter[1]
+        completion = asyncio.get_running_loop().create_future()
+        self._session_reset_waiters[session_id] = (asyncio.current_task(), completion)
+        try:
+            self._revoke_local_profile(session_id)
+            return await self._reset_session_inner(session_id)
+        finally:
+            try:
+                # Also discard source responses arriving while reset awaited
+                # audio cleanup. Only a subsequent scan can own the fresh session.
+                if self._max_client_boundary is boundary:
+                    boundary.clear_client()
+            finally:
+                self._session_reset_waiters.pop(session_id, None)
+                if not completion.done():
+                    completion.set_result(None)
+
+    async def _reset_session_inner(self, session_id: str) -> dict[str, Any]:
         self._drop_identity_owner(session_id)
         incident = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
         if incident is not None and incident.safety_severity == "urgent":
@@ -2406,7 +2360,7 @@ class ScenarioApplication:
             self._invalidate_audio_lease(session_id)
             if record is not None:
                 record.cancellation_token += 1
-                record.child_id, record.anonymous, record.rfid_tag = None, True, None
+                record.child_id, record.anonymous = None, True
                 self.audio.cancel(record.cancellation_token)
                 self.sessions.save(record)
             await self._cleanup_session_resources(session_id)
@@ -2502,49 +2456,7 @@ class ScenarioApplication:
                 for element_id, state in commands:
                     self.led.set_element(element_id, state)
 
-    async def _run_readiness_wave_async(self, session, outputs: list[dict]) -> None:
-        if session.readiness_wave_completed:
-            return
-        wave = getattr(self.led, "readiness_wave_async", None)
-        if not callable(wave):
-            self._run_readiness_wave(session, outputs)
-            return
-        session_id = session.session_id
-        await wave(
-            READINESS_WAVE_DURATION_MS,
-            cancelled=lambda: self.sessions.get(session_id) is None,
-        )
-        complete_wave = getattr(self.led, "complete_readiness_wave", None)
-        if callable(complete_wave):
-            complete_wave()
-        current = self.sessions.get(session_id)
-        if current is None:
-            return
-        current.readiness_wave_completed = True
-        self._reconcile_canonical_lighting(outputs)
-        self.sessions.save(current)
-        outputs.append({
-            "action": "led_pattern",
-            "pattern": "rfid_wave",
-            "duration_ms": READINESS_WAVE_DURATION_MS,
-            "groups": [list(group) for group in READINESS_WAVE_GROUPS],
-        })
 
-    def _run_readiness_wave(self, session, outputs: list[dict]) -> None:
-        if session.readiness_wave_completed:
-            return
-        wave = getattr(self.led, "readiness_wave", None)
-        if not callable(wave):
-            raise RuntimeError("canonical LED controller lacks readiness_wave")
-        wave(READINESS_WAVE_DURATION_MS)
-        session.readiness_wave_completed = True
-        self._reconcile_canonical_lighting(outputs)
-        outputs.append({
-            "action": "led_pattern",
-            "pattern": "rfid_wave",
-            "duration_ms": READINESS_WAVE_DURATION_MS,
-            "groups": [list(group) for group in READINESS_WAVE_GROUPS],
-        })
 
     @staticmethod
     def _result(session, outputs, reason): return {"session_id":session.session_id, "state":session.state.value, "node":session.current_node, "reason":reason, "outputs":outputs, "correlation_id":session.correlation_id}

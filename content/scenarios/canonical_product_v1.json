@@ -6,8 +6,6 @@
   "states": {
     "anonymous_visual": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -32,8 +30,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -50,8 +46,6 @@
     },
     "automatic_mood_check": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -76,8 +70,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -94,8 +86,6 @@
     },
     "awaiting_handset": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -120,8 +110,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -138,8 +126,6 @@
     },
     "bear_dialogue": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -164,8 +150,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -182,8 +166,6 @@
     },
     "complaint_intake": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -208,8 +190,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -226,8 +206,6 @@
     },
     "dialogue_memory_expired": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -252,8 +230,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -270,8 +246,6 @@
     },
     "dialogue_suspended_ram": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -296,8 +270,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -314,8 +286,6 @@
     },
     "fixed_story_menu": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -340,8 +310,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -358,8 +326,6 @@
     },
     "fixed_story_playing": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -384,8 +350,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -402,8 +366,6 @@
     },
     "game_active": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -428,8 +390,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -446,8 +406,6 @@
     },
     "game_menu": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -472,8 +430,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -490,8 +446,6 @@
     },
     "idle": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -516,8 +470,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -534,8 +486,6 @@
     },
     "mood_report": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -560,8 +510,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -578,8 +526,6 @@
     },
     "personal_story_generating": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -604,8 +550,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -622,8 +566,6 @@
     },
     "personal_story_playing": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -648,8 +590,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -666,8 +606,6 @@
     },
     "personal_story_theme": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -692,8 +630,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -710,8 +646,6 @@
     },
     "personal_story_validating": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -736,52 +670,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
-        "IdentityReadyExpired",
-        "IdentityAuthorizationExpired"
-      ],
-      "expected_input": "contextual",
-      "lighting_preset": "READY",
-      "audio_policy": "application_owned",
-      "timeout_policy": "explicit",
-      "persistence_policy": "minimal",
-      "success_transition": "explicit",
-      "retry_transition": "explicit",
-      "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
-      "state_version": 1
-    },
-    "rfid_identified": {
-      "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
-        "AnonymousStart",
-        "HandsetLifted",
-        "HandsetPlaced",
-        "ButtonPressed",
-        "ButtonReleased",
-        "ButtonHeld",
-        "ButtonLongHeld",
-        "SpeechStarted",
-        "SpeechEnded",
-        "VoiceIntentReady",
-        "AudioStarted",
-        "AudioCompleted",
-        "AudioFailed",
-        "StoryPositionUpdated",
-        "TimeoutFired",
-        "WelcomeTimerFired",
-        "HardwareDisconnected",
-        "HardwareReconnected",
-        "SessionCancel",
-        "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
-        "ExhibitionOnboardingComplete",
-        "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -798,8 +686,6 @@
     },
     "root_menu": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -824,8 +710,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -842,8 +726,6 @@
     },
     "safety_handoff": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -868,8 +750,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -886,8 +766,6 @@
     },
     "schedule_navigation": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -912,8 +790,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -930,8 +806,6 @@
     },
     "schedule_weather": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -956,8 +830,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -974,8 +846,6 @@
     },
     "session_closed": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1000,8 +870,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1018,8 +886,6 @@
     },
     "soft_end": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1044,8 +910,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1062,8 +926,6 @@
     },
     "story_paused": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1088,8 +950,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1106,8 +966,6 @@
     },
     "story_speech_analysis": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1132,8 +990,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1150,8 +1006,6 @@
     },
     "story_suspended_ram": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1176,8 +1030,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1194,8 +1046,6 @@
     },
     "support_intake": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1220,8 +1070,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1238,8 +1086,6 @@
     },
     "visual_welcome": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1264,8 +1110,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1282,8 +1126,6 @@
     },
     "voice_welcome": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1308,8 +1150,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1326,8 +1166,6 @@
     },
     "wellbeing_check": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1352,8 +1190,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1370,8 +1206,6 @@
     },
     "exhibition_age_selection": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1396,8 +1230,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1414,8 +1246,6 @@
     },
     "exhibition_name_capture": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1440,8 +1270,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1458,8 +1286,6 @@
     },
     "exhibition_onboarding_complete": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1484,8 +1310,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1502,8 +1326,6 @@
     },
     "exhibition_menu_tutorial_intro": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1528,8 +1350,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1546,8 +1366,6 @@
     },
     "exhibition_menu_tutorial_prompt": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1572,8 +1390,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1590,8 +1406,6 @@
     },
     "exhibition_menu_tutorial_buttons": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1616,8 +1430,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1634,8 +1446,6 @@
     },
     "exhibition_menu_wave": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1661,8 +1471,6 @@
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "ExhibitionMenuWaveComplete",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1679,8 +1487,6 @@
     },
     "exhibition_menu_repeat_prompt": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1706,8 +1512,6 @@
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "ExhibitionMenuWaveComplete",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1724,8 +1528,6 @@
     },
     "exhibition_menu_repeat_listen": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1751,8 +1553,6 @@
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "ExhibitionMenuWaveComplete",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1769,8 +1569,6 @@
     },
     "exhibition_menu_replay_buttons": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1796,8 +1594,6 @@
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "ExhibitionMenuWaveComplete",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1814,8 +1610,6 @@
     },
     "menu_ready": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -1840,8 +1634,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1875,8 +1667,6 @@
         "HardwareDisconnected",
         "HardwareReconnected",
         "MenuTutorialStep",
-        "RfidPresented",
-        "RfidRemoved",
         "SessionCancel",
         "SessionReset",
         "SpeechEnded",
@@ -1885,8 +1675,6 @@
         "TimeoutFired",
         "VoiceIntentReady",
         "WelcomeTimerFired",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1919,8 +1707,6 @@
         "HardwareDisconnected",
         "HardwareReconnected",
         "MenuTutorialStep",
-        "RfidPresented",
-        "RfidRemoved",
         "SessionCancel",
         "SessionReset",
         "SpeechEnded",
@@ -1929,8 +1715,6 @@
         "TimeoutFired",
         "VoiceIntentReady",
         "WelcomeTimerFired",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -1963,8 +1747,6 @@
         "HardwareDisconnected",
         "HardwareReconnected",
         "MenuTutorialStep",
-        "RfidPresented",
-        "RfidRemoved",
         "SessionCancel",
         "SessionReset",
         "SpeechEnded",
@@ -1973,8 +1755,6 @@
         "TimeoutFired",
         "VoiceIntentReady",
         "WelcomeTimerFired",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -2007,8 +1787,6 @@
         "HardwareDisconnected",
         "HardwareReconnected",
         "MenuTutorialStep",
-        "RfidPresented",
-        "RfidRemoved",
         "SessionCancel",
         "SessionReset",
         "SpeechEnded",
@@ -2017,8 +1795,6 @@
         "TimeoutFired",
         "VoiceIntentReady",
         "WelcomeTimerFired",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -2051,8 +1827,6 @@
         "HardwareDisconnected",
         "HardwareReconnected",
         "MenuTutorialStep",
-        "RfidPresented",
-        "RfidRemoved",
         "SessionCancel",
         "SessionReset",
         "SpeechEnded",
@@ -2061,8 +1835,6 @@
         "TimeoutFired",
         "VoiceIntentReady",
         "WelcomeTimerFired",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -2078,8 +1850,6 @@
     },
     "fixed_story_choice_wave": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -2104,8 +1874,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -2122,8 +1890,6 @@
     },
     "story_pause_announcement": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -2148,8 +1914,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -2166,8 +1930,6 @@
     },
     "story_resume_announcement": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
         "AnonymousStart",
         "HandsetLifted",
         "HandsetPlaced",
@@ -2192,8 +1954,6 @@
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
@@ -2208,85 +1968,18 @@
       "error_transition": "safe_stop",
       "state_version": 1
     },
-    "rfid_lookup": {
+    "profile_ready": {
       "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
-        "AnonymousStart",
+        "ClientProfileReady",
+        "ClientProfileCleared",
         "HandsetLifted",
         "HandsetPlaced",
-        "ButtonPressed",
-        "ButtonReleased",
-        "ButtonHeld",
-        "ButtonLongHeld",
-        "SpeechStarted",
-        "SpeechEnded",
-        "VoiceIntentReady",
-        "AudioStarted",
-        "AudioCompleted",
-        "AudioFailed",
-        "StoryPositionUpdated",
-        "TimeoutFired",
-        "WelcomeTimerFired",
-        "HardwareDisconnected",
-        "HardwareReconnected",
-        "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
-        "ExhibitionOnboardingComplete",
-        "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
-        "IdentityReadyExpired",
-        "IdentityAuthorizationExpired"
-      ],
-      "expected_input": "identity_result_or_handset",
-      "lighting_preset": "OFF",
-      "audio_policy": "application_owned",
-      "timeout_policy": "explicit",
-      "persistence_policy": "minimal",
-      "success_transition": "explicit",
-      "retry_transition": "explicit",
-      "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
-      "state_version": 1
-    },
-    "rfid_ready": {
-      "allowed_events": [
-        "RfidPresented",
-        "RfidRemoved",
-        "AnonymousStart",
-        "HandsetLifted",
-        "HandsetPlaced",
-        "ButtonPressed",
-        "ButtonReleased",
-        "ButtonHeld",
-        "ButtonLongHeld",
-        "SpeechStarted",
-        "SpeechEnded",
-        "VoiceIntentReady",
-        "AudioStarted",
-        "AudioCompleted",
-        "AudioFailed",
-        "StoryPositionUpdated",
-        "TimeoutFired",
-        "WelcomeTimerFired",
-        "HardwareDisconnected",
-        "HardwareReconnected",
         "SessionCancel",
-        "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
-        "ExhibitionOnboardingComplete",
-        "MenuTutorialStep",
-        "IdentityLookupSucceeded",
-        "IdentityLookupFailed",
-        "IdentityReadyExpired",
-        "IdentityAuthorizationExpired"
+        "IdentityReadyExpired"
       ],
       "expected_input": "handset_or_expiry",
-      "lighting_preset": "RFID_WAVE_TO_BREATHING",
+      "lighting_preset": "PROFILE_WAVE_TO_BREATHING",
       "audio_policy": "application_owned",
       "timeout_policy": "explicit",
       "persistence_policy": "minimal",

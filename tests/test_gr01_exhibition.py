@@ -288,6 +288,8 @@ from app.foundation.config import Settings
 from app.foundation.stand import HardwareIntegrationStand
 async def main():
     stand = HardwareIntegrationStand(Settings(profile='mock', hardware_mode='simulator', content_root='content'))
+    # Test-only control admission: this unit harness has no lifecycle warmup.
+    stand._admits_physical_users = lambda: True
     try:
         result = await stand.inject_physical({'type': 'SpaceReleased', '_source': 'clean_process_mock_hid', '_sequence': 1})
         print(json.dumps({'reason': result['reason'], 'timer': any(item.get('type') == 'welcome_timer_scheduled' for item in result['outputs'])}))

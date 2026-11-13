@@ -140,6 +140,8 @@ def test_csv_lf_protocol_and_brightness_quantization_are_exact() -> None:
 def test_stand_start_lift_down_lift_trace_uses_simulator_effect_owner() -> None:
     async def scenario() -> None:
         stand = HardwareIntegrationStand(Settings(profile="mock", hardware_mode="simulator", content_root="content"))
+        # Test-only control admission: this unit harness has no lifecycle warmup.
+        stand._admits_physical_users = lambda: True
         try:
             startup = stand.snapshot()
             assert startup["lighting_effects"]["effect"] == "idle"
@@ -167,6 +169,8 @@ def test_stand_start_lift_down_lift_trace_uses_simulator_effect_owner() -> None:
 def test_aud03_lossless_physical_projection_and_fake_clock_smoke() -> None:
     async def scenario() -> None:
         harness = SimulatorAcceptanceHarness()
+        # Test-only control admission: this unit harness has no lifecycle warmup.
+        harness.stand._admits_physical_users = lambda: True
         try:
             ids = set(str(element_id) for element_id in LIGHTING_ELEMENT_IDS)
 

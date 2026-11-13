@@ -88,7 +88,7 @@ class SQLiteRepository(InMemorySessionRepository):
         try:
             row = db.execute("SELECT payload FROM sessions WHERE session_id=?", (session_id,)).fetchone()
             if not row: return None
-            data = json.loads(row[0]); data["state"] = Lifecycle(data["state"])
+            data = json.loads(row[0]); data.pop("rfid_tag", None); data["state"] = Lifecycle("WAITING_PROFILE" if data["state"] == "WAITING_RFID" else data["state"])
             restored = SessionRecord(**data); self.items[session_id] = restored
             self.last_error = None; return restored
         except (sqlite3.Error, json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -101,7 +101,7 @@ class SQLiteRepository(InMemorySessionRepository):
             rows = db.execute("SELECT payload FROM sessions ORDER BY updated_at").fetchall()
             sessions = []
             for (raw,) in rows:
-                data = json.loads(raw); data["state"] = Lifecycle(data["state"])
+                data = json.loads(raw); data.pop("rfid_tag", None); data["state"] = Lifecycle("WAITING_PROFILE" if data["state"] == "WAITING_RFID" else data["state"])
                 session = SessionRecord(**data); self.items[session.session_id] = session; sessions.append(session)
             self.last_error = None; return tuple(sessions)
         except (sqlite3.Error, json.JSONDecodeError, TypeError, ValueError) as exc:

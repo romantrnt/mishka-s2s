@@ -11,7 +11,7 @@ ALLOWED_INTENTS = frozenset({"greeting", "mood_positive", "mood_neutral", "mood_
 class Lifecycle(str, Enum):
     """Physical session lifecycle; scenario modes live in CanonicalState."""
     IDLE = "IDLE"
-    WAITING_RFID = "WAITING_RFID"
+    WAITING_PROFILE = "WAITING_PROFILE"
     ACTIVE = "ACTIVE"
     ENDED = "ENDED"
 
@@ -38,8 +38,8 @@ class Event:
     monotonic_timestamp: float | None = None
 
 
-IDENTITY_INTERNAL_EVENT_TYPES = frozenset({"IdentityLookupSucceeded", "IdentityLookupFailed", "IdentityReadyExpired", "IdentityAuthorizationExpired"})
-EVENT_TYPES = frozenset({"RfidPresented", "RfidRemoved", "AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"}) | IDENTITY_INTERNAL_EVENT_TYPES
+IDENTITY_INTERNAL_EVENT_TYPES = frozenset({"ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired"})
+EVENT_TYPES = frozenset({"AnonymousStart", "SessionStarted", "SessionReset", "SessionCancel", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "AdultHandoffAcknowledged", "AdultResolved", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"}) | IDENTITY_INTERNAL_EVENT_TYPES
 
 
 @dataclass
@@ -47,14 +47,13 @@ class SessionRecord:
     session_id: str
     installation_id: str
     correlation_id: str
-    state: Lifecycle = Lifecycle.WAITING_RFID
+    state: Lifecycle = Lifecycle.WAITING_PROFILE
     child_id: str | None = None
     anonymous: bool = False
     handset_up: bool = False
-    # Visual guest mode may be entered by a physical button before RFID/handset.
+    # Visual guest mode may be entered by a physical button before a ready profile/handset.
     # It deliberately suppresses audio while preserving LED/display and scenario routing.
     visual_only: bool = False
-    rfid_tag: str | None = None
     scenario_id: str | None = None
     scenario_version: str | None = None
     current_node: str | None = None
@@ -107,7 +106,6 @@ class HardwareAdapter(Protocol):
     def send(self, message: dict[str, Any]) -> None: ...
     def health(self) -> dict[str, Any]: ...
 
-class RFIDReader(Protocol): pass
 class HandsetReader(Protocol): pass
 class ButtonReader(Protocol): pass
 
@@ -135,8 +133,6 @@ class DisplayController(Protocol):
 class SpeechRecognizer(Protocol): pass
 class SpeechSynthesizer(Protocol): pass
 
-class ProfileProvider(Protocol):
-    def resolve(self, tag_id: str) -> dict[str, Any] | None: ...
 
 class ScenarioRepository(Protocol):
     def get(self, scenario_id: str) -> dict[str, Any]: ...

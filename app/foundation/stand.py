@@ -328,8 +328,8 @@ class UARTLEDController:
             base_elements=base_elements, stage_duration_ms=stage_duration_ms, preserve_current=preserve_current,
         )
 
-    def start_rfid_ready(self, *, now: float | None = None):
-        return self.exhibition_effects.start_rfid_ready(now=now)
+    def start_profile_ready(self, *, now: float | None = None):
+        return self.exhibition_effects.start_profile_ready(now=now)
 
     def start_age_selection_wave(self, *, now: float | None = None):
         return self.exhibition_effects.start_wave(
@@ -490,6 +490,7 @@ class HardwareIntegrationStand:
         self.input_adapter = None
         self._physical_loop = None
         self._physical_sequence = 0
+        self._admits_physical_users = None
         self._hid_generation = 0
         self._hid_status: dict[str, Any] = {"state": "not_started", "generation": 0}
         self._lighting_status: dict[str, Any] = {"state": "starting"}
@@ -956,6 +957,12 @@ class HardwareIntegrationStand:
         elif edge == "SpaceReleased":
             normalized = {"type": "handset_up", "_input_type": edge, "_normalized_event": "handset_up"}
         event = parse_event(normalized, self.active_session_id, int(sequence), source)
+        # The HID path must obey the same admission gate as HTTP/WebSocket.
+        # Hangup remains a cleanup operation during warmup, failure and shutdown.
+        if event.event_type not in {"HandsetPlaced", "HardwareDisconnected"}:
+            admits = self._admits_physical_users
+            if admits is None or not admits():
+                return {"state": "idle", "reason": "runtime_unavailable", "outputs": []}
         result = await self.application.receive_async(event, None)
         self._collect_events()
         await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
@@ -1189,7 +1196,7 @@ class HardwareIntegrationStand:
                     if response:
                         text=str(response.get("text","")); session=self.application.sessions.get(self.active_session_id)
                         if session and session.child_id and "{name}" in text:
-                            profile=self.application.profiles.resolve(session.rfid_tag or "") or {}; text=text.replace("{name}",str(profile.get("display_name","")))
+                            profile = self.application._canonical_profiles.get(self.active_session_id) or {}; text = text.replace("{name}", str(profile.get("display_name", "")) if self.application._identity_scope_live(self.active_session_id, "personalize") else "")
                         payload["resolved_text"]=text
                         payload["content_kind"]="response"
                         # Static response ids are metadata/telemetry at the
@@ -1263,6 +1270,10 @@ class HardwareIntegrationStand:
 
     async def inject(self, message_type: str, payload: dict[str,Any], session_id: str | None = None, *, wait_for_audio: bool = True):
         sid = session_id or self.active_session_id
+        if self.application.max_json:
+            boundary = self.application._max_client_boundary
+            if boundary is None or sid != boundary.session_id:
+                return {"error": {"code": "validation_error", "message": "max_json requires its owned session and no RFID ingress"}}
         requested_session_id = session_id
         started=time.perf_counter()
         result=None
@@ -1421,6 +1432,13 @@ class HardwareIntegrationStand:
             await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
 
     async def reset(self, session_id: str | None = None):
+        boundary = self.application._max_client_boundary
+        if self.application.max_json:
+            if boundary is None or (session_id is not None and session_id != boundary.session_id):
+                return {"error": {"code": "validation_error", "message": "max_json reset requires its owned session"}}
+            session_id = boundary.session_id
+            # Fence before the Stand's own playback cleanup can yield.
+            self.application._revoke_local_profile(session_id)
         self._cancel_story_audio()
         self._cancel_response_audio()
         await self.playback.stop()
@@ -1428,8 +1446,8 @@ class HardwareIntegrationStand:
         # normally sends its stable session id ("stand"), while an API/WS
         # smoke test may have left another id active.  Reset both sides of
         # that binding and make the requested id the fresh cursor; otherwise
-        # the next RFID is rejected as installation_busy and the panel looks
-        # authenticated while the runtime is actually waiting for RFID.
+        # the next profile is rejected as installation_busy and the panel looks
+        # personalized while the runtime is actually waiting for a profile.
         sid=session_id or self.active_session_id
         # The browser uses one stable id ("stand"), while API/WS smoke runs
         # may have created another id in the same installation. Reset is an
@@ -1505,7 +1523,7 @@ class HardwareIntegrationStand:
     def _safe_trace_item(item: dict[str, Any]) -> dict[str, Any]:
         """Only project fixed protocol names and numeric timing metadata."""
         event_names = EVENT_TYPES | {
-            "handset_up", "handset_down", "button", "text", "rfid",
+            "handset_up", "handset_down", "button", "text",
             "anonymous", "anonymous_start", "button_pressed",
             "button_released", "button_hold", "button_long_hold",
         }
@@ -1540,6 +1558,32 @@ class HardwareIntegrationStand:
         }
         return {key: item[key] for key in allowed if key in item}
 
+    def physical_hardware_ready(self) -> bool:
+        """Live host-side controls/audio readiness, not acoustic/firmware acceptance."""
+        if self.hardware_mode != "physical" or self._closed:
+            return False
+        try:
+            hid = _hid_diagnostics(self.input_adapter)
+            return bool(
+                self._hid_status.get("state") == "active"
+                and hid.get("physical_ready")
+                and self.lighting_serial is not None
+                and self.lighting_serial.diagnostics().get("ready")
+                and self.playback.readiness().get("ready")
+                and self.audio_input is not None
+                and self.audio_input.is_ready()
+                and self._headless_audio_status.get("state") == "active"
+            )
+        except Exception:
+            return False
+
+    def admission_dependencies_ready(self) -> bool:
+        # Only the explicit live-demo profile gains this new hardware gate.
+        # It does not depend on RFID availability: anonymous use is supported.
+        return (self.settings.max_client_source != "local_demo"
+                or self.hardware_mode != "physical"
+                or self.physical_hardware_ready())
+
     def health_snapshot(self) -> dict[str, Any]:
         """Bounded, read-only operational contract with no session content."""
         state = dict(getattr(self.application, "last_canonical_state", {}) or {})
@@ -1551,6 +1595,10 @@ class HardwareIntegrationStand:
             audio_state = "simulated"
         hid_status = dict(getattr(self, "_hid_status", {}) or {})
         hid_state = str(hid_status.get("state") or "unavailable")
+        try:
+            live_hid = _hid_diagnostics(self.input_adapter) if self.hardware_mode == "physical" else {}
+        except Exception:
+            live_hid = {}
         if self.hardware_mode != "physical":
             hid_state = "simulated"
         lighting_state = str(getattr(self, "_lighting_status", {}).get("state") or "unavailable")
@@ -1578,13 +1626,24 @@ class HardwareIntegrationStand:
             last_error = self.errors[-1].get("error_code") or self.errors[-1].get("stage")
         if last_error is None and lighting_state == "unavailable" and self.hardware_mode == "physical":
             last_error = "lighting_unavailable"
+        local_demo = self.settings.max_client_source == "local_demo"
+        hardware_ready = self.physical_hardware_ready()
+        runtime_admitted = bool(self._admits_physical_users and self._admits_physical_users())
+        if local_demo:
+            degraded = degraded or not runtime_admitted
         return {
             "status": "degraded" if degraded else "ready",
+            "physical_hardware_ready": hardware_ready,
+            **({"software_runtime_usable": runtime_admitted,
+                "production_ready": False,
+                "identity": self.application.identity_status(),
+                "production_blockers": ["synthetic_demo_data", "max_client_production_acceptance_pending"]}
+               if local_demo else {}),
             "mode": "exhibition",
             "canonical_state": mode,
             "handset": handset,
             "audio": {"status": audio_state, "provider": audio.get("provider")},
-            "hid": {"status": hid_state, "generation": int(hid_status.get("generation") or 0), "semantic_input_accepted": bool(hid_status.get("semantic_input_accepted", self.hardware_mode != "physical" or hid_state == "active")), "initial_level_sync": hid_status.get("initial_level_sync", {"status": "simulated" if self.hardware_mode != "physical" else "not_attempted"}), "physical_ready": bool(self.hardware_mode == "physical" and hid_status.get("physical_ready", False)), "restart_allowed": bool(self.hardware_mode == "physical" and hid_state in {"device_unavailable", "initial_level_unavailable", "device_disconnected", "reader_exception", "dispatch_failure", "stopped"})},
+            "hid": {"status": hid_state, "generation": int(hid_status.get("generation") or 0), "semantic_input_accepted": bool(hid_status.get("semantic_input_accepted", self.hardware_mode != "physical" or hid_state == "active")), "initial_level_sync": hid_status.get("initial_level_sync", {"status": "simulated" if self.hardware_mode != "physical" else "not_attempted"}), "physical_ready": bool(self.hardware_mode == "physical" and hid_state == "active" and live_hid.get("physical_ready", False)), "restart_allowed": bool(self.hardware_mode == "physical" and hid_state in {"device_unavailable", "initial_level_unavailable", "device_disconnected", "reader_exception", "dispatch_failure", "stopped"})},
             "lighting": {"status": lighting_state},
             "content": {
                 "status": content_status,
@@ -1845,16 +1904,24 @@ class HardwareIntegrationStand:
         """Cancel loop-owned tasks on the loop; release blocking workers off it."""
         if getattr(self, "_closed", False):
             return
+        identity_error = None
         shutdown_identity = getattr(self.application, "shutdown_identity", None)
-        if callable(shutdown_identity):
-            await shutdown_identity()
-        led = getattr(getattr(self, "application", None), "led", None)
-        cancel_effects = getattr(led, "cancel_effects", None)
-        if callable(cancel_effects) and not hardware_stopped:
-            cancel_effects(clear=True)
-        self._cancel_story_audio()
-        self._cancel_response_audio()
-        await asyncio.to_thread(self.close, cancel_tasks=False, hardware_stopped=hardware_stopped)
+        try:
+            if callable(shutdown_identity):
+                await shutdown_identity()
+        except BaseException as error:
+            identity_error = error
+        try:
+            led = getattr(getattr(self, "application", None), "led", None)
+            cancel_effects = getattr(led, "cancel_effects", None)
+            if callable(cancel_effects) and not hardware_stopped:
+                cancel_effects(clear=True)
+            self._cancel_story_audio()
+            self._cancel_response_audio()
+        finally:
+            await asyncio.to_thread(self.close, cancel_tasks=False, hardware_stopped=hardware_stopped)
+        if identity_error is not None:
+            raise identity_error
 
     def close(self, *, cancel_tasks: bool = True, hardware_stopped: bool = False):
         if getattr(self, "_closed", False):
@@ -1939,9 +2006,8 @@ def resample(samples: tuple[float, ...], source_rate: int, target_rate: int) -> 
     return tuple(float(value) for value in result)
 
 
-def create_stand_app(settings: Settings | None = None):
+def create_stand_app(settings: Settings | None = None, *, phone_client=None):
     from fastapi import HTTPException, Request, WebSocket, WebSocketDisconnect
-    from starlette.websockets import WebSocketDisconnected
     from fastapi.responses import FileResponse, JSONResponse, Response
     globals()["WebSocket"] = WebSocket
     globals()["Request"] = Request
@@ -1949,7 +2015,18 @@ def create_stand_app(settings: Settings | None = None):
     # launcher/tests, while never overriding an explicitly configured secret.
     if settings is not None and not settings.stand_access_token and "STAND_ACCESS_TOKEN" in os.environ:
         settings = settings_with_compat_env(settings, ("STAND_ACCESS_TOKEN",))
-    stand=HardwareIntegrationStand(settings); api=create_app(stand.application); api.add_middleware(StandAuthQueryRedactionMiddleware, allow_query_token=stand.settings.allow_query_token); api.state.stand=stand
+    settings = settings if settings is not None else Settings.from_env()
+    settings.validate()
+    if settings.identity_mode == "max_json" and phone_client is None:
+        raise ValueError("max_json_requires_explicit_phone_client")
+    if settings.identity_mode != "max_json" and phone_client is not None:
+        raise ValueError("phone_client_requires_max_json_mode")
+    stand=HardwareIntegrationStand(settings); api=create_app(stand.application, admission_guard=stand.admission_dependencies_ready); api.add_middleware(StandAuthQueryRedactionMiddleware, allow_query_token=stand.settings.allow_query_token); api.state.stand=stand
+    stand._admits_physical_users = api.state.lifecycle.admits_users
+    if phone_client is not None:
+        from .max_json import MaxJsonBoundary
+        MaxJsonBoundary(stand.application, phone_client, session_id=stand.active_session_id,
+                        admits_users=api.state.lifecycle.admits_users)
     console_root=Path(__file__).with_name("console")
     access_token=stand.settings.stand_access_token
     mutation_policy=stand.settings.mutation_auth_policy
@@ -2212,8 +2289,6 @@ def create_stand_app(settings: Settings | None = None):
         stand._collect_events()
         await stand.hub.publish({"type": "stand_state", "state": stand.panel_snapshot()})
         return result
-    @api.post("/stand/rfid")
-    async def rfid(payload:dict): return transport_response(await stand.inject("rfid",{"tag_id":payload.get("tag_id","")},payload.get("session_id")))
     @api.post("/stand/handset")
     async def handset(payload:dict):
         sid = payload.get("session_id")
@@ -2306,7 +2381,7 @@ def create_stand_app(settings: Settings | None = None):
                     if kind == "ping":
                         await websocket.send_json({"type": "pong"})
                         continue
-                    if kind in {"audio_pcm", "flush_audio", "rfid", "handset", "button", "button_released", "button_hold", "button_long_hold", "text", "reset"}:
+                    if kind in {"audio_pcm", "flush_audio", "handset", "button", "button_released", "button_hold", "button_long_hold", "text", "reset"}:
                         lifecycle = getattr(api.state, "lifecycle", None)
                         if (lifecycle is not None
                                 and not lifecycle.admits_users()
@@ -2322,7 +2397,7 @@ def create_stand_app(settings: Settings | None = None):
                     session_id = message.get("session_id")
                     if session_id:
                         session_ids.add(str(session_id))
-                    if kind in {"audio_pcm", "flush_audio", "rfid", "handset", "button", "button_released", "button_hold", "button_long_hold", "text", "reset"} and not stand.hub.is_owner(websocket):
+                    if kind in {"audio_pcm", "flush_audio", "handset", "button", "button_released", "button_hold", "button_long_hold", "text", "reset"} and not stand.hub.is_owner(websocket):
                         await websocket.send_json({"type":"error","error":{"code":"conflict","message":"stand input lease is owned by another client"}})
                         continue
                     if kind=="audio_pcm":
@@ -2343,7 +2418,7 @@ def create_stand_app(settings: Settings | None = None):
                         # Flush the VAD boundary with one bounded silence frame;
                         # empty payloads remain invalid for the PCM contract.
                         schedule_audio(stand.inject_pcm(tuple(0.0 for _ in range(320)),16000,message.get("session_id"),True,wait_for_turn=False))
-                    elif kind in {"rfid","handset","button","button_released","button_hold","button_long_hold","text"}:
+                    elif kind in {"handset","button","button_released","button_hold","button_long_hold","text"}:
                         result = await stand.inject(kind,{k:v for k,v in message.items() if k not in {"type","session_id"}},message.get("session_id"))
                         if isinstance(result, dict) and result.get("error"):
                             error = result["error"]
@@ -2360,7 +2435,7 @@ def create_stand_app(settings: Settings | None = None):
                     # browser session. Return a structured transport error
                     # and keep accepting later valid frames.
                     await websocket.send_json({"type":"error","error":{"code":"invalid_audio_frame","message":"audio PCM frame is invalid"}})
-        except (WebSocketDisconnect, WebSocketDisconnected): pass
+        except WebSocketDisconnect: pass
         finally:
             stand.hub.disconnect(websocket)
             owned_audio_tasks = tuple(audio_tasks)

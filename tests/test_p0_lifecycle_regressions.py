@@ -302,39 +302,3 @@ def test_new_lift_waits_for_old_exhibition_reset_cleanup():
         app._cancel_welcome_timer(sid)
 
     asyncio.run(run())
-
-
-def test_urgent_rejected_rfid_cannot_replace_private_audio_profile():
-    class Profiles:
-        data = {
-            "tag-a": {"profile_ref": "child-a", "display_name": "Ada", "age": 7},
-            "tag-b": {"profile_ref": "child-b", "display_name": "Bob", "age": 4},
-        }
-
-        def resolve(self, tag_id):
-            return self.data.get(tag_id)
-
-    async def run():
-        app, _, _, _ = build_application(
-            settings=Settings(profile="mock", runtime_mode="clinical"),
-            monotonic_now=lambda: 0.0,
-        )
-        app.profiles = Profiles()
-        sid = "rfid-urgent-profile"
-        await app.receive_async(_event("RfidPresented", sid, 1, {"tag_id": "tag-a"}))
-        await app.receive_async(_event("HandsetLifted", sid, 2))
-        await app.receive_async(_event(
-            "VoiceIntentReady", sid, 3,
-            {"intent": "free_speech", "safety_severity": "urgent"},
-        ))
-        blocked = await app.receive_async(_event(
-            "RfidPresented", sid, 4, {"tag_id": "tag-b"},
-        ))
-        assert blocked["reason"] == "safety_handoff_active"
-        assert app.canonical_runtime.sessions[sid].profile_ref == "child-a"
-        assert app._canonical_profiles[sid]["profile_ref"] == "child-a"
-        context = app._canonical_audio_context(sid)
-        assert context.profile.display_name == "Ada"
-        assert "Bob" not in context.system_prompt
-
-    asyncio.run(run())

@@ -130,7 +130,6 @@ def test_valid_button_ids_keep_success_contract(monkeypatch):
             headers = {"x-stand-token": "transport-secret"}
             for value in range(1, 8):
                 client.post("/stand/reset", headers=headers, json={"session_id": "valid"})
-                client.post("/stand/rfid", headers=headers, json={"session_id": "valid", "tag_id": "mock-child-001"})
                 client.post("/stand/handset", headers=headers, json={"session_id": "valid", "state": "up"})
                 response = client.post(
                     "/stand/button",

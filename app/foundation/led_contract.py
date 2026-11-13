@@ -89,7 +89,7 @@ def canonical_led_command(payload: dict[str, Any]):
         for key, value in raw.items():
             if not str(key).isdigit() or int(key) not in BUTTON_LED_COLORS: raise ValueError("LED color map contains an unknown button")
             if str(value).lower() != "off": ids.append(int(key))
-        return {"valid": True, "pattern": pattern, "color": "rainbow" if pattern == "rfid_wave" else "mixed", "colors": fixed_button_colors(ids), "targets": sorted(ids), "duration_ms": duration}
+        return {"valid": True, "pattern": pattern, "color": "mixed", "colors": fixed_button_colors(ids), "targets": sorted(ids), "duration_ms": duration}
     color = str(payload.get("color", "off")).lower()
     if color not in {"off", "red", "orange", "yellow", "green", "cyan", "blue", "purple", "white"}: raise ValueError("LED command contains an unknown color")
     if color == "off" or pattern == "off": return {"valid": True, "pattern": pattern, "color": "off", "colors": {}, "targets": [], "duration_ms": duration}

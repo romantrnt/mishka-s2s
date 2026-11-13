@@ -6,23 +6,27 @@ import pytest
 from app.foundation.api import build_application, create_app
 from app.foundation.config import Settings, SettingsError
 from app.foundation.domain import Event
-from app.foundation.identity import DisabledIdentityResolver
 from app.foundation.lifecycle import RuntimeState
 from app.foundation.repositories import InMemorySessionRepository
 from app.foundation.stand import HardwareIntegrationStand
+from test_profile_software_chain import PublicPhoneClientDouble, attach_client
 
 
-def test_optional_identity_uses_current_exhibition_session_policy():
+def test_json_profile_uses_current_exhibition_session_policy():
     with pytest.raises(SettingsError, match="exhibition session policy"):
-        Settings(profile="mock", runtime_mode="clinical", identity_mode="optional_rfid").validate()
+        Settings(profile="mock", runtime_mode="clinical", identity_mode="max_json").validate()
 
 
-def test_identity_unavailable_does_not_block_guest_admission():
+def test_json_client_unavailable_does_not_block_guest_admission():
     async def run():
-        app, _, _, _ = build_application(settings=Settings(profile="mock", identity_mode="optional_rfid"),
-                                          identity_resolver=DisabledIdentityResolver(), background_scheduler=False)
+        app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="exhibition",
+            hardware_mode="fake", identity_mode="max_json"), background_scheduler=False)
         assert isinstance(app.sessions, InMemorySessionRepository)
-        app.profiles.readiness = lambda: {"ready": False, "provider": "unavailable"}
+        client, boundary = attach_client(app, session_id="guest")
+        def unavailable_poll():
+            raise RuntimeError("client unavailable")
+        client.poll = unavailable_poll
+        assert (await boundary.step())["reason"] == "client_unavailable"
         async def ready():
             return {"ready": True}
         app.runtime_manager.readiness = ready
@@ -57,19 +61,20 @@ def test_panel_roundtrip_preserves_audio_handle_but_not_private_fields():
         stand.close()
 
 
-def test_asgi_transport_keeps_auth_and_boot_admission_before_rfid():
+def test_asgi_transport_keeps_auth_and_boot_admission_before_handset():
     import httpx
     from app.foundation.stand import create_stand_app
 
     async def run():
         api = create_stand_app(Settings(profile="mock", hardware_mode="simulator",
-            identity_mode="optional_rfid", stand_access_token="synthetic-operator-token"))
+            runtime_mode="exhibition", identity_mode="max_json",
+            stand_access_token="synthetic-operator-token"), phone_client=PublicPhoneClientDouble())
         stand = api.state.stand
         try:
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://synthetic.invalid") as client:
-                denied = await client.post("/stand/rfid", json={"tag_id": "synthetic-card"})
+                denied = await client.post("/stand/handset", json={"state": "up"})
                 assert denied.status_code == 401
-                unavailable = await client.post("/stand/rfid", json={"tag_id": "synthetic-card"},
+                unavailable = await client.post("/stand/handset", json={"state": "up"},
                     headers={"x-stand-token": "synthetic-operator-token"})
                 assert unavailable.status_code == 503
                 assert unavailable.json()["error"]["code"] == "runtime_unavailable"

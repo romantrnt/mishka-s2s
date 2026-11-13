@@ -10,6 +10,7 @@ class RuntimeState(str, Enum):
     BOOTING = "BOOTING"
     WARMING_UP = "WARMING_UP"
     READY = "READY"
+    STOPPING = "STOPPING"
     DEGRADED = "DEGRADED"
 
 
@@ -19,7 +20,9 @@ Warmup = Callable[[], Awaitable[dict[str, Any]]]
 class StartupLifecycle:
     """Single lifecycle owner shared by health, readiness and WebSocket gates."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, admission_guard: Callable[[], bool] | None = None) -> None:
+        self._admission_guard = admission_guard
+        self._stopping = False
         self._state = RuntimeState.BOOTING
         self._reason = "process_started"
         self._changed_at = time.monotonic()
@@ -36,8 +39,8 @@ class StartupLifecycle:
         return {
             "state": self._state.value,
             "live": True,
-            "ready": self._state is RuntimeState.READY,
-            "readiness": self._state is RuntimeState.READY,
+            "ready": self.admits_users(),
+            "readiness": self.admits_users(),
             "user_available": self.admits_users(),
 
             "reason": self._reason,
@@ -53,13 +56,21 @@ class StartupLifecycle:
         return True
 
     def admits_users(self) -> bool:
-        return self._state is RuntimeState.READY
+        if self._stopping or self._state is not RuntimeState.READY:
+            return False
+        try:
+            return self._admission_guard is None or bool(self._admission_guard())
+        except Exception:
+            # Missing/unavailable live diagnostics must never admit a user.
+            return False
 
     def observe_noncritical(self, reason: str, details: dict[str, Any] | None = None) -> None:
         self._last_observation = {"timestamp_unix": time.time(), "reason": reason, "details": details or {}, "generation": self._generation}
 
     def _record_degraded(self, reason: str, details: dict[str, Any] | None = None) -> None:
         """Record every DEGRADED transition without clearing prior diagnostics."""
+        if self._stopping:
+            return
         self._state = RuntimeState.DEGRADED
         self._reason = reason
         self._last_degraded = {
@@ -72,6 +83,8 @@ class StartupLifecycle:
 
     async def begin_recovery(self, reason: str, correlation_id: str) -> int:
         async with self._lock:
+            if self._stopping:
+                return -1
             self._generation += 1
             self._recovery_generation = self._generation
             self._recovery_correlation_id = correlation_id
@@ -82,7 +95,7 @@ class StartupLifecycle:
             return self._recovery_generation
 
     def finish_recovery(self, generation: int, result: dict[str, Any]) -> bool:
-        if generation != self._generation or generation != self._recovery_generation:
+        if self._stopping or generation != self._generation or generation != self._recovery_generation:
             return False
         self._recovery_state = "ready" if result.get("ok") else "degraded"
         if result.get("ok") and result.get("e2e", {}).get("ok") is True and not result.get("mock"):
@@ -96,6 +109,8 @@ class StartupLifecycle:
 
     async def start(self, warmup: Warmup) -> None:
         async with self._lock:
+            if self._stopping:
+                raise RuntimeError("lifecycle_stopping")
             if self._warmup and not self._warmup.done():
                 return
             self._state = RuntimeState.WARMING_UP
@@ -120,7 +135,7 @@ class StartupLifecycle:
             raise
         except Exception as exc:
             result = {"ok": False, "reason": f"warmup_exception:{type(exc).__name__}"}
-        if generation != self._generation:
+        if self._stopping or generation != self._generation:
             return result
         if result.get("ok") and result.get("e2e", {}).get("ok") is True and not result.get("mock"):
             self._state = RuntimeState.READY
@@ -135,8 +150,19 @@ class StartupLifecycle:
         self._changed_at = time.monotonic()
         return result
 
+    def begin_shutdown(self) -> None:
+        """Close ingress synchronously before any cleanup operation can yield."""
+        self._stopping = True
+        self._state = RuntimeState.STOPPING
+        self._reason = "shutdown_in_progress"
+        self._changed_at = time.monotonic()
+        self._generation += 1
+        if self._warmup and not self._warmup.done():
+            self._warmup.cancel()
+
     async def stop(self) -> None:
         """Cancel lifecycle-owned warmup work before its dependencies close."""
+        self.begin_shutdown()
         task = self._warmup
         self._generation += 1
         if task is None or task.done():

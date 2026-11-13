@@ -6,9 +6,9 @@ import json
 import pytest
 
 from app.foundation.config import Settings
-from app.foundation.identity import IdentityDecision, SyntheticIdentityResolver
 from app.foundation.lighting import LIGHTING_ELEMENT_IDS
 from app.foundation.simulator import SimulatorAcceptanceHarness
+from test_profile_software_chain import attach_client
 
 
 @pytest.mark.parametrize("settings", [
@@ -23,6 +23,8 @@ def test_acceptance_harness_rejects_real_providers_and_devices(settings):
 def test_simulator_button_sequence_reaches_canonical_deduplication():
     async def scenario():
         harness = SimulatorAcceptanceHarness()
+        # Test-only control admission: this unit harness has no lifecycle warmup.
+        harness.stand._admits_physical_users = lambda: True
         try:
             await harness.space_released(sequence=40)
             duplicate = await harness.button(1, sequence=40)
@@ -63,59 +65,31 @@ def test_simulator_audio_completion_carries_lease_and_rejects_old_playback():
     asyncio.run(scenario())
 
 
-def test_synthetic_card_helpers_project_backend_ready_and_dark_removal():
+def test_ready_json_projects_backend_ready_private_panel_and_dark_clear():
     async def scenario():
-        uid = "001-SYNTHETIC-PRIVATE-CARD"
         private_name = "SYNTHETIC-PRIVATE-NAME"
-        resolver = SyntheticIdentityResolver({uid: IdentityDecision(
-            "authorized", {"profile_ref": "fixture-subject", "display_name": private_name},
-            frozenset({"personalize"}), 60.0,
-        )}, clock=lambda: 0.0)
-        harness = SimulatorAcceptanceHarness(identity_resolver=resolver)
+        harness = SimulatorAcceptanceHarness(Settings(profile="mock", runtime_mode="exhibition",
+            hardware_mode="simulator", identity_mode="max_json"))
+        client, boundary = attach_client(harness.stand.application, session_id="stand")
         try:
-            assert harness.stand.application.identity_resolver is resolver
             dark = {str(element_id): 0 for element_id in LIGHTING_ELEMENT_IDS}
             assert harness.snapshot()["physical_lighting"] == dark
-            await harness.present_card(uid, wait_for_lookup=True)
-            assert harness.snapshot()["canonical_state"]["mode"] == "rfid_ready"
+            client.ready(first_name=private_name)
+            ready = await boundary.step()
+            assert ready["reason"] == "profile_ready"
+            assert harness.snapshot()["canonical_state"]["mode"] == "profile_ready"
+            assert harness.stand.application._canonical_profiles["stand"]["display_name"] == private_name
             public = json.dumps(harness.stand.panel_snapshot(), ensure_ascii=False)
-            assert uid not in public and private_name not in public
-            await harness.remove_card()
+            assert private_name not in public
+            assert "patient_profile" not in public
+            client.profile_cleared()
+            cleared = await boundary.step()
+            assert cleared["reason"] == "profile_cleared"
             assert harness.snapshot()["canonical_state"]["mode"] == "idle"
             assert harness.snapshot()["physical_lighting"] == dark
+            assert not harness.stand.application._canonical_profiles
+            assert boundary.facts is None
         finally:
-            harness.close()
-    asyncio.run(scenario())
-
-
-def test_pending_synthetic_lookup_does_not_hold_hangup():
-    class GatedResolver:
-        def __init__(self):
-            self.started = asyncio.Event()
-            self.release = asyncio.Event()
-
-        async def resolve(self, uid, installation_id, request_id):
-            self.started.set()
-            await self.release.wait()
-            return IdentityDecision("authorized", {"profile_ref": "late-subject"},
-                                    frozenset({"personalize"}), 60.0)
-
-        def readiness(self):
-            return {"provider": "synthetic", "ready": True, "synthetic": True, "production_ready": False}
-
-    async def scenario():
-        resolver = GatedResolver()
-        harness = SimulatorAcceptanceHarness(identity_resolver=resolver)
-        try:
-            await asyncio.wait_for(harness.present_card("fixture-pending"), timeout=1.0)
-            await asyncio.wait_for(resolver.started.wait(), timeout=1.0)
-            assert harness.snapshot()["canonical_state"]["mode"] == "rfid_lookup"
-            await asyncio.wait_for(harness.space_released(), timeout=1.0)
-            await asyncio.wait_for(harness.space_pressed(), timeout=1.0)
-            resolver.release.set()
-            await asyncio.sleep(0)
-            assert harness.snapshot()["canonical_state"]["mode"] == "idle"
-            assert all(value == 0 for value in harness.snapshot()["physical_lighting"].values())
-        finally:
+            await harness.stand.application.shutdown_identity()
             harness.close()
     asyncio.run(scenario())

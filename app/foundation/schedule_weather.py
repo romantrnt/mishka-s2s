@@ -63,7 +63,7 @@ class YandexWeatherProvider:
         settings = Settings.from_env()
         return cls.from_settings(settings)
 
-    async def current(self, profile: dict[str, Any], tag_id: str) -> dict[str, Any]:
+    async def current(self, profile: dict[str, Any], schedule_ref: str) -> dict[str, Any]:
         if not self.api_key:
             raise ScheduleWeatherProviderError("yandex_weather_api_key_not_configured")
         if self.latitude is None or self.longitude is None:
@@ -164,18 +164,18 @@ class ProductionScheduleWeatherService:
         self.weather_provider = weather_provider
         self.timeout_s = timeout_s
 
-    async def schedule(self, profile: Any, tag_id: str) -> list[dict[str, Any]]:
+    async def schedule(self, profile: Any, schedule_ref: str) -> list[dict[str, Any]]:
         if not isinstance(profile, dict):
             raise ScheduleWeatherProviderError("profile_data_unavailable")
         return validate_schedule(profile.get("schedule"))
 
-    async def weather(self, profile: Any, tag_id: str, *, allow_demo: bool = False) -> dict[str, Any]:
+    async def weather(self, profile: Any, schedule_ref: str, *, allow_demo: bool = False) -> dict[str, Any]:
         if self.weather_provider is None:
             raise ScheduleWeatherProviderError("ru_weather_provider_not_configured")
         if not isinstance(profile, dict):
             raise ScheduleWeatherProviderError("profile_data_unavailable")
         try:
-            value = await asyncio.wait_for(self.weather_provider.current(profile, tag_id), timeout=self.timeout_s)
+            value = await asyncio.wait_for(self.weather_provider.current(profile, schedule_ref), timeout=self.timeout_s)
         except asyncio.TimeoutError as exc:
             raise ScheduleWeatherProviderError("weather_provider_timeout") from exc
         except ScheduleWeatherProviderError:
@@ -184,9 +184,9 @@ class ProductionScheduleWeatherService:
             raise ScheduleWeatherProviderError("weather_provider_network_failure") from exc
         return validate_weather(value, allow_demo=allow_demo)
 
-    async def build(self, profile: Any, tag_id: str) -> dict[str, Any]:
-        schedule = await self.schedule(profile, tag_id)
-        weather = await self.weather(profile, tag_id)
+    async def build(self, profile: Any, schedule_ref: str) -> dict[str, Any]:
+        schedule = await self.schedule(profile, schedule_ref)
+        weather = await self.weather(profile, schedule_ref)
         items = ", ".join(f"{item['time']} — {item['title']}" for item in schedule[:4])
         return validate_report({
             "spoken_text": f"Расписание: {items}. Погода: {weather['summary']}.",
@@ -197,14 +197,14 @@ class ProductionScheduleWeatherService:
 class DemoScheduleWeatherService:
     """Development-only service. Never use this in a production profile."""
 
-    async def schedule(self, profile: Any, tag_id: str) -> list[dict[str, Any]]:
+    async def schedule(self, profile: Any, schedule_ref: str) -> list[dict[str, Any]]:
         profile = profile if isinstance(profile, dict) else {}
         return validate_schedule(profile.get("schedule") or [{"time": "09:00", "title": "Занятие"}])
 
-    async def weather(self, profile: Any, tag_id: str, *, allow_demo: bool = False) -> dict[str, Any]:
+    async def weather(self, profile: Any, schedule_ref: str, *, allow_demo: bool = False) -> dict[str, Any]:
         return validate_weather({"summary": "ясно, без осадков", "temperature_c": 15, "source": "demo"}, allow_demo=True)
 
-    async def build(self, profile: Any, tag_id: str) -> dict[str, Any]:
+    async def build(self, profile: Any, schedule_ref: str) -> dict[str, Any]:
         profile = profile if isinstance(profile, dict) else {}
         schedule = profile.get("schedule") or [{"time": "09:00", "title": "Занятие"}]
         weather = {"summary": "clear, no precipitation", "temperature_c": 15, "source": "demo"}

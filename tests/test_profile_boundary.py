@@ -1,5 +1,4 @@
-"""Synthetic-only identity trust boundary and public ingress regressions."""
-import asyncio
+"""Ready-profile trust boundary and public ingress regressions."""
 from dataclasses import replace
 import json
 import os
@@ -10,8 +9,7 @@ from app.foundation.config import Settings, SettingsError
 from app.foundation.domain import Event, IDENTITY_INTERNAL_EVENT_TYPES
 from app.foundation.events import EventValidationError, parse_event, redacted_event
 from app.foundation.identity import (
-    DisabledIdentityResolver, IdentityDecision, IdentityValidationError,
-    SyntheticIdentityResolver, normalize_profile, validate_identity_decision, validate_uid,
+    IdentityDecision, IdentityValidationError, normalize_profile, validate_identity_decision,
 )
 
 
@@ -19,45 +17,65 @@ def authorized(profile=None, *, expiry=100.0, capabilities=frozenset({"personali
     return IdentityDecision("authorized", {"profile_ref": "synthetic-subject"} if profile is None else profile, capabilities, expiry)
 
 
-def test_identity_defaults_are_disabled_independently_of_operator_token():
+def test_profile_defaults_are_guest_only_independently_of_operator_token():
     settings = Settings(stand_access_token="synthetic-operator-token").validate()
     assert settings.identity_mode == "guest_only"
-    assert settings.identity_provider == "disabled"
-    assert (settings.rfid_lookup_timeout_s, settings.rfid_ready_ttl_s, settings.rfid_debounce_s) == (2.0, 60.0, 0.5)
+    assert settings.profile_ready_ttl_s == 60.0
     assert settings.operator_token_present
-    assert asyncio.run(DisabledIdentityResolver().resolve("synthetic-card", "stand", "request")).status == "unavailable"
-    assert DisabledIdentityResolver().readiness()["ready"] is False
 
 
-def test_identity_environment_is_explicit_and_typed(monkeypatch):
+def test_profile_environment_is_explicit_and_typed(monkeypatch):
     monkeypatch.setattr(os, "environ", {
         "MISHKA_PROFILE": "mock", "MISHKA_HARDWARE_MODE": "simulator",
-        "MISHKA_IDENTITY_MODE": "optional_rfid", "MISHKA_IDENTITY_PROVIDER": "synthetic",
-        "MISHKA_RFID_LOOKUP_TIMEOUT_S": "1.5", "MISHKA_RFID_READY_TTL_S": "30",
-        "MISHKA_RFID_DEBOUNCE_S": "0.25",
+        "MISHKA_IDENTITY_MODE": "max_json", "MISHKA_PROFILE_READY_TTL_S": "30",
     })
     settings = Settings.from_env()
-    assert settings.identity_provider == "synthetic"
-    assert (settings.rfid_lookup_timeout_s, settings.rfid_ready_ttl_s, settings.rfid_debounce_s) == (1.5, 30.0, 0.25)
-    assert settings.operational_snapshot()["identity_mode"] == "optional_rfid"
+    assert settings.identity_mode == "max_json"
+    assert settings.hardware_mode == "simulator"
+    assert settings.profile_ready_ttl_s == 30.0
+    snapshot = settings.operational_snapshot()
+    assert snapshot["identity_mode"] == "max_json"
+    assert snapshot["profile_ready_ttl_s"] == 30.0
 
 
-@pytest.mark.parametrize("profile,hardware", [("production", "fake"), ("production_candidate", "fake"), ("local_cpu", "fake"), ("mock", "physical")])
-def test_synthetic_identity_is_not_a_production_backend(profile, hardware):
-    with pytest.raises(SettingsError, match="synthetic identity requires"):
-        Settings(profile=profile, hardware_mode=hardware, identity_mode="optional_rfid", identity_provider="synthetic").validate()
+@pytest.mark.parametrize("hardware", ["fake", "simulator"])
+def test_max_json_accepts_explicit_mock_exhibition_profiles(hardware):
+    settings = Settings(profile="mock", runtime_mode="exhibition", hardware_mode=hardware,
+                        identity_mode="max_json").validate()
+    assert settings.identity_mode == "max_json"
+
+
+@pytest.mark.parametrize("profile,hardware", [
+    ("production", "fake"), ("production_candidate", "fake"),
+    ("exhibition_candidate", "fake"), ("production_qwen_rvc", "fake"),
+    ("local_cpu", "fake"), ("local_gpu", "fake"), ("mock", "physical"),
+])
+def test_max_json_is_not_a_production_or_physical_backend(profile, hardware):
+    with pytest.raises(SettingsError, match="max_json requires"):
+        Settings(profile=profile, hardware_mode=hardware, identity_mode="max_json").validate()
+
+
+def test_max_json_requires_exhibition_session_policy():
+    with pytest.raises(SettingsError, match="exhibition session policy"):
+        Settings(identity_mode="max_json", runtime_mode="clinical").validate()
 
 
 @pytest.mark.parametrize("changes", [
-    {"identity_mode": "allow_all"}, {"identity_provider": "sqlite"},
-    {"identity_provider": "synthetic"}, {"rfid_lookup_timeout_s": 0},
-    {"rfid_lookup_timeout_s": 31}, {"rfid_ready_ttl_s": float("inf")},
-    {"rfid_ready_ttl_s": float("nan")}, {"rfid_debounce_s": -1},
-    {"rfid_debounce_s": True}, {"rfid_lookup_timeout_s": "2"},
+    {"identity_mode": "allow_all"}, {"identity_mode": "optional_rfid"},
+    {"identity_mode": "synthetic"}, {"profile_ready_ttl_s": 0},
+    {"profile_ready_ttl_s": 0.09}, {"profile_ready_ttl_s": 3600.1},
+    {"profile_ready_ttl_s": float("inf")}, {"profile_ready_ttl_s": float("nan")},
+    {"profile_ready_ttl_s": -1}, {"profile_ready_ttl_s": True},
+    {"profile_ready_ttl_s": "2"},
 ])
-def test_unsupported_identity_settings_fail_closed(changes):
+def test_unsupported_profile_settings_fail_closed(changes):
     with pytest.raises(SettingsError):
         replace(Settings(), **changes).validate()
+
+
+@pytest.mark.parametrize("ttl", [0.1, 3600.0])
+def test_profile_ready_ttl_accepts_supported_boundaries(ttl):
+    assert Settings(profile_ready_ttl_s=ttl).validate().profile_ready_ttl_s == ttl
 
 
 def test_profile_normalization_has_one_reference_and_a_bounded_allowlist():
@@ -104,7 +122,7 @@ def test_expired_or_malformed_grants_do_not_expose_profiles(expiry):
     assert validate_identity_decision(authorized(expiry=expiry), 10.0) == IdentityDecision("unavailable")
 
 
-def test_legacy_alias_is_normalized_and_invalid_injected_provider_results_fail_closed():
+def test_legacy_alias_is_normalized_and_invalid_profile_grants_fail_closed():
     original = {"child_id": "synthetic-subject", "display_name": "Test"}
     decision = validate_identity_decision(authorized(original), 10.0)
     assert decision.profile == {"profile_ref": "synthetic-subject", "display_name": "Test"}
@@ -118,54 +136,18 @@ def test_legacy_alias_is_normalized_and_invalid_injected_provider_results_fail_c
         assert validate_identity_decision(IdentityDecision(status, original, frozenset({"personalize"}), 100), 10) == IdentityDecision(status)
 
 
-def test_synthetic_fixture_only_grants_and_finite_expiry():
-    clock = [10.0]
-    resolver = SyntheticIdentityResolver({
-        "001a": authorized(), "001A": IdentityDecision("denied"),
-        "invalid": authorized({"profile_ref": "bad", "timezone": "Invalid/zone"}),
-        "same-as-subject": authorized({"profile_ref": "same-as-subject"}),
-    }, clock=lambda: clock[0], lease_s=5)
-    async def scenario():
-        granted = await resolver.resolve("001a", "synthetic-stand", "request-1")
-        assert granted.status == "authorized"
-        assert granted.expires_monotonic == 15.0
-        assert (await resolver.resolve("001A", "synthetic-stand", "request-2")).status == "denied"
-        assert (await resolver.resolve("other", "synthetic-stand", "request-3")).status == "unknown"
-        assert (await resolver.resolve("invalid", "synthetic-stand", "request-4")).status == "unavailable"
-        assert (await resolver.resolve("same-as-subject", "synthetic-stand", "request-5")).status == "unavailable"
-        clock[0] = 100
-        assert (await resolver.resolve("001a", "synthetic-stand", "request-6")).status == "unavailable"
-    asyncio.run(scenario())
-    readiness = resolver.readiness()
-    assert readiness["synthetic"] and not readiness["production_ready"]
-    assert "001a" not in json.dumps(readiness)
-
-
-def test_synthetic_fixture_is_copied_at_construction():
-    profile = {"profile_ref": "synthetic-subject", "display_name": "Original"}
-    fixtures = {"synthetic-card": authorized(profile)}
-    resolver = SyntheticIdentityResolver(fixtures, clock=lambda: 1.0)
-    profile["display_name"] = "Changed"
-    fixtures["other-card"] = authorized()
-    assert asyncio.run(resolver.resolve("synthetic-card", "stand", "request")).profile["display_name"] == "Original"
-    assert asyncio.run(resolver.resolve("other-card", "stand", "request")).status == "unknown"
-
-
-@pytest.mark.parametrize("uid", [None, "", " \t", "x" * 129, "SECRET_PRIVATE_MARKER\n"])
-def test_uid_validation_is_nonempty_bounded_and_does_not_echo_values(uid):
-    with pytest.raises(IdentityValidationError) as error:
-        validate_uid(uid)
+@pytest.mark.parametrize("name", ["rfid", "rfid_presented", "rfid_removed", "RfidPresented", "RfidRemoved"])
+@pytest.mark.parametrize("source", ["api", "uart_pty", "internal_identity", "trusted_provider"])
+def test_generic_ingress_rejects_raw_uid_events_without_echoing_values(name, source):
+    with pytest.raises(EventValidationError, match="unknown event type") as error:
+        parse_event({"type": name, "tag_id": "UID_PRIVATE_MARKER",
+                     "profile": {"display_name": "PROFILE_PRIVATE_MARKER"}}, "test", 1, source)
     assert "PRIVATE_MARKER" not in str(error.value)
-    with pytest.raises(EventValidationError):
-        parse_event({"type": "rfid", "tag_id": uid}, "test", 1)
-
-
-def test_uid_is_opaque_and_transient_until_lookup():
-    uid = "000aBc-01"
-    event = parse_event({"type": "rfid", "tag_id": uid, "profile": {"display_name": "PRIVATE_MARKER"}}, "test", 1)
-    assert event.payload == {"tag_id": uid}
-    assert validate_uid(uid) == uid
-    assert uid not in json.dumps(redacted_event(event))
+    direct = Event(name, "test", 1, 0, source, {
+        "tag_id": "UID_PRIVATE_MARKER", "profile": {"display_name": "PROFILE_PRIVATE_MARKER"},
+    })
+    assert redacted_event(direct)["payload"] == {}
+    assert "PRIVATE_MARKER" not in json.dumps(redacted_event(direct))
 
 
 @pytest.mark.parametrize("name", sorted(IDENTITY_INTERNAL_EVENT_TYPES | {"AdultResolved", "DialogueFallback"}))
@@ -176,8 +158,8 @@ def test_generic_ingress_cannot_forge_internal_outcomes(name, source):
                      "profile": {"profile_ref": "forged"}}, "test", 1, source)
 
 
-@pytest.mark.parametrize("name", ["RfidRemoved", "AnonymousStart", "HandsetPlaced", "SessionCancel", "HardwareReconnected"])
-def test_generic_removal_and_other_events_discard_private_payloads(name):
+@pytest.mark.parametrize("name", ["SessionStarted", "SessionReset", "AnonymousStart", "HandsetPlaced", "SessionCancel", "HardwareReconnected"])
+def test_generic_session_events_discard_private_payloads(name):
     private = {"tag_id": "UID_PRIVATE_MARKER", "uid": "UID_PRIVATE_MARKER", "profile_ref": "REF_PRIVATE_MARKER",
                "display_name": "NAME_PRIVATE_MARKER", "schedule": [{"private": "SCHEDULE_PRIVATE_MARKER"}],
                "profile": {"private": "PROFILE_PRIVATE_MARKER"}, "_identity_authorized": True}

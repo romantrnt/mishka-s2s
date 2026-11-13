@@ -91,20 +91,20 @@ def test_exhibition_application_ignores_buttons_before_handset_lift() -> None:
 
 
 
-def test_unknown_rfid_stays_anonymous_and_safety_handoff_survives_removal() -> None:
+def test_guest_stays_anonymous_and_safety_handoff_survives_no_profile_clear() -> None:
     from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime
 
     runtime = CanonicalRuntime()
     def event(kind: str, sequence: int, version: int, payload=None):
         return CanonicalEvent(kind, "unknown", sequence, version, "test", payload or {}, str(sequence), float(sequence))
 
-    unknown = runtime.handle(event("RfidPresented", 1, 0, {"tag_id": "unresolved"}), None)
-    assert unknown["reason"] == "unknown_tag"
+    unknown = runtime.handle(event("AnonymousStart", 1, 0), None)
+    assert unknown["state"]["profile_status"] == "anonymous"
     assert unknown["state"]["mode"] == "anonymous_visual"
     runtime.handle(event("HandsetLifted", 2, 1), None)
     handoff = runtime.handle(event("VoiceIntentReady", 3, 2, {"intent": "request_adult", "safety_severity": "none"}), None)
     assert handoff["state"]["mode"] == "safety_handoff"
-    removed = runtime.handle(event("RfidRemoved", 4, 3), None)
+    removed = runtime.handle(event("ClientProfileCleared", 4, 3), None, identity_event_authorized=True)
     assert removed["state"]["mode"] == "safety_handoff"
 
 
@@ -117,40 +117,17 @@ def test_story_validator_rejects_ip_and_invalid_schema_before_playback() -> None
     assert validate_generated_story(unsafe, brief)[0] is False
     assert validate_generated_story(malformed, brief)[0] is False
 
-def test_application_accepts_first_rfid_and_deduplicates_repeated_tag() -> None:
-    app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="clinical", content_root="content"))
-
-    async def scenario() -> None:
-        first = await app.receive_async(Event(
-            "RfidPresented", "rfid-test", 1, 0.0, "test",
-            {"tag_id": "mock-child-001"}, "rfid-one",
-        ))
-        assert first["reason"] == "rfid_identified"
-        assert first["state"] == "visual_welcome"
-        assert any(output.get("action") == "led_pattern" and output.get("pattern") == "rfid_wave" for output in first["outputs"])
-
-        repeated = await app.receive_async(Event(
-            "RfidPresented", "rfid-test", 2, 1.0, "test",
-            {"tag_id": "mock-child-001"}, "rfid-two",
-        ))
-        assert repeated["reason"] == "rfid_repeated"
-        assert repeated["state"] == "visual_welcome"
-        assert not repeated["outputs"]
-
-    asyncio.run(scenario())
 
 
 def test_handset_lift_from_visual_welcome_opens_current_voice_state_and_blocks_missing_phrase_honestly() -> None:
     app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="clinical", content_root="content"))
 
     async def scenario() -> None:
-        first = await app.receive_async(Event(
-            "RfidPresented", "handset-test", 1, 0.0, "test",
-            {"tag_id": "mock-child-001"}, "rfid-one",
-        ))
-        assert first["state"] == "visual_welcome"
-        assert first["canonical_state"]["expected_inputs"] == ["handset_up"]
-        assert all("unknown" not in str(output.get("effect_id", "")) for output in first["outputs"])
+        # Scenario-unit setup, not a patient/UID ingress path.
+        state = app.canonical_runtime._new_state("handset-test", {"profile_ref": "synthetic-context", "display_name": "Test", "age_years": 6, "age_source": "data14_age_years"})
+        state.mode = "visual_welcome"
+        state.expected_inputs = ["handset_up"]
+        app.canonical_runtime.sessions["handset-test"] = state
 
         lifted = await app.receive_async(Event(
             "HandsetLifted", "handset-test", 2, 1.0, "test", {}, "handset-one",
