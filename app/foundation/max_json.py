@@ -11,7 +11,7 @@ import math
 import uuid
 from datetime import datetime, timezone
 
-from .identity import normalize_profile
+from .identity import normalize_profile, _bounded_text
 
 
 def _map_card(card, context_ref, now, monotonic_now):
@@ -28,7 +28,11 @@ def _map_card(card, context_ref, now, monotonic_now):
     profile = {"profile_ref": context_ref}
     first_name = card["identity"]["first_name"]
     if first_name is not None:
-        profile["display_name"] = first_name
+        # DATA14 accepts 160 characters; the speech profile accepts 80.
+        # Keep the valid card without a spoken name rather than truncate it.
+        _bounded_text(first_name, "first_name", 160)
+        if len(first_name) <= 80:
+            profile["display_name"] = first_name
     birth = card["birth"]
     if birth["age_years"] is not None:
         profile.update(age_years=birth["age_years"], age_source="data14_age_years",

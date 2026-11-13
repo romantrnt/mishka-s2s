@@ -80,7 +80,7 @@ def test_retired_ingress_never_reaches_session_or_publisher(name):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("first_name", ["x" * 81, 42])
+@pytest.mark.parametrize("first_name", ["x" * 161, 42])
 def test_rejected_profile_mapping_clears_client_and_all_local_context(first_name):
     class Client:
         def __init__(self):
