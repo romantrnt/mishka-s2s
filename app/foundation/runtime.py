@@ -197,6 +197,13 @@ class S2SRuntimeManager:
                 "latency_metrics":self.engine.metrics.snapshot(),"warmup":self.last_warmup}
 
     async def warmup(self) -> dict[str,Any]:
+        try:
+            return await self._warmup()
+        finally:
+            from .story_context import refresh_story_contracts
+            await refresh_story_contracts(self.engine)
+
+    async def _warmup(self) -> dict[str,Any]:
         started=time.perf_counter(); stages: dict[str, Any] = {}
         if self.settings.profile=="mock":
             self.last_warmup={"ok":True,"mock":True,"latency_ms":0.0}; return self.last_warmup

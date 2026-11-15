@@ -297,15 +297,43 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.client.patient())
 
     async def test_ready_json_does_not_grant_schedule_or_query_a_schedule_provider(self):
+        calls = []
         class ForbiddenSchedule:
             async def schedule(self, *_args):
+                calls.append("schedule")
                 raise AssertionError("DATA-14 doctors_today is not a schedule grant")
+        self.app.audio.private_pcm_supported = False  # Existing recorded welcome path.
         await self.scan("demo-1")
         await self.send("HandsetLifted")
-        self.state().mode = "schedule_weather"
+        deadline = self.state().welcome_deadline_monotonic
+        self.app.monotonic_now = lambda: deadline + .01
+        async def accepted(kind, payload=None):
+            self.sequence += 1
+            return await self.app.receive_async(Event(kind, self.boundary.session_id, self.sequence,
+                time.time(), "test_handset", payload or {}, f"handset-{self.sequence}", deadline + .01))
+        await accepted("WelcomeTimerFired")
+        lease = self.app._active_audio[self.boundary.session_id]
+        await accepted("AudioCompleted", {"response_id": "PHRASE_001",
+            **{key: lease[key] for key in ("token", "generation", "playback_lease", "playback_id")}})
+        await accepted("ButtonPressed", {"button_id": 1})
+        await accepted("ButtonReleased", {"button_id": 1})
+        self.assertEqual(self.state().mode, "menu_ready")
         self.app.schedule_weather = ForbiddenSchedule()
-        result = await self.send("ButtonPressed", {"button_id": 3})
-        self.assertEqual(result["outputs"][0]["resolution"], "typed_information_blocked_by_identity")
+        await accepted("ButtonPressed", {"button_id": 7})
+        await accepted("ButtonReleased", {"button_id": 7})
+        self.assertEqual(self.state().mode, "schedule_weather")
+        self.assertFalse(any(item["id"] in {"what_next", "where_now"}
+            for item in self.state().scene_menu_descriptor["items"]))
+        result = await accepted("ButtonPressed", {"button_id": 3})
+        await accepted("ButtonReleased", {"button_id": 3})
+        self.assertFalse(any(x.get("type") == "typed_info_request" for x in result["outputs"]))
+        self.sequence += 1
+        result = await self.app.receive_async(Event("SpeechReceived", self.boundary.session_id,
+            self.sequence, time.time(), "test_handset", {}, f"handset-{self.sequence}", deadline + .01),
+            "Куда мне сейчас идти?")
+        self.assertTrue(any(x.get("resolution") == "typed_information_blocked_by_identity" for x in result["outputs"]))
+        self.assertFalse(calls)
+        self.assertFalse(self.app._identity_scope_live(self.boundary.session_id, "schedule"))
         self.assertIsNone(self.app._canonical_schedule_refs[self.boundary.session_id])
 
     async def test_another_session_cannot_take_a_ready_profile(self):

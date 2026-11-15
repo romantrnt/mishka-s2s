@@ -15,6 +15,7 @@ from dataclasses import replace
 from typing import Any, Callable
 from weakref import WeakSet
 
+from .game_engine import next_deadline as game_deadline
 from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, PlaybackHandle, ScenarioRepository, SessionRecord, SessionRepository
 from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
@@ -26,7 +27,8 @@ from .input_safety import InputSafetyGate
 from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest
 from .system_prompt import build_system_prompt
 from .private_welcome import PrivateWelcomeMixin
-from .owned_speech import OwnedSpeechMixin, TYPED_AUDIO_IDS
+from .owned_speech import OwnedSpeechMixin, TYPED_AUDIO_IDS, MENU_AUDIO_IDS
+from .personal_story import PersonalStoryMixin, STORY_MODES, STORY_ID, story_theme
 from .dialogue_memory import DialogueMemoryMixin
 from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
 
@@ -79,7 +81,7 @@ def _set_audio_effect_status(effect: dict[str, Any], *, asset_status: str,
         effect["resolution"] = resolution
 
 
-class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryMixin):
+class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMixin, DialogueMemoryMixin):
     """Use-case layer. It depends only on domain ports, never FastAPI/files/UART/LLM."""
     AUDIO_RECOVERABLE_FAILURES = frozenset({
         "vad_failure",
@@ -151,10 +153,15 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         self._paused_story_playback: dict[str, dict[str, Any]] = {}
         self._audio_timeout_tasks: dict[str, asyncio.Task[Any]] = {}
         self._audio_timeout_sequences: dict[str, int] = {}
+        self._game_timer_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._game_timer_scopes: dict[str, tuple] = {}
+        self._game_timer_sequences: dict[str, int] = {}
         self._welcome_timers: dict[str, asyncio.Task[Any]] = {}
         self._private_welcomes: dict[str, Any] = {}
         self._private_welcome_tasks: set[asyncio.Task[Any]] = set()
         self._owned_text_jobs: set[asyncio.Task[Any]] = set()
+        self._personal_stories = {}
+        self._personal_story_jobs = set()
         self._welcome_timer_sequences: dict[str, int] = {}
         self._menu_tutorial_tasks: dict[str, asyncio.Task[Any]] = {}
         self._menu_tutorial_sequences: dict[str, int] = {}
@@ -213,6 +220,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         return {"reason": reason, "state": snapshot["mode"], "outputs": [], "canonical_state": snapshot}
 
     def _drop_identity_owner(self, session_id: str) -> None:
+        self._discard_personal_story(session_id)
         # Drop authority before cancellation can yield. A cancellation-resistant
         # provider may finish, but it no longer owns an accepted request.
         self._discard_private_welcome(session_id)
@@ -264,6 +272,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         self._identity_shutdown = True
         for session_id in tuple(self.conversation_contexts):
             self._drop_dialogue_context(session_id)
+        for session_id in tuple(self._personal_stories):
+            self._discard_personal_story(session_id)
         for task in tuple(self._owned_text_jobs):
             task.cancel()
         for session_id in tuple(self._private_welcomes):
@@ -276,7 +286,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
             self._drop_identity_owner(session_id)
     async def shutdown_identity(self) -> dict[str, int]:
         """Revoke first, then drain a bounded amount of provider work."""
-        tasks = set(self._identity_deadline_tasks.values()) | self._handoff_delivery_tasks | self._private_welcome_tasks | self._owned_text_jobs
+        tasks = set(self._identity_deadline_tasks.values()) | self._handoff_delivery_tasks | self._private_welcome_tasks | self._owned_text_jobs | self._personal_story_jobs
         tasks.discard(asyncio.current_task())
         try:
             if self.max_json and self._max_client_boundary is not None:
@@ -486,7 +496,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         generation = payload.get("generation")
         if lease is None:
             return False
-        if lease.get("content_id") in TYPED_AUDIO_IDS | {"PERSONAL_WELCOME"} and not payload.get("playback_id"):
+        if lease.get("content_id") in TYPED_AUDIO_IDS | MENU_AUDIO_IDS | {"PERSONAL_WELCOME", "PERSONAL_STORY"} and not payload.get("playback_id"):
             return False
         try:
             token_matches = int(token) == int(lease["token"])
@@ -661,6 +671,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         if identity_request is not None:
             self._identity_requests[session_id] = identity_request
         self._discard_private_welcome(session_id)
+        self._cancel_game_timer(session_id)
         self._cancel_welcome_timer(session_id)
         self._welcome_timer_sequences.pop(session_id, None)
         self._cancel_menu_tutorial(session_id)
@@ -969,6 +980,65 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
             advance(), name=f"mishka-menu-tutorial-{session_id}"
         )
 
+    def _current_game_timer_scope(self, session_id: str) -> tuple | None:
+        state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
+        engine = state.game_engine_state if state is not None else None
+        if (state is None or state.mode != "game_active" or state.substate == "game_exit_confirmation"
+                or engine is None or not engine.run_id or game_deadline(engine) is None):
+            return None
+        return (self._session_epochs.get(session_id, 0), engine.run_id, engine.round_generation,
+                engine.timer_generation, game_deadline(engine))
+
+    def _cancel_game_timer(self, session_id: str) -> None:
+        self._game_timer_scopes.pop(session_id, None)
+        task = self._game_timer_tasks.pop(session_id, None)
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    def _sync_game_timer(self, session_id: str) -> None:
+        scope = self._current_game_timer_scope(session_id)
+        if scope is not None and self._game_timer_scopes.get(session_id) == scope:
+            return
+        self._cancel_game_timer(session_id)
+        if scope is None:
+            return
+        self._game_timer_scopes[session_id] = scope
+        if not self.background_scheduler:
+            return
+        async def wait() -> None:
+            try:
+                await asyncio.sleep(max(0., scope[-1] - self.monotonic_now()))
+                await self._fire_game_timer(session_id, scope)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception("game timer failed")
+            finally:
+                if self._game_timer_tasks.get(session_id) is asyncio.current_task():
+                    self._game_timer_tasks.pop(session_id, None)
+        self._game_timer_tasks[session_id] = asyncio.create_task(wait(), name="mishka-game-timer")
+
+    async def _fire_game_timer(self, session_id: str, scope: tuple) -> dict[str, Any] | None:
+        if self._current_game_timer_scope(session_id) != scope or self.monotonic_now() < scope[-1]:
+            return None
+        sequence = self._game_timer_sequences.get(session_id, 0) + 1
+        self._game_timer_sequences[session_id] = sequence
+        return await self._receive_canonical_event(Event(
+            "GameTimer", session_id, sequence, self.now(), "canonical_game_timer",
+            {"run_id": scope[1], "round_generation": scope[2], "timer_generation": scope[3], "deadline": scope[4]},
+            f"game-timer:{scope[1]}:{scope[2]}:{scope[3]}", self.monotonic_now(),
+        ), game_timer_authorized=True, _game_timer_scope=scope)
+
+    async def flush_game_timers(self) -> list[dict[str, Any]]:
+        """Deterministic clock seam through the same private authorized delivery."""
+        results = []
+        for session_id, scope in tuple(self._game_timer_scopes.items()):
+            if self.monotonic_now() >= scope[-1]:
+                result = await self._fire_game_timer(session_id, scope)
+                if result is not None:
+                    results.append(result)
+        return results
+
     def _cancel_welcome_timer(self, session_id: str) -> None:
         task = self._welcome_timers.pop(session_id, None)
         if task is not None and task is not asyncio.current_task() and not task.done():
@@ -1043,7 +1113,10 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                                        handoff_ack_authorized: bool = False,
                                        handoff_failure_authorized: bool = False,
                                        dialogue_fallback_authorized: bool = False,
+                                       personal_story_authorized: bool = False,
                                        identity_event_authorized: bool = False,
+                                       game_timer_authorized: bool = False,
+                                       _game_timer_scope: tuple | None = None,
                                        identity_profile: dict[str, Any] | None = None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None) -> dict[str, Any]:
         try:
@@ -1058,7 +1131,9 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                 handoff_ack_authorized=handoff_ack_authorized,
                 handoff_failure_authorized=handoff_failure_authorized,
                 dialogue_fallback_authorized=dialogue_fallback_authorized,
+                personal_story_authorized=personal_story_authorized,
                 identity_event_authorized=identity_event_authorized,
+                game_timer_authorized=game_timer_authorized, _game_timer_scope=_game_timer_scope,
                 identity_profile=identity_profile,
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
@@ -1107,7 +1182,10 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                                              handoff_ack_authorized: bool = False,
                                              handoff_failure_authorized: bool = False,
                                              dialogue_fallback_authorized: bool = False,
+                                       personal_story_authorized: bool = False,
                                              identity_event_authorized: bool = False,
+                                             game_timer_authorized: bool = False,
+                                             _game_timer_scope: tuple | None = None,
                                              identity_profile: dict[str, Any] | None = None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None) -> dict[str, Any]:
         """Bridge canonical decisions to application-owned effects.
@@ -1118,6 +1196,12 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         profile = None
         profile_request = None
         current = self.canonical_runtime.sessions.get(event.session_id)
+        if event.event_type == "GameTimer":
+            if not game_timer_authorized:
+                return self._identity_result(event.session_id, "game_timer_untrusted")
+            if (_game_timer_scope is None or self._current_game_timer_scope(event.session_id) != _game_timer_scope
+                    or self.monotonic_now() < _game_timer_scope[-1]):
+                return self._identity_result(event.session_id, "game_timer_stale")
         if self.optional_identity:
             if self._identity_shutdown:
                 return self._identity_result(event.session_id, "identity_shutdown")
@@ -1153,7 +1237,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         previous_state = copy.deepcopy(current)
         event_type = "VoiceIntentReady" if event.event_type == "SpeechReceived" else event.event_type
         payload = dict(event.payload)
-        accepted_monotonic = event.monotonic_timestamp if event.monotonic_timestamp is not None else self.monotonic_now()
+        accepted_monotonic = (self.monotonic_now() if event.event_type == "GameTimer" else
+                              event.monotonic_timestamp if event.monotonic_timestamp is not None else self.monotonic_now())
         voice_admission = None
         personal_welcome_answer_verified = False
         if event.event_type == "SpeechReceived":
@@ -1217,6 +1302,14 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                 and not uncertain_stt and bool((transient_text or "").strip()))
             payload.update({"intent": intent, "safety_severity": safety.severity,
                             "safety_reason": safety.reason})
+        if event.event_type == "PersonalStoryReady":
+            owner = self._personal_stories.get(event.session_id)
+            personal_story_authorized = bool(personal_story_authorized and owner and owner.audio is not None
+                and event.payload.get("request_id") == owner.request_id
+                and self._personal_story_scope(event.session_id, owner))
+        if (current is not None and current.mode == "personal_story_theme" and current.scene_menu_phase != "repeat_listen" and transient_text
+                and payload.get("safety_severity") == "none" and personal_welcome_answer_verified):
+            payload["intent"] = story_theme(transient_text) or "unsupported_story_theme"
         # Transport-supplied timestamps cannot make the real welcome clock due.
         if (event.event_type == "WelcomeTimerFired" and current is not None
                 and current.welcome_deadline_monotonic is not None
@@ -1229,6 +1322,10 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                 and self.monotonic_now() >= current.welcome_deadline_monotonic
                 and accepted_monotonic >= current.welcome_deadline_monotonic):
             private_welcome_ready = self._choose_private_welcome(event.session_id, commit=False)
+        self.canonical_runtime.menu_voice_capable = self._owned_menu_voice_capable()
+        self.canonical_runtime.personal_story_capable = self.personal_story_available()
+        from .menu_capabilities import day_menu_items
+        self.canonical_runtime.day_menu_items = lambda sid: day_menu_items(self,sid)
         decision = self.canonical_runtime.handle(CanonicalEvent(
             event_type=event_type, session_id=event.session_id, sequence=event.sequence,
             state_version=state_version, source=event.source, payload=payload,
@@ -1241,7 +1338,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
            handoff_ack_authorized=handoff_ack_authorized,
            handoff_failure_authorized=handoff_failure_authorized,
            dialogue_fallback_authorized=dialogue_fallback_authorized,
-           identity_event_authorized=identity_event_authorized)
+           personal_story_authorized=personal_story_authorized,
+           identity_event_authorized=identity_event_authorized, game_timer_authorized=game_timer_authorized)
         if decision["reason"] in {"welcome_started", "personal_welcome_started"}:
             self._choose_private_welcome(event.session_id)
         snapshot, effects = decision["state"], decision["effects"]
@@ -1279,6 +1377,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         child_ack = (
             (event.event_type == "AdultHandoffAcknowledged" and handoff_ack_authorized)
             or (event.event_type == "StoryPositionUpdated" and event.source == "audio_pause")
+            or (event.event_type in {"PersonalStoryReady", "AudioCompleted"} and personal_story_authorized)
             or (event.event_type == "DialogueFallback" and dialogue_fallback_authorized)
         )
         previous_version = previous_state.state_version if previous_state is not None else -1
@@ -1321,6 +1420,14 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
             )
         epoch = self._session_epochs.get(event.session_id, 0)
         state_owner = self.canonical_runtime.sessions.get(event.session_id)
+        story_owner = self._personal_stories.get(event.session_id)
+        if story_owner and (not state_owner or state_owner.mode not in STORY_MODES or state_owner.handset != "up"
+                or self._session_epochs.get(event.session_id,0) != story_owner.epoch
+                or (state_owner.profile_ref,state_owner.identity_request_id) != story_owner.identity
+                or (story_owner.identity[0] and not self._identity_scope_live(event.session_id,"personalize"))):
+            self._discard_personal_story(event.session_id)
+
+        self._sync_game_timer(event.session_id)
 
         reset_sync_results: dict[str, dict[str, Any]] = {}
 
@@ -1538,6 +1645,11 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                         return stale_result()
                     if isinstance(outcome, dict) and str(outcome.get("story_id") or "") == str(effect.get("story_id") or ""):
                         offset_ms = max(0, int(outcome.get("offset_ms") or 0))
+                        if effect.get("story_id") == STORY_ID:
+                            owner = self._personal_stories.get(event.session_id)
+                            if (self._personal_story_scope(event.session_id,owner,checkpoint=True)
+                                    and offset_ms <= int(1000*len(owner.audio.samples)/owner.audio.sample_rate)):
+                                owner.checkpoint_ms = offset_ms
                         checkpoint = await self._receive_canonical_event(Event(
                             "StoryPositionUpdated", event.session_id, event.sequence,
                             self.now(), "audio_pause",
@@ -1735,6 +1847,34 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                 self.led.clear_all()
                 for element_id in effect.get("elements", ()):
                     self.led.set_element(int(element_id), int(effect.get("state", 0)))
+            elif kind == "scene_menu_page":
+                descriptor=effect["descriptor"]
+                cancel_effects=getattr(self.led,"cancel_effects",None)
+                if callable(cancel_effects): cancel_effects(clear=False)
+                buttons=descriptor["buttons"]
+                lit={element for button in buttons for element in BUTTON_ELEMENTS.get(int(button),())}
+                self.led.set_elements(tuple(LightingCommand(element,int(element in lit),0)
+                    for element in LIGHTING_ELEMENT_IDS))
+            elif kind == "narrate_scene_menu":
+                from .scene_menus import MENU_PCM_MODES
+                def menu_current():
+                    return bool(still_current() and state_owner.handset=="up"
+                        and state_owner.mode==MENU_PCM_MODES.get(effect.get("content_id"))
+                        and state_owner.scene_menu_phase=="narrating"
+                        and state_owner.playback_lease==effect.get("playback_lease"))
+                try:
+                    text=str(state_owner.scene_menu_descriptor.get("spoken_text") or "")
+                    audio=await self._render_typed_audio(event.session_id,text,effect,
+                        record.cancellation_token,menu_current)
+                    if not menu_current():return stale_result()
+                    if audio is None:raise RuntimeError("menu_audio_unavailable")
+                    self._play_typed_audio(event.session_id,audio,effect,record.cancellation_token)
+                    _set_audio_effect_status(effect,asset_status="approved",queued=True,resolution="scene_menu_audio_queued")
+                except Exception:
+                    if not still_current():return stale_result()
+                    audio_failure={"response_id":effect["content_id"],"playback_lease":effect["playback_lease"],
+                        "error_code":"scene_menu_audio_unavailable"}
+                    _set_audio_effect_status(effect,asset_status="unavailable",queued=False,resolution="scene_menu_audio_unavailable")
             elif kind == "lighting_preset":
                 # Replace the complete logical frame in one ordered batch.
                 # Sending clear_all() first caused a visible off-to-on pulse
@@ -1759,6 +1899,9 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                         commands += ((digit_element, 1),)
                 else:
                     commands = LED_PRESETS.get(preset, ())
+                if preset == "GAME_OUTPUT":
+                    commands = tuple((element_id, 1) for button in effect.get("buttons", ())
+                                     if button in (1, 2, 3, 4) for element_id in BUTTON_ELEMENTS[button])
                 if preset == "TARGET":
                     commands = tuple((element_id, 1) for element_id in BUTTON_ELEMENTS.get(int(effect.get("target_button", 0)), ()))
                 desired = {element_id: 0 for element_id in LIGHTING_ELEMENT_IDS}
@@ -1867,6 +2010,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                                                      exception_type=type(exc).__name__, detail=str(exc)[:200],
                                                      session_id=event.session_id)
                         audio_failure = {"response_id": phrase_id, "token": record.cancellation_token,
+                                     "playback_lease": effect.get("playback_lease"),
                                          "error_code": "audio_dispatch_failed", "detail": type(exc).__name__}
                         logger.exception("canonical phrase dispatch failed", extra={"phrase_id": phrase_id, "session_id": event.session_id})
                     else:
@@ -1885,6 +2029,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                                                 content_status=diagnosis.get("status"),
                                                 content_code=diagnosis.get("code"), session_id=event.session_id)
                     audio_failure = {"response_id": phrase_id, "token": record.cancellation_token,
+                                     "playback_lease": effect.get("playback_lease"),
                                      "error_code": str(diagnosis.get("code") or "content_unavailable")[:80]}
             elif kind in {"support_question", "support_response"}:
                 phrase = str(effect["phrase_id"])
@@ -1968,24 +2113,60 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                         ),
                     }
                     deferred_effects.extend(fallback.get("outputs") or [])
-            elif kind in {"generate_personal_story", "validate_personal_story", "play_personal_story"}:
-                # There is no production story generator/full-story validator/
-                # playback provider. A short canned candidate or a conversational
-                # TTS turn is not a validated age-appropriate generated story.
-                effect["resolution"] = "personal_story_provider_unavailable"
-                effect["fallback_phrase_id"] = "PHRASE_080"
-                fallback = await self._receive_canonical_event(Event(
-                    "DialogueFallback", event.session_id, event.sequence, self.now(),
-                    "personal_story_unavailable", {"reason": "personal_story_unavailable"},
-                    f"{event.correlation_id or event.session_id}:story-unavailable",
-                    self.monotonic_now(),
-                ), dialogue_fallback_authorized=True)
+            elif kind == "generate_personal_story":
+                owner = await self._prepare_personal_story(event.session_id, effect.get("brief") or {}, record.cancellation_token)
                 if not still_current():
                     return stale_result()
-                effect["fallback"] = {"reason": fallback.get("reason"), "phrase_id": "PHRASE_080"}
-                deferred_effects.extend(fallback.get("outputs") or [])
-                decision["reason"] = fallback.get("reason", "personal_story_unavailable")
-                snapshot = state_owner.snapshot()
+                if owner is not None:
+                    ready = await self._receive_canonical_event(Event(
+                        "PersonalStoryReady",event.session_id,event.sequence,self.now(),"internal_personal_story",
+                        {"request_id":owner.request_id},owner.request_id,self.monotonic_now()), personal_story_authorized=True)
+                    if not still_current():
+                        return stale_result()
+                    deferred_effects.extend(ready.get("outputs") or [])
+                    effect["resolution"] = "personal_story_prepared"
+                    decision["reason"] = ready.get("reason")
+                    snapshot = self.canonical_runtime.sessions[event.session_id].snapshot()
+                else:
+                    fallback = await self._receive_canonical_event(Event(
+                        "DialogueFallback",event.session_id,event.sequence,self.now(),"personal_story_unavailable",
+                        {"reason":"personal_story_unavailable"},f"{event.correlation_id}:story-unavailable",self.monotonic_now()), dialogue_fallback_authorized=True)
+                    if not still_current():
+                        return stale_result()
+                    deferred_effects.extend(fallback.get("outputs") or [])
+                    effect["resolution"] = "personal_story_provider_unavailable"
+                    effect["fallback_phrase_id"] = "PHRASE_080"
+                    decision["reason"] = fallback.get("reason")
+                    snapshot = self.canonical_runtime.sessions[event.session_id].snapshot()
+            elif kind == "play_personal_story":
+                try:
+                    queued = self._play_personal_story(event.session_id,effect,record.cancellation_token)
+                except Exception:
+                    queued = False
+                if queued == "completed":
+                    terminal = await self._receive_canonical_event(Event(
+                        "AudioCompleted",event.session_id,event.sequence,self.now(),"internal_personal_story_complete",
+                        {"response_id":STORY_ID,"token":record.cancellation_token,
+                         "generation":effect["generation"],"playback_id":effect["playback_id"],
+                         "playback_lease":effect["playback_lease"]},f"{event.correlation_id}:story-already-complete",self.monotonic_now()), personal_story_authorized=True)
+                    if not still_current():
+                        return stale_result()
+                    deferred_effects.extend(terminal.get("outputs") or [])
+                    effect["resolution"] = "personal_story_already_complete"
+                    decision["reason"] = terminal.get("reason")
+                    snapshot = self.canonical_runtime.sessions[event.session_id].snapshot()
+                elif queued:
+                    effect["resolution"] = "personal_story_pcm_queued"
+                else:
+                    fallback = await self._receive_canonical_event(Event(
+                        "DialogueFallback",event.session_id,event.sequence,self.now(),"personal_story_unavailable",
+                        {"reason":"personal_story_unavailable"},f"{event.correlation_id}:story-output-unavailable",self.monotonic_now()), dialogue_fallback_authorized=True)
+                    if not still_current():
+                        return stale_result()
+                    deferred_effects.extend(fallback.get("outputs") or [])
+                    effect["resolution"] = "personal_story_output_unavailable"
+                    decision["reason"] = fallback.get("reason")
+                    snapshot = self.canonical_runtime.sessions[event.session_id].snapshot()
             elif kind in {"capture_open", "capture_close", "audio_stop"}:
                 effect["resolution"] = "application_boundary_acknowledged"
             elif kind == "game_retry":
@@ -2356,7 +2537,9 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         # Other scenarios retain their existing topic allowlist.
         allowed_topics = (("__all__",) if node_id == "bear_dialogue" else
                           ("greetings", "clinic", "weather", "games", "stories", "feelings", "questions"))
-        return ConversationContext(session_id, "canonical_product", node_id, allowed_topics, ("diagnosis", "medicine", "secret", "personal_data"), 5, 120, 2, profile=profile_context, system_prompt=prompt)
+        from .age_policy import POLICIES
+        turn_limit = POLICIES.get(profile_context.age_band, POLICIES["3-5"]).dialogue_turn_limit
+        return ConversationContext(session_id, "canonical_product", node_id, allowed_topics, ("diagnosis", "medicine", "secret", "personal_data"), turn_limit, 120, 2, profile=profile_context, system_prompt=prompt)
 
     async def _complete_canonical_audio_turn(self, session_id: str, sequence: int, pending: asyncio.Task[Any], epoch: int, correlation_id: str, *, _ingress_guard=None) -> None:
         try:
@@ -2778,6 +2961,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
             return {"session_id": session_id, "state": state["mode"], "reset": False,
                     "reason": "safety_handoff_active", "canonical_state": state}
         self._discard_private_welcome(session_id)
+        self._cancel_game_timer(session_id)
         self._cancel_welcome_timer(session_id)
         self._welcome_timer_sequences.pop(session_id, None)
         self._cancel_menu_tutorial(session_id)
@@ -2858,6 +3042,9 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                 clear_all()
                 preset = str(effect.get("preset", ""))
                 commands = LED_PRESETS.get(preset, ())
+                if preset == "GAME_OUTPUT":
+                    commands = tuple((element_id, 1) for button in effect.get("buttons", ())
+                                     if button in (1, 2, 3, 4) for element_id in BUTTON_ELEMENTS[button])
                 if preset == "TARGET":
                     commands = tuple(
                         (element_id, 1)

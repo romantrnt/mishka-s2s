@@ -21,9 +21,14 @@ async def test_game_telemetry_preserves_single_owned_target(mode, progress):
             # Isolate game output, not onboarding. Clinical path is fully unseeded.
             app.canonical_runtime.sessions['target-output'].mode = 'menu_ready'
         await send('ButtonPressed', {'button_id': 1})
+        await send('ButtonReleased', {'button_id': 1})
+        skipped = await send('ButtonPressed', {'button_id': 1})
+        assert skipped['reason'] == 'scene_menu_skipped'
+        await send('ButtonReleased', {'button_id': 1})
         result = await send('ButtonPressed', {'button_id': 1})
         assert result['reason'] == 'game_started'
         if progress:
+            await send('ButtonReleased', {'button_id': 1})
             result = await send('ButtonPressed', {'button_id': 1})
             assert result['reason'] == 'game_progress'
         state = app.canonical_runtime.sessions['target-output']

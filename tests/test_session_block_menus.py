@@ -1,4 +1,4 @@
-"""Temporary honest story-menu fallback, not completed narrated-menu content."""
+"""Session menu compatibility: canonical descriptors replace the interim hint."""
 from pathlib import Path
 import pytest
 from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime, CanonicalState
@@ -21,56 +21,39 @@ def complete(r):
 
 
 @pytest.mark.parametrize('entry',['menu_ready','root_menu'])
-def test_no_five_story_promise_and_no_fake_repeat(entry):
+def test_catalogue_menu_replaces_untruthful_recording(entry):
     r=setup(entry);result=send(r,'ButtonPressed',{'button_id':2})
-    assert [x['phrase_id'] for x in result['effects'] if x['type']=='speak']==['PHRASE_075']
-    visual=next(x for x in result['effects'] if x['type']=='visual')
-    assert visual['buttons']=={'1':'fixed_aibolit_v1','2':'fixed_squirrel_v1','3':'fixed_lukomorye_v1','4':'fixed_soft_paws_star_v1','5':'help','7':'back'}
-    assert any(x.get('error_code')=='story_menu_audio_mapping_conflict' for x in result['effects'])
-    assert complete(r)['reason']=='story_menu_hint_finished'
-    assert not r.sessions['s'].active_audio_id
-    send(r,'ButtonPressed',{'button_id':7})
-    result=send(r,'ButtonPressed',{'button_id':2})
-    assert not any(x['type']=='speak' for x in result['effects'])
-    assert send(r,'VoiceIntentReady',{'intent':'yes','safety_severity':'none'},'Да')['reason']!='block_intro_replay'
+    page=result['state']['scene_menu_descriptor']
+    assert page['scene']=='fixed_story_menu'
+    assert not any(x.get('phrase_id') in {'PHRASE_054','PHRASE_055','PHRASE_075'} for x in result['effects'])
+    assert any(x['type']=='scene_menu_page' and x['descriptor']==page for x in result['effects'])
 
 
 @pytest.mark.parametrize('button',[1,2,3,4,6,7])
-def test_hint_any_button_interrupt_and_stale_audio_inert(button):
-    r=setup();send(r,'ButtonPressed',{'button_id':2})
+def test_menu_any_fresh_press_interrupt_and_stale_audio_inert(button):
+    r=setup();r.menu_voice_capable=True
+    send(r,'ButtonPressed',{'button_id':2});send(r,'ButtonReleased',{'button_id':2})
     s=r.sessions['s'];old={'response_id':s.active_audio_id,'playback_lease':s.playback_lease}
     result=send(r,'ButtonPressed',{'button_id':button})
-    assert result['reason']=='story_menu_hint_skipped'
-    assert result['state']['mode']=='fixed_story_menu'
-    assert send(r,'ButtonPressed',{'button_id':button})['reason']=='story_menu_hint_skip_held'
+    assert result['reason']=='scene_menu_skipped' and s.mode=='fixed_story_menu'
+    assert send(r,'ButtonPressed',{'button_id':button})['reason']=='scene_menu_release_required'
     assert not any(x['type']=='speak' for x in send(r,'AudioCompleted',old)['effects'])
-    send(r,'ButtonReleased',{'button_id':button})
-    if button==5:
-        result=send(r,'ButtonPressed',{'button_id':5})
-        assert result['reason']=='help_priority' and result['state']['mode']=='wellbeing_check'
 
 
-def test_help_and_back_mapping_after_hint():
+def test_help_and_back_mapping_without_narration():
     for button,reason,mode in [(5,'help_priority','wellbeing_check'),(7,'story_menu_back','root_menu')]:
-        r=setup();send(r,'ButtonPressed',{'button_id':2});complete(r)
+        r=setup();send(r,'ButtonPressed',{'button_id':2})
         result=send(r,'ButtonPressed',{'button_id':button})
         assert result['reason']==reason and result['state']['mode']==mode
 
 
-@pytest.mark.parametrize('button',range(1,5))
-def test_visual_story_mapping_matches_actual_selection(button):
-    r=setup();first=send(r,'ButtonPressed',{'button_id':2});complete(r)
-    visual=next(x for x in first['effects'] if x['type']=='visual')
-    result=send(r,'ButtonPressed',{'button_id':button})
-    assert any(x.get('story_id')==visual['buttons'][str(button)] for x in result['effects'])
-
-
-def test_session_and_identity_reset_restore_one_time_hint():
-    r=setup();send(r,'ButtonPressed',{'button_id':2});send(r,'HandsetPlaced')
-    assert not r.sessions['s'].story_menu_hint_seen
+def test_session_and_identity_reset_restore_one_time_menu():
+    r=setup();r.menu_voice_capable=True
+    send(r,'ButtonPressed',{'button_id':2});send(r,'HandsetPlaced')
+    assert not r.sessions['s'].scene_menu_seen
     s=r.sessions['s'];s.mode='menu_ready';s.handset='up'
     send(r,'ButtonPressed',{'button_id':2});r.clear_identity(s)
-    assert not s.story_menu_hint_seen and not s.story_menu_hint_active
+    assert not s.scene_menu_seen and s.scene_menu_phase=='idle'
 
 
 @pytest.mark.parametrize('button',range(1,8))
@@ -100,7 +83,9 @@ def test_console_mapping_is_honest_without_unapproved_audio():
     text=Path('app/foundation/console/console.js').read_text()
     assert 'Выберите сказку кнопками 1–5' not in text
     assert 'Выберите одну из пяти' not in text
-    assert '5 — помощь; 7 — назад. Озвучка меню временно недоступна.' in text
+    assert 'scene_menu_descriptor' in text
+    assert '${item.slot} — ${item.title}' in text
+    assert 'Озвучка меню временно недоступна.' not in text
 
 
 @pytest.mark.asyncio
@@ -118,10 +103,10 @@ async def test_actual_application_hint_completion_and_help():
         await dispatch('HandsetLifted');app.canonical_runtime.sessions['menus'].mode='menu_ready'
         result=await dispatch('ButtonPressed',{'button_id':2})
         lease=dict(app._active_audio['menus'])
-        assert lease['content_id']=='PHRASE_075'
-        callback={key:lease[key] for key in ('token','generation','playback_lease','playback_id')};callback['response_id']='PHRASE_075'
-        assert (await dispatch('AudioCompleted',callback))['reason']=='story_menu_hint_finished'
-        assert 'menus' not in app._active_audio
+        assert lease['content_id']=='MENU_FIXED_STORY'
+        callback={key:lease[key] for key in ('token','generation','playback_lease','playback_id')};callback['response_id']='MENU_FIXED_STORY'
+        assert (await dispatch('AudioCompleted',callback))['reason']=='scene_menu_repeat_question'
+        assert app._active_audio['menus']['content_id']=='PHRASE_009'
         result=await dispatch('ButtonPressed',{'button_id':5})
         assert result['reason']=='help_priority'
         assert app._active_audio['menus']['content_id']=='PHRASE_084'
@@ -144,7 +129,7 @@ async def test_help_button_immediately_interrupts_hint_and_old_callback_cannot_s
         await app.receive_async(event("ButtonPressed",2,{"button_id":2}))
         lease=dict(app._active_audio["hint-help"])
         old={key:lease[key] for key in ("token","generation","playback_lease","playback_id")}
-        old["response_id"]="PHRASE_075"
+        old["response_id"]="MENU_FIXED_STORY"
         result=await app.receive_async(event("ButtonPressed",3,{"button_id":5}))
         assert result["reason"]=="help_priority"
         assert app.canonical_runtime.sessions["hint-help"].mode=="wellbeing_check"

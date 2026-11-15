@@ -50,7 +50,7 @@ AUDIO_SAMPLE_RATES = {16000, 22050, 24000, 48000}
 MAX_AUDIO_SECONDS = 15
 MAX_AUDIO_WAV_BYTES = 6 * 1024 * 1024
 HEADLESS_AUDIO_NODES = frozenset({
-    "personal_welcome_listen",
+    "personal_welcome_listen", "fixed_story_menu", "game_menu",
     "exhibition_menu_repeat_listen",
     "exhibition_name_capture", "exhibition_age_selection", "bear_dialogue", "support_intake",
     "personal_story_theme", "wellbeing_check", "schedule_weather",
@@ -696,6 +696,12 @@ class HardwareIntegrationStand:
             and getattr(session, "handset_up", False)
             and getattr(state, "handset", None) == "up"
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
+            and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
+                 or (not self.application._active_audio.get(self.active_session_id)
+                     and (getattr(state,"scene_menu_phase",None) == "repeat_listen"
+                          or (getattr(state,"mode",None) in {"personal_story_theme","schedule_weather"}
+                              and getattr(state,"scene_menu_phase",None)=="ready"
+                              and bool(getattr(state,"scene_menu_descriptor",{}).get("items"))))))
             and not (getattr(session, "current_node", None) == "personal_welcome_listen"
                      and (self.application._active_audio.get(self.active_session_id)
                           or getattr(state, "audio_status", None) == "failed"))
@@ -734,7 +740,7 @@ class HardwareIntegrationStand:
         state = runtime.sessions.get(sid) if runtime is not None else None
         version = getattr(state, "state_version", None)
         lease = self.application._active_audio.get(sid)
-        private_phase = (node == "personal_welcome_listen"
+        private_phase = (node in {"personal_welcome_listen","fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
                          or bool(lease and lease.get("content_id") == "PERSONAL_WELCOME"))
 
         def phase_current():
@@ -971,12 +977,33 @@ class HardwareIntegrationStand:
                     "content_id":handle.response_id,"token":handle.token,"generation":handle.generation,
                     "playback_id":handle.playback_id,"playback_lease":handle.playback_lease}.items())):
             return False
+        if handle.response_id == "PERSONAL_STORY":
+            owner = self.application._personal_stories.get(handle.session_id)
+            return self.application._personal_story_scope(handle.session_id, owner, playback=True)
         if handle.response_id == "PERSONAL_WELCOME" or handle.response_id in PRIVATE_TYPED_AUDIO_IDS:
             capability = "personalize" if handle.response_id == "PERSONAL_WELCOME" else "schedule"
             return bool(identity_binding and all(identity_binding)
                 and (state.profile_ref,state.identity_request_id) == identity_binding
                 and self.application._identity_scope_live(handle.session_id,capability))
+        from .scene_menus import MENU_PCM_MODES
+        if handle.response_id in MENU_PCM_MODES:
+            return state.mode == MENU_PCM_MODES[handle.response_id]
         return state.mode == "schedule_weather"
+
+    def _personal_story_checkpoint_current(self, handle, story_owner, hid_generation) -> bool:
+        # A paused lease grants one position update, never renewed PCM authority.
+        app = self.application
+        paused = app._paused_story_playback.get(handle.session_id)
+        return bool(handle.response_id == "PERSONAL_STORY" and paused
+            and self.active_session_id == handle.session_id
+            and getattr(self, "_capture_hid_fault", None) is None
+            and getattr(self, "_hid_generation", 0) == hid_generation
+            and app._session_epochs.get(handle.session_id, 0) == handle.generation
+            and app._personal_story_scope(handle.session_id, story_owner, checkpoint=True)
+            and all(paused.get(key) == value for key, value in {
+                "content_id": handle.response_id, "token": handle.token,
+                "generation": handle.generation, "playback_id": handle.playback_id,
+                "playback_lease": handle.playback_lease}.items()))
 
     def _headless_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
         from .owned_speech import OWNED_PCM_IDS
@@ -986,9 +1013,15 @@ class HardwareIntegrationStand:
         state = self.application.canonical_runtime.sessions.get(handle.session_id)
         identity_binding = (state.profile_ref, state.identity_request_id) if state is not None else None
         previous = tuple(self._response_audio_tasks)
-        task = asyncio.create_task(self._play_pcm_audio(handle, audio, previous, identity_binding),
-                                   name="mishka-private-pcm")
+        story_owner = (self.application._personal_stories.get(handle.session_id)
+                       if handle.response_id == "PERSONAL_STORY" else None)
+        task = asyncio.create_task(self._play_pcm_audio(handle, audio, previous, identity_binding,
+            hid_generation=getattr(self, "_hid_generation", 0), story_owner=story_owner),
+            name="mishka-private-pcm")
         self._response_audio_tasks.add(task)
+        if handle.response_id == "PERSONAL_STORY":
+            self._story_pause_requested = False
+            self._active_story_task, self._active_story_id = task, handle.response_id
         def observe(done):
             self._response_audio_tasks.discard(done)
             if not done.cancelled():
@@ -997,9 +1030,15 @@ class HardwareIntegrationStand:
         task.add_done_callback(observe)
 
     async def _play_pcm_audio(self, handle: PlaybackHandle, audio: AudioChunk,
-                              previous=(), identity_binding=None) -> None:
+                              previous=(), identity_binding=None, *, hid_generation=None,
+                              story_owner=None):
+        def current():
+            return bool((hid_generation is None or getattr(self, "_hid_generation", 0) == hid_generation)
+                and self._pcm_owner_current(handle, identity_binding)
+                and (handle.response_id != "PERSONAL_STORY"
+                     or self.application._personal_stories.get(handle.session_id) is story_owner))
         async def report(kind):
-            if not self._pcm_owner_current(handle, identity_binding):
+            if not current():
                 return
             self._audio_event_sequence += 1
             payload = {"response_id": handle.response_id, "token": handle.token,
@@ -1017,23 +1056,42 @@ class HardwareIntegrationStand:
         try:
             # Registration may follow the synchronous port call before yield.
             # Stale PCM must never cancel a newer owner's playback.
-            if not self._pcm_owner_current(handle, identity_binding):
+            if not current():
                 return
             for task in previous:
                 task.cancel()
             if previous:
                 await asyncio.gather(*previous, return_exceptions=True)
-            if not self._pcm_owner_current(handle, identity_binding):
+            if not current():
                 return
             self.playback.active_token = handle.token
             diagnostic("private_pcm_started")
             play_owned = getattr(self.playback, "play_owned_pcm", None)
             if not callable(play_owned):
                 raise RuntimeError("private_pcm_guard_unavailable")
-            await play_owned(audio, lambda: self._pcm_owner_current(handle, identity_binding))
-            if not self._pcm_owner_current(handle, identity_binding):
+            if handle.response_id == "PERSONAL_STORY":
+                from .s2s import PCMPlaybackResult
+                offset = int(story_owner.offset_ms * audio.sample_rate / 1000)
+                result = await play_owned(audio, current, start_position_samples=offset)
+                if not isinstance(result, PCMPlaybackResult):
+                    raise RuntimeError("personal_story_progress_unavailable")
+                if (getattr(self, "_story_pause_requested", False)
+                        and self._personal_story_checkpoint_current(handle, story_owner, hid_generation)):
+                    self._story_pause_requested = False
+                    total = len(story_owner.audio.samples)
+                    if not offset <= result.position_samples <= total:
+                        raise RuntimeError("personal_story_progress_invalid")
+                    return {"story_id": "PERSONAL_STORY",
+                            "offset_ms": int(result.position_samples * 1000 / audio.sample_rate)}
+                completed = result.completed
+            else:
+                result = await play_owned(audio, current)
+                from .s2s import PCMPlaybackResult
+                completed = (result.completed if isinstance(result, PCMPlaybackResult)
+                             else bool(getattr(self.playback, "last_playback_completed", False)))
+            if not current():
                 return
-            if not bool(getattr(self.playback, "last_playback_completed", False)):
+            if not completed:
                 diagnostic("private_pcm_incomplete")
                 await report("AudioFailed")
                 return
@@ -1044,7 +1102,7 @@ class HardwareIntegrationStand:
             # playback here: a newer owner may already be using it.
             raise
         except Exception:
-            if self._pcm_owner_current(handle, identity_binding):
+            if current():
                 diagnostic("private_pcm_failed")
                 try:
                     await report("AudioFailed")
@@ -1157,8 +1215,6 @@ class HardwareIntegrationStand:
             ))
             is_story = response_id in self.stories or response_id.startswith("placeholder:fixed_story:")
             start_sample = min(len(samples), max(0, int(int(offset_ms) * rate / 1000)))
-            if is_story:
-                self.playback.start_position_samples = start_sample
             self.playback.active_token = int(token)
             self.commands.append({
                 "at": time.time(), "type": "asset_audio_play", "response_id": response_id,
@@ -1172,22 +1228,34 @@ class HardwareIntegrationStand:
                          content_id=response_id, asset_ref=str(path), playback_id=f"{session_id}:{response_id}:{token}")
             audio = AudioChunk(samples[start_sample:], rate, int(token), session_id)
             guarded_play = getattr(self.playback, "play_owned_pcm", None)
+            from .s2s import PCMPlaybackResult
+            result = None
             if callable(guarded_play):
-                await guarded_play(audio, current)
+                result = await guarded_play(audio, current, start_position_samples=start_sample)
+                if physical and not isinstance(result, PCMPlaybackResult):
+                    raise RuntimeError("physical_asset_progress_unavailable")
             elif physical:
                 raise RuntimeError("physical_asset_guard_unavailable")
             else:
+                self.playback.start_position_samples = start_sample
                 await self.playback.play(audio)
-            completed = bool(getattr(self.playback, "last_playback_completed", True))
-            if (is_story and not completed and getattr(self, "_story_pause_requested", False)
+            completed = (result.completed if isinstance(result, PCMPlaybackResult)
+                         else bool(getattr(self.playback, "last_playback_completed", True)))
+            if (is_story and getattr(self, "_story_pause_requested", False)
                     and checkpoint_current()):
                 self._story_pause_requested = False
-                checkpoint_ms = int(getattr(self.playback, "position_samples", start_sample) * 1000 / rate)
+                position = (result.position_samples if isinstance(result, PCMPlaybackResult)
+                            else int(getattr(self.playback, "position_samples", start_sample)))
+                if not start_sample <= position <= len(samples):
+                    raise RuntimeError("physical_asset_progress_invalid")
+                checkpoint_ms = int(position * 1000 / rate)
                 self.commands.append({"at": time.time(), "type": "story_audio_paused", "story_id": response_id, "offset_ms": checkpoint_ms})
                 self.application._mark_audio_effect_lifecycle(response_id, "paused", **HardwareIntegrationStand._playback_lifecycle_identity(handle))
                 return {"story_id": response_id, "offset_ms": checkpoint_ms}
             if not current():
                 return
+            if not completed:
+                raise RuntimeError("physical_asset_playback_incomplete")
             self.application._mark_audio_effect_lifecycle(response_id, "finished", **HardwareIntegrationStand._playback_lifecycle_identity(handle))
             if callable(recorder):
                 recorder("audio_playback_finished", session_id=session_id, response_id=response_id,

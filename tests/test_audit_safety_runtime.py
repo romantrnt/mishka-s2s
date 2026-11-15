@@ -395,7 +395,16 @@ def test_owned_audio_dispatch_failure_is_terminal_even_during_completion(kind):
                 result = await app._receive_canonical_event(event("AudioCompleted", 1,
                     {"response_id": state.active_audio_id, "playback_lease": "initial"}))
             else:
-                result = await app.receive_async(event("ButtonPressed", 1, {"button_id": 1}))
+                # Initialize the actual descriptor through an edge; don't bypass
+                # the verified catalogue or replay a held key as a selection.
+                app._owned_menu_voice_capable = lambda: False
+                await app.receive_async(event("ButtonReleased", 1, {"button_id": 1}))
+                result = await app.receive_async(event("ButtonPressed", 2, {"button_id": 1}))
+            if kind == "placeholder":
+                assert state.scene_menu_descriptor["items"] == []
+                assert not calls and state.active_audio_id is None
+                assert not app._active_audio and not app._audio_timeout_tasks
+                return
             assert calls and calls[0].playback_lease
             assert result["reason"] == "audio_failed_safe_stop"
             assert state.audio_status == "failed" and state.active_audio_id is None

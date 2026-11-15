@@ -13,11 +13,18 @@ from app.foundation.schedule_weather import ScheduleWeatherProviderError
 class Harness:
     def __init__(self):
         self.app,*_=build_application(settings=Settings(profile='mock',runtime_mode='clinical'),background_scheduler=False)
+        # Isolate typed facts/lease behavior from separately tested narration.
+        self.app._owned_menu_voice_capable=lambda:False
         self.seq=0
     async def send(self,kind,payload=None):
         self.seq+=1
         return await self.app.receive_async(Event(kind,'typed',self.seq,1.,'test',payload or {},f't:{self.seq}',1.))
-    async def button(self,b):return await self.send('ButtonPressed',{'button_id':b})
+    async def button(self,b):
+        await self.send('ButtonReleased',{'button_id':b})
+        return await self.send('ButtonPressed',{'button_id':b})
+    async def where_now(self):
+        self.seq+=1
+        return await self.app.receive_async(Event('SpeechReceived','typed',self.seq,1.,'test',{},f't:{self.seq}',1.),'Куда мне сейчас идти?')
     async def start(self):await self.send('HandsetLifted');await self.button(7)
     async def close(self):await self.app._cleanup_session_resources('typed')
     @property
@@ -32,7 +39,7 @@ async def test_public_facts_reach_owned_audio_without_profile_or_text_diagnostic
     h=Harness()
     try:
         await h.start()
-        assert h.app.audio.commands[-1]['response_id']=='TYPED_MENU'
+        assert h.state.scene_menu_descriptor['items']
         result=await h.button(button)
         assert h.app.audio.commands[-1]['response_id']==response
         assert h.state.active_audio_id==response
@@ -47,8 +54,17 @@ async def test_public_facts_reach_owned_audio_without_profile_or_text_diagnostic
 async def test_unavailable_facts_are_audible_without_fake_information(button,phrase):
     h=Harness()
     try:
-        await h.start();h.app.schedule_weather=None
-        await h.button(button)
+        await h.start()
+        if button==2:
+            # Capability remains configured; request fails at execution time.
+            async def unavailable(*args,**kwargs):raise ScheduleWeatherProviderError('unavailable')
+            h.app.schedule_weather.weather=unavailable
+            await h.button(button)
+        else:
+            # Private choices are no longer advertised anonymously. Voice
+            # requests still exercise the canonical privacy fallback.
+            assert all(item['id'] not in {'what_next','where_now'} for item in h.state.scene_menu_descriptor['items'])
+            await h.where_now()
         assert h.app.audio.commands[-1]['response_id']==phrase
         assert h.state.mode=='schedule_weather'
     finally:await h.close()
@@ -57,13 +73,16 @@ async def test_unavailable_facts_are_audible_without_fake_information(button,phr
 async def test_blocked_schedule_grant_has_recorded_fallback_not_silence():
     h=Harness()
     try:
+        class Forbidden:
+            def __getattr__(self,n):raise AssertionError('No schedule grant')
+        # This tests the direct authorization boundary, not capability remap.
+        # Install the absent provider before the initial descriptor is built.
+        h.app.schedule_weather=Forbidden()
         await h.start()
         h.state.profile_status='identified'
         h.app.optional_identity=True
-        class Forbidden:
-            def __getattr__(self,n):raise AssertionError('No schedule grant')
-        h.app.schedule_weather=Forbidden()
-        result=await h.button(3)
+        assert not h.state.scene_menu_refresh_required
+        result=await h.where_now()
         assert result['outputs'][0]['resolution']=='typed_information_blocked_by_identity'
         assert h.app.audio.commands[-1]['response_id']=='PHRASE_101'
     finally:await h.close()
@@ -82,11 +101,11 @@ async def test_slow_tts_cannot_cross_owner_but_release_does_not_cancel_it(action
             return await original(text,token,cancelled)
         h.app.bounded_s2s.tts.delegate.synthesize=delayed
         h.app.audio.commands.clear()
-        task=asyncio.create_task(h.button(1));await entered.wait()
+        task=asyncio.create_task(h.button(1));await asyncio.wait_for(entered.wait(),2)
         if action=='back':await h.button(7)
         elif action=='new_request':
             # A request with no private grant changes the lease to its own fallback.
-            await h.button(3)
+            await h.where_now()
         else:await h.send(action,{'button_id':1} if action=='ButtonReleased' else None)
         release.set();result=await task
         ids=[x['response_id'] for x in h.app.audio.commands]
@@ -221,10 +240,11 @@ async def test_dated_schedule_controls_spoken_time_and_labels_future_day():
 async def test_onhook_day_menu_is_silent_and_announced_after_lift():
     h=Harness()
     try:
+        h.app._owned_menu_voice_capable=lambda:True
         result=await h.button(7)
         assert result['reason']=='button_mode' and h.state.mode=='schedule_weather'
         assert not h.app.audio.commands and not h.state.active_audio_id
         result=await h.send('HandsetLifted')
         assert result['reason']=='typed_menu_after_handset'
-        assert h.app.audio.commands[-1]['response_id']=='TYPED_MENU'
+        assert h.app.audio.commands[-1]['response_id']=='MENU_DAY'
     finally:await h.close()

@@ -63,7 +63,9 @@ async def test_owned_exit_audio_terminal_keeps_explicit_choice_and_lighting(term
         return await app.receive_async(Event(kind, sid, sequence, 1., "test", payload or {}, f"exit:{sequence}", 1.))
     try:
         await send("ButtonPressed", {"button_id":1})
+        await send("ButtonReleased", {"button_id":1})
         await send("ButtonPressed", {"button_id":1})
+        await send("ButtonReleased", {"button_id":1})
         await send("HandsetLifted")
         await send("ButtonPressed", {"button_id":7})
         owner = dict(app._active_audio[sid])
@@ -91,7 +93,9 @@ async def test_game_exit_hint_dispatch_failure_remains_a_visual_choice():
         return await app.receive_async(Event(kind,sid,seq,1.,"test",payload or {},f"exit:{seq}",1.))
     try:
         await send("ButtonPressed", {"button_id":1})
+        await send("ButtonReleased", {"button_id":1})
         await send("ButtonPressed", {"button_id":1})
+        await send("ButtonReleased", {"button_id":1})
         await send("HandsetLifted")
         def fail(*args, **kwargs):
             raise OSError("speaker unavailable")
@@ -117,7 +121,9 @@ async def test_hangup_and_stale_prompt_completion_do_not_answer_game_exit():
         return await app.receive_async(Event(kind,sid,seq,1.,"test",payload or {},f"exit:{seq}",1.))
     try:
         await send("ButtonPressed", {"button_id":1})
+        await send("ButtonReleased", {"button_id":1})
         await send("ButtonPressed", {"button_id":1})
+        await send("ButtonReleased", {"button_id":1})
         await send("HandsetLifted")
         await send("ButtonPressed", {"button_id":7})
         owner = dict(app._active_audio[sid])

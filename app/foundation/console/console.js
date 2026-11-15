@@ -1129,15 +1129,15 @@ function speakCommands(state) {
 function updateGuide(state, contract) {
     const labels = {
     profile_ready: ['Карта принята', 'Поднимите трубку, чтобы начать.'],
-    game_menu: ['1 · Игры', '1, 2, 3, 4 или 6 — выбор; 5 — помощь; 7 — назад.'],
+    game_menu: ['Игры', 'Варианты загружаются из текущего меню.'],
     game_active: ['1 · Игра', 'Следуйте текущей подсветке.'],
-    fixed_story_menu: ['2 · Сказки', '1 — Про Бегемота, который боялся прививок; 2 — Как бельчонок страх преодолел; 3 — У Лукоморья дуб зелёный; 4 — Кролик Мягкие Лапки и Звезда. 5 — помощь; 7 — назад. Озвучка меню временно недоступна.'],
+    fixed_story_menu: ['Сказки', 'Варианты загружаются из текущего меню.'],
     fixed_story_playing: ['2 · Сказка', 'Идёт утверждённая запись. 6 — пауза; 7 — остановить сказку.'],
     support_intake: ['3 · Я слушаю', 'Расскажите, спросите или сообщите, что случилось.'],
     personal_story_theme: ['4 · Новая сказка', 'Выберите безопасную тему.'],
     wellbeing_check: ['5 · Помощь', '1 — нет, 7 — да.'],
     bear_dialogue: ['6 · Ограниченный разговор', 'Короткий разговор по безопасным темам.'],
-    schedule_weather: ['7 · День и планы', '1 — дата; 2 — погода; 3 — планы; 4 — куда идти; 5 — помощь; 7 — назад.'],
+    schedule_weather: ['7 · День и планы', 'Варианты загружаются из текущего меню.'],
     safety_handoff: ['Помощь взрослого', 'Ожидается подтверждение безопасного контура.'],
     root_menu: ['Главное меню', 'Выберите действие кнопкой 1–7.'],
     exhibition_onboarding_complete: ['Знакомство завершено', 'Подсветка гаснет перед меню.'],
@@ -1154,8 +1154,8 @@ function updateGuide(state, contract) {
   if (guideMap) guideMap.hidden = node === 'bear_dialogue';
   const map = {
     root_menu: ['Главное меню', buttonLegendSummary(contract)],
-    game_menu: ['Игры', '1, 2, 3, 4 или 6 — выбор; 5 — помощь; 7 — назад.'],
-    fixed_story_menu: ['Сказки', 'Сказки: 1 — Про Бегемота, который боялся прививок; 2 — Как бельчонок страх преодолел; 3 — У Лукоморья дуб зелёный; 4 — Кролик Мягкие Лапки и Звезда. 5 — помощь; 7 — назад. Озвучка меню временно недоступна.'],
+    game_menu: ['Игры', 'Варианты загружаются из текущего меню.'],
+    fixed_story_menu: ['Сказки', 'Варианты загружаются из текущего меню.'],
     bear_dialogue: ['Ограниченный разговор', 'Короткий разговор по безопасным темам.'],
     safety_handoff: ['Помощь взрослого', 'Ожидается подтверждение безопасного контура.'],
     game_active: ['Игра', 'Нажимайте кнопки согласно подсветке.'],
@@ -1163,6 +1163,14 @@ function updateGuide(state, contract) {
   };
     const normalizedState = String(state.session.state || '').trim().toUpperCase();
   const content = normalizedState === 'ENDED' ? map.session_closed : ((labels[node] || map[node] || (['NONE', 'IDLE', 'STANDBY'].includes(normalizedState) ? ['Готов к знакомству', 'Поднимите трубку или подайте действие через симулятор.'] : ['Тест продолжается', 'Следуйте текущему состоянию.'])));
+  const page = state.canonical_state?.scene_menu_descriptor;
+  if (normalizedState !== 'ENDED' && ['fixed_story_menu', 'game_menu', 'personal_story_theme', 'schedule_weather'].includes(node) && page?.scene === node) {
+    const choices = (page.items || []).map(item => `${item.slot} — ${item.title}`);
+    const controls = ['5 — помощь'];
+    if ((page.buttons || []).includes(6)) controls.push('6 — следующие варианты');
+    controls.push('7 — назад');
+    content[1] = [...choices, ...controls].join('; ') + '.';
+  }
   if (normalizedState !== 'ENDED' && node === 'game_active' && state.canonical_state?.substate === 'game_exit_confirmation') {
     content[0] = 'Закончить игру?';
     content[1] = '6 — продолжить; 7 — закончить; 5 — помощь.';

@@ -94,11 +94,15 @@ def test_story_menu_transition_lights_digit_channels_and_only_resume_stop_fills(
             "ButtonPressed", sid, 1, 1.0, "test", {"button_id": 2}, "story-menu-1", 0.0,
         ))
         assert result["canonical_state"]["mode"] == "fixed_story_menu"
-        assert LED_PRESETS["STORY_MENU"]
+        from app.foundation.canonical_services import BUTTON_ELEMENTS
+        page = result["canonical_state"]["scene_menu_descriptor"]
+        assert page["scene"] == "fixed_story_menu"
+        assert page["buttons"] == [1, 2, 5, 6, 7]
+        expected = {element for button in page["buttons"] for element in BUTTON_ELEMENTS[button]}
         frame = app.led.output.state.elements
+        assert {element for element, value in frame.items() if value} == expected
         for button in range(1, 8):
-            assert frame[BUTTON_DIGIT_ELEMENTS[button][1]] == 1
-            assert frame[BUTTON_FILL_ELEMENTS[button]] == (1 if button in {6, 7} else 0)
+            assert frame[BUTTON_DIGIT_ELEMENTS[button][1]] == int(button in page["buttons"])
 
     asyncio.run(run())
 

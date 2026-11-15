@@ -61,15 +61,36 @@ def test_all_root_buttons_reach_existing_destinations(authorized, button, target
 def test_schedule_selection_never_bypasses_missing_schedule_grant(authorized, selection):
     async def run():
         h = Harness(card() if authorized else None)
+        accesses = []
         class ForbiddenProvider:
             def __getattr__(self, name):
+                accesses.append(name)
                 raise AssertionError("No schedule grant: provider must not be accessed")
         try:
             await menu(h, authorized)
-            await h.send("ButtonPressed", {"button_id": 7})
+            # No capability change after narration: exercise the independent
+            # no-grant boundary against the menu that was actually announced.
             h.app.schedule_weather = ForbiddenProvider()
+            await h.send("ButtonPressed", {"button_id": 7})
+            await h.send("ButtonReleased", {"button_id": 7})
+            if h.state.scene_menu_phase in {"narrating", "repeat_prompt", "repeat_listen"}:
+                await h.send("ButtonPressed", {"button_id": 1})
+                await h.send("ButtonReleased", {"button_id": 1})
             result = await h.send("ButtonPressed", {"button_id": selection})
+            await h.send("ButtonReleased", {"button_id": selection})
             assert h.state.mode == "schedule_weather"
+            assert not any(item["id"] in {"what_next", "where_now"}
+                           for item in h.state.scene_menu_descriptor["items"])
+            assert not any(x.get("type") == "typed_info_request" for x in result["outputs"])
+            assert not h.state.scene_menu_refresh_required
+            # Hidden slots do not remove the independent authorization boundary:
+            # a real spoken schedule request must still fail without a grant.
+            h.sequence += 1
+            result = await h.app.receive_async(Event("SpeechReceived", h.boundary.session_id,
+                h.sequence, 1., "test", {}, f"schedule-request-{h.sequence}", h.clock[0]),
+                "Куда мне сейчас идти?")
+            assert not accesses
+            assert not h.app._identity_scope_live(h.boundary.session_id, "schedule")
             if authorized:
                 assert any(x.get("resolution") == "typed_information_blocked_by_identity" for x in result["outputs"])
             else: assert result["reason"] == "schedule_requires_profile"

@@ -14,12 +14,13 @@ import wave
 import re
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo
 
+from .game_engine import GameState, AVAILABLE_GAME_SPECS, start as start_game, advance as advance_game, desired_buttons, pause as pause_game, arm_wait, next_deadline, timer_step, begin_demonstration
 from .age_policy import age_details, policy_for, policy_for_band
 
 RAM_TTL_SECONDS = 300
@@ -71,7 +72,7 @@ ALLOWED_EVENTS = frozenset({
     "AnonymousStart", "HandsetLifted", "HandsetPlaced",
     "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
     "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
-    "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected", "HardwareReconnected",
+    "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected", "HardwareReconnected",
     "SessionCancel", "SessionReset", "AdultHandoffAcknowledged", "AdultHandoffFailed", "AdultResolved",
     "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep",
 })
@@ -263,6 +264,16 @@ class CanonicalState:
     profile_data_incomplete: bool = False
     current_date: str | None = None
     age_policy: dict[str, Any] = field(default_factory=dict)
+    scene_menu_seen: list[str] = field(default_factory=list)
+    scene_menu_answers: dict[str, str] = field(default_factory=dict)
+    scene_menu_pages: dict[str, int] = field(default_factory=dict)
+    scene_menu_active: str | None = None
+    scene_menu_phase: str = "idle"
+    scene_menu_refresh_required: bool = False
+    scene_menu_held: list[int] = field(default_factory=list)
+    # Admitted button levels survive scene transitions; no invented press times.
+    accepted_buttons_down: list[int] = field(default_factory=list)
+    scene_menu_descriptor: dict[str, Any] = field(default_factory=dict)
     mood_result: str | None = None
     accessibility_policy: dict[str, Any] = field(default_factory=dict)
     schedule_ref: str | None = None
@@ -274,6 +285,7 @@ class CanonicalState:
     safety_severity: str = "none"
     incident_id: str | None = None
     active_story_id: str | None = None
+    game_engine_state: GameState | None = None
     game_target: int | None = None
     game_level: int = 0
     active_game_id: str | None = None
@@ -742,7 +754,7 @@ def validate_generated_story(candidate: Mapping[str, Any], brief: Mapping[str, A
     if name and text.casefold().count(str(name).casefold()) > 2:
         return False, "name_overuse"
     duration = candidate.get("estimated_duration_sec")
-    bounds = {"1-3": (45, 70), "3-5": (60, 100), "5-7": (90, 150)}.get(str(brief.get("age_band")))
+    bounds = {"1-3": (45, 70), "3-5": (60, 100), "5-7": (90, 150)}.get({"4-5":"3-5","6-7":"5-7"}.get(str(brief.get("age_band")),str(brief.get("age_band"))))
     if isinstance(duration, bool) or not isinstance(duration, int) or not bounds or not bounds[0] <= duration <= bounds[1]:
         return False, "duration"
     return True, None
@@ -860,7 +872,9 @@ def normalize_exhibition_repeat_answer(value: str) -> str | None:
     return None
 
 
-class CanonicalRuntime:
+from .scene_menus import SceneMenuMixin
+
+class CanonicalRuntime(SceneMenuMixin):
     """In-memory state machine with stale-event, effect and RAM-TTL guarantees."""
     def __init__(self, *, now: Callable[[], float] = _utc_now, monotonic_now: Callable[[], float] = time.monotonic, stories: FixedStoryManifest | None = None, allow_development_placeholders: bool = False, exhibition_mode: bool = False, optional_identity: bool = False) -> None:
         self.now, self.monotonic_now, self.stories, self.sessions = now, monotonic_now, stories, {}
@@ -945,6 +959,9 @@ class CanonicalRuntime:
             setattr(state, name, getattr(fresh, name))
         state.story_menu_hint_seen = state.story_menu_hint_active = False
         state.story_menu_skip_button = None
+        state.scene_menu_seen.clear(); state.scene_menu_answers.clear(); state.scene_menu_pages.clear()
+        state.scene_menu_active=None; state.scene_menu_phase="idle"; state.scene_menu_refresh_required=False; state.scene_menu_held.clear()
+        state.scene_menu_descriptor={}
         state.history_tail.clear()
         state.dialogue_memory.clear()
         state.pending_tool = None
@@ -981,26 +998,38 @@ class CanonicalRuntime:
         return self._decision(state, [{"type": "capture_close"}, {"type": "audio_stop"},
             {"type": "speak", "phrase_id": "PHRASE_007"}], reason, clear_audio=True)
 
+    @staticmethod
+    def _game_lighting(engine: GameState | None) -> dict[str, Any]:
+        return {"type": "lighting_preset", "preset": "GAME_OUTPUT",
+                "buttons": list(desired_buttons(engine)) if engine else []}
+
+    def _game_input(self, state: CanonicalState, event: CanonicalEvent, now: float) -> dict[str, Any]:
+        engine = state.game_engine_state
+        if engine is None:
+            return self._decision(state, [], "game_unavailable")
+        outcome = advance_game(engine, edge=event.event_type, button=int(event.payload["button_id"]),
+                               sequence=engine.last_sequence + 1, now=now)
+        state.game_engine_state = outcome.state
+        state.game_target = outcome.state.target if outcome.state.game_id != "visual_free_play" else None
+        state.state_version += 1
+        effects = [self._game_lighting(outcome.state)]
+        if (engine.game_id == "repeat_pattern" and event.event_type == "ButtonPressed"
+                and outcome.status in {"sequence_partial", "sequence_retry", "progress", "completed"}):
+            effects.insert(0, {"type": "audio_stop"})
+        if outcome.feedback_id and not outcome.completed and state.handset == "up":
+            effects.append({"type": "speak", "phrase_id": outcome.feedback_id})
+        if outcome.completed:
+            state.mode = "root_menu"
+            effects.append({"type": "lighting_preset", "preset": "ROOT_MENU"})
+            if state.handset == "up":
+                effects.append({"type": "speak", "phrase_id": "PHRASE_028"})
+        return self._decision(state, effects, "game_" + outcome.status)
+
     def _decision(self, state: CanonicalState, effects: list[dict[str, Any]], reason: str, *,
                   reset_session: bool = False, clear_audio: bool = False) -> dict[str, Any]:
-        if state.mode != "fixed_story_menu":
-            state.story_menu_hint_active = False
-        if (state.mode == "fixed_story_menu"
-                and reason in {"button_mode", "fixed_story_menu_opened"}):
-            # Current button 5 is help, not story 5. Both recordings promise
-            # five stories, so neither is truthful for this mapping. Keep the
-            # safety control; expose a bounded visual map and a neutral hint.
-            effects = [item for item in effects if item.get("phrase_id") not in {"PHRASE_054", "PHRASE_055"}]
-            effects.extend([
-                {"type": "visual", "view": "story_menu_available", "buttons": {
-                    "1": "fixed_aibolit_v1", "2": "fixed_squirrel_v1",
-                    "3": "fixed_lukomorye_v1", "4": "fixed_soft_paws_star_v1",
-                    "5": "help", "7": "back"}},
-                {"type": "content_blocked", "error_code": "story_menu_audio_mapping_conflict"},
-            ])
-            if state.handset == "up" and not state.story_menu_hint_seen:
-                state.story_menu_hint_seen = state.story_menu_hint_active = True
-                effects.append({"type": "speak", "phrase_id": "PHRASE_075"})
+        if state.mode != "game_active":
+            state.game_engine_state = None
+        effects = self._prepare_scene_menu(state, effects, reason)
         # Acknowledgements, audio completion and handset changes cannot answer
         # an exit question. Its explicit 6/7 choices change substate/mode first.
         if not (state.mode == "game_active"
@@ -1009,7 +1038,7 @@ class CanonicalRuntime:
         state.timeout_at = state.dialogue_memory.expires_at
         audio_effects = [item for item in effects if item.get("type") in {
             "speak", "play_asset", "play_fixed_story", "resume_fixed_story", "play_placeholder",
-            "story_audio_resume", "speak_dynamic", "support_question", "support_response", "play_private_welcome", "typed_info_request",
+            "story_audio_resume", "speak_dynamic", "support_question", "support_response", "play_private_welcome", "typed_info_request", "play_personal_story", "narrate_scene_menu",
         }]
         if audio_effects:
             for audio_effect in audio_effects:
@@ -1081,7 +1110,9 @@ class CanonicalRuntime:
                handoff_ack_authorized: bool = False,
                handoff_failure_authorized: bool = False,
                dialogue_fallback_authorized: bool = False,
+               personal_story_authorized: bool = False,
                identity_event_authorized: bool = False,
+               game_timer_authorized: bool = False,
                private_welcome_ready: bool = False,
                personal_welcome_answer_verified: bool = False) -> dict[str, Any]:
         event.validate()
@@ -1097,6 +1128,8 @@ class CanonicalRuntime:
         # client-controlled payload. Untrusted resolve does not consume sequence.
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired"} and not identity_event_authorized:
             return self._decision(state, [], "identity_outcome_untrusted")
+        if event.event_type == "GameTimer" and not game_timer_authorized:
+            return self._decision(state, [], "game_timer_untrusted")
         if event.event_type == "AdultResolved" and not adult_resolution_authorized:
             return self._decision(state, [], "adult_resolution_untrusted")
         if event.event_type == "AdultHandoffAcknowledged" and not handoff_ack_authorized:
@@ -1105,6 +1138,8 @@ class CanonicalRuntime:
             return self._decision(state, [], "handoff_ack_simulated")
         if event.event_type == "AdultHandoffFailed" and not handoff_failure_authorized:
             return self._decision(state, [], "handoff_failure_untrusted")
+        if event.event_type == "PersonalStoryReady" and not personal_story_authorized:
+            return self._decision(state, [], "personal_story_result_untrusted")
         if event.event_type == "DialogueFallback" and not dialogue_fallback_authorized:
             return self._decision(state, [], "dialogue_fallback_untrusted")
         if _voice_admission is None:
@@ -1117,6 +1152,12 @@ class CanonicalRuntime:
                     or _voice_admission.key != (event.session_id, event.source, event.sequence, event.correlation_id)):
                 raise ValueError("invalid voice admission")
             _voice_admission.consumed = True
+        if event.event_type in {"ButtonPressed", "ButtonReleased"}:
+            button = int(event.payload["button_id"])
+            if event.event_type == "ButtonPressed" and button not in state.accepted_buttons_down:
+                state.accepted_buttons_down.append(button)
+            elif event.event_type == "ButtonReleased" and button in state.accepted_buttons_down:
+                state.accepted_buttons_down.remove(button)
         if event.event_type == "HandsetPlaced" and state.handset == "down":
             return self._decision(state, [], "handset_already_placed")
         if event.event_type == "HandsetLifted" and state.handset == "up":
@@ -1301,18 +1342,33 @@ class CanonicalRuntime:
                 "scheduled_deadline_monotonic": deadline,
                 "started_at_monotonic": monotonic_now,
             }], "welcome_started")
+        if event.event_type == "GameTimer":
+            engine = state.game_engine_state
+            if (state.mode != "game_active" or state.substate == "game_exit_confirmation" or engine is None
+                    or event.payload.get("run_id") != engine.run_id
+                    or event.payload.get("round_generation") != engine.round_generation
+                    or event.payload.get("timer_generation") != engine.timer_generation
+                    or event.payload.get("deadline") != next_deadline(engine)):
+                return self._decision(state, [], "game_timer_stale")
+            outcome = timer_step(engine, monotonic_now)
+            if (outcome.feedback_id == "PHRASE_041" and state.handset == "up" and not state.active_audio_id):
+                outcome = replace(outcome, state=replace(outcome.state, phase="instruction", demonstration_deadline=None))
+            state.game_engine_state = outcome.state
+            state.state_version += 1
+            effects = [{"type": "game_wait", "reason": outcome.status,
+                        "hints_emitted": outcome.state.hints_emitted}]
+            if outcome.status in {"sequence_demonstration", "sequence_input"}:
+                effects.append(self._game_lighting(outcome.state))
+            # Do not replace an instruction still playing or fabricate audio
+            # on the silent clinical on-hook visual path.
+            if outcome.feedback_id and state.handset == "up" and not state.active_audio_id:
+                effects.append({"type": "speak", "phrase_id": outcome.feedback_id})
+            return self._decision(state, effects, "game_" + outcome.status)
         if event.event_type == "TimeoutFired":
             if state.mode == "game_active" and state.substate == "game_exit_confirmation":
                 return self._decision(state, [], "game_exit_confirmation_pending")
             if state.mode == "game_active":
-                state.game_attempts += 1
-                state.game_hint_stage = min(2, state.game_hint_stage + 1)
-                if state.game_attempts >= 3 and state.game_level > 0:
-                    state.game_level -= 1
-                    state.game_target = _game_target_for_level(state.game_level)
-                    state.game_attempts = 0
-                state.state_version += 1
-                return self._decision(state, [{"type": "game_retry", "hint_stage": state.game_hint_stage, "target_button": state.game_target, "level": state.game_level}], "game_timeout_hint")
+                return self._decision(state, [], "game_waiting")
             if state.dialogue_memory.expires_at and now >= state.dialogue_memory.expires_at:
                 state.dialogue_memory.clear()
                 if state.mode in {"dialogue_suspended_ram", "story_suspended_ram"}:
@@ -1320,6 +1376,14 @@ class CanonicalRuntime:
                 state.state_version += 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "clear_private_display"}], "ram_ttl_expired")
             return self._decision(state, [], "timeout_not_due")
+        if event.event_type == "PersonalStoryReady":
+            if state.mode != "personal_story_generating" or state.handset != "up":
+                return self._decision(state, [], "personal_story_result_stale")
+            state.mode = "personal_story_playing"
+            state.active_story_id = "PERSONAL_STORY"
+            state.state_version += 1
+            state.expected_inputs = ["button_5", "button_6", "button_7", "handset_down"]
+            return self._decision(state, [{"type":"play_personal_story", "content_id":"PERSONAL_STORY"}], "personal_story_ready")
         if event.event_type == "DialogueFallback":
             if (event.payload.get("reason") == "typed_information_unavailable"
                     and state.mode == "schedule_weather" and state.handset == "up"):
@@ -1365,6 +1429,8 @@ class CanonicalRuntime:
                 return self._decision(state, [], "event_ignored")
             if event.payload.get("playback_lease") and event.payload.get("playback_lease") != state.playback_lease:
                 return self._decision(state, [], "event_ignored")
+            menu_result = self._scene_menu_audio(state, event, response_id)
+            if menu_result is not None: return menu_result
             if response_id == "RINGTONE" and state.mode == "voice_welcome" and state.welcome_status == "pending":
                 # The optional ring must never complete the welcome or cancel
                 # its timer. It still has an owned terminal playback state.
@@ -1372,6 +1438,31 @@ class CanonicalRuntime:
                 state.state_version += 1
                 return self._decision(state, [], "ringtone_finished" if event.event_type == "AudioCompleted"
                                       else "ringtone_failed", clear_audio=True)
+            game_instruction_ids = {spec.instruction_phrase_id for spec in AVAILABLE_GAME_SPECS} | {"PHRASE_036", "PHRASE_041", "PHRASE_042"}
+            if ((state.mode == "game_active" and state.substate != "game_exit_confirmation"
+                    and response_id in game_instruction_ids)
+                    or (state.mode == "root_menu" and state.substate == "game_completed"
+                        and response_id == "PHRASE_028")) and state.active_audio_id == response_id:
+                # Optional instructions never own playable visual state. Only
+                # this exact active lease may finish; no scoring/navigation.
+                if not event.payload.get("playback_lease") or event.payload["playback_lease"] != state.playback_lease:
+                    return self._decision(state, [], "game_instruction_stale_audio")
+                failed = event.event_type == "AudioFailed"
+                state.audio_status = "failed" if failed else "finished"
+                state.audio_failure_code = "game_instruction_audio_unavailable" if failed else None
+                state.state_version += 1
+                effects = ([{"type": "content_blocked", "error_code": "game_instruction_audio_unavailable"}]
+                           if failed else [])
+                if (state.mode == "game_active" and state.handset == "up" and response_id == "PHRASE_035"
+                        and state.game_engine_state is not None and state.game_engine_state.hold_ready
+                        and state.game_engine_state.target in state.game_engine_state.held):
+                    effects.append({"type": "speak", "phrase_id": "PHRASE_036"})
+                if (state.game_engine_state is not None and state.game_engine_state.phase == "instruction"
+                        and state.game_engine_state.game_id == "repeat_pattern" and response_id in {"PHRASE_040", "PHRASE_041"}):
+                    state.game_engine_state = begin_demonstration(state.game_engine_state, monotonic_now)
+                    effects.append(self._game_lighting(state.game_engine_state))
+                return self._decision(state, effects,
+                    "game_instruction_audio_failed" if failed else "game_instruction_audio_finished", clear_audio=True)
             if (state.mode == "game_active" and state.substate == "game_exit_confirmation"
                     and response_id == "PHRASE_062" and state.active_audio_id == "PHRASE_062"):
                 # This optional voice hint does not own the visual choice. A
@@ -1389,6 +1480,16 @@ class CanonicalRuntime:
                 state.audio_status = "finished"
                 state.state_version += 1
                 return self._decision(state, [], "handoff_audio_finished", clear_audio=True)
+        if (event.event_type in {"AudioCompleted", "AudioFailed"} and state.mode == "personal_story_playing"
+                and event.payload.get("response_id") == "PERSONAL_STORY"):
+            if (state.active_audio_id != "PERSONAL_STORY" or not event.payload.get("playback_lease")
+                    or event.payload["playback_lease"] != state.playback_lease):
+                return self._decision(state, [], "personal_story_completion_stale")
+            state.mode = "root_menu"
+            state.active_story_id = None
+            state.state_version += 1
+            return self._decision(state, [{"type":"audio_stop"}, {"type":"lighting_preset","preset":"ROOT_MENU"}],
+                                  "personal_story_finished" if event.event_type == "AudioCompleted" else "personal_story_playback_failed", clear_audio=True)
         if (event.event_type == "AudioCompleted" and state.mode == "schedule_weather"
                 and (response_id.startswith("TYPED_") or response_id in {"PHRASE_100", "PHRASE_101"})):
             state.state_version += 1
@@ -1580,6 +1681,11 @@ class CanonicalRuntime:
         if event.event_type == "AudioCompleted" and state.mode == "story_resume_announcement":
             if response_id != "PHRASE_064":
                 return self._decision(state, [], "story_resume_announcement_completion_ignored")
+            if state.active_story_id == "PERSONAL_STORY":
+                state.mode = "personal_story_playing"
+                state.state_version += 1
+                return self._decision(state, [{"type":"play_personal_story", "content_id":"PERSONAL_STORY",
+                    "checkpoint":state.dialogue_memory.story_checkpoint}], "personal_story_resumed", clear_audio=True)
             state.mode, state.substate = "fixed_story_playing", "story_resumed_after_prompt"
             state.expected_inputs = ["button_6", "button_7", "handset_down"]
             state.state_version += 1
@@ -1668,6 +1774,10 @@ class CanonicalRuntime:
                 state.dialogue_memory.suspend(now)
             if state.mode == "game_active":
                 effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "game_continue_visual"}]
+                if (state.substate != "game_exit_confirmation" and state.game_engine_state is not None
+                        and state.game_engine_state.phase == "instruction"):
+                    state.game_engine_state = begin_demonstration(state.game_engine_state, monotonic_now)
+                    effects.append(self._game_lighting(state.game_engine_state))
             elif state.mode == "safety_handoff":
                 # The safeguarding marker is not dialogue RAM: handset-down
                 # closes capture/audio but keeps the incident visible and
@@ -1759,6 +1869,18 @@ class CanonicalRuntime:
             state.mode = "voice_welcome"
             state.expected_inputs = ["button", "speech", "handset_down"]
             return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "voice_open")
+        if (event.event_type.startswith("Button") and state.mode == "game_active"
+                and state.substate == "game_exit_confirmation" and state.game_engine_state is not None
+                and int(event.payload["button_id"]) in (1, 2, 3, 4)):
+            state.game_engine_state = advance_game(state.game_engine_state, edge=event.event_type,
+                button=int(event.payload["button_id"]), sequence=state.game_engine_state.last_sequence + 1, now=monotonic_now, paused=True).state
+            return self._decision(state, [], "game_exit_confirmation_pending")
+        if (event.event_type in {"ButtonReleased", "ButtonHeld", "ButtonLongHeld"}
+                and state.mode == "game_active" and state.substate != "game_exit_confirmation"):
+            return self._game_input(state, event, monotonic_now)
+        if event.event_type in {"ButtonPressed","ButtonReleased","ButtonHeld","ButtonLongHeld"}:
+            menu_result = self._scene_menu_button(state,event)
+            if menu_result is not None: return menu_result
         if event.event_type == "ButtonReleased" and state.story_menu_skip_button == int(event.payload["button_id"]):
             state.story_menu_skip_button = None
             return self._decision(state, [], "story_menu_hint_skip_released")
@@ -1890,7 +2012,7 @@ class CanonicalRuntime:
                 "game_active", "fixed_story_playing", "story_paused", "fixed_story_menu",
                 "game_menu", "support_intake", "personal_story_theme", "bear_dialogue",
                 "schedule_weather", "personal_story_generating",
-                "personal_story_validating", "personal_story_playing",
+                "personal_story_validating", "personal_story_playing", "story_pause_announcement", "story_resume_announcement",
             } and not (self.exhibition_mode and state.mode == "exhibition_age_selection"):
                 question = state.support_question_kind if state.mode == "wellbeing_check" else None
                 state.support_question_kind = question or "pain_or_discomfort"
@@ -1914,7 +2036,12 @@ class CanonicalRuntime:
                 state.mood_result = mood
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "mood_report", "value": mood, "input": f"button_{button}"}, {"type": "speak", "phrase_id": "PHRASE_017"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "mood_report")
-            if state.mode in {"fixed_story_playing", "story_speech_analysis"}:
+            if (state.active_story_id == "PERSONAL_STORY" or state.mode == "personal_story_playing") and button == 7:
+                state.mode = "root_menu"
+                state.active_story_id = None
+                state.state_version += 1
+                return self._decision(state, [{"type":"audio_stop"},{"type":"lighting_preset","preset":"ROOT_MENU"}], "personal_story_back", clear_audio=True)
+            if state.mode in {"fixed_story_playing", "story_speech_analysis", "personal_story_playing"}:
                 if button == 6:
                     state.mode, state.substate = "story_pause_announcement", "story_pause_requested"
                     state.state_version += 1
@@ -1972,6 +2099,8 @@ class CanonicalRuntime:
                 return self._support_no(state)
             if state.mode in {"idle", "visual_welcome", "anonymous_visual", "root_menu", "dialogue_memory_expired", "dialogue_suspended_ram", "voice_welcome", "automatic_mood_check", "awaiting_handset"}:
                 mode = BUTTON_MODES[button]
+                if mode in {"game_menu", "fixed_story_menu", "personal_story_theme", "schedule_weather"}:
+                    state.scene_menu_held = [button]
                 if button in {3, 6} and state.handset != "up":
                     state.pending_mode = mode
                     state.mode, state.state_version = "awaiting_handset", state.state_version + 1
@@ -1999,34 +2128,54 @@ class CanonicalRuntime:
                     return self._decision(state, effects, "bear_dialogue_started", clear_audio=True)
                 return self._decision(state, effects, "button_mode")
             if state.mode == "personal_story_theme":
-                themes = {1: "dinosaurs", 2: "космос", 3: "лес", 4: "дружелюбные машины", 6: "море"}
+                theme = self._menu_selection(state, button)
                 if button == 7:
                     state.mode, state.state_version = "root_menu", state.state_version + 1
                     return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "personal_story_cancelled")
-                if button in themes:
+                if theme is not None:
                     state.mode, state.state_version = "personal_story_generating", state.state_version + 1
-                    brief = {"age_band": state.age_band, "theme": themes[button], "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ())), "display_name": state.display_name}
+                    brief = {"age_band": state.age_band, "theme": theme, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
                     return self._decision(state, [{"type": "generate_personal_story", "brief": brief}], "personal_story_requested_by_button")
             if state.mode == "story_paused" and button == 6:
                 state.mode, state.substate, state.state_version = "story_resume_announcement", "story_resume_requested", state.state_version + 1
                 state.expected_inputs = ["audio_completed", "button_7", "handset_down"]
                 return self._decision(state, [{"type": "lighting_wave_resume"}, {"type": "speak", "phrase_id": "PHRASE_064"}], "story_resume_requested", clear_audio=True)
             if state.mode == "game_menu":
-                selected = GAME_CATALOG[(button - 1) % len(GAME_CATALOG)]
-                selected_level = max(int(selected["level"]), min(9, int(state.game_level)))
-                state.mode, state.game_level, state.game_target, state.active_game_id, state.game_parameters, state.game_attempts, state.game_hint_stage, state.game_success_streak, state.state_version = "game_active", selected_level, 1, selected["game_id"], {**dict(selected), "profile_level": selected_level}, 0, 0, 0, state.state_version + 1
-                return self._decision(state, [{"type": "lighting_preset", "preset": "TARGET", "target_button": 1}, {"type": "game_level", "level": state.game_level, "max_level": 9, "game_id": selected["game_id"], "catalog": list(GAME_CATALOG)}], "game_started")
+                game_id = self._menu_selection(state, button)
+                selected = next((spec for spec in AVAILABLE_GAME_SPECS if spec.game_id == game_id), None)
+                if selected is None:
+                    return self._decision(state, [], "game_unavailable")
+                policy = policy_for_band(state.age_band)
+                engine = start_game(selected.game_id, sequence=0, now=monotonic_now, selection_button=button,
+                    held_buttons=tuple(state.accepted_buttons_down), run_id=uuid.uuid4().hex, response_window_s=policy.game_response_window_ms / 1000.,
+                    first_hint_s=policy.first_hint_after_seconds, hint_limit=policy.repeat_count)
+                if selected.mechanic == "sequence" and state.handset != "up":
+                    engine = begin_demonstration(engine, monotonic_now)
+                state.game_engine_state = engine
+                state.mode, state.active_game_id = "game_active", selected.game_id
+                state.expected_inputs = ["button", "handset_down", "handset_up"]
+                state.game_target = engine.target if selected.mechanic != "free_play" else None
+                state.game_parameters = {"game_id": selected.game_id, "rounds": engine.rounds if selected.mechanic != "free_play" else None, "engineering_parameter": True}
+                state.state_version += 1
+                effects = [self._game_lighting(engine), {"type": "game_started", "game_id": selected.game_id}]
+                if state.handset == "up":
+                    effects.append({"type": "speak", "phrase_id": selected.instruction_phrase_id})
+                return self._decision(state, effects, "game_started")
             if state.mode == "game_active" and state.substate == "game_exit_confirmation":
                 if button == 7:
                     state.mode, state.substate, state.state_version = "root_menu", "game_exit_confirmed", state.state_version + 1
                     return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "game_exit_confirmed")
                 if button == 6:
+                    if state.game_engine_state is not None:
+                        state.game_engine_state = arm_wait(state.game_engine_state, monotonic_now)
                     state.substate, state.state_version = "game_active", state.state_version + 1
-                    return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "TARGET", "target_button": state.game_target}], "game_exit_cancelled", clear_audio=True)
+                    return self._decision(state, [{"type": "audio_stop"}, self._game_lighting(state.game_engine_state)], "game_exit_cancelled", clear_audio=True)
                 # Other game buttons cannot score or dismiss a pending exit.
                 # The earlier global help/safety path keeps its priority.
                 return self._decision(state, [], "game_exit_confirmation_pending")
             if state.mode == "game_active" and button == 7:
+                if state.game_engine_state is not None:
+                    state.game_engine_state = pause_game(state.game_engine_state)
                 state.substate, state.state_version = "game_exit_confirmation", state.state_version + 1
                 effects = [{"type": "audio_stop"},
                            {"type": "lighting_preset", "preset": "PAUSED"},
@@ -2034,29 +2183,10 @@ class CanonicalRuntime:
                 if state.handset == "up":
                     effects.append({"type": "speak", "phrase_id": "PHRASE_062"})
                 return self._decision(state, effects, "game_exit_confirmation", clear_audio=True)
-            if state.mode == "game_active" and button == state.game_target:
-                if state.game_level >= 9:
-                    state.mode, state.game_target, state.state_version = "root_menu", None, state.state_version + 1
-                    return self._decision(state, [{"type": "lighting_preset", "preset": "SUCCESS"}, {"type": "game_completed", "level": 9}], "game_completed")
-                state.game_success_streak += 1
-                if state.game_success_streak >= 2:
-                    state.game_level += 1
-                    state.game_success_streak = 0
-                state.game_target, state.state_version = _game_target_for_level(state.game_level), state.state_version + 1
-                state.dialogue_memory.touch(now)
-                state.game_attempts = 0
-                state.game_hint_stage = 0
-                return self._decision(state, [{"type": "lighting_preset", "preset": "SUCCESS"}, {"type": "lighting_preset", "preset": "TARGET", "target_button": state.game_target}, {"type": "game_level", "level": state.game_level, "max_level": 9, "mastery_window": {"success": 7, "attempts": 10, "without_hint": 5}}], "game_progress")
             if state.mode == "game_active":
-                state.game_attempts += 1
-                state.game_hint_stage = min(2, state.game_hint_stage + 1)
-                if state.game_attempts >= 2 and state.game_level > 0:
-                    state.game_level -= 1
-                    state.game_target = _game_target_for_level(state.game_level)
-                    state.game_attempts = 0
-                return self._decision(state, [{"type": "game_retry", "hint_stage": state.game_hint_stage, "target_button": state.game_target, "level": state.game_level}], "game_retry")
+                return self._game_input(state, event, monotonic_now)
             if state.mode == "fixed_story_menu":
-                story_id = self._story_id_for_button(button)
+                story_id = self._menu_selection(state, button)
                 if story_id is None:
                     return self._decision(state, [], "story_menu_ignored")
                 verified = self.stories.get_verified(story_id) if self.stories else None
@@ -2075,7 +2205,7 @@ class CanonicalRuntime:
                     return self._decision(state, [story_wave, {"type": "play_fixed_story", "story_id": story_id, "asset": verified["audio_file"], "duration_ms": verified["duration_ms"]}], "fixed_story_started")
                 return self._decision(state, [story_wave, {"type": "play_placeholder", "content_kind": "fixed_story", "story_id": story_id, "asset": placeholder["audio_file"], "development_only": True}], "fixed_story_placeholder")
             if state.mode == "schedule_weather":
-                action = {1: "date", 2: "weather", 3: "what_next", 4: "where_now", 7: "back"}.get(button)
+                action = "back" if button==7 else self._menu_selection(state,button)
                 if action == "back":
                     state.mode, state.state_version = "root_menu", state.state_version + 1
                     return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "info_back")
@@ -2143,6 +2273,9 @@ class CanonicalRuntime:
                 if state.audio_status == "failed" or state.active_audio_id or not personal_welcome_answer_verified:
                     return self._decision(state, [], "personal_welcome_waiting")
                 return self._personal_welcome_menu(state, "personal_welcome_answer_received")
+            if severity == "none":
+                menu_result = self._scene_menu_answer(state,intent,transient_text,personal_welcome_answer_verified)
+                if menu_result is not None: return menu_result
             if self.exhibition_mode and state.mode == "exhibition_menu_repeat_listen":
                 repeat_answer = normalize_exhibition_repeat_answer(transient_text or "") or (intent if intent in {"yes", "no"} else None)
                 if repeat_answer == "yes":
@@ -2211,15 +2344,8 @@ class CanonicalRuntime:
             if state.mode == "automatic_mood_check" and intent in {"mood", "free_speech"}:
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "mood_report", "value": intent}, {"type": "speak", "phrase_id": "PHRASE_017"}], "mood_report")
-            if state.mode == "personal_story_generating" and intent == "generated":
-                state.mode, state.state_version = "personal_story_validating", state.state_version + 1
-                return self._decision(state, [{"type": "validate_personal_story"}], "personal_story_generated")
-            if state.mode == "personal_story_generating" and intent == "validation_failed":
-                state.mode, state.state_version = "personal_story_theme", state.state_version + 1
-                return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_080"}], "personal_story_fallback")
-            if state.mode == "personal_story_validating" and intent == "validated":
-                state.mode, state.state_version = "personal_story_playing", state.state_version + 1
-                return self._decision(state, [{"type": "play_personal_story", "development_only": True}], "personal_story_validated")
+            if state.mode in {"personal_story_generating", "personal_story_validating"} and intent in {"generated","validated","validation_failed"}:
+                return self._decision(state, [], "personal_story_result_untrusted")
             if self.exhibition_mode and state.mode == "exhibition_name_capture":
                 name = normalize_exhibition_name(transient_text or "")
                 if name is None:
@@ -2249,8 +2375,10 @@ class CanonicalRuntime:
                 state.state_version += 1
                 return self._decision(state, [{"type": "support_response", "kind": intent}], "support_response")
             if state.mode == "personal_story_theme":
+                if state.scene_menu_phase != "ready" or not getattr(self, 'personal_story_capable', False):
+                    return self._decision(state, [], "story_theme_not_accepting")
                 state.mode, state.state_version = "personal_story_generating", state.state_version + 1
-                brief = {"age_band": state.age_band, "theme": intent, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ())), "display_name": state.display_name}
+                brief = {"age_band": state.age_band, "theme": intent, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
                 return self._decision(state, [{"type": "generate_personal_story", "brief": brief}], "personal_story_requested")
             if state.mode == "bear_dialogue":
                 state.dialogue_memory.bounded_turns.append({"intent": intent})

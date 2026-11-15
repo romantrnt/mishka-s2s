@@ -243,6 +243,19 @@ class S2SConfig:
 
 
 @dataclass(frozen=True)
+class PCMPlaybackResult:
+    """Request-local native writes, not a claim about sound heard by a user."""
+    start_position_samples: int
+    written_samples: int
+    completed: bool
+    stream_started: bool
+
+    @property
+    def position_samples(self) -> int:
+        return self.start_position_samples + self.written_samples
+
+
+@dataclass(frozen=True)
 class AudioChunk:
     samples: tuple[float, ...]
     sample_rate: int
@@ -980,10 +993,11 @@ class MockLLMProvider:
 class OllamaLLMProvider:
     """Ollama `/api/chat` NDJSON adapter with exact model readiness checks."""
 
-    def __init__(self, base_url: str, model: str, timeout_s: float, *, quantization: str = "", num_ctx: int = 8192, temperature: float = 0.2, max_tokens: int = 160, keep_alive: str = "-1", think: bool = False, warmup_timeout_s: float = 120.0):
+    def __init__(self, base_url: str, model: str, timeout_s: float, *, quantization: str = "", num_ctx: int = 8192, temperature: float = 0.2, max_tokens: int = 160, keep_alive: str = "-1", think: bool = False, warmup_timeout_s: float = 120.0, story_backend_contract=None):
         self.base_url=base_url.rstrip("/"); self.model=model; self.timeout_s=timeout_s
         self.quantization=quantization; self.num_ctx=num_ctx; self.temperature=temperature
         self.max_tokens=max_tokens; self.keep_alive=keep_alive; self.think=think; self.warmup_timeout_s=warmup_timeout_s; self.last_stats: dict[str, Any]={}
+        self.story_backend_contract=story_backend_contract
 
     def _payload(self, messages: list[dict[str, str]], stream: bool, max_tokens: int | None = None) -> dict[str, Any]:
         keep_alive: Any = self.keep_alive
@@ -992,21 +1006,61 @@ class OllamaLLMProvider:
         return {"model":self.model,"messages":messages,"stream":stream,"think":self.think,"keep_alive":keep_alive,"options":{"temperature":self.temperature,"top_p":0.85,"top_k":40,"repeat_penalty":1.05,"num_predict":max_tokens or self.max_tokens,"num_ctx":self.num_ctx}}
 
     async def stream(self,messages,request_id,cancelled):
+        async for part in self._stream_bounded(messages,request_id,cancelled):
+            yield part
+
+    @property
+    def supports_full_story(self):
+        contract=self.story_backend_contract
+        if not contract or not contract.ready(self.base_url,self.model):return False
+        try:
+            contract.budget([], 6000, self.num_ctx)
+            return True
+        except RuntimeError:return False
+
+    def supports_story_request(self,messages):
+        if not self.supports_full_story:return False
+        try:
+            self.story_backend_contract.budget(messages,6000,self.num_ctx)
+            return True
+        except RuntimeError:return False
+
+    async def stream_story(self,messages,request_id,cancelled):
+        from .story_context import StoryContextError
+        contract=self.story_backend_contract
+        if not self.supports_full_story:raise StoryContextError('story_backend_unverified')
+        budget=contract.budget(messages,6000,self.num_ctx)
+        await contract.refresh()
+        if not self.supports_full_story:raise StoryContextError('story_backend_changed')
+        async for part in self._stream_bounded(messages,request_id,cancelled,max_tokens=6000,num_ctx=budget,story=True):
+            yield part
+        await contract.refresh()
+
+    async def _stream_bounded(self,messages,request_id,cancelled,*,max_tokens=None,num_ctx=None,story=False):
         try:
             import httpx
             timeout=httpx.Timeout(self.timeout_s)
+            payload=self._payload(messages,True,max_tokens)
+            if num_ctx is not None:payload['options']['num_ctx']=num_ctx
+            if story:payload.update(truncate=False,shift=False)
             async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("POST",f"{self.base_url}/api/chat",json=self._payload(messages,True),headers={"x-request-id":request_id}) as response:
+                async with client.stream("POST",f"{self.base_url}/api/chat",json=payload,headers={"x-request-id":request_id}) as response:
                     response.raise_for_status()
+                    clean_terminal = False
                     async for line in response.aiter_lines():
                         if cancelled(): raise asyncio.CancelledError
                         if not line: continue
                         data=json.loads(line)
                         if data.get("done"):
+                            if story and (data.get("done") is not True or data.get("done_reason") != "stop"):
+                                raise RuntimeError("story_incomplete_terminal")
+                            clean_terminal = True
                             self.last_stats={key:data.get(key) for key in ("total_duration","load_duration","prompt_eval_count","prompt_eval_duration","eval_count","eval_duration")}
                             break
                         token=str(data.get("message",{}).get("content",""))
                         if token: yield token
+                    if story and not clean_terminal:
+                        raise RuntimeError("story_incomplete_terminal")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1694,30 +1748,43 @@ class SoundDevicePlaybackController:
     async def play(self, audio):
         await self._play_guarded(audio)
 
-    async def play_owned_pcm(self, audio, owner_current):
-        await self._play_guarded(audio, owner_current)
+    async def play_owned_pcm(self, audio, owner_current, *, start_position_samples=None):
+        # A resumed RAM story binds its offset to this request, not a mutable
+        # controller field set before waiting for another stream to close.
+        if (start_position_samples is not None
+                and (type(start_position_samples) is not int or start_position_samples < 0)):
+            raise ValueError("invalid playback offset")
+        return await self._play_guarded(audio, owner_current,
+                                        start_position_samples=start_position_samples)
 
-    async def _play_guarded(self, audio, owner_current=None):
+    async def _play_guarded(self, audio, owner_current=None, *, start_position_samples=None):
         generation = self._generation
         task = asyncio.current_task()
+        offset = int(start_position_samples or 0)
+        written = 0
+        stream_started = False
+        def outcome(completed=False):
+            return PCMPlaybackResult(offset, written, bool(completed), stream_started)
         def current():
             return (not task.cancelling()
                     and generation == self._generation and audio.token == self.active_token
                     and (owner_current is None or owner_current()))
         async with self._play_lock:
             # Ordinary queued assets historically sample stop-generation here.
-            # Private PCM must retain its pre-queue generation fence.
+            # Owned PCM retains its pre-queue generation and per-request offset.
             if owner_current is None:
                 generation = self._generation
+            if start_position_samples is None:
+                offset = int(self.start_position_samples)
             self.last_playback_completed = False
             if not current():
-                return
+                return outcome()
             stream = None
             try:
                 import numpy as np
                 import sounddevice as sd
                 if not current():
-                    return
+                    return outcome()
                 stream = sd.OutputStream(
                     samplerate=audio.sample_rate,
                     channels=1,
@@ -1726,28 +1793,33 @@ class SoundDevicePlaybackController:
                 )
                 self._stream = stream
                 def guarded_start():
-                    if current():
-                        stream.start()
-                await self._run_io(guarded_start)
+                    if not current():
+                        return False
+                    stream.start()
+                    return True
+                stream_started = bool(await self._run_io(guarded_start))
                 if not current():
-                    return
+                    return outcome()
                 samples = np.asarray(audio.samples, dtype=np.float32).reshape(-1, 1)
-                self.position_samples = int(self.start_position_samples)
+                self.position_samples = offset
                 self.start_position_samples = 0
                 self.last_playback_completed = False
-                for offset in range(0, len(samples), 2048):
+                for offset_in_audio in range(0, len(samples), 2048):
                     if not current():
-                        return
-                    chunk = samples[offset:offset + 2048]
+                        return outcome()
+                    chunk = samples[offset_in_audio:offset_in_audio + 2048]
                     def guarded_write(chunk=chunk):
                         if not current():
                             return False
                         stream.write(chunk)
                         return True
                     if not await self._run_io(guarded_write):
-                        return
-                    self.position_samples += len(chunk)
-                self.last_playback_completed = current()
+                        return outcome()
+                    written += len(chunk)
+                    self.position_samples = offset + written  # Legacy diagnostics only.
+                completed = current()
+                self.last_playback_completed = completed
+                return outcome(completed)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -2441,6 +2513,17 @@ class BoundedConversationEngine:
         validation_mini=(OllamaMiniLLMValidator(base_url=getattr(settings, "ollama_base_url", "http://127.0.0.1:11434"), model=validation_model, timeout_s=validation_timeout_ms/1000.0, fail_closed=validation_fail_closed, num_ctx=validation_num_ctx, keep_alive=getattr(settings, "validation_keep_alive", "-1"))
                          if validation_provider == "ollama" else MockMiniLLMValidator())
         self.response_validator=AsyncResponseValidator(mini=validation_mini, timeout_ms=validation_timeout_ms, fail_closed=validation_fail_closed)
+        from .story_context import load_story_contracts
+        self.story_backend_contracts=load_story_contracts(
+            getattr(settings,"story_backend_receipt_path",""),
+            base_url=settings.ollama_base_url,generator_model=settings.llm_model,
+            validator_model=validation_model)
+        story_llm=llm.delegate if isinstance(llm,RetryingLLMProvider) else llm
+        if isinstance(story_llm,OllamaLLMProvider):
+            story_llm.story_backend_contract=self.story_backend_contracts.get('generator')
+        if isinstance(validation_mini,OllamaMiniLLMValidator):
+            validation_mini.story_backend_contract=self.story_backend_contracts.get('validator')
+
         self.parser=ResponseTagParser(); self.consumer=StreamingTokenConsumer(self.config.max_response_chars*4)
         self.metrics=metrics or PipelineMetrics(settings=settings)
         self.active_tasks: dict[str, asyncio.Task] = {}
@@ -2554,10 +2637,12 @@ class BoundedConversationEngine:
             self.active_tasks[context.session_id] = task
             self.task_started_at[context.session_id] = time.monotonic()
         self.active_queues[context.session_id] = queue
+        from .age_policy import POLICIES
+        age_words = POLICIES.get(context.profile.age_band, POLICIES["3-5"]).max_words
         topic_instruction = ("Open developer dialogue: accept any topic unless it violates the safety rules. "
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
-        policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + '. NON_NEGOTIABLE_RUNTIME_OUTPUT: start immediately; emit only complete <say>...</say> blocks, plus at most the allowlisted <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/>. Never emit JSON, markdown, analysis, tool calls, URLs, hardware commands, unclosed tags, or plain text outside tags. Use one or two short Russian spoken sentences, at most 45 words total, and stop.'
+        policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + f'. NON_NEGOTIABLE_RUNTIME_OUTPUT: start immediately; emit only complete <say>...</say> blocks, plus at most the allowlisted <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/>. Never emit JSON, markdown, analysis, tool calls, URLs, hardware commands, unclosed tags, or plain text outside tags. Use one or two short Russian spoken sentences, at most {age_words} words total, and stop.'
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
         messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}"},{"role":"user","content":text}]
@@ -2584,6 +2669,8 @@ class BoundedConversationEngine:
                         # A short chunk is still untrusted model output. Include
                         # earlier chunks so splitting a request cannot erase its meaning.
                         candidate = " ".join((*chunks, chunk))
+                        if len(candidate.split()) > age_words:
+                            raise ValueError("age_word_budget_exceeded")
                         validation_started=time.perf_counter(); decision=await self.response_validator.validate(candidate, context=context.history[-4:], generation_id=token)
                         self.metrics.observe_voice_stage(context.session_id, "validation", validation_started, generation_id=trace_generation_id)
                     except asyncio.CancelledError:
@@ -2626,6 +2713,8 @@ class BoundedConversationEngine:
                     # Validate the complete text seen so far as well as the
                     # fragment. This prevents a blocked phrase split across
                     # multiple LLM tokens from reaching TTS.
+                    if len(raw_spoken.split()) > age_words:
+                        raise ValueError("age_word_budget_exceeded")
                     self.output_safety.validate(raw_spoken,self.config.max_response_chars)
                     validated=self.output_safety.validate(item.value,self.config.max_response_chars)
                     safe=validated

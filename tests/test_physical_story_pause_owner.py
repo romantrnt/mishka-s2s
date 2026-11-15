@@ -4,6 +4,7 @@ import wave
 import pytest
 from app.foundation.config import Settings
 from app.foundation.domain import Event
+from app.foundation.s2s import PCMPlaybackResult
 from app.foundation.stand import HardwareIntegrationStand, HeadlessAudioOutput
 
 @pytest.mark.asyncio
@@ -24,13 +25,14 @@ async def test_real_button6_preserves_physical_story_checkpoint_and_resume(revoc
     started=asyncio.Event(); stopped=asyncio.Event(); guards=[]
     class Playback:
         active_token=0; start_position_samples=0; position_samples=0; last_playback_completed=False
-        async def play_owned_pcm(self,audio,current):
+        async def play_owned_pcm(self,audio,current,*,start_position_samples=0):
             guards.append(current)
             assert current()
             started.set()
             await stopped.wait()
             self.position_samples=4000
             self.last_playback_completed=False
+            return PCMPlaybackResult(start_position_samples, 4000-start_position_samples, False, True)
         async def stop(self):
             if revocation == 'paused_lease': app._paused_story_playback[sid]['playback_id']='other'
             elif revocation == 'epoch': app._session_epochs[sid]=1

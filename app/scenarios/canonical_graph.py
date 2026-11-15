@@ -94,6 +94,14 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return False
     if current == target:
         return True
+    if event_type == "PersonalStoryReady":
+        return current == "personal_story_generating" and target == "personal_story_playing"
+    if event_type in {"AudioCompleted", "AudioFailed"} and current == "personal_story_playing":
+        return target == "root_menu"
+    if event_type == "AudioCompleted" and current == "story_resume_announcement" and target == "personal_story_playing":
+        return True
+    if event_type == "ButtonPressed" and current == "personal_story_playing" and target == "story_pause_announcement":
+        return True
     if event_type == "ClientProfileReady":
         return current in {"idle", "profile_ready"} and target == "profile_ready"
     if event_type == "ClientProfileCleared":
@@ -236,7 +244,7 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
         "AnonymousStart", "HandsetLifted", "HandsetPlaced",
         "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
-        "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected",
+        "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected",
         "HardwareReconnected", "SessionCancel", "SessionReset", "AdultHandoffAcknowledged", "AdultHandoffFailed",
         "AdultResolved", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
         "StoryChoiceWaveComplete", "MenuTutorialStep",

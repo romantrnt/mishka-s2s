@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.foundation.game_engine import GameState
 
 import asyncio
 
@@ -37,8 +38,13 @@ def test_exhibition_menu_existing_use_cases_pass_application_and_graph():
                        and effect.get("button_number") == button
                        and effect.get("target_state") == target
                        for effect in result["outputs"])
-            assert any(effect.get("type") == "lighting_preset"
-                       and effect.get("preset") == preset for effect in result["outputs"])
+            if target in {"game_menu", "fixed_story_menu", "personal_story_theme", "schedule_weather"}:
+                page = result["canonical_state"]["scene_menu_descriptor"]
+                assert any(effect.get("type") == "scene_menu_page"
+                           and effect.get("descriptor") == page for effect in result["outputs"])
+            else:
+                assert any(effect.get("type") == "lighting_preset"
+                           and effect.get("preset") == preset for effect in result["outputs"])
     asyncio.run(run())
 
 
@@ -105,7 +111,7 @@ def test_game_unreachable_target_is_not_presented_as_playable(level):
         app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"))
         sid = "game-target-control"
         app.canonical_runtime.sessions[sid] = CanonicalState(
-            sid, mode="game_active", handset="up", game_target=1, game_level=level,
+            sid, mode="game_active", handset="up", game_target=1, game_level=level, game_engine_state=GameState("catch_light"),
             game_success_streak=1,
         )
         result = await app.receive_async(_event("ButtonPressed", sid, 1, {"button_id": 1}))
@@ -123,7 +129,7 @@ def test_game_targets_remain_reachable_after_progress_and_downgrade(trigger):
     for level in range(1, 10):
         runtime = CanonicalRuntime()
         state = CanonicalState("game", mode="game_active", handset="up", game_level=level,
-                               game_target=1, game_success_streak=1, game_attempts=2)
+                               game_target=1, game_success_streak=1, game_attempts=2, game_engine_state=GameState("catch_light"))
         runtime.sessions["game"] = state
         request = CanonicalEvent("TimeoutFired" if trigger == "timeout" else "ButtonPressed",
             "game", 1, state.state_version, "test", {"button_id": 1 if trigger == "success" else 2})
@@ -155,7 +161,7 @@ def test_game_target_is_ignored_while_exit_confirmation_waits_for_7_or_6():
         app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"))
         sid = "game-pending-target"
         app.canonical_runtime.sessions[sid] = CanonicalState(
-            sid, mode="game_active", handset="up", game_target=1, game_level=0,
+            sid, mode="game_active", handset="up", game_target=1, game_level=0, game_engine_state=GameState("catch_light"),
         )
         await app.receive_async(_event("ButtonPressed", sid, 1, {"button_id": 7}))
         blocked = await app.receive_async(_event("ButtonPressed", sid, 2, {"button_id": 1}))
@@ -169,11 +175,11 @@ def test_game_target_is_ignored_while_exit_confirmation_waits_for_7_or_6():
 
         normal = "game-normal-target"
         app.canonical_runtime.sessions[normal] = CanonicalState(
-            normal, mode="game_active", handset="up", game_target=1, game_level=0,
+            normal, mode="game_active", handset="up", game_target=1, game_level=0, game_engine_state=GameState("catch_light"),
         )
         progressed = await app.receive_async(_event("ButtonPressed", normal, 1, {"button_id": 1}))
         assert progressed["reason"] == "game_progress"
-        assert progressed["canonical_state"]["game_success_streak"] == 1
+        assert progressed["canonical_state"]["game_engine_state"]["round"] == 1
     asyncio.run(run())
 
 
