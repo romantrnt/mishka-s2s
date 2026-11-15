@@ -748,13 +748,41 @@ def validate_generated_story(candidate: Mapping[str, Any], brief: Mapping[str, A
     return True, None
 
 
+def _strip_explicit_name_reply_prefix(text: str) -> str:
+    # A correction such as “Нет, меня зовут Вася” is not a refusal. Only
+    # discard a discourse prefix before an explicit naming cue, never infer
+    # a name from an arbitrary trailing clause.
+    return re.sub(
+        r"^(?:нет|да|спасибо)(?:\s*[,;:—–-]\s*|\s+)"
+        r"(?=(?:меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я)\s+)",
+        "", text, count=1, flags=re.IGNORECASE,
+    )
+
+
 def onboarding_declined(value: str) -> bool:
-    """An explicit refusal/skip is not a name, age, or behaviour problem."""
+    """Recognize an explicit short refusal before extracting any name slot.
+
+    Match whole words at the first meaningful clause, not substrings in a
+    genuine name and not an unconstrained keyword anywhere in an utterance.
+    Safety/adult-request routing is performed before this helper is used.
+    """
     text = " ".join(str(value or "").casefold().strip().split()).strip(" .!?…")
+    if not text or len(text) > 160:
+        return False
+    text = _strip_explicit_name_reply_prefix(text)
+    clauses = re.split(r"[,.;!?…:—–]", text)
+    first = clauses[0].strip()
+    if first == "спасибо" and len(clauses) > 1:
+        first = clauses[1].strip()
+    if re.match(r"^(?:нет|неа)\b", first):
+        return True
+    if re.match(r"^(?:я\s+)?не\s+(?:хочу|буду|скажу|знаю|помню)\b", first):
+        return True
+    if re.match(r"^(?:сво[её]\s+)?(?:имя|возраст)\s+(?:я\s+)?не\s+(?:скажу|назову)\b", first):
+        return True
     return bool(re.fullmatch(
-        r"(?:нет|неа|не (?:хочу|скажу|знаю|помню|буду)(?: (?:говорить|отвечать|знакомиться|называть имя|сказывать))?"
-        r"|(?:я )?не хочу(?: (?:говорить|отвечать|знакомиться))?"
-        r"|(?:давай|можно|хочу) (?:играть|поиграть)|пропусти(?:м)?|неважно)", text))
+        r"(?:(?:я )?(?:давай|можно|хочу)(?: (?:лучше|сразу))? (?:играть|поиграть)"
+        r"|пропусти(?:м)?(?: пожалуйста)?|неважно)", first))
 
 
 def normalize_exhibition_name(value: str) -> str | None:
@@ -768,6 +796,7 @@ def normalize_exhibition_name(value: str) -> str | None:
     text = " ".join(str(value or "").strip().split())
     if not text or len(text) > 160 or onboarding_declined(text):
         return None
+    text = _strip_explicit_name_reply_prefix(text)
     # Stop at normal sentence punctuation so a natural answer such as
     # ``меня зовут Вася, мне семь`` cannot absorb the second clause.
     text = re.split(r"[,.;!?…]", text, maxsplit=1)[0].strip(" -—:;")
@@ -972,11 +1001,10 @@ class CanonicalRuntime:
             if state.handset == "up" and not state.story_menu_hint_seen:
                 state.story_menu_hint_seen = state.story_menu_hint_active = True
                 effects.append({"type": "speak", "phrase_id": "PHRASE_075"})
-        # Physical release/hold and timer acknowledgements do not change the
-        # pending game-exit choice. Other states keep their existing reason.
+        # Acknowledgements, audio completion and handset changes cannot answer
+        # an exit question. Its explicit 6/7 choices change substate/mode first.
         if not (state.mode == "game_active"
-                and state.substate == "game_exit_confirmation"
-                and reason in {"button_edge_ack", "game_exit_confirmation_pending"}):
+                and state.substate == "game_exit_confirmation"):
             state.substate = reason
         state.timeout_at = state.dialogue_memory.expires_at
         audio_effects = [item for item in effects if item.get("type") in {
@@ -1344,6 +1372,18 @@ class CanonicalRuntime:
                 state.state_version += 1
                 return self._decision(state, [], "ringtone_finished" if event.event_type == "AudioCompleted"
                                       else "ringtone_failed", clear_audio=True)
+            if (state.mode == "game_active" and state.substate == "game_exit_confirmation"
+                    and response_id == "PHRASE_062" and state.active_audio_id == "PHRASE_062"):
+                # This optional voice hint does not own the visual choice. A
+                # failed speaker must not turn working buttons into a dead end.
+                failed = event.event_type == "AudioFailed"
+                state.audio_status = "failed" if failed else "finished"
+                state.audio_failure_code = "game_exit_audio_unavailable" if failed else None
+                state.state_version += 1
+                effects = ([{"type": "content_blocked", "error_code": "game_exit_audio_unavailable"}]
+                           if failed else [])
+                return self._decision(state, effects,
+                    "game_exit_audio_failed" if failed else "game_exit_audio_finished", clear_audio=True)
             if (event.event_type == "AudioCompleted" and state.mode == "safety_handoff"
                     and response_id in {"PHRASE_089", "PHRASE_091"}):
                 state.audio_status = "finished"
@@ -1678,7 +1718,8 @@ class CanonicalRuntime:
                 ], "support_question_after_handset")
             if state.mode == "game_active":
                 state.expected_inputs = ["button", "speech", "handset_down"]
-                return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "game_voice_join")
+                # Joining voice must not erase the visual game's current target.
+                return self._decision(state, [{"type": "capture_open"}], "game_voice_join")
             if state.dialogue_memory.status == "suspended" and state.dialogue_memory.expires_at and now < state.dialogue_memory.expires_at:
                 if state.mode == "story_suspended_ram":
                     state.mode = "story_paused"
@@ -1701,7 +1742,9 @@ class CanonicalRuntime:
                     return self._decision(state, [story_wave, {"type": "play_placeholder", "content_kind": "fixed_story", "story_id": story_id, "asset": placeholder["audio_file"], "development_only": True}], "fixed_story_placeholder_after_handset")
             if state.mode in {"game_menu", "fixed_story_menu", "support_intake", "personal_story_theme", "wellbeing_check", "bear_dialogue", "schedule_weather"}:
                 state.expected_inputs = ["button", "speech", "handset_down"]
-                return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "voice_open_activity")
+                # The active menu owns its button affordances; microphone admission
+                # is not a navigation event and must preserve that lighting.
+                return self._decision(state, [{"type": "capture_open"}], "voice_open_activity")
             if state.profile_status == "identified":
                 state.mode = "automatic_mood_check"
                 state.expected_inputs = ["button", "speech", "handset_down"]
@@ -1753,7 +1796,9 @@ class CanonicalRuntime:
                 state.mode, state.substate = "menu_ready", "menu_tutorial_skipped"
                 state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
                 state.menu_lit_buttons = list(range(1, 8))
-                state.menu_pressed_buttons = []
+                # The skip edge stays consumed until physical release. A
+                # repeated key-down must not also activate the menu action.
+                state.menu_pressed_buttons = [button]
                 state.menu_tutorial_phase = "skipped"
                 state.menu_repeat_attempts = 0
                 state.state_version += 1
@@ -1977,13 +2022,18 @@ class CanonicalRuntime:
                     return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "game_exit_confirmed")
                 if button == 6:
                     state.substate, state.state_version = "game_active", state.state_version + 1
-                    return self._decision(state, [{"type": "lighting_preset", "preset": "TARGET", "target_button": state.game_target}], "game_exit_cancelled")
+                    return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "TARGET", "target_button": state.game_target}], "game_exit_cancelled", clear_audio=True)
                 # Other game buttons cannot score or dismiss a pending exit.
                 # The earlier global help/safety path keeps its priority.
                 return self._decision(state, [], "game_exit_confirmation_pending")
             if state.mode == "game_active" and button == 7:
                 state.substate, state.state_version = "game_exit_confirmation", state.state_version + 1
-                return self._decision(state, [{"type": "game_exit_confirmation", "requires_explicit_choice": True}], "game_exit_confirmation")
+                effects = [{"type": "audio_stop"},
+                           {"type": "lighting_preset", "preset": "PAUSED"},
+                           {"type": "game_exit_confirmation", "requires_explicit_choice": True}]
+                if state.handset == "up":
+                    effects.append({"type": "speak", "phrase_id": "PHRASE_062"})
+                return self._decision(state, effects, "game_exit_confirmation", clear_audio=True)
             if state.mode == "game_active" and button == state.game_target:
                 if state.game_level >= 9:
                     state.mode, state.game_target, state.state_version = "root_menu", None, state.state_version + 1

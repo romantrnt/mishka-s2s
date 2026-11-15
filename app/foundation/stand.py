@@ -694,6 +694,7 @@ class HardwareIntegrationStand:
             session is not None
             and getattr(self, "_capture_hid_fault", None) is None
             and getattr(session, "handset_up", False)
+            and getattr(state, "handset", None) == "up"
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and not (getattr(session, "current_node", None) == "personal_welcome_listen"
                      and (self.application._active_audio.get(self.active_session_id)
@@ -718,6 +719,7 @@ class HardwareIntegrationStand:
                         and getattr(self, "_hid_generation", 0) == hid_generation
                         and getattr(self, "_capture_generation", 0) == capture_generation
                         and getattr(self, "_capture_hid_fault", None) is None
+                        and getattr(self.application.canonical_runtime.sessions.get(sid), "handset", None) == "up"
                         and bool(record and record.handset_up))))
         return current
 
@@ -834,22 +836,37 @@ class HardwareIntegrationStand:
     async def _stop_headless_audio_capture(self) -> None:
         self._capture_generation = getattr(self, "_capture_generation", 0) + 1
         capture = getattr(self, "audio_input", None)
-        if capture is not None:
-            capture.stop()
         task, self._headless_audio_task = getattr(self, "_headless_audio_task", None), None
         self._headless_audio_queue = None
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        try:
+            if capture is not None:
+                capture.stop()
+        except Exception:
+            self._headless_audio_status = {"state": "unavailable", "error_code": "capture_stop_failed"}
+            raise
+        finally:
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         if capture is not None:
             self._headless_audio_status = {"state": "stopped"}
 
+    def _hardware_lifecycle_lock(self):
+        lock = getattr(self, "_hid_lifecycle_lock", None)
+        if lock is None:
+            lock = self._hid_lifecycle_lock = asyncio.Lock()
+        return lock
+
     async def start_hardware(self):
+        async with self._hardware_lifecycle_lock():
+            await self._start_hardware_locked()
+
+    async def _start_hardware_locked(self):
         if self.hardware_mode != "physical":
             return
         pending_loss = getattr(self, "_hid_loss_future", None)
         if pending_loss is not None:
-            await asyncio.wrap_future(pending_loss)
+            await self._settle_hid_loss(pending_loss)
         if self.input_adapter is not None and self.input_adapter.is_ready() and getattr(self, "_capture_hid_fault", None) is None:
             hid_diag = _hid_diagnostics(self.input_adapter); self._hid_status = {"state": "active", "generation": getattr(self, "_hid_generation", 0), "initial_level_sync": hid_diag.get("initial_level_sync"), "semantic_input_accepted": bool(hid_diag.get("semantic_input_accepted")), "physical_ready": bool(hid_diag.get("physical_ready"))}
             return
@@ -902,9 +919,13 @@ class HardwareIntegrationStand:
         self._startup_state = "ready" if getattr(self, "_lighting_status", {"state": "available"}).get("state") == "available" and hid_diag.get("physical_ready") and getattr(self, "_headless_audio_status", {}).get("state") == "active" else "degraded"
 
     async def stop_hardware(self):
+        async with self._hardware_lifecycle_lock():
+            await self._stop_hardware_locked()
+
+    async def _stop_hardware_locked(self):
         pending_loss = getattr(self, "_hid_loss_future", None)
         if pending_loss is not None:
-            await asyncio.wrap_future(pending_loss)
+            await self._settle_hid_loss(pending_loss)
         await self._stop_headless_audio_capture()
         led = getattr(getattr(self, "application", None), "led", None)
         cancel_effects = getattr(led, "cancel_effects", None)
@@ -936,6 +957,9 @@ class HardwareIntegrationStand:
             self._schedule_response_audio(self.active_session_id, str(resolved))
 
     def _pcm_owner_current(self, handle: PlaybackHandle, identity_binding) -> bool:
+        # Reader faults revoke output synchronously, before owner-loop teardown.
+        if getattr(self, "_capture_hid_fault", None) is not None:
+            return False
         from .owned_speech import OWNED_PCM_IDS, PRIVATE_TYPED_AUDIO_IDS
         lease = self.application._active_audio.get(handle.session_id)
         state = self.application.canonical_runtime.sessions.get(handle.session_id)
@@ -1071,7 +1095,44 @@ class HardwareIntegrationStand:
 
     async def _play_asset_audio(self, session_id: str, response_id: str, asset_id: str, token: int,
                                 offset_ms: int = 0, handle: PlaybackHandle | None = None) -> None:
+        hid_generation = getattr(self, "_hid_generation", 0)
+        physical = getattr(self, "hardware_mode", None) == "physical"
+        def current():
+            if (getattr(self, "_capture_hid_fault", None) is not None
+                    or getattr(self, "_hid_generation", 0) != hid_generation):
+                return False
+            if not physical:
+                return True  # Preserve simulator/legacy audio port behavior.
+            if handle is None or self.active_session_id != session_id:
+                return False
+            lease = self.application._active_audio.get(session_id)
+            state = self.application.canonical_runtime.sessions.get(session_id)
+            return bool(lease and state and state.handset == "up"
+                and self.application._session_epochs.get(session_id, 0) == handle.generation
+                and state.active_audio_id == response_id and state.playback_lease == handle.playback_lease
+                and all(lease.get(key) == value for key, value in {
+                    "content_id": response_id, "token": token, "generation": handle.generation,
+                    "playback_id": handle.playback_id, "playback_lease": handle.playback_lease}.items()))
+        def checkpoint_current():
+            # Pause changes the canonical active lease to its announcement.
+            # The retained old lease grants only one checkpoint, never PCM.
+            if not physical:
+                return current()
+            state = self.application.canonical_runtime.sessions.get(session_id)
+            paused = self.application._paused_story_playback.get(session_id)
+            return bool(handle and paused and state and state.handset == "up"
+                and state.mode in {"story_pause_announcement", "story_paused"}
+                and state.active_story_id == response_id
+                and self.active_session_id == session_id
+                and getattr(self, "_capture_hid_fault", None) is None
+                and getattr(self, "_hid_generation", 0) == hid_generation
+                and self.application._session_epochs.get(session_id, 0) == handle.generation
+                and all(paused.get(key) == value for key, value in {
+                    "content_id": response_id, "token": token, "generation": handle.generation,
+                    "playback_id": handle.playback_id, "playback_lease": handle.playback_lease}.items()))
         try:
+            if not current():
+                return
             path = Path(asset_id).expanduser()
             if not path.is_absolute():
                 project_root = Path(__file__).resolve().parents[2]
@@ -1082,6 +1143,8 @@ class HardwareIntegrationStand:
                 )
                 path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
             rendered = await self._offload_audio(path.read_bytes)
+            if not current():
+                return
             with wave.open(BytesIO(rendered), "rb") as source:
                 rate = source.getframerate()
                 channels = source.getnchannels()
@@ -1107,14 +1170,24 @@ class HardwareIntegrationStand:
             if callable(recorder):
                 recorder("audio_playback_started", session_id=session_id, response_id=response_id,
                          content_id=response_id, asset_ref=str(path), playback_id=f"{session_id}:{response_id}:{token}")
-            await self.playback.play(AudioChunk(samples[start_sample:], rate, int(token), session_id))
+            audio = AudioChunk(samples[start_sample:], rate, int(token), session_id)
+            guarded_play = getattr(self.playback, "play_owned_pcm", None)
+            if callable(guarded_play):
+                await guarded_play(audio, current)
+            elif physical:
+                raise RuntimeError("physical_asset_guard_unavailable")
+            else:
+                await self.playback.play(audio)
             completed = bool(getattr(self.playback, "last_playback_completed", True))
-            if is_story and not completed and getattr(self, "_story_pause_requested", False):
+            if (is_story and not completed and getattr(self, "_story_pause_requested", False)
+                    and checkpoint_current()):
                 self._story_pause_requested = False
                 checkpoint_ms = int(getattr(self.playback, "position_samples", start_sample) * 1000 / rate)
                 self.commands.append({"at": time.time(), "type": "story_audio_paused", "story_id": response_id, "offset_ms": checkpoint_ms})
                 self.application._mark_audio_effect_lifecycle(response_id, "paused", **HardwareIntegrationStand._playback_lifecycle_identity(handle))
                 return {"story_id": response_id, "offset_ms": checkpoint_ms}
+            if not current():
+                return
             self.application._mark_audio_effect_lifecycle(response_id, "finished", **HardwareIntegrationStand._playback_lifecycle_identity(handle))
             if callable(recorder):
                 recorder("audio_playback_finished", session_id=session_id, response_id=response_id,
@@ -1146,6 +1219,8 @@ class HardwareIntegrationStand:
                          content_id=response_id, asset_ref=asset_id, playback_id=f"{session_id}:{response_id}:{token}")
             raise
         except Exception as exc:
+            if not current():
+                return
             self.application._mark_audio_effect_lifecycle(response_id, "failed", reason=type(exc).__name__, **HardwareIntegrationStand._playback_lifecycle_identity(handle))
             recorder = getattr(self.application, "record_audio_diagnostic", None)
             if callable(recorder):
@@ -1188,7 +1263,30 @@ class HardwareIntegrationStand:
         if loop is not None and not loop.is_closed():
             self._hid_loss_future = asyncio.run_coroutine_threadsafe(
                 self._handle_hid_loss(self.active_session_id, generation), loop)
-            self._hid_loss_future.add_done_callback(self._observe_physical_input_future)
+            self._hid_loss_future.add_done_callback(
+                lambda done, owner=generation: self._observe_physical_input_future(done, owner, cleanup=True))
+
+    async def _settle_hid_loss(self, pending_loss) -> None:
+        # Bind ownership before yielding. A completed old future must never
+        # dispatch teardown against a replacement reader/session.
+        generation = getattr(self, "_hid_generation", 0)
+        sid = self.active_session_id
+
+        def owns_loss():
+            return (getattr(self, "_hid_loss_future", None) is pending_loss
+                    and getattr(self, "_hid_generation", 0) == generation)
+
+        if not owns_loss():
+            return
+        try:
+            await asyncio.shield(asyncio.wrap_future(pending_loss))
+        except Exception:
+            if not owns_loss():
+                return
+            # Public start/stop hold the lifecycle lock through this retry.
+            await self._handle_hid_loss(sid, generation)
+        if owns_loss():
+            self._hid_loss_future = None
 
     async def _handle_hid_loss(self, sid: str, generation: int) -> None:
         if generation != getattr(self, "_hid_generation", 0):
@@ -1196,11 +1294,23 @@ class HardwareIntegrationStand:
         try:
             capture = getattr(self, "audio_input", None)
             if capture is not None:
-                capture.stop()
-            await self.application.receive_async(Event(
-                "HardwareDisconnected", sid, generation, time.time(), "physical_hid_loss",
-                {}, f"hid-loss:{generation}",
+                try:
+                    capture.stop()
+                except Exception:
+                    # Ingress is already fenced; an input-device failure must
+                    # not prevent the independent audio/lighting teardown.
+                    self._headless_audio_status = {"state": "unavailable", "error_code": "capture_stop_failed"}
+            self._hid_cleanup_sequence = getattr(self, "_hid_cleanup_sequence", 0) + 1
+            sequence = self._hid_cleanup_sequence
+            result = await self.application.receive_async(Event(
+                "HardwareDisconnected", sid, sequence, time.time(), "physical_hid_loss",
+                {}, f"hid-loss:{generation}:{sequence}",
             ))
+            for effect in result.get("outputs", []):
+                if any(isinstance(effect.get(key), dict)
+                       and effect[key].get("status") in {"failed", "timed_out", "timeout"}
+                       for key in ("sync_cleanup", "audio_cleanup", "s2s_cleanup")):
+                    raise RuntimeError("hid_cleanup_failed")
         finally:
             await self._stop_headless_audio_capture()
 
@@ -1219,18 +1329,24 @@ class HardwareIntegrationStand:
         payload["_sequence"] = self._physical_sequence
         payload["_hid_generation"] = generation
         future = asyncio.run_coroutine_threadsafe(self.inject_physical(payload), loop)
-        future.add_done_callback(self._observe_physical_input_future)
+        future.add_done_callback(
+            lambda done, owner=getattr(self, "_hid_generation", 0) if generation is None else generation:
+                self._observe_physical_input_future(done, owner))
 
-    def _observe_physical_input_future(self, future) -> None:
+    def _observe_physical_input_future(self, future, generation=None, *, cleanup=False) -> None:
         if future.cancelled():
             return
         try:
             future.result()
-        except Exception as exc:
-            diagnostic = {"at": time.time(), "stage": "hid_dispatch", "exception_type": type(exc).__name__, "detail": str(exc)[:200]}
-            self._hid_status = {"state": "dispatch_failure", "generation": getattr(self, "_hid_generation", 0), **diagnostic}
-            self.errors.append(diagnostic)
-            logger.error("physical HID dispatch failed: %s", diagnostic["detail"])
+        except Exception:
+            owner = getattr(self, "_hid_generation", 0) if generation is None else generation
+            if owner != getattr(self, "_hid_generation", 0):
+                return
+            diagnostic = {"kind": "dispatch_failure", "error_code": "hid_cleanup_failed" if cleanup else "hid_dispatch_failed"}
+            # The existing fault path revokes capture immediately. A failed
+            # cleanup observer must not recursively schedule another cleanup.
+            self._on_hid_error(diagnostic, owner)
+            logger.error("physical HID dispatch failed: %s", diagnostic["error_code"])
 
     async def inject_physical(self, payload: dict):
         normalized = dict(payload)
@@ -1251,6 +1367,8 @@ class HardwareIntegrationStand:
         # The HID path must obey the same admission gate as HTTP/WebSocket.
         # Hangup remains a cleanup operation during warmup, failure and shutdown.
         if event.event_type not in {"HandsetPlaced", "HardwareDisconnected"}:
+            if getattr(self, "_capture_hid_fault", None) is not None:
+                return {"state": "idle", "reason": "hid_unavailable", "outputs": []}
             admits = self._admits_physical_users
             if admits is None or not admits():
                 return {"state": "idle", "reason": "runtime_unavailable", "outputs": []}
@@ -1857,7 +1975,21 @@ class HardwareIntegrationStand:
         return result
 
     @staticmethod
+    def _safe_cleanup_failure(item: dict[str, Any]) -> dict[str, Any]:
+        result = {"type": "cleanup_failed", "status": "failed"}
+        enums = {"resource": {"audio", "lighting"},
+                 "operation": {"exhibition_reset"},
+                 "exception_type": {"RuntimeError", "OSError", "ConnectionError",
+                                    "TimeoutError", "ValueError", "TypeError", "AttributeError"}}
+        for key, allowed in enums.items():
+            value = item.get(key)
+            result[key] = value if isinstance(value, str) and value in allowed else "unknown"
+        return result
+
+    @staticmethod
     def _safe_diagnostic_item(item: dict[str, Any]) -> dict[str, Any]:
+        if item.get("type") == "cleanup_failed":
+            return HardwareIntegrationStand._safe_cleanup_failure(item)
         allowed = {
             "kind", "code", "status", "component", "stage", "error_code",
             "content_id", "asset_ref", "operation", "source",
@@ -1880,6 +2012,23 @@ class HardwareIntegrationStand:
                 result["latency_ms"] = latency
         return result
 
+    def _lighting_diagnostics(self) -> dict[str, Any]:
+        runtime = (self.lighting_serial.diagnostics() if self.lighting_serial is not None
+                   else dict(getattr(self, "_lighting_status", {})))
+        output_diagnostics = getattr(self.lighting_output, "diagnostics", None)
+        if callable(output_diagnostics):
+            output = output_diagnostics()
+            for key in ("output_ready", "generation_failed", "pending_batches", "in_flight",
+                        "max_pending_batches", "submitted_batches", "written_batches",
+                        "dropped_batches", "failed_batches", "overflow_batches"):
+                if key in output:
+                    runtime[key] = output[key]
+        runtime["state_kind"] = "desired_targets"
+        # A completed host write is not a firmware acknowledgement or optical
+        # measurement. Do not claim observed physical brightness from targets.
+        runtime["firmware_acknowledged"] = False
+        return runtime
+
     def physical_hardware_ready(self) -> bool:
         """Live host-side controls/audio readiness, not acoustic/firmware acceptance."""
         if self.hardware_mode != "physical" or self._closed:
@@ -1890,7 +2039,8 @@ class HardwareIntegrationStand:
                 self._hid_status.get("state") == "active"
                 and hid.get("physical_ready")
                 and self.lighting_serial is not None
-                and self.lighting_serial.diagnostics().get("ready")
+                and self._lighting_diagnostics().get("ready")
+                and self._lighting_diagnostics().get("output_ready", True)
                 and self.playback.readiness().get("ready")
                 and self.audio_input is not None
                 and self.audio_input.is_ready()
@@ -1924,12 +2074,9 @@ class HardwareIntegrationStand:
         if self.hardware_mode != "physical":
             hid_state = "simulated"
         lighting_state = str(getattr(self, "_lighting_status", {}).get("state") or "unavailable")
-        lighting_runtime = (
-            self.lighting_serial.diagnostics()
-            if self.lighting_serial is not None
-            else dict(getattr(self, "_lighting_status", {}))
-        )
-        if self.hardware_mode == "physical" and self.lighting_serial is not None and not lighting_runtime.get("ready", False):
+        lighting_runtime = self._lighting_diagnostics()
+        if self.hardware_mode == "physical" and self.lighting_serial is not None and (
+                not lighting_runtime.get("ready", False) or not lighting_runtime.get("output_ready", True)):
             # A serial adapter can open successfully and fail later while a
             # USB CDC device is busy.  Readiness must reflect the live
             # transport, otherwise the panel claims production readiness
@@ -1961,11 +2108,11 @@ class HardwareIntegrationStand:
                 "identity": self.application.identity_status(),
                 "production_blockers": ["synthetic_demo_data", "max_client_production_acceptance_pending"]}
                if local_demo else {}),
-            "mode": "exhibition",
+            "mode": self.settings.runtime_mode,
             "canonical_state": mode,
             "handset": handset,
             "audio": {"status": audio_state, "provider": audio.get("provider")},
-            "hid": {"status": hid_state, "generation": int(hid_status.get("generation") or 0), "semantic_input_accepted": bool(hid_status.get("semantic_input_accepted", self.hardware_mode != "physical" or hid_state == "active")), "initial_level_sync": hid_status.get("initial_level_sync", {"status": "simulated" if self.hardware_mode != "physical" else "not_attempted"}), "physical_ready": bool(self.hardware_mode == "physical" and hid_state == "active" and live_hid.get("physical_ready", False)), "restart_allowed": bool(self.hardware_mode == "physical" and hid_state in {"device_unavailable", "initial_level_unavailable", "device_disconnected", "reader_exception", "dispatch_failure", "stopped"})},
+            "hid": {"status": hid_state, "generation": int(hid_status.get("generation") or 0), "semantic_input_accepted": bool(hid_status.get("semantic_input_accepted", self.hardware_mode != "physical" or hid_state == "active")), "initial_level_sync": hid_status.get("initial_level_sync", {"status": "simulated" if self.hardware_mode != "physical" else "not_attempted"}), "physical_ready": bool(self.hardware_mode == "physical" and hid_state == "active" and live_hid.get("physical_ready", False)), "restart_allowed": bool(self.hardware_mode == "physical" and hid_state in {"device_unavailable", "initial_level_unavailable", "device_disconnected", "input_desynchronized", "reader_exception", "dispatch_failure", "stopped"})},
             "lighting": {"status": lighting_state},
             "content": {
                 "status": content_status,
@@ -2011,16 +2158,14 @@ class HardwareIntegrationStand:
             "health": self.health_snapshot(),
             "trace": list(reversed(trace)),
             "diagnostics": diagnostic_items,
-            "lighting_hardware": (
-                self.lighting_serial.diagnostics()
-                if self.lighting_serial is not None
-                else dict(getattr(self, "_lighting_status", {}))
-            ),
+            "lighting_hardware": self._lighting_diagnostics(),
             # Bounded and redacted, but lossless for every physical lighting ID.
             "physical_lighting": dict(self.lighting_output.snapshot()),
         }
 
     def snapshot(self):
+        # Freeze bounded buffers before Python-level redaction: UART callbacks
+        # may append while a projection runs. Never iterate a live deque here.
         session=self.application.sessions.get(self.active_session_id)
         lighting = self.lighting_output.snapshot()
         # Lossless physical projection. The led field below is intentionally
@@ -2060,11 +2205,11 @@ class HardwareIntegrationStand:
                                "decoded":{"type":(item.get("decoded") or {}).get("type"),
                                           "sequence":(item.get("decoded") or {}).get("sequence"),
                                           "payload":self._panel_payload((item.get("decoded") or {}).get("payload"))}}
-                              for item in self.raw_frames],
+                              for item in tuple(self.raw_frames)],
                 "commands":[{"at":item.get("at"), "type":item.get("type"),
                              "sequence":item.get("sequence"),
                              "payload":self._panel_payload(item.get("payload"))}
-                            for item in self.commands],
+                            for item in tuple(self.commands)],
                 "events":[{key: item[key] for key in ("type", "event_type", "sequence", "timestamp", "source")
                            if key in item} for item in self.publisher.events[-300:] if isinstance(item, dict)],
                 "results":list(self.results),
@@ -2075,11 +2220,11 @@ class HardwareIntegrationStand:
                 "physical_lighting":physical_lighting,
                 "lighting_wave": dict(self._lighting_wave),
                 "lighting_effects": (self.application.led.effect_snapshot() if callable(getattr(self.application.led, "effect_snapshot", None)) else {}),
-                "hardware": {"transport_mode": self.hardware_mode, "lighting": self.lighting_serial.diagnostics() if self.lighting_serial is not None else dict(self._lighting_status), "input": input_diagnostics, "audio": audio_readiness, "audio_input": audio_input, "acceptance": "physical" if self.hardware_mode == "physical" else "simulator"},
+                "hardware": {"transport_mode": self.hardware_mode, "lighting": self._lighting_diagnostics(), "input": input_diagnostics, "audio": audio_readiness, "audio_input": audio_input, "acceptance": "physical" if self.hardware_mode == "physical" else "simulator"},
                 "button_contract":button_contract(),
                 "latencies":list(self.latencies),"pipeline_metrics":self.application.runtime_manager.engine.metrics.snapshot(),
                 "graph":self.graph,
-                "errors":[self._safe_diagnostic_item(item) for item in self.errors if isinstance(item, dict)],
+                "errors":[self._safe_diagnostic_item(item) for item in tuple(self.errors) if isinstance(item, dict)],
                 "profile":self.settings.profile,
                 "canonical_state":dict(getattr(self.application, "last_canonical_state", {}) or {}),
                 "last_canonical_event":{key: value for key, value in
@@ -2088,9 +2233,9 @@ class HardwareIntegrationStand:
                 "effects":[self._panel_payload(item) for item in
                     (getattr(self.application, "last_canonical_effects", []) or [])],
                 "canonical_trace":[self._safe_trace_item(item) for item in
-                    (getattr(self.application, "canonical_trace", []) or []) if isinstance(item, dict)],
+                    tuple(getattr(self.application, "canonical_trace", ()) or ()) if isinstance(item, dict)],
                 "canonical_diagnostics":[self._safe_diagnostic_item(item) for item in
-                    (getattr(self.application, "canonical_diagnostics", []) or []) if isinstance(item, dict)],
+                    tuple(getattr(self.application, "canonical_diagnostics", ()) or ()) if isinstance(item, dict)],
                 "audio_status":next((item.get("audio_status") for item in reversed(getattr(self.application, "last_canonical_effects", []) or []) if item.get("audio_status")), "idle")}
 
     @classmethod
@@ -2126,6 +2271,8 @@ class HardwareIntegrationStand:
     def _panel_payload(value: Any) -> dict[str, Any]:
         if not isinstance(value, dict):
             return {}
+        if value.get("type") == "cleanup_failed":
+            return HardwareIntegrationStand._safe_cleanup_failure(value)
         allowed = {
             "button_id", "node_id", "from", "to", "reason", "status",
             "response_id", "session_id", "playback_lease", "playback_id", "token", "offset_ms", "duration_ms",
@@ -2187,6 +2334,8 @@ class HardwareIntegrationStand:
     def _panel_fallback_effect(value: Any) -> dict[str, Any]:
         if not isinstance(value, dict):
             return {}
+        if value.get("type") == "cleanup_failed":
+            return HardwareIntegrationStand._safe_cleanup_failure(value)
         result = {}
         for key in ("type", "action"):
             if isinstance(value.get(key), str) and value[key] in {
@@ -2246,6 +2395,11 @@ class HardwareIntegrationStand:
             "mode", "handset", "expected_inputs", "node", "onboarding_step",
             "menu_tutorial_step", "active_effect", "lighting_effect",
         ) if key in canonical}
+        # The operator guide needs the actual exit choice, not arbitrary
+        # internal substate strings or private model/profile metadata.
+        if (canonical.get("mode") == "game_active"
+                and canonical.get("substate") == "game_exit_confirmation"):
+            canonical_safe["substate"] = "game_exit_confirmation"
 
         def event_item(item):
             if not isinstance(item, dict):

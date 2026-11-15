@@ -717,6 +717,8 @@ class SerialLightingAdapter:
         self._drain_stop = threading.Event()
         self._drain_thread: threading.Thread | None = None
         self._drained_bytes = 0
+        self._line_boundary_pending = False
+        self._line_boundary_recoveries = 0
 
     def _make_transport(self):
         if self.transport is not None:
@@ -748,7 +750,10 @@ class SerialLightingAdapter:
             try:
                 read_available = getattr(self.transport, "read_available", None)
                 if callable(read_available):
-                    self._drained_bytes += len(read_available() or b"")
+                    received = read_available() or b""
+                    self._drained_bytes += len(received)
+                    if not received:
+                        self._drain_stop.wait(0.02)
                 else:
                     self._drain_stop.wait(0.02)
             except Exception:
@@ -815,6 +820,15 @@ class SerialLightingAdapter:
             if not self.is_ready():
                 raise ConnectionError("lighting serial adapter is not ready")
             try:
+                if self._line_boundary_pending:
+                    # A host reopen does not clear the MCU's partial CSV buffer.
+                    # Complete/discard that old line before writing new targets.
+                    try:
+                        self._write_line(b"\n")
+                    except Exception as exc:
+                        raise _IncompleteLightingLineError("lighting serial boundary recovery failed") from exc
+                    self._line_boundary_pending = False
+                    self._line_boundary_recoveries += 1
                 for command in validated:
                     if callable(is_current) and not is_current():
                         return False
@@ -830,6 +844,7 @@ class SerialLightingAdapter:
                 self._ready = False
                 self._last_error = {**first_error, "attempt": 1}
                 if isinstance(exc, _IncompleteLightingLineError):
+                    self._line_boundary_pending = True
                     raise ConnectionError("lighting serial write failed after incomplete line") from exc
                 if callable(is_current) and not is_current():
                     return False
@@ -852,6 +867,8 @@ class SerialLightingAdapter:
                     self._last_error = None
                     return True
                 except Exception as retry_exc:
+                    if isinstance(retry_exc, _IncompleteLightingLineError):
+                        self._line_boundary_pending = True
                     self._ready = False
                     self._last_error = {
                         "exception_type": type(retry_exc).__name__,
@@ -877,6 +894,8 @@ class SerialLightingAdapter:
             "last_error": self._last_error,
             "last_open_at": self._last_open_at,
             "drained_bytes": self._drained_bytes,
+            "framing_recovery_pending": self._line_boundary_pending,
+            "framing_recoveries": self._line_boundary_recoveries,
             "drain_alive": bool(self._drain_thread and self._drain_thread.is_alive()),
         }
 
@@ -1065,6 +1084,8 @@ class PhysicalLightingOutput:
                 "failed_batches": self._failed_batches,
                 "overflow_batches": self._overflow_batches,
                 "async_error": dict(self._last_async_error) if self._last_async_error else None,
+                "output_ready": not (self._closed or self._closing or self._generation_error is not None),
+                "generation_failed": self._generation_error is not None,
                 "firmware_acknowledged": False,
             }
         return {"backend": "serial", **self.adapter.diagnostics(), **output}

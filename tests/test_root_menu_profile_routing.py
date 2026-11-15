@@ -7,7 +7,7 @@ from test_profile_onboarding import Harness, card
 from app.foundation.domain import Event
 
 
-async def menu(h, authorized):
+async def menu(h, authorized, *, release_skip=True):
     if authorized:
         await h.ready()
     await h.lift()
@@ -23,10 +23,16 @@ async def menu(h, authorized):
         assert result["reason"] == "exhibition_age_question_started"
         await h.complete(); await h.complete()
         await h.send("ButtonPressed", {"button_id": 4})
+        await h.send("ButtonReleased", {"button_id": 4})
         await h.complete()
         await h.send("ExhibitionOnboardingComplete")
     await h.send("ButtonPressed", {"button_id": 1})
     assert h.state.mode == "menu_ready"
+    # A completed physical press includes release. Without it, another down
+    # of button 1 is still the consumed tutorial-skip edge, not a selection.
+    if release_skip:
+        released = await h.send("ButtonReleased", {"button_id": 1})
+        assert released["reason"] == "exhibition_menu_button_released"
     h.played.clear()
 
 
@@ -70,3 +76,44 @@ def test_schedule_selection_never_bypasses_missing_schedule_grant(authorized, se
             assert "PHRASE_099" not in h.played
         finally: await h.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("authorized", [False, True])
+def test_held_tutorial_skip_one_requires_release_before_game_menu(authorized):
+    async def run():
+        h = Harness(card() if authorized else None)
+        try:
+            await menu(h, authorized, release_skip=False)
+            held = await h.send("ButtonPressed", {"button_id": 1})
+            assert held["reason"] == "exhibition_menu_button_duplicate"
+            assert h.state.mode == "menu_ready"
+            assert h.state.menu_pressed_buttons == [1]
+            assert not any(x.get("type") == "exhibition_menu_selected" for x in held["outputs"])
+            released = await h.send("ButtonReleased", {"button_id": 1})
+            assert released["reason"] == "exhibition_menu_button_released"
+            assert h.state.menu_pressed_buttons == []
+            selected = await h.send("ButtonPressed", {"button_id": 1})
+            assert h.state.mode == "game_menu"
+            assert selected["reason"] == "button_mode"
+            assert [x["target_state"] for x in selected["outputs"]
+                    if x.get("type") == "exhibition_menu_selected"] == ["game_menu"]
+        finally:
+            await h.close()
+    asyncio.run(run())
+
+
+def test_physical_hid_one_emits_new_press_only_after_release():
+    from app.foundation.input_adapters import KeyboardHIDInputAdapter
+    events = []
+    adapter = KeyboardHIDInputAdapter("/synthetic/input", events.append)
+    adapter.feed_key(2, 1, timestamp=1.0)
+    adapter.feed_key(2, 2, timestamp=2.0)  # Kernel autorepeat, not a new edge.
+    adapter.feed_key(2, 1, timestamp=3.0)  # Duplicate down stays held.
+    assert [(e.type, e.payload) for e in events] == [("ButtonPressed", {"button_id": 1})]
+    adapter.feed_key(2, 0, timestamp=4.0)
+    adapter.feed_key(2, 1, timestamp=5.0)  # Beyond existing physical debounce.
+    assert [(e.type, e.payload) for e in events] == [
+        ("ButtonPressed", {"button_id": 1}),
+        ("ButtonReleased", {"button_id": 1}),
+        ("ButtonPressed", {"button_id": 1}),
+    ]

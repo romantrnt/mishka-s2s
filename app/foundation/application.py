@@ -1322,6 +1322,42 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
         epoch = self._session_epochs.get(event.session_id, 0)
         state_owner = self.canonical_runtime.sessions.get(event.session_id)
 
+        reset_sync_results: dict[str, dict[str, Any]] = {}
+
+        def reset_sync_step(resource: str, action) -> None:
+            # A failed device must not prevent another device or RAM owner
+            # from being revoked. Report failure, never claim physical success.
+            try:
+                action()
+                reset_sync_results[resource] = {"status": "completed"}
+            except Exception as exc:
+                failure = {"type": "cleanup_failed", "resource": resource,
+                           "operation": "exhibition_reset", "status": "failed",
+                           "exception_type": type(exc).__name__}
+                reset_sync_results[resource] = failure
+                effects.append(dict(failure))
+                self.canonical_diagnostics.append(dict(failure))
+                self.runtime_status["session_cleanup_last_failure"] = dict(failure)
+                logger.warning("exhibition reset %s cleanup failed: %s", resource, type(exc).__name__)
+
+        if exhibition_reset:
+            # Physical hangup takes effect synchronously. Native/model audio
+            # cleanup can await, fail or be cancelled; none may keep a stale
+            # wave or tutorial lit after canonical handset-down was accepted.
+            self._cancel_welcome_timer(event.session_id)
+            self._cancel_menu_tutorial(event.session_id)
+            self._cancel_lighting_wave(event.session_id)
+            self._invalidate_audio_lease(event.session_id)
+            closing_record = self.sessions.get(event.session_id)
+            if closing_record is not None:
+                closing_record.handset_up = False
+                closing_record.cancellation_token += 1
+                self.sessions.save(closing_record)
+                reset_sync_step("audio", lambda: self.audio.cancel(closing_record.cancellation_token))
+            cancel_effects = getattr(self.led, "cancel_effects", None)
+            reset_sync_step("lighting", lambda: cancel_effects(clear=True)
+                            if callable(cancel_effects) else self.led.clear_all())
+
         def still_current() -> bool:
             return (
                 self._session_revisions.get(event.session_id) == revision
@@ -1349,7 +1385,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
             old_record = self.sessions.get(event.session_id)
             if old_record is not None:
                 old_record.cancellation_token += 1
-                self.audio.cancel(old_record.cancellation_token)
+                if not exhibition_reset:
+                    self.audio.cancel(old_record.cancellation_token)
             await self._cleanup_session_resources(event.session_id, identity_request=profile_request)
             if not still_current():
                 return stale_result()
@@ -1423,6 +1460,11 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                          "speak_dynamic", "support_question", "support_response"}:
                 effect.setdefault("session_id", event.session_id)
                 effect.setdefault("generation", int(self._session_epochs.get(event.session_id, 0)))
+            if exhibition_reset and kind in {"lighting_dark", "standby_dark_started", "exhibition_effects_cancelled"}:
+                effect["cleanup"] = dict(reset_sync_results["lighting"])
+                effect["resolution"] = ("canonical_lighting_dark"
+                    if reset_sync_results["lighting"]["status"] == "completed" else "lighting_cleanup_failed")
+                continue
             if kind == "identity_cleared":
                 if profile_request is None:
                     self._drop_identity_owner(event.session_id)
@@ -1614,7 +1656,19 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
             elif kind in {"audio_stop", "welcome_ring_stop"}:
                 record.cancellation_token += 1
                 self._invalidate_audio_lease(event.session_id)
-                self.audio.cancel(record.cancellation_token)
+                if exhibition_reset:
+                    effect["sync_cleanup"] = dict(reset_sync_results.get("audio", {"status": "not_owned"}))
+                else:
+                    try:
+                        self.audio.cancel(record.cancellation_token)
+                        if event.event_type == "HardwareDisconnected":
+                            effect["sync_cleanup"] = {"status": "completed"}
+                    except Exception:
+                        if event.event_type != "HardwareDisconnected":
+                            raise
+                        effect["sync_cleanup"] = {"status": "failed", "error_code": "hardware_audio_stop_failed"}
+                        self.canonical_diagnostics.append({"kind": "hardware_audio_stop_failed"})
+                        logger.warning("hardware disconnect audio stop failed")
                 if kind == "welcome_ring_stop":
                     # The ringtone has no S2S turn to drain. The greeting deadline
                     # must not await native preparation cleanup.
@@ -1945,11 +1999,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryM
                 effect["lighting_preset"] = preset
                 effect.setdefault("resolution", "declarative_effect_emitted")
             elif kind == "game_level":
-                self.led.clear_all()
-                target = int(effect.get("target_button") or 0)
-                if target:
-                    for element_id in BUTTON_ELEMENTS.get(target, ()):
-                        self.led.set_element(element_id, 1)
+                # Telemetry must not overwrite the preceding canonical TARGET.
                 effect.setdefault("resolution", "declarative_effect_emitted")
             elif kind in {"exhibition_menu_selected", "menu_tutorial_complete", "exhibition_menu_tutorial_step"}:
                 effect.setdefault("resolution", "canonical_exhibition_menu_boundary")

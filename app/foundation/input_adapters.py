@@ -29,7 +29,9 @@ class KeyboardHIDInputAdapter:
     """
 
     EVENT_STRUCT = struct.Struct("llHHI")
+    EV_SYN = 0x00
     EV_KEY = 0x01
+    SYN_DROPPED = 0x03
     KEY_CODES = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7}
     KEY_SPACE = 57
     KEY_MAX = 0x2FF
@@ -61,6 +63,7 @@ class KeyboardHIDInputAdapter:
         self._initial_level_sync: dict = {"status": "not_attempted", "first_event_policy": "requires_level_sync"}
         self._unknown_level_blocked = False
         self._unverified_events = 0
+        self._desynchronized = False
 
     @classmethod
     def _ev_iocgkey(cls) -> tuple[int, int]:
@@ -107,6 +110,7 @@ class KeyboardHIDInputAdapter:
             self._last_edge.clear()
             self._unknown_level_blocked = False
             self._sync_initial_levels()
+            self._desynchronized = False
             self._ready = True
             self._status = "active"
             self._thread = threading.Thread(target=self._run, name="mishka-hid-reader", daemon=True)
@@ -154,6 +158,11 @@ class KeyboardHIDInputAdapter:
 
     def feed_key(self, key_code: int, value: int, *, timestamp: float | None = None) -> None:
         """Inject a Linux key edge (1=down, 0=up, 2=autorepeat)."""
+        # After evdev queue loss no buffered edge has physical authority.
+        # Only explicit close/open recovery may establish a new level baseline.
+        if self._desynchronized:
+            self._unverified_events += 1
+            return
         now = time.monotonic() if timestamp is None else float(timestamp)
         # EVIOCGKEY failure leaves the current level unknowable. The first
         # event may be a buffered/current event rather than a new physical edge;
@@ -188,8 +197,6 @@ class KeyboardHIDInputAdapter:
             if value == 1:
                 if self.KEY_SPACE in self._pressed:
                     return
-                if now - self._last_edge.get(self.KEY_SPACE, -1e9) < self.debounce_s:
-                    return
                 self._pressed.add(self.KEY_SPACE)
                 self._known_levels.add(self.KEY_SPACE)
                 self._last_edge[self.KEY_SPACE] = now
@@ -220,6 +227,17 @@ class KeyboardHIDInputAdapter:
                 while len(buffer) >= event_size:
                     raw, buffer = buffer[:event_size], buffer[event_size:]
                     _sec, _usec, event_type, code, value = self.EVENT_STRUCT.unpack(raw)
+                    if event_type == self.EV_SYN and code == self.SYN_DROPPED:
+                        # A lost on-hook edge could leave capture authorized.
+                        # Fail closed instead of trusting this batch's tail or
+                        # fabricating a lifecycle edge from an ioctl resync.
+                        self._desynchronized = True
+                        self._ready = False
+                        self._stop.set()
+                        self._pressed.clear()
+                        self._known_levels.clear()
+                        self._report_error("input_desynchronized")
+                        return
                     if event_type == self.EV_KEY and value in (0, 1, 2):
                         self.feed_key(code, value)
             except BlockingIOError:
@@ -249,6 +267,7 @@ class KeyboardHIDInputAdapter:
             "reader_alive": bool(self._thread and self._thread.is_alive()),
             "initial_level_sync": dict(self._initial_level_sync),
             "unverified_events": self._unverified_events,
+            "input_desynchronized": self._desynchronized,
             "semantic_input_accepted": bool(self.is_ready() and not self._unknown_level_blocked),
             "physical_ready": bool(self.is_ready() and not self._unknown_level_blocked and self._initial_level_sync.get("status") == "synced"),
         }
