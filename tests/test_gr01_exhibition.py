@@ -57,8 +57,10 @@ def test_canonical_exhibition_timer_is_monotonic_exact_and_cancelable() -> None:
     clock[0] = 15.0
     due = runtime.handle(canonical_event("WelcomeTimerFired", 2, 1, 15.0, "timer"))
     assert due["reason"] == "welcome_started"
-    assert [effect["phrase_id"] for effect in due["effects"]] == ["PHRASE_001"]
-    assert due["effects"][0]["scheduled_deadline_monotonic"] == 15.0
+    assert [effect["type"] for effect in due["effects"]] == ["welcome_ring_stop", "speak"]
+    speech = [effect for effect in due["effects"] if effect["type"] == "speak"]
+    assert [effect["phrase_id"] for effect in speech] == ["PHRASE_001"]
+    assert speech[0]["scheduled_deadline_monotonic"] == 15.0
 
     cancelled = CanonicalRuntime(monotonic_now=lambda: clock[0], exhibition_mode=True)
     cancelled.handle(canonical_event("HandsetLifted", 1, 0, 10.0))
@@ -235,7 +237,10 @@ def test_timer_boundary_races_and_audio_failure_are_terminal() -> None:
         due = await app.flush_welcome_timers()
         assert len(due) == 1
         assert [call[0] for call in calls] == ["RINGTONE", "PHRASE_001"]
-        assert due[0]["outputs"][0]["resolution"] == "audio_dispatch_failed"
+        assert due[0]["outputs"][0]["type"] == "welcome_ring_stop"
+        speech = [effect for effect in due[0]["outputs"] if effect.get("type") == "speak"]
+        assert len(speech) == 1 and speech[0]["phrase_id"] == "PHRASE_001"
+        assert speech[0]["resolution"] == "audio_dispatch_failed"
         assert await app.flush_welcome_timers() == []
         assert app.canonical_diagnostics[-1]["kind"] == "audio_dispatch_failed"
 

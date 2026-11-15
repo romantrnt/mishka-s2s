@@ -102,7 +102,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return current == "exhibition_onboarding_complete" and target == "exhibition_menu_tutorial_buttons"
     if event_type == "AudioCompleted":
         return (
-            (current == "voice_welcome" and target in {"exhibition_introduction", "exhibition_menu_tutorial_prompt"})
+            (current == "voice_welcome" and target in {"exhibition_introduction", "exhibition_menu_tutorial_prompt", "personal_welcome_listen"})
             or (current == "exhibition_introduction" and target == "exhibition_name_question")
             or (current == "exhibition_name_question" and target == "exhibition_name_capture")
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
@@ -152,6 +152,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return current == "safety_handoff" and target == "root_menu"
     if event_type == "ButtonPressed":
         return (
+            (current == "personal_welcome_listen" and target == "exhibition_menu_tutorial_prompt")
+            or
             target == "wellbeing_check"
             or (current == "wellbeing_check" and target in {"support_intake", "safety_handoff"})
             or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
@@ -181,6 +183,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
                     and target == "fixed_story_menu"))
     if event_type == "VoiceIntentReady":
         return (
+            (current == "personal_welcome_listen" and target == "exhibition_menu_tutorial_prompt")
+            or
             target in {"safety_handoff", "support_intake"}
             or (current in {"fixed_story_playing", "story_speech_analysis"}
                 and target in {"story_pause_announcement", "fixed_story_choice_wave"})

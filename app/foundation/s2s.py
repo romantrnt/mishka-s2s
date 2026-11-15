@@ -15,6 +15,7 @@ import os
 import re
 import queue as thread_queue
 import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -90,6 +91,7 @@ class _BoundedNativeWorker:
     def _run(self) -> None:
         while True:
             job = self._jobs.get()
+            value = None
             try:
                 if job is None:
                     return
@@ -126,6 +128,10 @@ class _BoundedNativeWorker:
                     with self._lock:
                         self.active_jobs = max(0, self.active_jobs - 1)
                 self._jobs.task_done()
+                # Do not retain the last call closure/text or PCM result while
+                # the resident thread blocks waiting for its next job.
+                job = None
+                value = None
 
     def snapshot(self) -> dict[str, int | bool]:
         with self._lock:
@@ -656,7 +662,7 @@ class AudioIngressPipeline:
             if duration < self.config.min_speech_ms: return "too_short", None
             return "speech_end", chunk
         return "collecting", None
-    def reset(self): self.active=False; self.silence_ms=0; self.buffer.clear(); self._vad_pending.clear(); self._pre_roll.clear()
+    def reset(self): self.active=False; self.silence_ms=0; self.buffer.clear(); self._vad_pending.clear(); self._pre_roll.clear(); self._canonical_private_owner = None; self._canonical_private_stale_samples = 0; self._canonical_private_replacement_owner = None
 
 
 class MockSpeechRecognizer:
@@ -1261,6 +1267,37 @@ class DictAudioAssetProvider:
     async def get(self,asset_id): return self.assets.get(asset_id)
 
 
+class PrivateRVCUnavailable(RuntimeError):
+    """Fixed public failure code; never includes audio or worker diagnostics."""
+
+    def __init__(self):
+        super().__init__("private_rvc_unavailable")
+
+
+def _private_rvc_tmpfs_root() -> Path:
+    """Linux-only, verified writable tmpfs. No disk-backed fallback.
+
+    tmpfs can still be swapped by the OS; this is not a swap/core-dump policy.
+    """
+    root = Path("/dev/shm")
+    try:
+        if not sys.platform.startswith("linux") or root.resolve(strict=True) != root:
+            raise PrivateRVCUnavailable()
+        info = root.stat()
+        if not stat.S_ISDIR(info.st_mode) or not os.access(root, os.W_OK | os.X_OK):
+            raise PrivateRVCUnavailable()
+        device = f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}"
+        for line in Path("/proc/self/mountinfo").read_text().splitlines():
+            before, after = line.split(" - ", 1)
+            fields, filesystem = before.split(), after.split()
+            if (fields[4] == str(root) and fields[2] == device
+                    and "rw" in fields[5].split(",") and filesystem[0] == "tmpfs"):
+                return root
+    except (OSError, ValueError, IndexError):
+        pass
+    raise PrivateRVCUnavailable() from None
+
+
 class RVCV2Provider:
     """Persistent, process-isolated RVC v2 adapter.
 
@@ -1316,12 +1353,8 @@ class RVCV2Provider:
         return status
 
     async def _drain_stderr(self, stream: asyncio.StreamReader) -> None:
-        while True:
-            line=await stream.readline()
-            if not line: return
-            text=line.decode("utf-8","replace").strip()
-            if text:
-                self._stderr_tail.append(text[:500])
+        while await stream.read(4096):
+            pass  # Never retain raw vendor diagnostic content.
 
 
     async def _ensure_worker(self) -> None:
@@ -1338,21 +1371,38 @@ class RVCV2Provider:
                 "--model",str(self.model_path),"--index",str(self.index_path),
                 "--f0-method",self.f0_method,"--filter-radius",str(self.filter_radius),"--f0-up-key",str(self.f0_up_key),"--index-rate",str(self.index_rate),"--protect",str(self.protect),
                 cwd=self.project_root,env=env,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,start_new_session=True,
+                stderr=asyncio.subprocess.DEVNULL,start_new_session=True,
             )
-            assert self._process.stdout is not None and self._process.stderr is not None
-            self._stderr_task=asyncio.create_task(self._drain_stderr(self._process.stderr))
+            assert self._process.stdout is not None
+            # Vendor stderr can contain private audio/name-derived details.
+            # Discard at the OS pipe boundary, including delayed writes.
+            self._stderr_tail.clear()
             try:
                 raw=await asyncio.wait_for(self._process.stdout.readline(),self.startup_timeout_s)
                 reply=json.loads(raw) if raw else {}
                 if reply.get("event")!="ready": raise RuntimeError("RVC worker did not become ready")
                 self._worker_info=reply; self.worker_restarts+=1
             except BaseException:
-                await self._stop_worker(force=True)
+                await self._stop_worker_drained()
                 raise
 
+    async def _stop_worker_drained(self, *, force: bool = True) -> None:
+        # Keep ownership until the process is reaped, even across repeated
+        # task.cancel() calls. Never let cleanup race a still-active WAV writer.
+        task = asyncio.create_task(self._stop_worker(force=force))
+        interrupted = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                interrupted = True
+        task.result()
+        self._stderr_tail.clear()
+        if interrupted:
+            raise asyncio.CancelledError
+
     async def _stop_worker(self, *, force: bool=False) -> None:
-        process=self._process; self._process=None; self._worker_info={}
+        process=self._process; self._worker_info={}
         if process is not None and process.returncode is None:
             if not force and process.stdin is not None:
                 try:
@@ -1365,13 +1415,15 @@ class RVCV2Provider:
                 try: await asyncio.wait_for(process.wait(),3.0)
                 except TimeoutError:
                     process.kill(); await process.wait()
+        if self._process is process:
+            self._process = None
         if self._stderr_task is not None:
             self._stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError): await self._stderr_task
             self._stderr_task=None
 
     async def close(self) -> None:
-        async with self._job_lock: await self._stop_worker()
+        async with self._job_lock: await self._stop_worker_drained(force=False)
 
     async def _read_reply(self, request_id: str, cancelled) -> dict[str,Any]:
         assert self._process is not None and self._process.stdout is not None
@@ -1381,7 +1433,7 @@ class RVCV2Provider:
                 done,_=await asyncio.wait({read_task},timeout=.05)
                 if read_task in done:
                     raw=read_task.result()
-                    if not raw: raise RuntimeError("RVC worker exited: "+" | ".join(self._stderr_tail)[-1000:])
+                    if not raw: raise RuntimeError("RVC worker exited")
                     reply=json.loads(raw)
                     if str(reply.get("id"))!=request_id: raise RuntimeError("RVC worker response id mismatch")
                     return reply
@@ -1391,6 +1443,17 @@ class RVCV2Provider:
             with contextlib.suppress(asyncio.CancelledError): await read_task
 
     async def convert(self,audio,cancelled):
+        return await self._convert(audio, cancelled)
+
+    async def convert_private(self, audio, cancelled):
+        try:
+            return await self._convert(audio, cancelled, private=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise PrivateRVCUnavailable() from None
+
+    async def _convert(self, audio, cancelled, *, private=False):
         if cancelled(): raise asyncio.CancelledError
         if self.converter is not None:
             converted_input = np.asarray(audio.samples, dtype=np.float32)
@@ -1406,41 +1469,56 @@ class RVCV2Provider:
             return AudioChunk(peak_normalize(samples), RVC_SAMPLE_RATE, audio.token)
         async with self._job_lock:
             if cancelled(): raise asyncio.CancelledError
+            tmp_root = _private_rvc_tmpfs_root() if private else self.tmp_dir
             await self._ensure_worker()
             assert self._process is not None and self._process.stdin is not None
-            self.tmp_dir.mkdir(parents=True,exist_ok=True); self.jobs_submitted+=1; self._active=True
+            tmp_root.mkdir(parents=True,exist_ok=True); self.jobs_submitted+=1; self._active=True
             request_id=uuid.uuid4().hex; started=time.perf_counter()
+            folder_owner = None
+            succeeded = False
             try:
-                with tempfile.TemporaryDirectory(prefix="turn-",dir=self.tmp_dir) as folder:
-                    input_path=Path(folder)/"silero.wav"; output_path=Path(folder)/"rvc.wav"
-                    rvc_input = audio
-                    if audio.sample_rate != RVC_SAMPLE_RATE:
-                        rvc_input = AudioChunk(
-                            resample_mono(audio.samples, audio.sample_rate, RVC_SAMPLE_RATE),
-                            RVC_SAMPLE_RATE,
-                            audio.token,
-                        )
-                    self._write_wav(input_path,rvc_input)
-                    request={"op":"convert","id":request_id,"input":str(input_path),"output":str(output_path)}
-                    self._process.stdin.write((json.dumps(request,separators=(",",":"))+"\n").encode())
-                    await self._process.stdin.drain()
-                    reply=await self._read_reply(request_id,cancelled)
-                    if reply.get("event")!="converted": raise RuntimeError("RVC v2 conversion failed: "+str(reply.get("message") or reply.get("error") or "worker_error")[:500])
-                    if cancelled(): raise asyncio.CancelledError
-                    samples,rate=self._read_wav(output_path)
+                folder_owner = tempfile.TemporaryDirectory(prefix="private-" if private else "turn-", dir=tmp_root)
+                folder = folder_owner.name
+                if private and (stat.S_IMODE(Path(folder).stat().st_mode) != 0o700
+                                or Path(folder).stat().st_dev != tmp_root.stat().st_dev):
+                    raise PrivateRVCUnavailable()
+                input_path=Path(folder)/"silero.wav"; output_path=Path(folder)/"rvc.wav"
+                rvc_input = audio
+                if audio.sample_rate != RVC_SAMPLE_RATE:
+                    rvc_input = AudioChunk(
+                        resample_mono(audio.samples, audio.sample_rate, RVC_SAMPLE_RATE),
+                        RVC_SAMPLE_RATE,
+                        audio.token,
+                    )
+                self._write_wav(input_path,rvc_input)
+                request={"op":"convert","id":request_id,"input":str(input_path),"output":str(output_path)}
+                self._process.stdin.write((json.dumps(request,separators=(",",":"))+"\n").encode())
+                await self._process.stdin.drain()
+                reply=await self._read_reply(request_id,cancelled)
+                if reply.get("event")!="converted": raise RuntimeError("RVC v2 conversion failed: "+str(reply.get("message") or reply.get("error") or "worker_error")[:500])
+                if cancelled(): raise asyncio.CancelledError
+                samples,rate=self._read_wav(output_path)
                 if cancelled(): raise asyncio.CancelledError
                 if rate != RVC_SAMPLE_RATE:
                     samples = resample_mono(samples, rate, RVC_SAMPLE_RATE)
                     rate = RVC_SAMPLE_RATE
                 samples = peak_normalize(samples)
                 self.jobs_completed+=1; self.last_latency_ms=round((time.perf_counter()-started)*1000,2)
+                succeeded = True
                 return AudioChunk(samples,rate,audio.token)
             except asyncio.CancelledError:
-                self.jobs_cancelled+=1; await self._stop_worker(force=True); raise
+                self.jobs_cancelled+=1
+                raise
             except Exception:
-                self.jobs_failed+=1; await self._stop_worker(force=True); raise
+                self.jobs_failed+=1
+                raise
             finally:
-                self._active=False
+                try:
+                    if not succeeded: await self._stop_worker_drained()
+                finally:
+                    self._active=False
+                    if folder_owner is not None:
+                        folder_owner.cleanup()
 
     @staticmethod
     def _write_wav(path: Path, audio: AudioChunk) -> None:
@@ -1475,6 +1553,9 @@ class RVCProvider:
             raise asyncio.CancelledError
         return audio
 
+    async def convert_private(self, audio, cancelled):
+        return await self.convert(audio, cancelled)
+
 
 class PassthroughVoiceProvider:
     """Explicit non-production bypass for profiles that disable conversion."""
@@ -1486,6 +1567,9 @@ class PassthroughVoiceProvider:
         if cancelled():
             raise asyncio.CancelledError
         return audio
+
+    async def convert_private(self, audio, cancelled):
+        return await self.convert(audio, cancelled)
 
 
 class ResilientVoiceProvider:
@@ -1608,12 +1692,32 @@ class SoundDevicePlaybackController:
                 self._stream = None
 
     async def play(self, audio):
+        await self._play_guarded(audio)
+
+    async def play_owned_pcm(self, audio, owner_current):
+        await self._play_guarded(audio, owner_current)
+
+    async def _play_guarded(self, audio, owner_current=None):
+        generation = self._generation
+        task = asyncio.current_task()
+        def current():
+            return (not task.cancelling()
+                    and generation == self._generation and audio.token == self.active_token
+                    and (owner_current is None or owner_current()))
         async with self._play_lock:
-            generation = self._generation
+            # Ordinary queued assets historically sample stop-generation here.
+            # Private PCM must retain its pre-queue generation fence.
+            if owner_current is None:
+                generation = self._generation
+            self.last_playback_completed = False
+            if not current():
+                return
             stream = None
             try:
                 import numpy as np
                 import sounddevice as sd
+                if not current():
+                    return
                 stream = sd.OutputStream(
                     samplerate=audio.sample_rate,
                     channels=1,
@@ -1621,20 +1725,29 @@ class SoundDevicePlaybackController:
                     device=self._device_arg(),
                 )
                 self._stream = stream
-                await self._run_io(stream.start)
-                if generation != self._generation or audio.token != self.active_token:
+                def guarded_start():
+                    if current():
+                        stream.start()
+                await self._run_io(guarded_start)
+                if not current():
                     return
                 samples = np.asarray(audio.samples, dtype=np.float32).reshape(-1, 1)
                 self.position_samples = int(self.start_position_samples)
                 self.start_position_samples = 0
                 self.last_playback_completed = False
                 for offset in range(0, len(samples), 2048):
-                    if generation != self._generation or audio.token != self.active_token:
+                    if not current():
                         return
                     chunk = samples[offset:offset + 2048]
-                    await self._run_io(lambda chunk=chunk: stream.write(chunk))
+                    def guarded_write(chunk=chunk):
+                        if not current():
+                            return False
+                        stream.write(chunk)
+                        return True
+                    if not await self._run_io(guarded_write):
+                        return
                     self.position_samples += len(chunk)
-                self.last_playback_completed = True
+                self.last_playback_completed = current()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

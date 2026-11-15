@@ -133,9 +133,11 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("patient_profile", self.app.last_canonical_event["payload"])
 
     async def test_real_max_json_starts_menu_without_exhibition_identity_questions(self):
+        self.app.audio.private_pcm_supported = False  # Recorded fallback path.
         await self.scan("demo-1")
         await self.send("HandsetLifted")
         deadline = self.state().welcome_deadline_monotonic
+        self.app.monotonic_now = lambda: deadline + .01
         async def accepted(kind, seq, payload=None):
             return await self.app.receive_async(Event(kind, self.boundary.session_id, seq,
                 time.time(), "profile_onboarding", payload or {}, f"profile-onboarding-{seq}", deadline + .01))
@@ -152,6 +154,30 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(duplicate["reason"], "exhibition_introduction_started")
         self.assertEqual(self.state().mode, "exhibition_menu_tutorial_prompt")
         self.assertNotIn("Демо", json.dumps(self.state().snapshot(), ensure_ascii=False))
+
+    async def test_real_max_json_private_welcome_waits_for_child_answer(self):
+        await self.scan("demo-1")
+        await self.send("HandsetLifted")
+        owner = self.app._private_welcomes[self.boundary.session_id]
+        await owner.task
+        deadline = self.state().welcome_deadline_monotonic
+        self.app.monotonic_now = lambda: deadline
+        async def accepted(kind, seq, payload=None, text=None):
+            return await self.app.receive_async(Event(kind, self.boundary.session_id, seq,
+                time.time(), "private_onboarding", payload or {}, f"private-onboarding-{seq}", deadline), text)
+        result = await accepted("WelcomeTimerFired", 1)
+        self.assertEqual(result["reason"], "personal_welcome_started")
+        lease = self.app._active_audio[self.boundary.session_id]
+        callback = {key: lease[key] for key in ("token", "generation", "playback_lease", "playback_id")}
+        callback["response_id"] = "PERSONAL_WELCOME"
+        result = await accepted("AudioCompleted", 2, callback)
+        self.assertEqual(result["reason"], "personal_welcome_listening")
+        self.assertFalse(any(x.get("phrase_id") == "PHRASE_007" for x in result["outputs"]))
+        result = await accepted("SpeechReceived", 3, text="Хорошо")
+        self.assertEqual(result["reason"], "personal_welcome_answer_received")
+        self.assertEqual(self.state().mode, "exhibition_menu_tutorial_prompt")
+        self.assertFalse(self.app.bounded_s2s.tts.cache)
+        self.assertNotIn("Демо", json.dumps(result, ensure_ascii=False))
 
     async def test_ready_lift_hangup_clears_both_sides(self):
         await self.scan("demo-1")

@@ -22,8 +22,10 @@ RFID database and original checkout are not modified by these source changes.
 - Output validation rejects demonstrated secrecy/isolation instructions and
   unsupported claims of external calls/messages/delivery. Direct requests such as
   calling a parent route to the real handoff boundary, not generated promises.
-- An already-authorized, live Max JSON profile starts the menu after the greeting,
-  without re-interviewing for name/age. Missing fields remain unknown. No raw UID
+- An already-authorized, live Max JSON profile can receive the private personalized
+  welcome and then one safety-checked answer before the menu, without re-interviewing
+  for name/age. The recorded fallback retains the existing menu path. See
+  `personal-welcome-acceptance-2026-11-15.md` for exact timing, fallback and silence limits. Missing fields remain unknown. No raw UID
   or second identity database is introduced. Guest, denial, expiry, revocation and
   hangup remain separate. Medical appointments are not inferred from unrelated facts.
 - Root buttons 4 and 7 reach their existing story and day/plans entry points.
@@ -130,7 +132,7 @@ Interrupted runs and targeted subsets are not represented as a full-suite pass.
 Independent review confirmed and re-tested the explicit-help race, silent story
 trap, help-key priority and stale fallback lease fixes. Physical audio is unverified.
 
-Final local aggregate, frozen application/tests snapshot: **1204 passed and 4
+Prior a9105e5 local aggregate, before the personalized-welcome change: **1204 passed and 4
 subtests passed in 708.91 seconds**, exit 0, with the unchanged external Max demo
 bundle. The earlier interrupted runs are excluded. Canonical acceptance, browser
 fake-Audio regression, 126-file AST parse and the 108-asset audio catalog check

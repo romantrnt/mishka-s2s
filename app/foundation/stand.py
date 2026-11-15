@@ -50,6 +50,7 @@ AUDIO_SAMPLE_RATES = {16000, 22050, 24000, 48000}
 MAX_AUDIO_SECONDS = 15
 MAX_AUDIO_WAV_BYTES = 6 * 1024 * 1024
 HEADLESS_AUDIO_NODES = frozenset({
+    "personal_welcome_listen",
     "exhibition_menu_repeat_listen",
     "exhibition_name_capture", "exhibition_age_selection", "bear_dialogue", "support_intake",
     "personal_story_theme", "wellbeing_check", "schedule_weather",
@@ -495,6 +496,10 @@ class UARTLEDController:
 
 
 class UARTAudioOutput:
+    private_pcm_supported = False
+    def play_pcm_owned(self, handle: PlaybackHandle, audio: AudioChunk):
+        raise RuntimeError("private_pcm_unsupported")
+
     def __init__(self, adapter: SerialHardwareAdapter): self.adapter=adapter
     def play_owned(self, handle: PlaybackHandle, asset_id: str, offset_ms: int = 0):
         self.adapter.send({"type": "audio_play", "payload": {
@@ -524,12 +529,20 @@ class UARTDisplayController:
 class HeadlessAudioOutput:
     """Scenario audio port that delegates playback to the local USB device."""
 
+    private_pcm_supported = True
+
     def __init__(self):
         self.on_play = None
         self.on_asset_play = None
+        self.on_pcm_play = None
         self.on_pause = None
         self.on_resume = None
         self.on_cancel = None
+
+    def play_pcm_owned(self, handle: PlaybackHandle, audio: AudioChunk):
+        if not callable(self.on_pcm_play):
+            raise RuntimeError("private_pcm_unavailable")
+        self.on_pcm_play(handle, audio)
 
     def play_owned(self, handle: PlaybackHandle, asset_id: str, offset_ms: int = 0):
         if not callable(self.on_asset_play):
@@ -654,6 +667,7 @@ class HardwareIntegrationStand:
         self._event_cursor=0; self._device_buffer=b""; self.responses,self.stories,self.games=self._load_content(content_root)
         if isinstance(self.audio_output, HeadlessAudioOutput):
             self.audio_output.on_play = self._headless_audio_play
+            self.audio_output.on_pcm_play = self._headless_pcm_play
             self.audio_output.on_asset_play = self._headless_asset_play
             self.audio_output.on_pause = self._pause_story_playback
             self.audio_output.on_resume = self._resume_story_playback
@@ -674,11 +688,16 @@ class HardwareIntegrationStand:
 
     def _headless_audio_accepting(self) -> bool:
         session = self.application.sessions.get(self.active_session_id)
+        runtime = getattr(self.application, "canonical_runtime", None)
+        state = runtime.sessions.get(self.active_session_id) if runtime is not None else None
         return bool(
             session is not None
             and getattr(self, "_capture_hid_fault", None) is None
             and getattr(session, "handset_up", False)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
+            and not (getattr(session, "current_node", None) == "personal_welcome_listen"
+                     and (self.application._active_audio.get(self.active_session_id)
+                          or getattr(state, "audio_status", None) == "failed"))
         )
 
     def _audio_owner_guard(self, sid: str, *, physical: bool = False):
@@ -705,7 +724,27 @@ class HardwareIntegrationStand:
     def _headless_frame_owner(self):
         # Called in the capture callback, before scheduling on the event loop.
         sid = self.active_session_id
-        return sid, self._audio_owner_guard(sid, physical=True)
+        owner_current = self._audio_owner_guard(sid, physical=True)
+        accepting = self._headless_audio_accepting()
+        record = self.application.sessions.get(sid)
+        node = getattr(record, "current_node", None)
+        runtime = getattr(self.application, "canonical_runtime", None)
+        state = runtime.sessions.get(sid) if runtime is not None else None
+        version = getattr(state, "state_version", None)
+        lease = self.application._active_audio.get(sid)
+        private_phase = (node == "personal_welcome_listen"
+                         or bool(lease and lease.get("content_id") == "PERSONAL_WELCOME"))
+
+        def phase_current():
+            current = runtime.sessions.get(sid) if runtime is not None else None
+            return (accepting and owner_current() and self._headless_audio_accepting()
+                    and (not private_phase or (
+                        getattr(record, "current_node", None) == node
+                        and getattr(current, "state_version", None) == version
+                        and self.application._active_audio.get(sid) is lease)))
+        # Distinguish a closed listening phase from a revoked physical owner.
+        phase_current.lifecycle_current = owner_current
+        return sid, phase_current
 
     def _enqueue_headless_audio_frame(self, values: Any, owner=None) -> None:
         queue = self._headless_audio_queue
@@ -895,6 +934,94 @@ class HardwareIntegrationStand:
                 resolved = response.get("text")
         if resolved:
             self._schedule_response_audio(self.active_session_id, str(resolved))
+
+    def _pcm_owner_current(self, handle: PlaybackHandle, identity_binding) -> bool:
+        lease = self.application._active_audio.get(handle.session_id)
+        state = self.application.canonical_runtime.sessions.get(handle.session_id)
+        return bool(identity_binding and all(identity_binding) and state is not None
+            and (state.profile_ref, state.identity_request_id) == identity_binding
+            and state.active_audio_id == "PERSONAL_WELCOME"
+            and state.playback_lease == handle.playback_lease
+            and self.application._identity_scope_live(handle.session_id, "personalize")
+            and handle.response_id == "PERSONAL_WELCOME" and lease
+            and self.active_session_id == handle.session_id
+            and self.application._session_epochs.get(handle.session_id, 0) == handle.generation and
+            all(lease.get(key) == value for key, value in {
+                "content_id": handle.response_id, "token": handle.token,
+                "generation": handle.generation, "playback_id": handle.playback_id,
+                "playback_lease": handle.playback_lease}.items()))
+
+    def _headless_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
+        if (handle.response_id != "PERSONAL_WELCOME" or audio.token != handle.token
+                or audio.session_id != handle.session_id or not audio.samples):
+            raise RuntimeError("private_pcm_invalid_owner")
+        state = self.application.canonical_runtime.sessions.get(handle.session_id)
+        identity_binding = (state.profile_ref, state.identity_request_id) if state is not None else None
+        previous = tuple(self._response_audio_tasks)
+        task = asyncio.create_task(self._play_pcm_audio(handle, audio, previous, identity_binding),
+                                   name="mishka-private-pcm")
+        self._response_audio_tasks.add(task)
+        def observe(done):
+            self._response_audio_tasks.discard(done)
+            if not done.cancelled():
+                # Never retain or report exception messages from private PCM.
+                done.exception()
+        task.add_done_callback(observe)
+
+    async def _play_pcm_audio(self, handle: PlaybackHandle, audio: AudioChunk,
+                              previous=(), identity_binding=None) -> None:
+        async def report(kind):
+            if not self._pcm_owner_current(handle, identity_binding):
+                return
+            self._audio_event_sequence += 1
+            payload = {"response_id": "PERSONAL_WELCOME", "token": handle.token,
+                       "generation": handle.generation, "playback_id": handle.playback_id,
+                       "playback_lease": handle.playback_lease}
+            if kind == "AudioFailed":
+                payload["error_code"] = "private_pcm_failed"
+            await self.application.receive_async(Event(kind, handle.session_id,
+                self._audio_event_sequence, time.time(), "physical_audio", payload,
+                "private-pcm:" + handle.playback_id))
+        def diagnostic(code):
+            recorder = getattr(self.application, "record_audio_diagnostic", None)
+            if callable(recorder):
+                recorder(code, session_id=handle.session_id, response_id="PERSONAL_WELCOME")
+        try:
+            # Registration may follow the synchronous port call before yield.
+            # Stale PCM must never cancel a newer owner's playback.
+            if not self._pcm_owner_current(handle, identity_binding):
+                return
+            for task in previous:
+                task.cancel()
+            if previous:
+                await asyncio.gather(*previous, return_exceptions=True)
+            if not self._pcm_owner_current(handle, identity_binding):
+                return
+            self.playback.active_token = handle.token
+            diagnostic("private_pcm_started")
+            play_owned = getattr(self.playback, "play_owned_pcm", None)
+            if not callable(play_owned):
+                raise RuntimeError("private_pcm_guard_unavailable")
+            await play_owned(audio, lambda: self._pcm_owner_current(handle, identity_binding))
+            if not self._pcm_owner_current(handle, identity_binding):
+                return
+            if not bool(getattr(self.playback, "last_playback_completed", False)):
+                diagnostic("private_pcm_incomplete")
+                await report("AudioFailed")
+                return
+            diagnostic("private_pcm_finished")
+            await report("AudioCompleted")
+        except asyncio.CancelledError:
+            # Backend cancellation owns its stream cleanup. Never stop shared
+            # playback here: a newer owner may already be using it.
+            raise
+        except Exception:
+            if self._pcm_owner_current(handle, identity_binding):
+                diagnostic("private_pcm_failed")
+                try:
+                    await report("AudioFailed")
+                except Exception:
+                    pass
 
     def _headless_asset_play(self, response_id: str, asset_id: str, token: int, offset_ms: int = 0,
                              handle: PlaybackHandle | None = None) -> None:

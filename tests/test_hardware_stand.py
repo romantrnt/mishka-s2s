@@ -290,7 +290,7 @@ def test_stand_ready_reports_validated_content_instead_of_external_placeholder()
         result=run(ready_route())
         assert result["content"]["contract"] == "canonical_product/v1"
         assert result["content"]["scenario_id"] == "canonical_product"
-        assert result["content"]["state_nodes"] == 50
+        assert result["content"]["state_nodes"] == 51
         assert result["content"]["ready"] is True
         assert result["ready"] is False
         assert result["lifecycle"]["state"] in {"BOOTING", "DEGRADED"}

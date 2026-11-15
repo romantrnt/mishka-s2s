@@ -44,7 +44,8 @@ def test_exhibition_session_keeps_onboarding_memory_and_closing_wave():
     runtime = CanonicalRuntime(exhibition_mode=True, monotonic_now=lambda: 10.0)
     runtime.handle(_event("HandsetLifted", 1, 0, source="hid"))
     timer = runtime.handle(_event("WelcomeTimerFired", 2, 1, source="timer", monotonic=15.0))
-    assert [item["type"] for item in timer["effects"]] == ["speak"]
+    assert [item["type"] for item in timer["effects"]] == ["welcome_ring_stop", "speak"]
+    assert timer["effects"][1]["phrase_id"] == "PHRASE_001"
     for seq, phrase in ((3, "PHRASE_001"), (4, "PHRASE_078"), (5, "PHRASE_099")):
         state = runtime.sessions["production-path"]
         runtime.handle(_event("AudioCompleted", seq, state.state_version, {"response_id": phrase}, source="audio"))
