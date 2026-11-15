@@ -36,10 +36,11 @@ class RecordingAudio:
                 "offset_ms": int(offset_ms),
             })
     def play_pcm_owned(self, handle, audio):
-        if handle.response_id != "PERSONAL_WELCOME":
+        from .owned_speech import OWNED_PCM_IDS
+        if handle.response_id not in OWNED_PCM_IDS:
             raise RuntimeError("private_pcm_invalid_owner")
         if handle.token == self.token:
-            self.commands.append({"response_id": "PERSONAL_WELCOME", "token": handle.token,
+            self.commands.append({"response_id": handle.response_id, "token": handle.token,
                 "session_id": handle.session_id, "generation": handle.generation,
                 "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
                 "content_kind": "private_pcm"})

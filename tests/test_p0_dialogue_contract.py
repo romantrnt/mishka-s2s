@@ -16,7 +16,7 @@ def event(kind, sid, sequence, payload=None, source="test"):
     return Event(kind, sid, sequence, 1.0, source, payload or {}, f"{source}:{sequence}", 0.0)
 
 
-def test_bounded_dialogue_reuses_history_and_clears_on_hangup():
+def test_bounded_dialogue_reuses_committed_history_and_retains_on_clinical_hangup():
     class FakeConversation:
         def __init__(self):
             self.seen = []
@@ -45,9 +45,11 @@ def test_bounded_dialogue_reuses_history_and_clears_on_hangup():
         assert fake.seen[0][1] == []
         assert fake.seen[1][1] == [("первый вопрос", "ответ")]
         assert fake.seen[1][2] == 1
-        assert fake.seen[0][0] is fake.seen[1][0]
+        assert fake.seen[0][0] is not fake.seen[1][0]  # transactional provider copies
         assert fake.seen[0][3] == fake.seen[1][3]
         await app.receive_async(event("HandsetPlaced", sid, 4))
+        assert app.conversation_contexts[sid].history == [("первый вопрос", "ответ"), ("второй вопрос", "ответ")]
+        await app.reset_session(sid)
         assert sid not in app.conversation_contexts
 
     asyncio.run(run())

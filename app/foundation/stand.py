@@ -936,23 +936,27 @@ class HardwareIntegrationStand:
             self._schedule_response_audio(self.active_session_id, str(resolved))
 
     def _pcm_owner_current(self, handle: PlaybackHandle, identity_binding) -> bool:
+        from .owned_speech import OWNED_PCM_IDS, PRIVATE_TYPED_AUDIO_IDS
         lease = self.application._active_audio.get(handle.session_id)
         state = self.application.canonical_runtime.sessions.get(handle.session_id)
-        return bool(identity_binding and all(identity_binding) and state is not None
-            and (state.profile_ref, state.identity_request_id) == identity_binding
-            and state.active_audio_id == "PERSONAL_WELCOME"
-            and state.playback_lease == handle.playback_lease
-            and self.application._identity_scope_live(handle.session_id, "personalize")
-            and handle.response_id == "PERSONAL_WELCOME" and lease
-            and self.active_session_id == handle.session_id
-            and self.application._session_epochs.get(handle.session_id, 0) == handle.generation and
-            all(lease.get(key) == value for key, value in {
-                "content_id": handle.response_id, "token": handle.token,
-                "generation": handle.generation, "playback_id": handle.playback_id,
-                "playback_lease": handle.playback_lease}.items()))
+        if not (state is not None and state.handset == "up" and handle.response_id in OWNED_PCM_IDS
+                and state.active_audio_id == handle.response_id and state.playback_lease == handle.playback_lease
+                and lease and self.active_session_id == handle.session_id
+                and self.application._session_epochs.get(handle.session_id,0) == handle.generation
+                and all(lease.get(key) == value for key,value in {
+                    "content_id":handle.response_id,"token":handle.token,"generation":handle.generation,
+                    "playback_id":handle.playback_id,"playback_lease":handle.playback_lease}.items())):
+            return False
+        if handle.response_id == "PERSONAL_WELCOME" or handle.response_id in PRIVATE_TYPED_AUDIO_IDS:
+            capability = "personalize" if handle.response_id == "PERSONAL_WELCOME" else "schedule"
+            return bool(identity_binding and all(identity_binding)
+                and (state.profile_ref,state.identity_request_id) == identity_binding
+                and self.application._identity_scope_live(handle.session_id,capability))
+        return state.mode == "schedule_weather"
 
     def _headless_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
-        if (handle.response_id != "PERSONAL_WELCOME" or audio.token != handle.token
+        from .owned_speech import OWNED_PCM_IDS
+        if (handle.response_id not in OWNED_PCM_IDS or audio.token != handle.token
                 or audio.session_id != handle.session_id or not audio.samples):
             raise RuntimeError("private_pcm_invalid_owner")
         state = self.application.canonical_runtime.sessions.get(handle.session_id)
@@ -974,7 +978,7 @@ class HardwareIntegrationStand:
             if not self._pcm_owner_current(handle, identity_binding):
                 return
             self._audio_event_sequence += 1
-            payload = {"response_id": "PERSONAL_WELCOME", "token": handle.token,
+            payload = {"response_id": handle.response_id, "token": handle.token,
                        "generation": handle.generation, "playback_id": handle.playback_id,
                        "playback_lease": handle.playback_lease}
             if kind == "AudioFailed":
@@ -985,7 +989,7 @@ class HardwareIntegrationStand:
         def diagnostic(code):
             recorder = getattr(self.application, "record_audio_diagnostic", None)
             if callable(recorder):
-                recorder(code, session_id=handle.session_id, response_id="PERSONAL_WELCOME")
+                recorder(code, session_id=handle.session_id, response_id=handle.response_id)
         try:
             # Registration may follow the synchronous port call before yield.
             # Stale PCM must never cancel a newer owner's playback.

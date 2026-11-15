@@ -207,6 +207,8 @@ class DialogueMemory:
         self.expires_at = now + self.ttl_seconds
 
     def touch(self, now: float) -> None:
+        if self.status == "expired":
+            self.status, self.expires_at = "active", None
         self.last_valid_interaction_at = now
         if self.status == "suspended":
             self.expires_at = now + self.ttl_seconds
@@ -229,6 +231,7 @@ class CanonicalState:
     audio_failure_code: str | None = None
     pending_tool: str | None = None
     pending_mode: str | None = None
+    support_question_kind: str | None = None
     timeout_at: float | None = None
     history_tail: list[str] = field(default_factory=list)
     profile_ref: str | None = None
@@ -745,6 +748,15 @@ def validate_generated_story(candidate: Mapping[str, Any], brief: Mapping[str, A
     return True, None
 
 
+def onboarding_declined(value: str) -> bool:
+    """An explicit refusal/skip is not a name, age, or behaviour problem."""
+    text = " ".join(str(value or "").casefold().strip().split()).strip(" .!?…")
+    return bool(re.fullmatch(
+        r"(?:нет|неа|не (?:хочу|скажу|знаю|помню|буду)(?: (?:говорить|отвечать|знакомиться|называть имя|сказывать))?"
+        r"|(?:я )?не хочу(?: (?:говорить|отвечать|знакомиться))?"
+        r"|(?:давай|можно|хочу) (?:играть|поиграть)|пропусти(?:м)?|неважно)", text))
+
+
 def normalize_exhibition_name(value: str) -> str | None:
     """Extract a spoken name from a short answer.
 
@@ -754,7 +766,7 @@ def normalize_exhibition_name(value: str) -> str | None:
     retain the transcript itself in session state.
     """
     text = " ".join(str(value or "").strip().split())
-    if not text or len(text) > 160:
+    if not text or len(text) > 160 or onboarding_declined(text):
         return None
     # Stop at normal sentence punctuation so a natural answer such as
     # ``меня зовут Вася, мне семь`` cannot absorb the second clause.
@@ -795,19 +807,16 @@ _EXHIBITION_AGE_WORDS = {
 
 
 def normalize_exhibition_age(value: str) -> int | None:
-    """Extract an exact age 1..7 from a natural STT answer."""
-    text = " ".join(str(value or "").casefold().strip().split())
-    if not text or len(text) > 120:
+    """Accept one direct age answer; reject contradictions and unrelated numbers."""
+    text = " ".join(str(value or "").casefold().strip().split()).strip(" .!?…")
+    if not text or len(text) > 120 or onboarding_declined(text):
         return None
-    # Prefer an explicit one-digit age.  Do not accept a digit embedded in a
-    # larger number or a year.
-    match = re.search(r"(?<!\d)([1-7])(?!\d)", text)
-    if match:
-        return int(match.group(1))
-    for word, age in _EXHIBITION_AGE_WORDS.items():
-        if re.search(rf"(?<![а-яё]){re.escape(word)}(?![а-яё])", text):
-            return age
-    return None
+    word = r"(?:[1-7]|один|одна|два|две|три|четыре|пять|шесть|семь)"
+    match = re.fullmatch(rf"(?:(?:мне|мне уже) )?({word})(?: (?:год|года|лет))?", text)
+    if not match:
+        return None
+    value = match.group(1)
+    return int(value) if value.isdecimal() else _EXHIBITION_AGE_WORDS[value]
 
 
 def normalize_exhibition_repeat_answer(value: str) -> str | None:
@@ -920,6 +929,21 @@ class CanonicalRuntime:
         state.identity_expires_monotonic = None
         state.identity_capabilities = []
 
+    def _support_no(self, state):
+        if state.support_question_kind != "fear":
+            state.support_question_kind = "fear"
+            state.state_version += 1
+            return self._decision(state, [{"type": "audio_stop"},
+                {"type": "lighting_preset", "preset": "HELP"},
+                {"type": "support_question", "question": "fear"}], "support_continue", clear_audio=True)
+        state.support_question_kind = None
+        state.mode = "root_menu"
+        state.expected_inputs = [f"button_{i}" for i in range(1, 8)] + ["handset_down"]
+        state.state_version += 1
+        return self._decision(state, [{"type": "audio_stop"},
+            {"type": "lighting_preset", "preset": "ROOT_MENU"},
+            {"type": "speak", "phrase_id": "PHRASE_087"}], "support_declined", clear_audio=True)
+
     def _personal_welcome_menu(self, state, reason):
         state.mode = "exhibition_menu_tutorial_prompt"
         state.expected_inputs = ["audio_completed", "handset_down"]
@@ -957,10 +981,12 @@ class CanonicalRuntime:
         state.timeout_at = state.dialogue_memory.expires_at
         audio_effects = [item for item in effects if item.get("type") in {
             "speak", "play_asset", "play_fixed_story", "resume_fixed_story", "play_placeholder",
-            "story_audio_resume", "speak_dynamic", "support_question", "support_response", "play_private_welcome",
+            "story_audio_resume", "speak_dynamic", "support_question", "support_response", "play_private_welcome", "typed_info_request",
         }]
         if audio_effects:
             for audio_effect in audio_effects:
+                if audio_effect.get("type") == "typed_info_request":
+                    audio_effect["content_id"] = "TYPED_" + str(audio_effect["kind"]).upper()
                 if audio_effect.get("type") == "support_question":
                     audio_effect["phrase_id"] = {
                         "pain_or_discomfort": "PHRASE_084", "fear": "PHRASE_085",
@@ -972,10 +998,15 @@ class CanonicalRuntime:
                     )
                 content_id = str(audio_effect.get("phrase_id") or audio_effect.get("story_id")
                                  or audio_effect.get("content_id") or "dynamic")
+                if state.handset != "up":
+                    audio_effect["deferred_until_handset"] = True
+                    continue
                 audio_effect["playback_lease"] = f"{state.session_id}:{uuid.uuid4().hex}"
                 state.active_audio_id = content_id
                 state.playback_lease = audio_effect["playback_lease"]
-            state.audio_status = "queued"
+            state.audio_status = "queued" if state.handset == "up" else "idle"
+            if state.handset != "up":
+                state.active_audio_id = state.playback_lease = None
             state.audio_failure_code = None
         elif clear_audio or any(item.get("type") == "audio_stop" for item in effects):
             state.active_audio_id = None
@@ -1262,6 +1293,12 @@ class CanonicalRuntime:
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "clear_private_display"}], "ram_ttl_expired")
             return self._decision(state, [], "timeout_not_due")
         if event.event_type == "DialogueFallback":
+            if (event.payload.get("reason") == "typed_information_unavailable"
+                    and state.mode == "schedule_weather" and state.handset == "up"):
+                state.state_version += 1
+                phrase = "PHRASE_101" if event.payload.get("kind") in {"what_next", "where_now"} else "PHRASE_100"
+                return self._decision(state, [{"type": "audio_stop"}, {"type": "speak", "phrase_id": phrase}],
+                                      "typed_information_unavailable", clear_audio=True)
             if (event.payload.get("reason") == "personal_story_unavailable"
                     and state.mode in {"personal_story_generating", "personal_story_validating", "personal_story_playing"}
                     and state.handset == "up"):
@@ -1312,6 +1349,10 @@ class CanonicalRuntime:
                 state.audio_status = "finished"
                 state.state_version += 1
                 return self._decision(state, [], "handoff_audio_finished", clear_audio=True)
+        if (event.event_type == "AudioCompleted" and state.mode == "schedule_weather"
+                and (response_id.startswith("TYPED_") or response_id in {"PHRASE_100", "PHRASE_101"})):
+            state.state_version += 1
+            return self._decision(state, [], "typed_information_finished", clear_audio=True)
         if (event.event_type == "AudioCompleted" and state.mode == "fixed_story_menu"
                 and response_id == "PHRASE_080" and state.active_audio_id == "PHRASE_080"):
             if not event.payload.get("playback_lease") or event.payload["playback_lease"] != state.playback_lease:
@@ -1625,6 +1666,16 @@ class CanonicalRuntime:
             if state.mode == "safety_handoff":
                 state.expected_inputs = ["adult_resolution"]
                 return self._decision(state, [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
+            if state.mode == "schedule_weather":
+                state.expected_inputs = ["button", "speech", "handset_down"]
+                return self._decision(state, [{"type": "capture_open"},
+                    {"type": "typed_info_request", "kind": "menu"}], "typed_menu_after_handset")
+            if state.mode == "wellbeing_check":
+                state.expected_inputs = ["button_1", "button_5", "button_7", "speech", "handset_down"]
+                return self._decision(state, [
+                    {"type": "capture_open"}, {"type": "lighting_preset", "preset": "HELP"},
+                    {"type": "support_question", "question": state.support_question_kind or "pain_or_discomfort"},
+                ], "support_question_after_handset")
             if state.mode == "game_active":
                 state.expected_inputs = ["button", "speech", "handset_down"]
                 return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "game_voice_join")
@@ -1754,9 +1805,14 @@ class CanonicalRuntime:
                     selection["downstream_owner"] = mode
                     preset = {1: "GAME_MENU", 3: "SUPPORT", 4: "PERSONAL_STORY",
                               5: "HELP", 7: "SCHEDULE_WEATHER"}[button]
-                    return self._decision(state, [
-                        selection, {"type": "lighting_preset", "preset": preset},
-                    ], "button_mode")
+                    entry_effects = [selection, {"type": "lighting_preset", "preset": preset}]
+                    if button == 7:
+                        entry_effects.append({"type": "typed_info_request", "kind": "menu"})
+                    if button == 5:
+                        state.support_question_kind = "pain_or_discomfort"
+                        state.expected_inputs = ["button_1", "button_5", "button_7", "speech", "handset_down"]
+                        entry_effects.append({"type": "support_question", "question": state.support_question_kind})
+                    return self._decision(state, entry_effects, "button_mode")
                 if button == 2:
                     state.mode, state.substate = "fixed_story_menu", "story_menu_opened"
                     state.menu_pressed_buttons = []
@@ -1791,8 +1847,13 @@ class CanonicalRuntime:
                 "schedule_weather", "personal_story_generating",
                 "personal_story_validating", "personal_story_playing",
             } and not (self.exhibition_mode and state.mode == "exhibition_age_selection"):
-                state.mode, state.expected_inputs, state.state_version = "wellbeing_check", ["button_1", "button_7", "speech"], state.state_version + 1
-                return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "HELP"}, {"type": "support_question", "question": "pain_or_discomfort"}], "help_priority")
+                question = state.support_question_kind if state.mode == "wellbeing_check" else None
+                state.support_question_kind = question or "pain_or_discomfort"
+                state.mode, state.expected_inputs, state.state_version = "wellbeing_check", ["button_1", "button_5", "button_7", "speech", "handset_down"], state.state_version + 1
+                return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "HELP"}, {"type": "support_question", "question": state.support_question_kind}], "help_priority")
+            if state.mode == "wellbeing_check" and state.handset != "up":
+                state.expected_inputs = ["handset_up", "button_5"]
+                return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "support_handset_required")
             if state.mode == "personal_welcome_listen":
                 if state.audio_status == "failed":
                     return self._decision(state, [], "personal_welcome_audio_failed")
@@ -1863,8 +1924,7 @@ class CanonicalRuntime:
                 state.mode, state.safety_severity, state.state_version = "safety_handoff", "concern", state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}, {"type": "adult_handoff_request", "severity": "concern"}], "adult_handoff_requested")
             if state.mode == "wellbeing_check" and button == 1:
-                state.mode, state.state_version = "support_intake", state.state_version + 1
-                return self._decision(state, [{"type": "support_question", "question": "fear"}], "support_continue")
+                return self._support_no(state)
             if state.mode in {"idle", "visual_welcome", "anonymous_visual", "root_menu", "dialogue_memory_expired", "dialogue_suspended_ram", "voice_welcome", "automatic_mood_check", "awaiting_handset"}:
                 mode = BUTTON_MODES[button]
                 if button in {3, 6} and state.handset != "up":
@@ -1882,6 +1942,8 @@ class CanonicalRuntime:
                     "schedule_weather": "SCHEDULE_WEATHER",
                 }.get(mode, "ROOT_MENU")
                 effects = [{"type": "lighting_preset", "preset": preset}]
+                if mode == "schedule_weather":
+                    effects.append({"type": "typed_info_request", "kind": "menu"})
                 if mode == "bear_dialogue" and state.handset == "up":
                     state.substate = "dialogue_started"
                     state.dialogue_memory.touch(now)
@@ -1968,7 +2030,7 @@ class CanonicalRuntime:
                     state.mode, state.state_version = "root_menu", state.state_version + 1
                     return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "info_back")
                 if action in {"what_next", "where_now"} and state.profile_status != "identified":
-                    return self._decision(state, [{"type": "privacy_blocked"}, {"type": "offer_adult"}], "schedule_requires_profile")
+                    return self._decision(state, [{"type": "privacy_blocked"}, {"type": "speak", "phrase_id": "PHRASE_101"}], "schedule_requires_profile")
                 if action:
                     state.state_version += 1
                     return self._decision(state, [{"type": "typed_info_request", "kind": action}], "typed_info_requested")
@@ -2016,8 +2078,17 @@ class CanonicalRuntime:
                     state.incident_id = uuid.uuid4().hex
                 state.mode, state.safety_severity, state.state_version = "safety_handoff", "concern", state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}, {"type": "adult_handoff_request", "severity": "concern"}], "adult_requested")
+            if state.mode == "wellbeing_check" and intent == "no":
+                return self._support_no(state)
+            if (self.exhibition_mode and state.mode in {"exhibition_name_capture", "exhibition_age_selection"}
+                    and onboarding_declined(transient_text or "")):
+                # No fabricated slot, no repeated interrogation, no new identity.
+                return self._personal_welcome_menu(state, "exhibition_onboarding_declined")
             if state.handset != "up" and state.mode not in {"safety_handoff"}:
                 return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "voice_requires_handset")
+            if state.mode == "wellbeing_check" and state.handset != "up":
+                state.expected_inputs = ["handset_up", "button_5"]
+                return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "support_handset_required")
             if state.mode == "personal_welcome_listen":
                 if state.audio_status == "failed" or state.active_audio_id or not personal_welcome_answer_verified:
                     return self._decision(state, [], "personal_welcome_waiting")
@@ -2138,7 +2209,7 @@ class CanonicalRuntime:
                 return self._decision(state, [{"type": "bounded_dialogue_turn", "intent": intent}], "dialogue_turn")
             if state.mode == "schedule_weather" and intent == "where_now":
                 if state.profile_status != "identified":
-                    return self._decision(state, [{"type": "privacy_blocked"}], "schedule_requires_profile")
+                    return self._decision(state, [{"type": "privacy_blocked"}, {"type": "speak", "phrase_id": "PHRASE_101"}], "schedule_requires_profile")
                 state.state_version += 1
                 return self._decision(state, [{"type": "typed_info_request", "kind": "where_now"}], "typed_info_requested")
             if state.mode == "story_paused" and intent in {"continue", "resume", "resume_story"}:

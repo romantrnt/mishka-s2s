@@ -155,7 +155,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             (current == "personal_welcome_listen" and target == "exhibition_menu_tutorial_prompt")
             or
             target == "wellbeing_check"
-            or (current == "wellbeing_check" and target in {"support_intake", "safety_handoff"})
+            or (current == "wellbeing_check" and target in {"support_intake", "safety_handoff", "root_menu"})
             or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
             or (current in {
                 "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
@@ -183,7 +183,9 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
                     and target == "fixed_story_menu"))
     if event_type == "VoiceIntentReady":
         return (
-            (current == "personal_welcome_listen" and target == "exhibition_menu_tutorial_prompt")
+            (current in {"personal_welcome_listen", "exhibition_name_capture", "exhibition_age_selection"}
+             and target == "exhibition_menu_tutorial_prompt")
+            or (current == "wellbeing_check" and target == "root_menu")
             or
             target in {"safety_handoff", "support_intake"}
             or (current in {"fixed_story_playing", "story_speech_analysis"}

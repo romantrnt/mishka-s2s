@@ -26,6 +26,8 @@ from .input_safety import InputSafetyGate
 from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest
 from .system_prompt import build_system_prompt
 from .private_welcome import PrivateWelcomeMixin
+from .owned_speech import OwnedSpeechMixin, TYPED_AUDIO_IDS
+from .dialogue_memory import DialogueMemoryMixin
 from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
 
 logger = logging.getLogger("mishka.application")
@@ -77,7 +79,7 @@ def _set_audio_effect_status(effect: dict[str, Any], *, asset_status: str,
         effect["resolution"] = resolution
 
 
-class ScenarioApplication(PrivateWelcomeMixin):
+class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, DialogueMemoryMixin):
     """Use-case layer. It depends only on domain ports, never FastAPI/files/UART/LLM."""
     AUDIO_RECOVERABLE_FAILURES = frozenset({
         "vad_failure",
@@ -113,6 +115,7 @@ class ScenarioApplication(PrivateWelcomeMixin):
         self._idle_expiration_count = 0
         self._last_idle_cleanup: dict[str, Any] | None = None
         self.conversation_contexts: dict[str, Any] = {}
+        self._dialogue_expiry_tasks: dict[str, asyncio.Task[Any]] = {}
         self.s2s_audio: Any = None
         # Stand integrations install an async callback here so that a
         # non-blocking browser audio turn can publish its completed result
@@ -151,6 +154,7 @@ class ScenarioApplication(PrivateWelcomeMixin):
         self._welcome_timers: dict[str, asyncio.Task[Any]] = {}
         self._private_welcomes: dict[str, Any] = {}
         self._private_welcome_tasks: set[asyncio.Task[Any]] = set()
+        self._owned_text_jobs: set[asyncio.Task[Any]] = set()
         self._welcome_timer_sequences: dict[str, int] = {}
         self._menu_tutorial_tasks: dict[str, asyncio.Task[Any]] = {}
         self._menu_tutorial_sequences: dict[str, int] = {}
@@ -224,7 +228,7 @@ class ScenarioApplication(PrivateWelcomeMixin):
                     task.cancel()
         self._canonical_profiles.pop(session_id, None)
         self._canonical_schedule_refs.pop(session_id, None)
-        self.conversation_contexts.pop(session_id, None)
+        self._drop_dialogue_context(session_id)
 
     def _revoke_local_profile(self, session_id: str) -> None:
         """Fence an app-owned termination before any cleanup await.
@@ -258,6 +262,10 @@ class ScenarioApplication(PrivateWelcomeMixin):
     def cancel_identity_work(self) -> None:
         """Synchronous authority revocation for Stand.close, also outside a loop."""
         self._identity_shutdown = True
+        for session_id in tuple(self.conversation_contexts):
+            self._drop_dialogue_context(session_id)
+        for task in tuple(self._owned_text_jobs):
+            task.cancel()
         for session_id in tuple(self._private_welcomes):
             self._discard_private_welcome(session_id)
         for task in tuple(self._handoff_delivery_tasks):
@@ -268,7 +276,7 @@ class ScenarioApplication(PrivateWelcomeMixin):
             self._drop_identity_owner(session_id)
     async def shutdown_identity(self) -> dict[str, int]:
         """Revoke first, then drain a bounded amount of provider work."""
-        tasks = set(self._identity_deadline_tasks.values()) | self._handoff_delivery_tasks | self._private_welcome_tasks
+        tasks = set(self._identity_deadline_tasks.values()) | self._handoff_delivery_tasks | self._private_welcome_tasks | self._owned_text_jobs
         tasks.discard(asyncio.current_task())
         try:
             if self.max_json and self._max_client_boundary is not None:
@@ -478,7 +486,7 @@ class ScenarioApplication(PrivateWelcomeMixin):
         generation = payload.get("generation")
         if lease is None:
             return False
-        if lease.get("content_id") == "PERSONAL_WELCOME" and not payload.get("playback_id"):
+        if lease.get("content_id") in TYPED_AUDIO_IDS | {"PERSONAL_WELCOME"} and not payload.get("playback_id"):
             return False
         try:
             token_matches = int(token) == int(lease["token"])
@@ -648,6 +656,7 @@ class ScenarioApplication(PrivateWelcomeMixin):
 
         # All direct mutations revoke the captured owner's resources before
         # yielding. A later accepted card/call owns whatever it installs next.
+        self._cancel_owned_text(session_id)
         self._drop_identity_owner(session_id)
         if identity_request is not None:
             self._identity_requests[session_id] = identity_request
@@ -674,6 +683,7 @@ class ScenarioApplication(PrivateWelcomeMixin):
 
     async def expire_idle_sessions(self, now: float | None = None) -> list[dict[str, Any]]:
         """End abandoned sessions and drain their RAM/audio ownership."""
+        self.expire_dialogue_memory()
         if self.idle_timeout_seconds is None:
             return []
         current_time = self.now() if now is None else float(now)
@@ -1272,7 +1282,10 @@ class ScenarioApplication(PrivateWelcomeMixin):
             or (event.event_type == "DialogueFallback" and dialogue_fallback_authorized)
         )
         previous_version = previous_state.state_version if previous_state is not None else -1
-        takes_ownership = bool(effects) or snapshot.get("state_version") != previous_version or exhibition_reset
+        # A physical key release/hold acknowledgement is telemetry, not a
+        # replacement for the response triggered by its preceding press.
+        semantic_effects = [item for item in effects if item.get("type") != "button_edge_ack"]
+        takes_ownership = bool(semantic_effects) or snapshot.get("state_version") != previous_version or exhibition_reset
         if (takes_ownership and self.max_json and self._max_client_boundary is not None
                 and event.session_id == self._max_client_boundary.session_id
                 and (event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart"}
@@ -1282,6 +1295,8 @@ class ScenarioApplication(PrivateWelcomeMixin):
             self._max_client_boundary.clear_client()
         revision = self._session_revisions.get(event.session_id, 0) + (1 if takes_ownership and not child_ack else 0)
         self._session_revisions[event.session_id] = revision
+        if takes_ownership and not child_ack:
+            self._cancel_owned_text(event.session_id)
         next_owner = self.canonical_runtime.sessions.get(event.session_id)
         identity_owner_changed = bool(self.optional_identity and previous_state is not None
             and previous_state.identity_request_id != getattr(next_owner, "identity_request_id", None))
@@ -1295,11 +1310,11 @@ class ScenarioApplication(PrivateWelcomeMixin):
             self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
             self._paused_story_playback.pop(event.session_id, None)
             self._discard_private_welcome(event.session_id)
-        if ((takes_ownership and event.event_type in {"HandsetPlaced", "AnonymousStart", "SessionCancel", "SessionReset"})
-                or (previous_state is not None and previous_state.mode == "bear_dialogue"
-                    and snapshot.get("mode") != "bear_dialogue")):
-
-            self.conversation_contexts.pop(event.session_id, None)
+        self._transition_dialogue_memory(
+            event.session_id, event.event_type, previous_state,
+            self.canonical_runtime.sessions.get(event.session_id),
+            takes_ownership=takes_ownership, exhibition_reset=exhibition_reset,
+        )
         if exhibition_reset:
             self._session_reset_waiters[event.session_id] = (
                 asyncio.current_task(), asyncio.get_running_loop().create_future()
@@ -1502,7 +1517,10 @@ class ScenarioApplication(PrivateWelcomeMixin):
                 asset = verified or placeholder
                 checkpoint = effect.get("checkpoint") if isinstance(effect.get("checkpoint"), dict) else {}
                 offset_ms = int(checkpoint.get("offset_ms") or 0)
-                if asset and voice_open:
+                if not voice_open:
+                    _set_audio_effect_status(effect, asset_status=str((asset or {}).get("status") or ("approved" if asset else "absent")),
+                                             queued=False, resolution="audio_deferred_handset_down")
+                elif asset:
                     response_id = story_id
                     remaining_ms = max(0, int(asset.get("duration_ms") or 0) - offset_ms)
                     queued = dispatch_story_audio(
@@ -1702,7 +1720,10 @@ class ScenarioApplication(PrivateWelcomeMixin):
                 verified = manifest.get_verified(story_id) if manifest else None
                 placeholder = manifest.get_development_placeholder() if manifest and self.allow_development_placeholders else None
                 asset = verified or placeholder
-                if asset and voice_open:
+                if not voice_open:
+                    _set_audio_effect_status(effect, asset_status=str((asset or {}).get("status") or ("approved" if asset else "absent")),
+                                             queued=False, resolution="audio_deferred_handset_down")
+                elif asset:
                     response_id = story_id
                     if dispatch_story_audio(response_id, str(asset["audio_file"]), effect,
                                             asset_status="approved" if verified else "placeholder",
@@ -1773,7 +1794,10 @@ class ScenarioApplication(PrivateWelcomeMixin):
                 asset = self.voice_manifest.resolve(phrase_id, content_hash)
                 effect["session_id"] = event.session_id
                 effect["playback_id"] = f"{event.session_id}:{record.cancellation_token}:{effect.get('effect_id', phrase_id)}"
-                if asset and voice_open:
+                if not voice_open:
+                    _set_audio_effect_status(effect, asset_status=str((asset or {}).get("status") or ("approved" if asset else "absent")),
+                                             queued=False, resolution="audio_deferred_handset_down")
+                elif asset:
                     try:
                         if snapshot.get("mode") == "bear_dialogue":
                             await self._set_dialogue_lighting_phase(event.session_id, "output")
@@ -1812,7 +1836,10 @@ class ScenarioApplication(PrivateWelcomeMixin):
                 phrase = str(effect["phrase_id"])
                 diagnosis = self.voice_manifest.diagnose(phrase)
                 asset = self.voice_manifest.resolve(phrase)
-                if asset and voice_open:
+                if not voice_open:
+                    _set_audio_effect_status(effect, asset_status=str((asset or {}).get("status") or ("approved" if asset else "absent")),
+                                             queued=False, resolution="audio_deferred_handset_down")
+                elif asset:
                     try:
                         self._play_owned_audio(event.session_id, phrase, str(asset["asset_path"]),
                                                record.cancellation_token, effect)
@@ -1849,12 +1876,14 @@ class ScenarioApplication(PrivateWelcomeMixin):
                         await self.expire_identity_leases()
                         if not still_current():
                             return stale_result()
-                        turn = await self.bounded_s2s.run_text_turn(
-                            str(transient_text), self._bounded_dialogue_context(event.session_id)
-                        )
+                        turn_context = copy.deepcopy(self._bounded_dialogue_context(event.session_id))
+                        turn = await self.bounded_s2s.run_text_turn(str(transient_text), turn_context)
                         await self.expire_identity_leases()
                         if not still_current():
                             return stale_result()
+                        # Commit only the current generation. A cancelled or late
+                        # provider owns a detached copy, never retained RAM.
+                        self.conversation_contexts[event.session_id] = turn_context
                         fallback_reason = turn.fallback_reason or (
                             "dialogue_exit" if turn.return_to_scenario else None
                         )
@@ -1927,37 +1956,64 @@ class ScenarioApplication(PrivateWelcomeMixin):
             elif kind in {"content_blocked", "privacy_blocked", "offer_adult", "visual", "clear_private_display", "game_continue_visual", "adult_incident_closed", "game_exit_confirmation", "story_speech_analysis", "hardware_reconnected", "button_edge_ack", "mood_report"}:
                 effect.setdefault("resolution", "declarative_effect_emitted")
             elif kind == "typed_info_request":
+                if not voice_open:
+                    effect["resolution"] = "audio_deferred_handset_down"
+                    continue
+                tool_kind = str(effect.get("kind") or "")
+                tool_name = "date" if tool_kind in {"date", "menu"} else "weather" if tool_kind == "weather" else "schedule"
+                unavailable_reason = None
                 try:
                     await self.expire_identity_leases()
                     if not still_current():
                         return stale_result()
-                    tool_kind = str(effect.get("kind") or "")
-                    tool_name = "date" if tool_kind == "date" else "weather" if tool_kind == "weather" else "schedule"
-                    tool_authorizer = self.transition_authorizer
-                    tool_auth = (tool_authorizer.authorize_tool(
+                    tool_auth = self.transition_authorizer.authorize_tool(
                         snapshot.get("mode"), tool_name,
-                        profile_status=str(snapshot.get("profile_status") or "anonymous"),
-                    ) if tool_authorizer is not None else {"ok": False, "reason": "langgraph_unavailable"})
+                        profile_status=str(snapshot.get("profile_status") or "anonymous"))
                     effect["tool_authorization"] = dict(tool_auth)
                     if not tool_auth.get("ok"):
-                        effect["resolution"] = "typed_information_blocked_by_policy"
-                        continue
-                    if tool_name == "schedule" and not self._identity_scope_live(event.session_id, "schedule"):
-                        effect["resolution"] = "typed_information_blocked_by_identity"
-                        continue
+                        unavailable_reason = "typed_information_blocked_by_policy"
+                    elif tool_name == "schedule" and not self._identity_scope_live(event.session_id, "schedule"):
+                        unavailable_reason = "typed_information_blocked_by_identity"
+                    if unavailable_reason is not None:
+                        raise ScheduleWeatherProviderError(unavailable_reason)
                     profile = self._canonical_profiles.get(event.session_id)
-                    if self.optional_identity and tool_name != "schedule" and not self._identity_scope_live(event.session_id, "personalize"):
+                    if tool_name != "schedule" and not self._identity_scope_live(event.session_id, "personalize"):
                         profile = None
                     schedule_ref = self._canonical_schedule_refs.get(event.session_id) if self._identity_scope_live(event.session_id, "schedule") else None
                     info = await TypedInfoRenderer(self.schedule_weather, profile, schedule_ref).render(
                         tool_kind, allow_demo=getattr(self.settings, "profile", "") == "mock")
-                    await self.expire_identity_leases()
+                    def audio_current():
+                        return bool(still_current() and state_owner.handset == "up"
+                            and state_owner.mode == "schedule_weather"
+                            and state_owner.playback_lease == effect.get("playback_lease")
+                            and (tool_name != "schedule" or self._identity_scope_live(event.session_id,"schedule")))
+                    if not audio_current():
+                        return stale_result()
+                    audio = await self._render_typed_audio(event.session_id, info["text"], effect,
+                                                          record.cancellation_token, audio_current)
+                    info = None  # Never put a private schedule/name in public effects or TTS cache.
+                    if not audio_current():
+                        return stale_result()
+                    if audio is None:
+                        raise ScheduleWeatherProviderError("typed_information_audio_unavailable")
+                    self._play_typed_audio(event.session_id, audio, effect, record.cancellation_token)
+                    audio = None
+                    _set_audio_effect_status(effect, asset_status="approved", queued=True,
+                                             resolution="typed_information_audio_queued")
+                except Exception:
                     if not still_current():
                         return stale_result()
-                    effect["typed_data"] = info
-                except (ScheduleWeatherProviderError, ValueError) as exc:
-                    effect["resolution"] = "typed_information_unavailable"
-                    effect["error"] = str(exc)
+                    effect["resolution"] = unavailable_reason or "typed_information_unavailable"
+                    fallback = await self._receive_canonical_event(Event(
+                        "DialogueFallback", event.session_id, event.sequence, self.now(),
+                        "typed_information", {"reason": "typed_information_unavailable", "kind": tool_kind},
+                        f"{event.correlation_id or event.session_id}:typed-unavailable", self.monotonic_now(),
+                    ), dialogue_fallback_authorized=True)
+                    if not still_current():
+                        return stale_result()
+                    deferred_effects.extend(fallback.get("outputs") or [])
+                    snapshot = state_owner.snapshot()
+
         if not still_current():
             return stale_result()
         effects.extend(deferred_effects)
@@ -2182,13 +2238,18 @@ class ScenarioApplication(PrivateWelcomeMixin):
                 "barge_in": False, "pending": False}
 
     def _bounded_dialogue_context(self, session_id: str):
-        """Reuse one bounded conversation within one physical/profile owner."""
+        """Reuse committed RAM within the same authorized physical/profile owner."""
+        self.expire_dialogue_memory()
         state = self.canonical_runtime.sessions.get(session_id)
+        if (self.optional_identity and state is not None and state.identity_request_id
+                and not self._identity_scope_live(session_id, "personalize")):
+            self._drop_dialogue_context(session_id)
         fresh = self._canonical_audio_context(session_id)
         owner = (self._session_epochs.get(session_id, 0),
                  state.profile_ref if state is not None else None)
         current = self.conversation_contexts.get(session_id)
         if current is not None and getattr(current, "_owner", None) == owner:
+            self._resume_dialogue_context(session_id, current)
             current.node_id = fresh.node_id
             current.profile = fresh.profile
             current.system_prompt = fresh.system_prompt
@@ -2680,7 +2741,7 @@ class ScenarioApplication(PrivateWelcomeMixin):
             await self._cancel_audio_owner(self.bounded_s2s, session_id, operation="reset")
         if self.s2s_audio is not None:
             await self._cancel_audio_owner(self.s2s_audio, session_id, operation="reset")
-        self.conversation_contexts.pop(session_id, None)
+        self._drop_dialogue_context(session_id)
         if self.canonical_runtime is not None:
             self.canonical_runtime.reset(session_id)
             self._canonical_profiles.pop(session_id, None)

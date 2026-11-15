@@ -174,48 +174,83 @@ class SimulatedAdultHandoff:
 
 class TypedInfoRenderer:
     """Render only typed provider facts; it never asks an LLM for information."""
-    def __init__(self, service: Any, profile: Mapping[str, Any] | None, schedule_ref: str | None) -> None:
+    def __init__(self, service: Any, profile: Mapping[str, Any] | None, schedule_ref: str | None, *, now=None) -> None:
         self.service, self.profile, self.schedule_ref = service, profile, schedule_ref
+        zone = ZoneInfo(str((profile or {}).get("timezone") or "Europe/Moscow"))
+        self.now = now or (lambda: datetime.now(zone))
 
-    @staticmethod
-    def _schedule_text(item: Mapping[str, Any], *, include_location: bool) -> str:
-        text = f"{item['time']} — {item['title']}"
+    def _select_schedule_item(self, schedule, kind):
+        # Array order, a bare HH:MM and an arbitrary last item are not authority
+        # to tell a child where to go now. Require explicit dated provider facts.
+        now = self.now()
+        if now.utcoffset() is None:
+            raise ScheduleWeatherProviderError("schedule_clock_unavailable")
+        candidates = []
+        for item in schedule:
+            if not isinstance(item, Mapping):
+                continue
+            status = item.get("status")
+            if status not in ({"in_progress"} if kind == "where_now" else {"scheduled"}):
+                continue
+            try:
+                start = datetime.fromisoformat(str(item.get("start_at") or "").replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if start.utcoffset() is None:
+                continue
+            if kind == "what_next" and start < now:
+                continue
+            if kind == "where_now" and (start > now or start.astimezone(now.tzinfo).date() != now.date()):
+                continue
+            candidates.append((start, item))
+        candidates.sort(key=lambda pair: pair[0])
+        if not candidates or (kind == "where_now" and len(candidates) != 1) or (len(candidates)>1 and candidates[0][0]==candidates[1][0]):
+            raise ScheduleWeatherProviderError("schedule_current_item_unavailable")
+        return candidates[0][1]
+
+    def _schedule_text(self, item: Mapping[str, Any], *, include_location: bool) -> str:
+        now = self.now()
+        start = datetime.fromisoformat(str(item["start_at"]).replace("Z", "+00:00")).astimezone(now.tzinfo)
+        day = "Сегодня" if start.date() == now.date() else start.strftime("%d.%m.%Y")
+        # Use the same dated instant used for selection, not a stale/conflicting
+        # HH:MM or provider countdown. A future-day appointment must be labelled.
+        text = f"{day} в {start:%H:%M} — {item['title']}"
         if include_location:
             if item.get("room"):
                 text += f", кабинет {item['room']}"
             if item.get("floor") is not None:
                 text += f", {item['floor']} этаж"
-            if item.get("minutes_until") is not None and int(item["minutes_until"]) >= 0:
-                text += f", через {item['minutes_until']} минут"
         return text
 
     async def render(self, kind: str, *, allow_demo: bool = False) -> dict[str, Any]:
+        if kind == "menu":
+            return {"kind": "menu", "text": "Один — дата. Два — погода. Три — планы. Четыре — куда идти. Семь — назад."}
         if kind == "date":
             try:
                 timezone = ZoneInfo(str((self.profile or {}).get("timezone") or "Europe/Moscow"))
             except Exception:
                 timezone = ZoneInfo("Europe/Moscow")
-            current = datetime.now(timezone)
+            current = self.now().astimezone(timezone)
             months = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
             return {"kind": "date", "text": f"Сегодня {current.day} {months[current.month - 1]} {current.year} года."}
         if kind not in {"weather", "what_next", "where_now"}:
             raise ValueError("unknown typed information kind")
-        if self.service is None or not isinstance(self.profile, Mapping):
+        if self.service is None or (kind != "weather" and not isinstance(self.profile, Mapping)):
             raise ScheduleWeatherProviderError("typed_information_unavailable")
         # Production services expose independent typed calls so a weather
         # outage does not make the child's schedule unavailable, and vice versa.
         if kind == "weather" and callable(getattr(self.service, "weather", None)):
-            weather = await self.service.weather(dict(self.profile), self.schedule_ref or "", allow_demo=allow_demo)
+            weather = await self.service.weather(dict(self.profile or {}), self.schedule_ref or "", allow_demo=allow_demo)
             return {"kind": kind, "text": weather["summary"], "source": weather["source"]}
         if kind in {"what_next", "where_now"} and callable(getattr(self.service, "schedule", None)):
             schedule = await self.service.schedule(dict(self.profile), self.schedule_ref or "")
-            item = schedule[0 if kind == "what_next" else -1]
+            item = self._select_schedule_item(schedule, kind)
             return {"kind": kind, "text": self._schedule_text(item, include_location=kind == "where_now")}
-        report = await self.service.build(dict(self.profile), self.schedule_ref or "")
+        report = await self.service.build(dict(self.profile or {}), self.schedule_ref or "")
         report = validate_report(report, allow_demo=allow_demo)
         if kind == "weather":
             return {"kind": kind, "text": report["weather"]["summary"], "source": report["source"]}
-        item = report["schedule"][0 if kind == "what_next" else -1]
+        item = self._select_schedule_item(report["schedule"], kind)
         return {"kind": kind, "text": self._schedule_text(item, include_location=kind == "where_now"), "source": report["source"]}
 
 

@@ -33,7 +33,7 @@ async def setup(outcome='success'):
     stand.application.optional_identity=True
     stand.application._identity_requests[HANDLE.session_id]={'request_id':'identity-1'}
     stand.application.canonical_runtime.sessions[HANDLE.session_id]=CanonicalState(
-        HANDLE.session_id, profile_ref='synthetic-profile',identity_request_id='identity-1',
+        HANDLE.session_id, handset='up', profile_ref='synthetic-profile',identity_request_id='identity-1',
         identity_expires_monotonic=20.0,identity_capabilities=['personalize'])
     stand.playback=Playback(outcome)
     stand.audio_output=HeadlessAudioOutput()
