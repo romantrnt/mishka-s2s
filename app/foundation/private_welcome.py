@@ -101,13 +101,6 @@ class PrivateWelcomeMixin:
         tts = engine.tts
         while isinstance(tts, CachedTTSProvider):
             tts = tts.delegate
-        voice = engine.voice
-        if isinstance(voice, ResilientVoiceProvider):
-            voice = voice.primary
-        convert = getattr(voice, 'convert_private', None)
-        if not callable(convert):
-            owner.status = 'personal_welcome_prepare_failed'
-            return
 
         def cancelled():
             return (not self._private_welcome_scope(session_id, owner)
@@ -132,18 +125,27 @@ class PrivateWelcomeMixin:
                 if not valid_pcm(audio):
                     owner.status = 'personal_welcome_prepare_failed'
                     return
+                # Trusted TTS is already usable. RVC may improve it before the
+                # deadline, but must never gate an authorized personal welcome.
+                owner.audio, owner.status = audio, 'personal_welcome_tts_fallback'
+                voice = engine.voice
+                if isinstance(voice, ResilientVoiceProvider):
+                    voice = voice.primary
+                convert = getattr(voice, 'convert_private', None)
+                if not callable(convert):
+                    return
                 audio = await convert(audio, cancelled)
                 if cancelled():
                     return
                 if not valid_pcm(audio):
-                    owner.status = 'personal_welcome_prepare_failed'
                     return
                 owner.audio, owner.status = audio, 'personal_welcome_ready'
             except asyncio.CancelledError:
                 pass
             except Exception:
                 # Exception messages may contain the private phrase.
-                owner.status = 'personal_welcome_prepare_failed'
+                if owner.status == 'preparing':
+                    owner.status = 'personal_welcome_prepare_failed'
             finally:
                 audio = phrase = None
         owner.task = asyncio.create_task(prepare(), name='mishka-private-welcome')
@@ -158,7 +160,7 @@ class PrivateWelcomeMixin:
         if not commit:
             return ready
         owner.chosen = True
-        code = 'personal_welcome_ready' if ready else (
+        code = owner.status if ready else (
             owner.status if owner.status != 'preparing' else 'personal_welcome_not_ready')
         self.record_audio_diagnostic('personal_welcome_choice', code=code)
         if not ready:

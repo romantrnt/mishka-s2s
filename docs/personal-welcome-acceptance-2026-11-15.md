@@ -17,15 +17,19 @@ These checks do not prove that an arbitrary string is a person's real name.
 Preparation starts during the ringtone. At five seconds after the accepted lift,
 the ringtone is stopped and the application chooses one outcome:
 
-- Ready PCM, with the same live profile/request/epoch: owned personal welcome.
-- Missing/invalid name, unsupported PCM port, invalid PCM, failed or late TTS/RVC:
+- Valid trusted TTS PCM ready before the deadline, with the same live
+  profile/request/epoch: owned personal welcome. Clean Silero is the personal
+  fallback while optional private RVC is cold, missing, failed or invalid. A valid
+  RVC result replaces it only while preparation is current and before the deadline.
+- Missing/invalid name, unsupported PCM port, invalid PCM from TTS, failed or late TTS:
   the existing recorded PHRASE_001. A still-authorized profile then follows the
   existing menu path without another name/age interview.
 - Revoked/expired/replaced identity: the existing identity/session shutdown path,
   not an old-name greeting or silent reassignment to a guest.
 
-Late preparation is discarded, never played after the generic fallback. Native
-inference may finish after cancellation, but its result has no playback authority.
+Only the selected PCM is played once. Late TTS is discarded, never played after
+the generic fallback; late RVC cannot replace or replay the selected personal PCM.
+Native inference may finish after cancellation, but its result has no playback authority.
 The five-second boundary is the application dispatch time, not a measured audible
 onset: Silero's existing pre-roll and the device buffer still require listening tests.
 No additional five seconds are added after a long ringtone file.
@@ -70,8 +74,12 @@ not a claimed automatic timeout/retry feature.
   live-acceptance UX boundary, not acoustic calibration or a new VAD threshold.
 - The complete name-bearing sentence bypasses the global TTS text cache. No name,
   phrase or PCM is put in effects, public diagnostics, command metadata or history.
-- Real file-based RVC uses a verified writable Linux tmpfs and a private temporary
-  directory, with no disk-backed fallback. Errors use fixed public codes.
+- Optional RVC calls only the primary `convert_private` path; the ordinary
+  `ResilientVoiceProvider.convert` path is never used for name-bearing audio.
+  Real file-based RVC uses a verified writable Linux tmpfs and a private temporary
+  directory, with no disk-backed fallback. Selection diagnostics use fixed codes:
+  `personal_welcome_tts_fallback` for clean TTS or `personal_welcome_ready` for
+  a timely valid RVC result; errors expose no name, phrase or vendor message.
 - Raw vendor stderr is discarded, so a private error cannot contaminate a later
   ordinary error. Structured protocol errors and counters remain. This deliberately
   sacrifices raw vendor stderr troubleshooting, without restarting a warm worker
@@ -100,12 +108,13 @@ swap/core-dump prevention, vendor-cache auditing or survival of abrupt SIGKILL.
 
 Physical audio, real-model synthesis latency, pronunciation, child-speech acoustic
 accuracy and production Max approval are not established by mock/synthetic tests.
-The existing adult-handoff, story-menu content and personal-story-generation
-blockers in `live-acceptance-candidate-2026-11-15.md` remain.
+The earlier candidate's adult-handoff dependency is historical: caregiver delivery
+was removed in favor of the local safety response linked above. Its acceptance
+results do not establish the current safety path or this optional-RVC change.
 
-## Verification
+## Historical verification before the optional-RVC fix
 
-The frozen integrated candidate passed **1370 tests and 4 subtests in 499.74
+The earlier frozen integrated candidate passed **1370 tests and 4 subtests in 499.74
 seconds**, exit 0, with the unchanged external Max demo bundle. All 147 source,
 test and JSON freeze hashes still matched after the run. Test-log SHA256:
 `f3a6eb448abea6e4337b6c292090cecc52a48f241269d1cb02ed9466954d8f69`.
@@ -121,3 +130,25 @@ for the explicit ringtone-stop effect and added listener state; those assertions
 were updated to preserve exact ordering and timing, not removed. Partial and
 interrupted runs are excluded from the final full-suite result. Physical devices,
 real synthesis latency/pronunciation and clinical coverage remain unverified.
+
+## Optional-RVC fix verification, 2026-11-16
+
+Before the production-code change, the new blocked-private-RVC regression failed
+in both normal and cancellation-resistant cases: the five-second timer selected
+`welcome_started` / PHRASE_001 despite completed trusted TTS (**2 failed, 78
+deselected**, exit 1). After the change, the focused suite passed **122 tests in
+37.88 seconds**, exit 0:
+
+```sh
+env PYTHONPATH=/home/server/mishka-worktrees/logic-audit-20261115:/home/server/mishka-stage-testdeps-20261113 \
+  /home/server/mishka/.venv/bin/python -m pytest -q \
+  tests/test_private_welcome.py tests/test_private_greeting_rvc.py tests/test_profile_onboarding.py
+```
+
+Coverage includes TTS/RVC deadline boundaries, missing/failed/invalid private RVC,
+timely conversion, cancellation-resistant late results, hangup, authorization
+revocation, profile replacement, and invalid/late TTS retaining PHRASE_001. These
+are synthetic application/provider checks, not real-model or physical-audio
+acceptance. The full suite was not rerun. `tests/test_optional_identity.py` is
+absent from this worktree; existing profile-onboarding checks cover identity loss
+and guest reuse. No dependencies or deployment files changed.

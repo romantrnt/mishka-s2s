@@ -17,6 +17,7 @@ class Render:
         self.stage = None
         self.entered = asyncio.Event()
         self.resist = False
+        self.voice_audio = None
     async def wait(self, stage):
         if self.stage == stage:
             self.entered.set()
@@ -30,7 +31,7 @@ class Render:
         return AudioChunk((.1, .2), 24000, token)
     async def convert_private(self, audio, cancelled):
         await self.wait('voice')
-        return audio
+        return self.voice_audio or audio
 
 
 def setup(name='Люси-Анна'):
@@ -39,9 +40,11 @@ def setup(name='Люси-Анна'):
     h.app.bounded_s2s.tts = CachedTTSProvider(render)
     h.app.bounded_s2s.voice = render
     h.pcm = []
+    h.pcm_audio = []
     def play(handle, audio):
         assert h.app._active_audio[handle.session_id]['playback_id'] == handle.playback_id
         h.pcm.append(handle)
+        h.pcm_audio.append(audio)
     h.app.audio.play_pcm_owned = play
     return h, render
 
@@ -60,6 +63,11 @@ async def speech(h, text, payload=None):
 async def deadline(h, at=15.):
     h.clock[0] = at
     return await h.send('WelcomeTimerFired')
+
+
+def choice_codes(h):
+    return [d['code'] for d in h.app.audio_runtime_diagnostics
+        if d['kind']=='personal_welcome_choice']
 
 
 def test_ready_exact_deadline_waits_for_answer_not_completion():
@@ -90,13 +98,19 @@ def test_ready_exact_deadline_waits_for_answer_not_completion():
 def test_render_completion_boundary(stage,at):
     async def run():
         h,r=setup();r.stage=stage;r.block=asyncio.Event()
+        r.voice_audio=AudioChunk((.3,.4),40000,0)
         try:
             await start(h);await r.entered.wait()
             h.clock[0]=at;r.block.set()
             for _ in range(4): await asyncio.sleep(0)
             await deadline(h,max(15.,at))
-            assert bool(h.pcm)==(at<15.)
-            if at>=15.: assert h.played[-1]=='PHRASE_001'
+            assert bool(h.pcm)==(stage=='voice' or at<15.)
+            if h.pcm:
+                assert len(h.pcm)==1 and 'PHRASE_001' not in h.played
+                assert h.pcm_audio[0].samples==((.3,.4) if at<15. else (.1,.2))
+                assert choice_codes(h)==[
+                    'personal_welcome_ready' if at<15. else 'personal_welcome_tts_fallback']
+            else:assert h.played[-1]=='PHRASE_001'
             assert not h.app.bounded_s2s.tts.cache
         finally: await h.close()
     asyncio.run(run())
@@ -366,7 +380,7 @@ def test_failed_retry_cannot_reopen_menu_but_help_remains_available():
 
 @pytest.mark.parametrize('field,value',[('sample_rate',0),('sample_rate',float('nan')),('sample_rate',True),('samples',()),('samples',(float('nan'),)),('samples',(float('inf'),)),('samples',(1.01,)),('samples',(-1.01,)),('samples',(10**1000,)),('samples',((.1,.2),))])
 @pytest.mark.parametrize('stage',['tts','voice'])
-def test_invalid_pcm_uses_recording_before_commit(field,value,stage):
+def test_invalid_pcm_keeps_trusted_tts_or_uses_recording(field,value,stage):
     async def run():
         h,r=setup()
         invalid=AudioChunk((.1,),24000,0)
@@ -377,7 +391,101 @@ def test_invalid_pcm_uses_recording_before_commit(field,value,stage):
         else:r.convert_private=bad_voice
         try:
             await start(h);await deadline(h)
-            assert not h.pcm and h.played[-1]=='PHRASE_001'
-            assert h.state.active_audio_id=='PHRASE_001'
+            if stage=='tts':
+                assert not h.pcm and h.played[-1]=='PHRASE_001'
+                assert h.state.active_audio_id=='PHRASE_001'
+            else:
+                assert len(h.pcm)==1 and h.pcm_audio[0].samples==(.1,.2)
+                assert 'PHRASE_001' not in h.played
+                assert h.state.active_audio_id=='PERSONAL_WELCOME'
+                assert choice_codes(h)==['personal_welcome_tts_fallback']
         finally:await h.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('resist', [False, True])
+def test_ready_tts_survives_cold_private_voice_at_deadline(resist):
+    async def run():
+        h,r=setup();r.stage='voice';r.block=asyncio.Event();r.resist=resist
+        r.voice_audio=AudioChunk((.3,.4),40000,0)
+        try:
+            await start(h);await r.entered.wait()
+            owner=h.app._private_welcomes[h.boundary.session_id]
+            result=await asyncio.wait_for(deadline(h),.2)
+            assert result['reason']=='personal_welcome_started',result
+            assert len(h.pcm)==1 and h.pcm_audio[0].samples==(.1,.2)
+            assert 'PHRASE_001' not in h.played
+            assert owner.closed and owner.audio is None
+            h.clock[0]=15.000001;r.block.set()
+            await owner.task
+            await deadline(h,16.)
+            assert len(h.pcm)==1 and 'PHRASE_001' not in h.played
+            assert choice_codes(h)==['personal_welcome_tts_fallback']
+            assert not h.app.bounded_s2s.tts.cache
+        finally:r.block.set();await h.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('mode', ['missing', 'failure'])
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_private_voice_optional_after_trusted_tts(mode,wrapped,caplog):
+    async def run():
+        from app.foundation.s2s import ResilientVoiceProvider
+        h,r=setup()
+        async def ordinary(*args):pytest.fail('private audio reached ordinary conversion')
+        async def failed(*args):raise RuntimeError('PRIVATE_SYNTHETIC_MARKER')
+        voice=SimpleNamespace(convert=ordinary)
+        if mode=='failure':voice.convert_private=failed
+        h.app.bounded_s2s.voice=ResilientVoiceProvider(voice) if wrapped else voice
+        try:
+            await start(h)
+            owner=h.app._private_welcomes[h.boundary.session_id]
+            await owner.task
+            assert owner.audio.samples==(.1,.2)
+            result=await deadline(h)
+            assert result['reason']=='personal_welcome_started'
+            assert len(h.pcm)==1 and h.pcm_audio[0].samples==(.1,.2)
+            assert 'PHRASE_001' not in h.played
+            assert choice_codes(h)==['personal_welcome_tts_fallback']
+            public=json.dumps(list(h.app.audio_runtime_diagnostics),ensure_ascii=False)
+            assert 'PRIVATE_SYNTHETIC_MARKER' not in public+caplog.text
+            assert 'Люси-Анна' not in public+caplog.text
+            assert not h.app.bounded_s2s.tts.cache
+        finally:await h.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('action', ['hangup', 'revoke', 'profile'])
+def test_scope_change_clears_trusted_tts_during_private_voice(action):
+    async def run():
+        h,r=setup();r.stage='voice';r.block=asyncio.Event();r.resist=True
+        r.voice_audio=AudioChunk((.3,.4),40000,0)
+        try:
+            await start(h);await r.entered.wait()
+            owner=h.app._private_welcomes[h.boundary.session_id]
+            assert owner.audio.samples==(.1,.2)
+            if action=='hangup':await h.send('HandsetPlaced')
+            else:
+                h.client.value=None
+                h.client.events.append({'kind':'clear','reason_code':'scan_started'})
+                await h.boundary.step()
+                if action=='profile':
+                    await h.send('HandsetPlaced')
+                    h.client.value=card('Синтетик')
+                    assert (await h.ready())['reason']=='profile_ready'
+                    await h.send('HandsetLifted')
+            assert owner.closed and owner.audio is None
+            r.block.set();await owner.task
+            assert owner.audio is None and not h.pcm
+            if action=='profile':
+                for _ in range(4):await asyncio.sleep(0)
+                await deadline(h)
+                assert len(h.pcm)==1 and r.texts==[
+                    'Привет, Люси-Анна. Как твои дела?',
+                    'Привет, Синтетик. Как твои дела?']
+            else:
+                await deadline(h)
+                assert not h.pcm
+            assert not h.app.bounded_s2s.tts.cache
+        finally:r.block.set();await h.close()
     asyncio.run(run())
