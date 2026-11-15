@@ -64,11 +64,35 @@ class SafetyClassification:
 
 class SafetyClassifier:
     """Deterministic first layer; semantic classifiers may only raise severity."""
-    URGENT = re.compile(r"(кровь|не могу дышать|не могу двиг|потерялся|потерялась|опасно|пожар|ударил|трогает|насили|умер|убью|опасный взрослый|срочно|не\s+хочу\s+жить|меня\s+бьют)", re.I)
-    CONCERN = re.compile(r"(страшно|обид|плачу|плох[оий]|болит|больно|секрет|не говори взрослым|не хочу идти)", re.I)
+    # Whole lexical forms, not substrings: безопасно / умеренная / пожарный
+    # are not disclosures merely because they contain an alarming stem.
+    URGENT = re.compile(r"""\b(?:
+        кровь|кровью|не\s+могу\s+дышать|не\s+могу\s+двиг[а-яё]*|
+        не\s+хватает\s+воздуха|воздуха\s+не\s+хватает|
+        мне\s+(?:трудно|тяжело)\s+дышать|я\s+задыхаюсь|^задыхаюсь|
+        потерял(?:ся|ась)|опасн[а-яё]*|
+        пожар(?:а|у|ом|е|ы|ов|ам|ами|ах|ищ[а-яё]*)?|пожарн(?:ая|ой|ую)\s+тревог[а-яё]*|
+        ударил[а-яё]*|трогает[а-яё]*|насили[а-яё]*|
+        умер(?:ла|ло|ли|еть|ш[а-яё]*)?|умертв[а-яё]*|умерщв[а-яё]*|убью(?:т|сь)?|срочно|
+        не\s+хочу\s+жить|меня\s+бьют
+    )\b""", re.I | re.X)
+    CONCERN = re.compile(r"""\b(?:
+        страшно|обид(?:а|у|е|ы|ой|ою|ам|ами|ах|н[а-яё]+|
+                      ел[а-яё]*|еть(?:ся)?|ит[а-яё]*|ишь[а-яё]*|им[а-яё]*|
+                      ят[а-яё]*|чи[кв][а-яё]*)|
+        (?:много|полно|столько|от|из-за)\s+обид|
+        плачу|плох(?:о|ой|ий|ие|им|ими|их|ому|ого|ую|ая|ое)|
+        болит|больно|секрет[а-яё]*|не\s+говори\s+взрослым|не\s+хочу\s+идти
+    )\b""", re.I | re.X)
+    # This is deliberately not a general negation rule. Only a complete,
+    # unambiguous reassurance is exempt; extra clauses still get a full scan.
+    # Semantic classification can raise even this narrowly exempted input.
+    NOT_LOST = re.compile(r"\s*(?:я\s+)?не\s+потерял(?:ся|ась)\s*[.!]*\s*", re.I)
 
     def classify(self, text: str, semantic: str = "none") -> SafetyClassification:
-        deterministic = "urgent" if self.URGENT.search(text) else "concern" if self.CONCERN.search(text) else "none"
+        deterministic = ("none" if self.NOT_LOST.fullmatch(text) else
+                         "urgent" if self.URGENT.search(text.strip()) else
+                         "concern" if self.CONCERN.search(text) else "none")
         levels = {"none": 0, "concern": 1, "urgent": 2}
         semantic = semantic if semantic in levels else "none"
         severity = deterministic if levels[deterministic] >= levels[semantic] else semantic
@@ -76,13 +100,15 @@ class SafetyClassifier:
 
 def classify_intent(text: str) -> str:
     value = text.casefold().strip()
+    # An explicit request for an adult outranks ordinary navigation/mood.
+    if re.search(r"(позвать\s+взросл|позови(?:те)?\s+взросл|нужен\s+взросл)", value): return "request_adult"
     if re.search(r"(поставь|поставить|на)\s*пауз|пауза", value): return "pause_story"
     if re.search(r"(продолжи|продолжить|дальше|возобнови)", value): return "resume_story"
     if re.search(r"\b(стоп|хватит|закончить сказку|выключи сказку)\b", value): return "stop_story"
     if re.search(r"(вау|класс|здорово|смешно|ха-ха|ура|ух ты)", value): return "emotional_reaction"
     if re.search(r"(настроени|груст|рад|весел)", value): return "mood"
     if re.search(r"(куда|маршрут|идти)", value): return "where_now"
-    if re.search(r"(позвать взросл|нужен взросл|помоги)", value): return "request_adult"
+    if re.search(r"помоги", value): return "request_adult"
     if re.search(r"(болит|страшно|обид|жалоб)", value): return "support"
     theme_map = (
         (r"динозавр", "dinosaurs"), (r"космос|звезд", "космос"),
@@ -116,7 +142,7 @@ class RecordedPhraseResolver:
         return self.manifest.diagnose(phrase_id, content_hash)
 
 class SimulatedAdultHandoff:
-    """Development-only outbox that exercises the whole safety acknowledgement path."""
+    """Development-only request outbox, never evidence of delivery to an adult."""
 
     def __init__(self) -> None:
         self.outbox: list[dict[str, Any]] = []
@@ -125,11 +151,11 @@ class SimulatedAdultHandoff:
         item = dict(payload)
         item["transport"] = "simulated_local_outbox"
         item["simulated"] = True
-        item["delivery"] = "acknowledged"
+        item["delivery"] = "simulated_only"
         self.outbox.append(item)
         return {
-            "acknowledged": True,
-            "ack_id": f"simulated-{len(self.outbox)}",
+            "acknowledged": False,
+            "simulation_id": f"simulated-{len(self.outbox)}",
             "transport": "simulated_local_outbox",
             "simulated": True,
         }

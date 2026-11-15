@@ -47,8 +47,9 @@ class OllamaInputClassifier(OllamaMiniLLMValidator):
 class InputSafetyGate:
     """Rules can escalate immediately; semantics is mandatory outside mock.
 
-    An unavailable/invalid classifier requests an adult and blocks ordinary
-    intent routing. This does not assert a confirmed emergency or diagnosis.
+    An unavailable/invalid classifier blocks ordinary intent routing, but is
+    not evidence of a safeguarding incident. A retry is distinct from concern.
+    Deterministic concerns and possible semantic danger remain safety signals.
     The mock profile exercises software routing only, never clinical safety.
     """
     def __init__(self, settings, semantic=None):
@@ -80,11 +81,15 @@ class InputSafetyGate:
                 raise ValueError("invalid input safety decision")
             # Even an uncertain possible urgent disclosure escalates. A low
             # confidence 'none' can never authorize an ordinary command.
-            if confidence < 0.75 and severity != "urgent":
-                return InputSafetyDecision("concern", "input_safety_uncertain", False)
             raised = self.rules.classify(text, semantic=severity)
+            if confidence < 0.75 and severity != "urgent":
+                return InputSafetyDecision(raised.severity, "input_safety_uncertain", False)
             return InputSafetyDecision(raised.severity, raised.reason)
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            return InputSafetyDecision(deterministic.severity, "input_safety_timeout", False)
+        except (ValueError, KeyError, TypeError):
+            return InputSafetyDecision(deterministic.severity, "input_safety_invalid", False)
         except Exception:
-            return InputSafetyDecision("concern", "input_safety_unavailable", False)
+            return InputSafetyDecision(deterministic.severity, "input_safety_unavailable", False)

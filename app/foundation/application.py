@@ -180,7 +180,9 @@ class ScenarioApplication:
         # Canonical scenario documents and LangGraph are the single source of
         self.voice_manifest = RecordedPhraseResolver(f"{getattr(settings, 'content_root', 'content')}/audio/voice_manifest.json", allow_development_assets=self.allow_development_placeholders)
         self.safety_classifier = InputSafetyGate(settings)
-        self.adult_handoff = adult_handoff if adult_handoff is not None else (SimulatedAdultHandoff() if self.allow_development_placeholders else None)
+        # CPU/GPU and physical development profiles are used with real children:
+        # availability of placeholder assets does not authorize fake delivery.
+        self.adult_handoff = adult_handoff if adult_handoff is not None else (SimulatedAdultHandoff() if profile == "mock" else None)
         self._canonical_profiles: dict[str, dict[str, Any] | None] = {}
         self._canonical_schedule_refs: dict[str, str | None] = {}
         self.transition_authorizer = CanonicalLangGraphAuthorizer() if self.canonical_runtime is not None else None
@@ -1141,7 +1143,17 @@ class ScenarioApplication:
             admitted_handset = current.handset if current is not None else "down"
             epoch = self._session_epochs.get(event.session_id, 0)
             revision = self._session_revisions.get(event.session_id, 0)
+            safety_started = self.monotonic_now()
             safety = await self.safety_classifier.classify(text)
+            # Retain fixed outcome codes, never a transcript, name, text hash,
+            # model response or exception message. Child ACKs may replace
+            # last_canonical_event, so diagnostics must be an independent ring.
+            self.record_audio_diagnostic(
+                "input_safety_decision", code=safety.reason,
+                safety_severity=safety.severity, safety_verified=bool(safety.verified),
+                stt_trusted=not bool(payload.get("_stt_untrusted", False)),
+                latency_ms=round(max(0.0, self.monotonic_now() - safety_started) * 1000, 2),
+            )
             # Classification is an async boundary: a hangup, reset or newer
             # event must fence its late result before any canonical mutation.
             if self._session_epochs.get(event.session_id, 0) != epoch:
@@ -1160,15 +1172,18 @@ class ScenarioApplication:
             previous_state = copy.deepcopy(current)
             state_version = current.state_version
             uncertain_stt = payload.pop("_stt_untrusted", False)
-            if uncertain_stt and safety.severity == "none":
+            parsed_intent = classify_intent(text)
+            explicit_adult_request = parsed_intent == "request_adult"
+            if uncertain_stt and safety.severity == "none" and not explicit_adult_request:
                 return {**self._identity_result(event.session_id, "audio_retry"),
                         "outputs": [{"action": "audio_retry", "reason": "stt_low_confidence"}]}
-            intent = "request_adult" if safety.severity == "concern" else classify_intent(text)
+            intent = "request_adult" if safety.severity == "concern" else parsed_intent
             if uncertain_stt or not safety.verified:
                 # Possible danger is still escalated, without treating the
                 # transcript as a reliable name, age, command, or memory.
                 transient_text = None
-                intent = "request_adult" if safety.severity == "concern" else "free_speech"
+                intent = ("request_adult" if safety.severity == "concern" or explicit_adult_request
+                          else "input_retry" if safety.severity == "none" else "free_speech")
             payload.update({"intent": intent, "safety_severity": safety.severity,
                             "safety_reason": safety.reason})
         decision = self.canonical_runtime.handle(CanonicalEvent(
@@ -1573,12 +1588,21 @@ class ScenarioApplication:
                         raise TypeError("adult_handoff response must be an object")
                     if type(delivery.get("acknowledged")) is not bool:
                         raise ValueError("adult_handoff acknowledgement must be boolean")
+                    if "simulated" in delivery and type(delivery["simulated"]) is not bool:
+                        raise ValueError("adult_handoff simulated marker must be boolean")
                     effect["delivery"] = dict(delivery)
+                    if delivery.get("simulated") is True or isinstance(self.adult_handoff, SimulatedAdultHandoff):
+                        # A local outbox is useful for demos, but no adult has
+                        # received anything. Never emit the real receipt phrase.
+                        effect["resolution"] = "adult_handoff_simulated_unavailable"
+                        effect["fallback_phrase_id"] = "PHRASE_091"
+                        handoff_failure = {"incident_id": incident_id}
+                        continue
                     if not delivery.get("acknowledged"):
                         effect["resolution"] = "adult_handoff_pending"
                         continue
-                    effect["resolution"] = "adult_handoff_simulated" if delivery.get("simulated") else "adult_handoff_acknowledged"
-                    acknowledgement = await self._receive_canonical_event(Event("AdultHandoffAcknowledged", event.session_id, event.sequence, self.now(), "adult_handoff_simulator", {"handoff_id": handoff_id, "incident_id": incident_id, "simulated": bool(delivery.get("simulated"))}, f"{event.correlation_id or handoff_id}:ack"), handoff_ack_authorized=True)
+                    effect["resolution"] = "adult_handoff_acknowledged"
+                    acknowledgement = await self._receive_canonical_event(Event("AdultHandoffAcknowledged", event.session_id, event.sequence, self.now(), "adult_handoff_transport", {"handoff_id": handoff_id, "incident_id": incident_id, "simulated": bool(delivery.get("simulated"))}, f"{event.correlation_id or handoff_id}:ack"), handoff_ack_authorized=True)
                     effect["acknowledgement"] = {"reason": acknowledgement.get("reason"), "simulated": bool(delivery.get("simulated"))}
                     effects.extend(acknowledgement.get("outputs", []))
                 except Exception as exc:

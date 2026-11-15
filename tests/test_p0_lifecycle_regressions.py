@@ -208,8 +208,14 @@ def test_generic_application_reset_does_not_close_urgent_incident():
 
 
 def test_urgent_delivery_ack_keeps_parent_safety_effects():
+    class ConfirmedTestDelivery:
+        async def request(self, _request):
+            return {"acknowledged": True, "simulated": False}
+
     async def run():
         app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"))
+        # This test covers an actual receipt; a mock outbox is not a receipt.
+        app.adult_handoff = ConfirmedTestDelivery()
         sid = "urgent-ack"
         app.monotonic_now = lambda: 0.0
         app.canonical_runtime.monotonic_now = app.monotonic_now
@@ -221,6 +227,7 @@ def test_urgent_delivery_ack_keeps_parent_safety_effects():
         assert result["reason"] == "urgent_safety"
         assert result["canonical_state"]["safety_severity"] == "urgent"
         assert any(e.get("preset") == "SAFE_STOP" for e in result["outputs"])
+        assert any(e.get("phrase_id") == "PHRASE_089" for e in result["outputs"])
 
     asyncio.run(run())
 

@@ -1009,6 +1009,8 @@ class CanonicalRuntime:
             return self._decision(state, [], "adult_resolution_untrusted")
         if event.event_type == "AdultHandoffAcknowledged" and not handoff_ack_authorized:
             return self._decision(state, [], "handoff_ack_untrusted")
+        if event.event_type == "AdultHandoffAcknowledged" and event.payload.get("simulated", False) is not False:
+            return self._decision(state, [], "handoff_ack_simulated")
         if event.event_type == "AdultHandoffFailed" and not handoff_failure_authorized:
             return self._decision(state, [], "handoff_failure_untrusted")
         if event.event_type == "DialogueFallback" and not dialogue_fallback_authorized:
@@ -1891,6 +1893,22 @@ class CanonicalRuntime:
                 state.mode, state.safety_severity, state.state_version = "safety_handoff", "urgent", state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}, {"type": "adult_handoff_request", "severity": "urgent"}], "urgent_safety")
             intent = str(event.payload.get("intent", "free_speech"))
+            if intent == "input_retry":
+                # A failed/uncertain classifier cannot authorize a command or
+                # identity capture, but it is not an adult-help request either.
+                # Preserve active incidents and already-approved story playback.
+                retry_modes = {
+                    "exhibition_name_capture", "exhibition_age_selection",
+                    "exhibition_menu_repeat_listen", "bear_dialogue",
+                    "wellbeing_check", "personal_story_theme", "automatic_mood_check",
+                }
+                retry_effects = ([{"type": "speak", "phrase_id": "PHRASE_074"}]
+                    if state.handset == "up" and state.mode in retry_modes else [])
+                prior_substate = state.substate
+                result = self._decision(state, retry_effects, "input_safety_retry")
+                state.substate = prior_substate
+                result["state"]["substate"] = prior_substate
+                return result
             if intent == "request_adult" or (state.mode == "wellbeing_check" and intent == "yes"):
                 if state.mode != "safety_handoff" or not state.incident_id:
                     state.incident_id = uuid.uuid4().hex

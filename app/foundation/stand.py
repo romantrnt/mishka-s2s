@@ -1678,7 +1678,22 @@ class HardwareIntegrationStand:
             "content_id", "asset_ref", "operation", "source",
             "generation", "at_monotonic",
         }
-        return {key: item[key] for key in allowed if key in item}
+        result = {key: item[key] for key in allowed if key in item}
+        if item.get("kind") == "input_safety_decision":
+            # Never expose arbitrary adapter strings through diagnostic fields.
+            codes = {"deterministic", "semantic", "mock_deterministic",
+                     "input_safety_uncertain", "input_safety_timeout",
+                     "input_safety_invalid", "input_safety_unavailable"}
+            result["code"] = item.get("code") if item.get("code") in codes else "unknown"
+            if item.get("safety_severity") in {"none", "concern", "urgent"}:
+                result["safety_severity"] = item["safety_severity"]
+            for key in ("safety_verified", "stt_trusted"):
+                if type(item.get(key)) is bool:
+                    result[key] = item[key]
+            latency = item.get("latency_ms")
+            if type(latency) in (int, float) and math.isfinite(latency) and latency >= 0:
+                result["latency_ms"] = latency
+        return result
 
     def physical_hardware_ready(self) -> bool:
         """Live host-side controls/audio readiness, not acoustic/firmware acceptance."""

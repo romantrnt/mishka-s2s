@@ -146,7 +146,7 @@ def test_faster_whisper_receives_numpy_pcm_not_a_filename(monkeypatch):
             assert samples.__class__.__module__.split(".")[0] == "numpy"
             assert samples.dtype.name == "float32"
             assert len(samples) >= 12_000  # short live turns are padded in RAM
-            return [SimpleNamespace(text=" привет ", no_speech_prob=0.05)], None
+            return [SimpleNamespace(text=" привет ", no_speech_prob=0.05, avg_logprob=0.0)], None
 
     async def immediate_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)

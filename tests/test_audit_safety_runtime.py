@@ -24,6 +24,12 @@ def event(kind, sequence, payload=None):
     return Event(kind, "audit", sequence, 1.0, "audit", payload or {}, str(sequence), 0.0)
 
 
+class ConfirmedTestDelivery:
+    """Explicit test double for receipt paths, never an implicit mock service."""
+    def request(self, payload):
+        return {"acknowledged": True, "simulated": False}
+
+
 def context():
     return ConversationContext("audit", "canonical_product", "bear_dialogue", ("__all__",), (), 5, 120, 2)
 
@@ -82,6 +88,7 @@ def test_output_adapter_rejects_invalid_confidence(bad):
 def test_urgent_disclosure_reaches_canonical_handoff(text):
     async def run():
         app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
+        app.adult_handoff = ConfirmedTestDelivery()
         try:
             await app.receive_async(event("HandsetLifted", 1))
             result = await app.receive_async(event("SpeechReceived", 2), text)
@@ -94,14 +101,15 @@ def test_urgent_disclosure_reaches_canonical_handoff(text):
 
 @pytest.mark.parametrize("reply,expected", [
     ({"severity": "urgent", "confidence": .9}, "urgent_safety"),
-    ({"severity": "none", "confidence": .1}, "adult_requested"),
-    ({"severity": "none", "confidence": True}, "adult_requested"),
-    ({"severity": "bogus", "confidence": 1}, "adult_requested"),
-    (None, "adult_requested"),
+    ({"severity": "none", "confidence": .1}, "input_safety_retry"),
+    ({"severity": "none", "confidence": True}, "input_safety_retry"),
+    ({"severity": "bogus", "confidence": 1}, "input_safety_retry"),
+    (None, "input_safety_retry"),
 ])
 def test_real_input_adapter_routes_semantics_and_failures(reply, expected):
     async def run():
         app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
+        app.adult_handoff = ConfirmedTestDelivery()
         gate = InputSafetyGate(Settings(profile="local_cpu", validation_timeout_ms=30))
         requests = []
         def request(raw):
@@ -150,6 +158,7 @@ def test_input_safety_survives_welcome_timer_or_classifier_timeout(timeout):
                 entered.set(); await release.wait()
                 return "urgent", .99
         app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
+        app.adult_handoff = ConfirmedTestDelivery()
         app.safety_classifier = InputSafetyGate(Settings(profile="mock", validation_timeout_ms=20 if timeout else 1000), Slow())
         clock = [0.]; app.monotonic_now = lambda: clock[0]
         app.canonical_runtime.monotonic_now = app.monotonic_now
@@ -161,7 +170,7 @@ def test_input_safety_survives_welcome_timer_or_classifier_timeout(timeout):
             assert await app.flush_welcome_timers()
             if not timeout: release.set()
             result = await pending
-            assert result["reason"] == ("adult_requested" if timeout else "urgent_safety")
+            assert result["reason"] == ("stale_session_generation" if timeout else "urgent_safety")
             assert not app.conversation_contexts
         finally:
             await app._cleanup_session_resources("audit")
@@ -173,6 +182,7 @@ def test_input_safety_survives_welcome_timer_or_classifier_timeout(timeout):
 def test_low_confidence_stt_is_safety_only_in_sync_and_async_paths(wait, text, urgent):
     async def run():
         app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
+        app.adult_handoff = ConfirmedTestDelivery()
         updates = []
         async def updated(_sid, result): updates.append(result)
         app.audio_update_hook = updated

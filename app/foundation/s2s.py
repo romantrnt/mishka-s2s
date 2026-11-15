@@ -720,19 +720,26 @@ class FasterWhisperRecognizer:
             if samples.size < minimum_samples:
                 samples=np.pad(samples, (0, minimum_samples - samples.size))
             # VAD already ran at the ingress boundary. A second Whisper VAD
-            # drops short Russian utterances. no_speech_prob is more useful
-            # than treating avg_logprob as calibrated confidence.
+            # drops short Russian utterances. Speech presence alone does not
+            # establish transcription quality; check both provider scores below.
             segments,_=self._model.transcribe(
                 samples, language="ru", beam_size=self.config.stt_beam_size,
                 vad_filter=False, condition_on_previous_text=False,
             )
             values=list(segments); text=" ".join(x.text.strip() for x in values).strip()
+            confidence=0.0
             if values:
-                no_speech=sum(float(getattr(x,"no_speech_prob",0.0)) for x in values)/len(values)
-                confidence=max(0.0,min(1.0,1.0-no_speech))
-                if confidence == 1.0 and all(not hasattr(x,"no_speech_prob") for x in values):
-                    confidence=math.exp(sum(x.avg_logprob for x in values)/len(values))
-            else: confidence=0.0
+                no_speech=[getattr(x,"no_speech_prob",None) for x in values]
+                logprobs=[getattr(x,"avg_logprob",None) for x in values]
+                valid_no_speech=all(type(x) in (int,float) and math.isfinite(x) and 0 <= x <= 1 for x in no_speech)
+                valid_logprobs=all(type(x) in (int,float) and math.isfinite(x) and x <= 0 for x in logprobs)
+                if valid_no_speech and valid_logprobs:
+                    # Neither score is calibrated text-correctness confidence.
+                    # Keep the existing presence gate, capped by the existing
+                    # logprob fallback score so poor decoding cannot be promoted
+                    # merely because speech is present. Invalid/missing metadata
+                    # fails closed, but text remains available for safety-only use.
+                    confidence=min(1.0-sum(no_speech)/len(values), math.exp(sum(logprobs)/len(values)))
             return text, confidence
         try:
             text,confidence=await asyncio.wait_for(asyncio.to_thread(run), self.config.stt_timeout_s)
