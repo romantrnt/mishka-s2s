@@ -1,3 +1,5 @@
+> Historical report: caregiver-delivery and adult-resolution behavior described below has been removed. Current local-only behavior is documented in [OPERATIONS.md](OPERATIONS.md#local-safety-response).
+
 # Финальный технический проход, 15 ноября 2026
 
 **Пакет для review, не разрешение на эксплуатацию с детьми.** Опубликование этой ветки не означает merge/deploy. Рабочий сервер, USB/HID и настоящие данные клиники в этом проходе не использовались.
