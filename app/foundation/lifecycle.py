@@ -130,8 +130,10 @@ class StartupLifecycle:
         try:
             result = await warmup()
         except asyncio.CancelledError:
-            self._record_degraded("warmup_cancelled", {"source": "warmup", "cancelled": True})
-            self._changed_at = time.monotonic()
+            # A superseded warmup no longer owns lifecycle state or diagnostics.
+            if not self._stopping and generation == self._generation:
+                self._record_degraded("warmup_cancelled", {"source": "warmup", "cancelled": True})
+                self._changed_at = time.monotonic()
             raise
         except Exception as exc:
             result = {"ok": False, "reason": f"warmup_exception:{type(exc).__name__}"}

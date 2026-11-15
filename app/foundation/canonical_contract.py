@@ -1485,7 +1485,7 @@ class CanonicalRuntime(SceneMenuMixin):
             game_instruction_ids = {spec.instruction_phrase_id for spec in AVAILABLE_GAME_SPECS} | {"PHRASE_036", "PHRASE_041", "PHRASE_042"}
             if ((state.mode == "game_active" and state.substate != "game_exit_confirmation"
                     and response_id in game_instruction_ids)
-                    or (state.mode == "root_menu" and state.substate == "game_completed"
+                    or (state.mode == "root_menu"
                         and response_id == "PHRASE_028")) and state.active_audio_id == response_id:
                 # Optional instructions never own playable visual state. Only
                 # this exact active lease may finish; no scoring/navigation.

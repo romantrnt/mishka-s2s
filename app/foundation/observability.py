@@ -84,8 +84,6 @@ class Metrics:
     def record_watchdog_event(self, event):
         """Keep bounded, redacted watchdog diagnostics for /health."""
         self.watchdog_events.append(dict(event))
-        if len(self.watchdog_events) > 200:
-            del self.watchdog_events[:-200]
 
     def watchdog_check(self, now, tasks=None, playback=None, max_age_s=30.0, queue_generations=None, *, record=True):
         stale_tasks = [k for k, started in (tasks or {}).items() if now - started > max_age_s]

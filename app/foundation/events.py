@@ -68,7 +68,11 @@ def parse_event(payload: dict[str, Any], session_id: str, sequence: int, source:
     if not valid_size:
         raise EventValidationError("event payload is invalid or exceeds 16 KiB")
     event_name=str(payload.get("type"))
-    if event_name=="handset": event_name="handset_up" if payload.get("state")=="up" else "handset_down"
+    if event_name == "handset":
+        state = payload.get("state")
+        if state not in ("up", "down"):
+            raise EventValidationError("handset state must be up or down")
+        event_name = "handset_up" if state == "up" else "handset_down"
     name = _ALIASES.get(event_name, event_name)
     if name not in EVENT_TYPES:
         raise EventValidationError("unknown event type")
@@ -88,7 +92,8 @@ def parse_event(payload: dict[str, Any], session_id: str, sequence: int, source:
         if not isinstance(text, str) or len(text) > 512:
             raise EventValidationError("speech text must be at most 512 characters")
         # The application receives text transiently; it must never publish/persist it.
-        clean = {"length": len(text)}
+        clean = {"length": len(text), **({"state_version": clean["state_version"]}
+                                      if "state_version" in clean else {})}
     return Event(name, session_id, sequence, now if now is not None else time.time(), source, clean, str(payload.get("correlation_id", "")))
 
 

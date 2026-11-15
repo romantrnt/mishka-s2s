@@ -160,6 +160,9 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return current == target == "safety_handoff"
     if event_type == "AdultResolved":
         return current == "safety_handoff" and target == "root_menu"
+    if event_type == "ButtonReleased":
+        # The hold game completes its last round on a measured release.
+        return current == "game_active" and target == "root_menu"
     if event_type == "ButtonPressed":
         return (
             (current == "root_menu" and target == "profile_ready") or
