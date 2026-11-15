@@ -78,8 +78,11 @@ def test_runtime_led_state_is_canonical_for_ui_and_physical_signal():
         state = stand.snapshot()
         assert state["led"]["valid"] is True
         assert state["led"]["pattern"] == "canonical_lighting"
-        assert state["led"]["targets"] == list(range(1, 8))
+        assert state["led"]["targets"] == []
         # The legacy pattern is a diagnostic projection; canonical lighting is authoritative.
+        stand.application.led.set_button_compatibility(range(1, 8), 1)
+        stand._drain_device_commands()
+        assert stand.snapshot()["led"]["targets"] == list(range(1, 8))
 
         stand.commands.extend((
             {"type": "led_pattern", "sequence": 99, "payload": {"pattern": "buttons_2", "color": "red"}},

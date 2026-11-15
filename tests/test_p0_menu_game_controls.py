@@ -102,7 +102,6 @@ def test_game_exit_confirmation_can_be_cancelled_after_release():
     asyncio.run(run())
 
 
-@pytest.mark.xfail(strict=True, reason="unsupported target 5/7 requires approved unavailable-step cue")
 @pytest.mark.parametrize("level", [1, 5])
 def test_game_unreachable_target_is_not_presented_as_playable(level):
     async def run():
@@ -119,6 +118,26 @@ def test_game_unreachable_target_is_not_presented_as_playable(level):
                        for effect in result["outputs"])
         assert result["canonical_state"]["game_target"] not in {5, 7}
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("trigger", ["success", "mistake", "timeout"])
+def test_game_targets_remain_reachable_after_progress_and_downgrade(trigger):
+    from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime
+    for level in range(1, 10):
+        runtime = CanonicalRuntime()
+        state = CanonicalState("game", mode="game_active", handset="up", game_level=level,
+                               game_target=1, game_success_streak=1, game_attempts=2)
+        runtime.sessions["game"] = state
+        request = CanonicalEvent("TimeoutFired" if trigger == "timeout" else "ButtonPressed",
+            "game", 1, state.state_version, "test", {"button_id": 1 if trigger == "success" else 2})
+        result = runtime.handle(request)
+        if state.mode != "game_active":
+            assert result["reason"] == "game_completed"
+            continue
+        assert state.game_target in {1, 2, 3, 4, 6}
+        scored = runtime.handle(CanonicalEvent("ButtonPressed", "game", 2, state.state_version,
+                                               "test", {"button_id": state.game_target}))
+        assert scored["reason"] in {"game_progress", "game_completed"}
 
 
 def test_game_ack_fix_does_not_change_story_or_onboarding_release():

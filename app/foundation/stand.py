@@ -15,6 +15,7 @@ import time
 import wave
 from collections import deque
 from io import BytesIO
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode
@@ -52,6 +53,7 @@ HEADLESS_AUDIO_NODES = frozenset({
     "exhibition_menu_repeat_listen",
     "exhibition_name_capture", "exhibition_age_selection", "bear_dialogue", "support_intake",
     "personal_story_theme", "wellbeing_check", "schedule_weather",
+    "fixed_story_playing", "story_paused", "story_speech_analysis",
 })
 _AUTH_QUERY_KEYS = frozenset({"token", "access_token", "stand_token"})
 
@@ -111,15 +113,27 @@ class StandAuthQueryRedactionMiddleware:
                     headers = list(scope.get("headers", []))
                     if not any(key.lower() == b"x-stand-token" for key, _ in headers):
                         headers.append((b"x-stand-token", query_token.encode("latin-1")))
+                    # Persist the credential that the downstream auth check
+                    # actually uses; an explicit header outranks the query.
+                    query_token = next(value.decode("latin-1") for key, value in headers
+                                       if key.lower() == b"x-stand-token")
                     scope["headers"] = headers
                     scope["_stand_query_token"] = query_token
                 if any(key.lower() in _AUTH_QUERY_KEYS for key, _ in pairs):
                     scope["query_string"] = urlencode(sanitized).encode("latin-1")
         async def send_with_cookie(message):
-            if console_query_fallback and message.get("type") == "http.response.start":
+            if (console_query_fallback and message.get("type") == "http.response.start"
+                    and message.get("status") == 200):
                 headers = list(message.get("headers", []))
-                headers.append((b"set-cookie", b"stand_token=" + query_token.encode("latin-1") + b"; Path=/console; HttpOnly; SameSite=strict"))
-                headers.append((b"set-cookie", b"stand_token=" + query_token.encode("latin-1") + b"; Path=/stand/ws; HttpOnly; SameSite=strict"))
+                for path in ("/console", "/stand"):
+                    cookie = SimpleCookie()
+                    cookie["stand_token"] = query_token
+                    cookie["stand_token"]["path"] = path
+                    cookie["stand_token"]["httponly"] = True
+                    cookie["stand_token"]["samesite"] = "Strict"
+                    if scope.get("scheme") == "https":
+                        cookie["stand_token"]["secure"] = True
+                    headers.append((b"set-cookie", cookie.output(header="").strip().encode("latin-1")))
                 message = dict(message)
                 message["headers"] = headers
             await send(message)
@@ -130,6 +144,26 @@ class AudioInputError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+async def read_bounded_audio_body(request, limit: int) -> bytes:
+    """Bound application buffering even for chunked requests without a length."""
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            length = int(declared)
+        except ValueError:
+            raise AudioInputError("invalid_format", "invalid audio content length") from None
+        if length < 0:
+            raise AudioInputError("invalid_format", "invalid audio content length")
+        if length > limit:
+            raise AudioInputError("oversized_audio", "audio request body exceeds limit")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > limit:
+            raise AudioInputError("oversized_audio", "audio request body exceeds limit")
+        body.extend(chunk)
+    return bytes(body)
 
 
 class StandHub:
@@ -588,16 +622,46 @@ class HardwareIntegrationStand:
         session = self.application.sessions.get(self.active_session_id)
         return bool(
             session is not None
+            and getattr(self, "_capture_hid_fault", None) is None
             and getattr(session, "handset_up", False)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
         )
 
-    def _enqueue_headless_audio_frame(self, values: Any) -> None:
+    def _audio_owner_guard(self, sid: str, *, physical: bool = False):
+        record = self.application.sessions.get(sid)
+        # A callback/upload admitted while the handset was down must not
+        # become owned by the next lift of this same mutable session record.
+        handset_up = bool(record and record.handset_up)
+        epoch = self.application._session_epochs.get(sid, 0)
+        hid_generation = getattr(self, "_hid_generation", 0)
+        capture_generation = getattr(self, "_capture_generation", 0)
+
+        def current():
+            return (self.application.sessions.get(sid) is record
+                    and bool(record and record.handset_up) == handset_up
+                    and self.application._session_epochs.get(sid, 0) == epoch
+                    and (not physical or (
+                        self.active_session_id == sid
+                        and getattr(self, "_hid_generation", 0) == hid_generation
+                        and getattr(self, "_capture_generation", 0) == capture_generation
+                        and getattr(self, "_capture_hid_fault", None) is None
+                        and bool(record and record.handset_up))))
+        return current
+
+    def _headless_frame_owner(self):
+        # Called in the capture callback, before scheduling on the event loop.
+        sid = self.active_session_id
+        return sid, self._audio_owner_guard(sid, physical=True)
+
+    def _enqueue_headless_audio_frame(self, values: Any, owner=None) -> None:
         queue = self._headless_audio_queue
         if queue is None or not self._headless_audio_accepting():
             return
+        sid, guard = owner if owner is not None else self._headless_frame_owner()
+        if not guard():
+            return
         try:
-            queue.put_nowait(values)
+            queue.put_nowait((values, sid, guard))
         except asyncio.QueueFull:
             self._headless_audio_dropped += 1
 
@@ -606,18 +670,20 @@ class HardwareIntegrationStand:
         if queue is None:
             return
         while True:
-            values = await queue.get()
-            if values is None:
+            item = await queue.get()
+            if item is None:
                 return
-            if not self._headless_audio_accepting():
+            values, sid, guard = item
+            if not guard() or not self._headless_audio_accepting():
                 continue
             try:
                 result = await self.inject_pcm(
                     tuple(float(value) for value in np.asarray(values, dtype=np.float32).reshape(-1)),
                     self.settings.audio_sample_rate,
-                    self.active_session_id,
+                    sid,
                     flush_silence=False,
                     wait_for_turn=False,
+                    _ingress_guard=guard,
                 )
                 if isinstance(result, dict) and isinstance(result.get("error"), dict):
                     self.errors.append({
@@ -640,6 +706,7 @@ class HardwareIntegrationStand:
         if capture is None or getattr(self, "_headless_audio_task", None) is not None:
             return
         loop = self._physical_loop or asyncio.get_running_loop()
+        self._capture_generation = getattr(self, "_capture_generation", 0) + 1
         self._headless_audio_queue = asyncio.Queue(maxsize=64)
         self._headless_audio_dropped = 0
         self._headless_audio_task = asyncio.create_task(
@@ -647,7 +714,7 @@ class HardwareIntegrationStand:
             name="mishka-headless-audio-input",
         )
         try:
-            capture.start(loop, self._enqueue_headless_audio_frame)
+            capture.start(loop, self._enqueue_headless_audio_frame, frame_context=self._headless_frame_owner)
             self._headless_audio_status = {
                 "state": "active",
                 "device": self.settings.audio_input_device or "default",
@@ -672,6 +739,7 @@ class HardwareIntegrationStand:
             })
 
     async def _stop_headless_audio_capture(self) -> None:
+        self._capture_generation = getattr(self, "_capture_generation", 0) + 1
         capture = getattr(self, "audio_input", None)
         if capture is not None:
             capture.stop()
@@ -686,7 +754,10 @@ class HardwareIntegrationStand:
     async def start_hardware(self):
         if self.hardware_mode != "physical":
             return
-        if self.input_adapter is not None and self.input_adapter.is_ready():
+        pending_loss = getattr(self, "_hid_loss_future", None)
+        if pending_loss is not None:
+            await asyncio.wrap_future(pending_loss)
+        if self.input_adapter is not None and self.input_adapter.is_ready() and getattr(self, "_capture_hid_fault", None) is None:
             hid_diag = _hid_diagnostics(self.input_adapter); self._hid_status = {"state": "active", "generation": getattr(self, "_hid_generation", 0), "initial_level_sync": hid_diag.get("initial_level_sync"), "semantic_input_accepted": bool(hid_diag.get("semantic_input_accepted")), "physical_ready": bool(hid_diag.get("physical_ready"))}
             return
         if not getattr(self.settings, "hid_device", ""):
@@ -704,6 +775,7 @@ class HardwareIntegrationStand:
         self.input_adapter = None
         self._hid_generation = getattr(self, "_hid_generation", 0) + 1
         generation = self._hid_generation
+        self._capture_hid_fault = None
         self._hid_status = {"state": "starting", "generation": generation}
         if old_adapter is not None:
             old_adapter.close()
@@ -724,6 +796,11 @@ class HardwareIntegrationStand:
                 return
             raise
         self._input_start_error = None
+        if self._capture_hid_fault is not None:
+            # The reader can fail from its thread before open() returns.
+            # Its pending cleanup owns this generation; never reopen capture.
+            self._startup_state = "degraded"
+            return
         hid_diag = _hid_diagnostics(self.input_adapter)
         level_sync = hid_diag.get("initial_level_sync") or {}
         hid_state = "active" if hid_diag.get("physical_ready") else ("initial_level_unavailable" if level_sync.get("status") == "unavailable" else "degraded")
@@ -732,6 +809,9 @@ class HardwareIntegrationStand:
         self._startup_state = "ready" if getattr(self, "_lighting_status", {"state": "available"}).get("state") == "available" and hid_diag.get("physical_ready") and getattr(self, "_headless_audio_status", {}).get("state") == "active" else "degraded"
 
     async def stop_hardware(self):
+        pending_loss = getattr(self, "_hid_loss_future", None)
+        if pending_loss is not None:
+            await asyncio.wrap_future(pending_loss)
         await self._stop_headless_audio_capture()
         led = getattr(getattr(self, "application", None), "led", None)
         cancel_effects = getattr(led, "cancel_effects", None)
@@ -914,9 +994,35 @@ class HardwareIntegrationStand:
             return
         self._hid_status = {"state": str(diagnostic.get("kind") or "reader_exception"), "generation": generation, "semantic_input_accepted": False, "physical_ready": False, **diagnostic}
         self.errors.append({"at": time.time(), "stage": "hid_reader", "generation": generation, **diagnostic})
+        if getattr(self, "_capture_hid_fault", None) == generation:
+            return
+        # Close ingress immediately, including queued callbacks and frames
+        # already waiting for UART/audio locks. Cleanup runs on the owner loop.
+        self._capture_hid_fault = generation
+        loop = getattr(self, "_physical_loop", None)
+        if loop is not None and not loop.is_closed():
+            self._hid_loss_future = asyncio.run_coroutine_threadsafe(
+                self._handle_hid_loss(self.active_session_id, generation), loop)
+            self._hid_loss_future.add_done_callback(self._observe_physical_input_future)
+
+    async def _handle_hid_loss(self, sid: str, generation: int) -> None:
+        if generation != getattr(self, "_hid_generation", 0):
+            return
+        try:
+            capture = getattr(self, "audio_input", None)
+            if capture is not None:
+                capture.stop()
+            await self.application.receive_async(Event(
+                "HardwareDisconnected", sid, generation, time.time(), "physical_hid_loss",
+                {}, f"hid-loss:{generation}",
+            ))
+        finally:
+            await self._stop_headless_audio_capture()
 
     def _on_physical_input(self, event: NormalizedInputEvent, generation: int | None = None):
         if generation is not None and generation != getattr(self, "_hid_generation", 0):
+            return
+        if getattr(self, "_capture_hid_fault", None) is not None:
             return
         loop = self._physical_loop
         if loop is None:
@@ -1268,8 +1374,12 @@ class HardwareIntegrationStand:
                     chunk_index=payload.get("chunk_index"), token=payload.get("token"),
                 )
 
-    async def inject(self, message_type: str, payload: dict[str,Any], session_id: str | None = None, *, wait_for_audio: bool = True):
+    async def inject(self, message_type: str, payload: dict[str,Any], session_id: str | None = None, *, wait_for_audio: bool = True, _ingress_guard=None):
         sid = session_id or self.active_session_id
+        if message_type == "audio_pcm":
+            _ingress_guard = _ingress_guard or self._audio_owner_guard(sid)
+            if not _ingress_guard():
+                return {"reason": "stale_session_generation", "outputs": []}
         if self.application.max_json:
             boundary = self.application._max_client_boundary
             if boundary is None or sid != boundary.session_id:
@@ -1287,10 +1397,14 @@ class HardwareIntegrationStand:
             self._cancel_response_audio()
         try:
             async with self._transport_lock:
+                if _ingress_guard is not None and not _ingress_guard():
+                    return {"reason": "stale_session_generation", "outputs": []}
                 await self._offload_uart(self._device_write, message_type, payload)
                 frames=await self._offload_uart(self._receive_frames_sync)
             if not frames: raise RuntimeError("serial adapter received no frame from PTY")
-            for frame in frames: result=await self._dispatch(frame, sid, wait_for_audio=wait_for_audio)
+            for frame in frames: result=await self._dispatch(frame, sid, wait_for_audio=wait_for_audio, _ingress_guard=_ingress_guard)
+            if _ingress_guard is not None and not _ingress_guard():
+                return {"reason": "stale_session_generation", "outputs": []}
             # Do not let a rejected concurrent session steal the stand's
             # active-session cursor.  Otherwise a follow-up handset event
             # could be routed to the rejected id and bypass the installation
@@ -1318,7 +1432,7 @@ class HardwareIntegrationStand:
             and isinstance(result, dict)
             and result.get("reason") in {"collecting", "audio_session_required"}
         )
-        if requested_session_id and not (isinstance(result, dict) and result.get("reason") == "installation_busy"):
+        if requested_session_id and (_ingress_guard is None or _ingress_guard()) and not (isinstance(result, dict) and result.get("reason") == "installation_busy"):
             self.active_session_id = requested_session_id
         is_transport_error = isinstance(result, dict) and isinstance(result.get("error"), dict)
         if not quiet_pcm:
@@ -1329,13 +1443,15 @@ class HardwareIntegrationStand:
         return result
 
     async def inject_raw(self, raw: bytes):
+        sid = self.active_session_id
+        ingress_guard = self._audio_owner_guard(sid)
         if not raw.endswith(b"\n"): raw+=b"\n"
         started=time.perf_counter()
         try:
             async with self._transport_lock:
                 await self._offload_uart(self.pty.write_device, raw)
                 frames=await self._offload_uart(self._receive_frames_sync)
-            results=[await self._dispatch(frame, self.active_session_id) for frame in frames]
+            results=[await self._dispatch(frame, sid, _ingress_guard=ingress_guard) for frame in frames]
             if frames: self.device_sequence=max(self.device_sequence,max(frame.sequence for frame in frames))
             if not frames: raise RuntimeError("no complete UART frame")
             result=results[-1] if results else None
@@ -1360,18 +1476,19 @@ class HardwareIntegrationStand:
         await self.hub.publish({"type":"stand_state","state":self.panel_snapshot()})
         return result
 
-    async def _dispatch(self, frame: HardwareFrame, session_id: str | None = None, *, wait_for_audio: bool = True):
+    async def _dispatch(self, frame: HardwareFrame, session_id: str | None = None, *, wait_for_audio: bool = True, _ingress_guard=None):
         sid = session_id or self.active_session_id
         if frame.type=="capabilities":
             self.adapter.capabilities=dict(frame.payload); self.adapter.firmware_version=str(frame.payload.get("firmware","")); return {"capabilities":frame.payload}
         if frame.type=="heartbeat": return {"heartbeat":True}
-        if frame.type=="audio_pcm": return await self._dispatch_pcm(frame, sid, wait_for_turn=wait_for_audio)
+        if frame.type=="audio_pcm": return await self._dispatch_pcm(frame, sid, wait_for_turn=wait_for_audio, _ingress_guard=_ingress_guard)
         event_payload={"type":frame.type,**frame.payload}
         event=parse_event(event_payload,sid,frame.sequence,"uart_pty")
         return await self.application.receive_async(event,frame.payload.get("text") if frame.type=="text" else None)
 
-    async def _dispatch_pcm(self, frame: HardwareFrame, session_id: str | None = None, *, wait_for_turn: bool = True):
+    async def _dispatch_pcm(self, frame: HardwareFrame, session_id: str | None = None, *, wait_for_turn: bool = True, _ingress_guard=None):
         sid = session_id or self.active_session_id
+        _ingress_guard = _ingress_guard or self._audio_owner_guard(sid)
         payload=frame.payload
         if payload.get("encoding")!="f32le" or payload.get("channels")!=1 or payload.get("sample_rate")!=16000:
             raise ValueError("audio_pcm must be mono f32le at 16000 Hz")
@@ -1382,9 +1499,11 @@ class HardwareIntegrationStand:
         if not all(math.isfinite(value) and -1.0<=value<=1.0 for value in samples): raise ValueError("audio samples must be finite -1..1")
         lock = self._audio_ingress_locks.setdefault(sid, asyncio.Lock())
         async with lock:
-            return await self.application.receive_audio_async(sid,tuple(samples),frame.sequence,wait_for_turn=wait_for_turn)
+            return await self.application.receive_audio_async(sid,tuple(samples),frame.sequence,wait_for_turn=wait_for_turn, _ingress_guard=_ingress_guard)
 
-    async def inject_pcm(self, samples: tuple[float,...], sample_rate: int, session_id: str | None = None, flush_silence: bool = True, *, wait_for_turn: bool = True):
+    async def inject_pcm(self, samples: tuple[float,...], sample_rate: int, session_id: str | None = None, flush_silence: bool = True, *, wait_for_turn: bool = True, _ingress_guard=None):
+        sid = session_id or self.active_session_id
+        _ingress_guard = _ingress_guard or self._audio_owner_guard(sid)
         if sample_rate not in AUDIO_SAMPLE_RATES:
             raise AudioInputError("unsupported_format", "sample rate is not supported")
         if not samples:
@@ -1394,7 +1513,6 @@ class HardwareIntegrationStand:
         values = np.asarray(samples, dtype=np.float32)
         if not np.isfinite(values).all() or np.any(values < -1.0) or np.any(values > 1.0):
             raise AudioInputError("decode_error", "audio samples must be finite and within -1..1")
-        if session_id: self.active_session_id=session_id
         if sample_rate!=16000:
             samples=await self._offload_audio(resample, tuple(float(value) for value in values), sample_rate, 16000)
             sample_rate=16000
@@ -1403,7 +1521,9 @@ class HardwareIntegrationStand:
         for offset in range(0,len(samples),512):
             chunk=samples[offset:offset+512]; raw=struct.pack("<"+"f"*len(chunk),*chunk)
             result=await self.inject("audio_pcm",{"encoding":"f32le","sample_rate":sample_rate,"channels":1,
-                                     "data_b64":base64.b64encode(raw).decode()},self.active_session_id,wait_for_audio=wait_for_turn)
+                                     "data_b64":base64.b64encode(raw).decode()},sid,wait_for_audio=wait_for_turn, _ingress_guard=_ingress_guard)
+            if not _ingress_guard():
+                return {"reason": "stale_session_generation", "outputs": []}
             # A completed turn changes the scenario node. Stop feeding the
             # remainder of the same upload so it cannot be mistaken for a new
             # turn or overwrite the useful result with a stale tail frame.
@@ -1415,7 +1535,9 @@ class HardwareIntegrationStand:
             for _ in range(14):
                 raw=struct.pack("<"+"f"*len(silence),*silence)
                 result=await self.inject("audio_pcm",{"encoding":"f32le","sample_rate":16000,"channels":1,
-                                         "data_b64":base64.b64encode(raw).decode()},self.active_session_id,wait_for_audio=wait_for_turn)
+                                         "data_b64":base64.b64encode(raw).decode()},sid,wait_for_audio=wait_for_turn, _ingress_guard=_ingress_guard)
+                if not _ingress_guard():
+                    return {"reason": "stale_session_generation", "outputs": []}
                 if isinstance(result,dict) and result.get("reason") in {"bounded_s2s_audio","quick_reply_audio","s2s_return"}:
                     turn_completed=True
                     break
@@ -2311,16 +2433,18 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
     async def raw(payload:dict): return transport_response(await stand.inject_raw(str(payload.get("frame","")).encode()))
     @api.post("/stand/audio/wav")
     async def audio_wav(request:Request,session_id:str="stand"):
-        raw = await request.body()
+        guard = stand._audio_owner_guard(session_id)
+        raw = await read_bounded_audio_body(request, MAX_AUDIO_WAV_BYTES)
         samples,rate=await stand._offload_audio(decode_wav, raw)
-        return transport_response(await stand.inject_pcm(samples,rate,session_id))
+        return transport_response(await stand.inject_pcm(samples,rate,session_id, _ingress_guard=guard))
     @api.post("/stand/audio/pcm")
     async def audio_pcm(request:Request,session_id:str="stand",sample_rate:int=16000):
-        raw=await request.body()
+        guard = stand._audio_owner_guard(session_id)
+        raw=await read_bounded_audio_body(request, 4 * 16000 * MAX_AUDIO_SECONDS)
         if not raw or len(raw)%4: raise AudioInputError("invalid_format", "PCM body must be little-endian float32")
         if len(raw) > 4 * 16000 * MAX_AUDIO_SECONDS: raise AudioInputError("oversized_audio", "PCM exceeds 15 seconds")
         samples=struct.unpack("<"+"f"*(len(raw)//4),raw)
-        return transport_response(await stand.inject_pcm(tuple(samples),sample_rate,session_id))
+        return transport_response(await stand.inject_pcm(tuple(samples),sample_rate,session_id, _ingress_guard=guard))
     @api.post("/stand/reset")
     async def reset_stand(payload:dict): return transport_response(await stand.reset(payload.get("session_id")))
     @api.websocket("/stand/ws")
@@ -2377,7 +2501,12 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         try:
             while True:
                 try:
-                    message=await websocket.receive_json(); kind=message.get("type")
+                    message = await websocket.receive_json()
+                    if not isinstance(message, dict) or not isinstance(message.get("type"), str):
+                        await websocket.send_json({"type": "error", "error": {
+                            "code": "invalid_message", "message": "WebSocket message must be an object with a string type"}})
+                        continue
+                    kind = message["type"]
                     if kind == "ping":
                         await websocket.send_json({"type": "pong"})
                         continue
@@ -2406,18 +2535,24 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
                         trace_generation = getattr(audio_pipeline, "generations", {}).get(sid, 0)
                         stand.application.runtime_manager.engine.metrics.begin_voice_turn(sid, generation_id=trace_generation)
                         stand.application.runtime_manager.engine.metrics.mark_voice(sid, "proxy_receive", generation_id=trace_generation)
-                        raw=base64.b64decode(str(message.get("data_b64","")),validate=True)
+                        encoded = message.get("data_b64", "")
+                        if not isinstance(encoded, str) or len(encoded) > 4 * ((8192 + 2) // 3):
+                            raise ValueError("audio PCM frame exceeds limit")
+                        raw=base64.b64decode(encoded,validate=True)
                         sample_rate=int(message.get("sample_rate",16000))
                         if sample_rate<=0 or len(raw)==0 or len(raw)%4 or len(raw)>8192:
                             raise ValueError("audio PCM frame must be finite float32 and <= 2048 samples")
                         samples=struct.unpack("<"+"f"*(len(raw)//4),raw)
                         if not all(math.isfinite(value) and -1.0<=value<=1.0 for value in samples):
                             raise ValueError("audio samples must be finite -1..1")
-                        schedule_audio(stand.inject_pcm(tuple(samples),sample_rate,message.get("session_id"),False,wait_for_turn=False))
+                        schedule_audio(stand.inject_pcm(tuple(samples),sample_rate,sid,False,wait_for_turn=False,
+                                                       _ingress_guard=stand._audio_owner_guard(sid)))
                     elif kind=="flush_audio":
                         # Flush the VAD boundary with one bounded silence frame;
                         # empty payloads remain invalid for the PCM contract.
-                        schedule_audio(stand.inject_pcm(tuple(0.0 for _ in range(320)),16000,message.get("session_id"),True,wait_for_turn=False))
+                        sid = str(session_id or stand.active_session_id)
+                        schedule_audio(stand.inject_pcm(tuple(0.0 for _ in range(320)),16000,sid,True,wait_for_turn=False,
+                                                       _ingress_guard=stand._audio_owner_guard(sid)))
                     elif kind in {"handset","button","button_released","button_hold","button_long_hold","text"}:
                         result = await stand.inject(kind,{k:v for k,v in message.items() if k not in {"type","session_id"}},message.get("session_id"))
                         if isinstance(result, dict) and result.get("error"):

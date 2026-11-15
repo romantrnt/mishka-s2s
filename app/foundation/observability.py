@@ -6,6 +6,7 @@ from pathlib import Path
 import resource
 from collections import Counter, deque
 import os
+import sys
 from typing import Any
 
 from .events import redacted_event
@@ -53,8 +54,13 @@ class Metrics:
             cgroup = {"current_bytes": self.metric(int(current)), "limit_bytes": self.metric(None, "unlimited") if limit == "max" else self.metric(int(limit))}
         except (OSError, ValueError): cgroup = {"current_bytes": self.metric(None, "cgroup_unavailable"), "limit_bytes": self.metric(None, "cgroup_unavailable")}
         try:
-            import torch
-            gpu = ({"allocated_bytes": self.metric(torch.cuda.memory_allocated()), "reserved_bytes": self.metric(torch.cuda.memory_reserved()), "peak_bytes": self.metric(torch.cuda.max_memory_allocated())} if torch.cuda.is_available() else {key: self.metric(None, "cuda_unavailable") for key in ("allocated_bytes", "reserved_bytes", "peak_bytes")})
+            # A read-only probe must not initialize a model runtime. Production
+            # loads torch during startup; mock/unused runtimes report unknown.
+            torch = sys.modules.get("torch")
+            if torch is None:
+                gpu = {key: self.metric(None, "torch_not_loaded") for key in ("allocated_bytes", "reserved_bytes", "peak_bytes")}
+            else:
+                gpu = ({"allocated_bytes": self.metric(torch.cuda.memory_allocated()), "reserved_bytes": self.metric(torch.cuda.memory_reserved()), "peak_bytes": self.metric(torch.cuda.max_memory_allocated())} if torch.cuda.is_available() else {key: self.metric(None, "cuda_unavailable") for key in ("allocated_bytes", "reserved_bytes", "peak_bytes")})
         except (ImportError, AttributeError, RuntimeError): gpu = {key: self.metric(None, "cuda_unavailable") for key in ("allocated_bytes", "reserved_bytes", "peak_bytes")}
         ollama = {"rss_bytes": self.metric(None, "ollama_unavailable")}
         try:

@@ -1,11 +1,15 @@
 import asyncio
+from xml.etree import ElementTree
+import pytest
 
 from app.foundation.s2s import RVCV2Provider, SileroTTSProvider
 from app.foundation.tts_engine import SileroTTSEngine
 
 
 def test_silero_normalization_and_contract():
-    assert SileroTTSEngine.normalize("  Привет\n   мир  ") == "Привет мир"
+    speech = ElementTree.fromstring(SileroTTSEngine.normalize("  Привет\n   мир  "))
+    assert speech.tag == "speak" and speech.find("s") is not None
+    assert "".join(speech.itertext()) == "Привет мир"
     try:
         SileroTTSEngine.normalize(" \t ")
     except ValueError as exc:
@@ -34,7 +38,7 @@ def test_silero_package_fallback_keeps_model_when_to_returns_none(tmp_path):
     samples, rate = engine.synthesize_blocking("Привет")
     assert rate == 48000
     assert len(samples) == 2
-    assert samples == (0.92, -0.92)
+    assert samples == pytest.approx((0.1, -0.1))  # Silero dynamics remain unchanged.
     assert engine.readiness()["load_source"] == "package_cache"
 
 

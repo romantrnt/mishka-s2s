@@ -6,6 +6,11 @@ import os
 from typing import Any
 
 
+def public_model_reference(value: str) -> str:
+    """Keep ordinary model names, never disclose local/URL references."""
+    return "[configured]" if any(char in str(value) for char in ("/", "\\")) else value
+
+
 class SettingsError(ValueError):
     """Safe, field-scoped configuration error with no secret values."""
 
@@ -441,9 +446,22 @@ class Settings:
         )
 
     def redacted_snapshot(self) -> dict[str, Any]:
-        secret = {"stand_access_token", "history_db", "yandex_weather_api_key"}
+        # This projection is public (/ready), including on a mock runtime.
+        # Keep location, local filesystem/device names and endpoint credentials
+        # out of it; presence flags are sufficient for operational diagnostics.
+        private = {"stand_access_token", "history_db", "yandex_weather_api_key",
+                   "content_root", "max_client_bundle", "max_demo_state", "host",
+                   "audio_output_device", "audio_input_device", "lighting_device", "hid_device",
+                   "ollama_base_url", "vllm_base_url", "weather_endpoint",
+                   "yandex_weather_latitude", "yandex_weather_longitude",
+                   "silero_cache_path", "rvc_project_root", "rvc_python", "rvc_model",
+                   "rvc_index", "rvc_tmp_dir", "warmup_pcm_path"}
         data = asdict(self)
-        return {key: value for key, value in data.items() if key not in secret}
+        for key in ("stt_model", "llm_model", "validation_model", "silero_model"):
+            data[key] = public_model_reference(data[key])
+        return {**{key: value for key, value in data.items() if key not in private},
+                "private_configuration_present": {key: value is not None and value != ""
+                                                  for key, value in data.items() if key in private}}
 
     @property
     def operator_token_present(self) -> bool:

@@ -33,6 +33,9 @@ def test_development_flag_on_allows_only_console_query_fallback(monkeypatch):
             assert response.status_code == 200
             assert "stand_token=" in response.headers.get("set-cookie", "")
             assert client.get("/console/console.js").status_code == 200
+            assert client.get("/stand/state").status_code == 200
+            assert client.post("/stand/audio/pcm", content=b"x").status_code != 401
+            client.cookies.clear()
             assert client.get("/stand/state?token=dev-secret").status_code == 401
     finally:
         api.state.stand.close()
@@ -42,9 +45,13 @@ def test_development_query_token_invalid_and_header_priority(monkeypatch):
     api = make_dev_app(monkeypatch, True)
     try:
         with TestClient(api) as client:
-            assert client.get("/console?token=wrong").status_code == 401
+            denied = client.get("/console?token=wrong")
+            assert denied.status_code == 401
+            assert "set-cookie" not in denied.headers
             assert client.get("/console?token=dev-secret", headers={"x-stand-token": "wrong"}).status_code == 401
             assert client.get("/stand/state", headers={"x-stand-token": "dev-secret"}).status_code == 200
+            assert client.get("/console?token=wrong", headers={"x-stand-token": "dev-secret"}).status_code == 200
+            assert client.get("/stand/state").status_code == 200
     finally:
         api.state.stand.close()
 

@@ -64,7 +64,7 @@ class SafetyClassification:
 
 class SafetyClassifier:
     """Deterministic first layer; semantic classifiers may only raise severity."""
-    URGENT = re.compile(r"(кровь|не могу дышать|не могу двиг|потерялся|потерялась|опасно|пожар|ударил|трогает|насили|умер|убью|опасный взрослый|срочно)", re.I)
+    URGENT = re.compile(r"(кровь|не могу дышать|не могу двиг|потерялся|потерялась|опасно|пожар|ударил|трогает|насили|умер|убью|опасный взрослый|срочно|не\s+хочу\s+жить|меня\s+бьют)", re.I)
     CONCERN = re.compile(r"(страшно|обид|плачу|плох[оий]|болит|больно|секрет|не говори взрослым|не хочу идти)", re.I)
 
     def classify(self, text: str, semantic: str = "none") -> SafetyClassification:

@@ -95,6 +95,18 @@ async function run() {
   assert.strictEqual(finished.at(-1).payload.playback_id, "phrase-B");
   assert.strictEqual(ofPath("/stand/audio/completed").at(-1).payload.playback_id, "phrase-B");
 
+  const ringtone = command("ringtone", "RINGTONE", 0);
+  ringtone.payload.asset_path = "assets/sounds/ringtone.wav";
+  context.storySpeechGeneration = 6;
+  await context.playGenericAsset(ringtone, 6);
+  assert.strictEqual(ofPath("/stand/audio/lifecycle").at(-1).payload.playback_id, "ringtone");
+  sources.at(-1).onended();
+  assert.strictEqual(ofPath("/stand/audio/completed").at(-1).payload.playback_lease, "lease-ringtone");
+  const ringCompletions = ofPath("/stand/audio/completed").length;
+  context.storySpeechGeneration = 7;
+  sources.at(-1).onended();
+  assert.strictEqual(ofPath("/stand/audio/completed").length, ringCompletions, "hangup fences ringtone callback");
+
   let wireBody = null;
   const transport = vm.createContext({
     postQueue: Promise.resolve(), session: () => "display-session",

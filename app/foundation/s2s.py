@@ -36,6 +36,7 @@ def _project_path(value: str | Path) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else PROJECT_ROOT / path
 
+from .config import public_model_reference
 from app.metrics.latency import VoiceTurnTrace
 from app.foundation.voice_pipeline import RVC_SAMPLE_RATE, peak_normalize, prepend_pre_roll, resample_mono
 
@@ -675,7 +676,7 @@ class FasterWhisperRecognizer:
         path = Path(self.model_name)
         local_reference = path.exists() if (path.is_absolute() or "/" in self.model_name) else None
         return {"ready": package and local_reference is not False, "provider": "faster_whisper",
-                "package": package, "model": self.model_name,
+                "package": package, "model": public_model_reference(self.model_name),
                 "local_model_present": local_reference,
                 "model_load_requires_warmup": self._model is None}
 
@@ -1007,9 +1008,9 @@ class OllamaLLMProvider:
             match=next((item for item in models if item.get("name")==self.model or item.get("model")==self.model),None)
             actual=(match or {}).get("details",{}).get("quantization_level")
             quantization_ok=not self.quantization or actual==self.quantization
-            return {"ready":match is not None and quantization_ok,"provider":"ollama","model":self.model,"model_present":match is not None,"expected_quantization":self.quantization or None,"actual_quantization":actual,"num_ctx":self.num_ctx}
+            return {"ready":match is not None and quantization_ok,"provider":"ollama","model":public_model_reference(self.model),"model_present":match is not None,"expected_quantization":self.quantization or None,"actual_quantization":actual,"num_ctx":self.num_ctx}
         except Exception as exc:
-            return {"ready":False,"provider":"ollama","model":self.model,"reason":type(exc).__name__}
+            return {"ready":False,"provider":"ollama","model":public_model_reference(self.model),"reason":type(exc).__name__}
 
     async def warmup(self) -> dict[str, Any]:
         started=time.perf_counter()
@@ -1097,8 +1098,8 @@ class VLLMLLMProvider:
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 response=await client.get(f"{self.base_url}/v1/models"); response.raise_for_status()
             ids={item.get("id") for item in response.json().get("data",[])}
-            return {"ready":self.model in ids,"provider":"vllm","model":self.model,"model_present":self.model in ids}
-        except Exception as exc: return {"ready":False,"provider":"vllm","model":self.model,"reason":type(exc).__name__}
+            return {"ready":self.model in ids,"provider":"vllm","model":public_model_reference(self.model),"model_present":self.model in ids}
+        except Exception as exc: return {"ready":False,"provider":"vllm","model":public_model_reference(self.model),"reason":type(exc).__name__}
 
     async def warmup(self) -> dict[str, Any]:
         started=time.perf_counter()
@@ -1662,6 +1663,7 @@ class SoundDeviceCaptureController:
         self._stream = None
         self._loop = None
         self._on_frame = None
+        self._frame_context = None
         self._frames = 0
         self._last_status = None
         self._last_error = None
@@ -1699,12 +1701,13 @@ class SoundDeviceCaptureController:
     def is_ready(self) -> bool:
         return self._stream is not None
 
-    def start(self, loop: asyncio.AbstractEventLoop, on_frame: Callable[[Any], None]) -> None:
+    def start(self, loop: asyncio.AbstractEventLoop, on_frame: Callable[..., None], *, frame_context=None) -> None:
         if self.is_ready():
             return
         import sounddevice as sd
         self._loop = loop
         self._on_frame = on_frame
+        self._frame_context = frame_context
         self._last_error = None
         try:
             self._stream = sd.InputStream(
@@ -1726,12 +1729,19 @@ class SoundDeviceCaptureController:
             self._last_status = str(status)
         loop = self._loop
         on_frame = self._on_frame
+        frame_context = self._frame_context
         if loop is None or on_frame is None or loop.is_closed():
             return
         try:
+            context = frame_context() if frame_context is not None else None
             values = np.asarray(indata, dtype=np.float32)
             values = values.mean(axis=1, dtype=np.float32) if values.ndim == 2 and values.shape[1] > 1 else values.reshape(-1)
-            loop.call_soon_threadsafe(on_frame, np.ascontiguousarray(values, dtype=np.float32))
+            # PortAudio owns indata and may reuse it immediately on return.
+            values = np.array(values, dtype=np.float32, copy=True)
+            if frame_context is None:
+                loop.call_soon_threadsafe(on_frame, values)
+            else:
+                loop.call_soon_threadsafe(on_frame, values, context)
             self._frames += 1
         except Exception as exc:
             self._last_error = {"exception_type": type(exc).__name__, "detail": str(exc)[:180]}
@@ -1739,6 +1749,7 @@ class SoundDeviceCaptureController:
     def stop(self) -> None:
         stream, self._stream = self._stream, None
         self._on_frame = None
+        self._frame_context = None
         self._loop = None
         if stream is not None:
             with contextlib.suppress(Exception):
@@ -1932,8 +1943,8 @@ class AudioSynthesisQueue:
                 self.queued_bytes + item_bytes > self.config.max_tts_queue_bytes):
             self.error=TTSQueueOverflowError("TTS queue resource limit exceeded")
             self.closed=True
-            self.cancel(self.session_id)
-            self._drain("cancelled")
+            if self.failure_event is not None: self.failure_event.set()
+            await self.abort(self.session_id or "")
             raise self.error
         chunk_index=self.next_chunk_index; self.next_chunk_index+=1
         item=(chunk_index,text)
@@ -2450,7 +2461,10 @@ class BoundedConversationEngine:
                     if self.cancel.cancelled(context.session_id, token):
                         raise asyncio.CancelledError
                     try:
-                        validation_started=time.perf_counter(); decision=await self.response_validator.validate(chunk, context=context.history[-4:], generation_id=token)
+                        # A short chunk is still untrusted model output. Include
+                        # earlier chunks so splitting a request cannot erase its meaning.
+                        candidate = " ".join((*chunks, chunk))
+                        validation_started=time.perf_counter(); decision=await self.response_validator.validate(candidate, context=context.history[-4:], generation_id=token)
                         self.metrics.observe_voice_stage(context.session_id, "validation", validation_started, generation_id=trace_generation_id)
                     except asyncio.CancelledError:
                         raise

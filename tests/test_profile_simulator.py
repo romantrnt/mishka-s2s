@@ -41,6 +41,8 @@ def test_simulator_button_sequence_reaches_canonical_deduplication():
 def test_simulator_audio_completion_carries_lease_and_rejects_old_playback():
     async def scenario():
         harness = SimulatorAcceptanceHarness()
+        # This unit harness has no real readiness/warmup admission.
+        harness.stand._admits_physical_users = lambda: True
         try:
             await harness.space_released()
             await harness.advance(5.0)

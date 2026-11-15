@@ -228,7 +228,7 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
         "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
         "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "HardwareDisconnected",
-        "HardwareReconnected", "SessionCancel", "SessionReset", "AdultHandoffAcknowledged",
+        "HardwareReconnected", "SessionCancel", "SessionReset", "AdultHandoffAcknowledged", "AdultHandoffFailed",
         "AdultResolved", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
         "StoryChoiceWaveComplete", "MenuTutorialStep",
     }

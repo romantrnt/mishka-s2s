@@ -37,12 +37,15 @@ def test_current_onboarding_closes_cleanly_and_does_not_implicitly_enter_menu():
     runtime = CanonicalRuntime(exhibition_mode=True, monotonic_now=lambda: 10.0)
     ready = complete_current_onboarding(runtime)
     assert ready["reason"] == "exhibition_onboarding_ready"
-    assert ready["state"]["mode"] == "exhibition_age_complete"
+    assert ready["state"]["mode"] == "exhibition_onboarding_complete"
     assert ready["state"]["substate"] == "exhibition_onboarding_ready"
-    assert ready["state"]["age_band"] == "4-5"
-    blocked = runtime.handle(ce("ExhibitionOnboardingComplete", 11, ready["state"]["state_version"], "handoff"))
-    assert blocked["reason"] == "exhibition_menu_handoff_ignored"
-    assert blocked["state"]["mode"] == "exhibition_age_complete"
+    assert ready["state"]["age_years"] == 2
+    assert ready["state"]["age_band"] == "1-3"
+    assert not any(item.get("phrase_id") == "PHRASE_008" for item in ready["effects"])
+    completed = runtime.handle(ce("ExhibitionOnboardingComplete", 11, ready["state"]["state_version"], "handoff"))
+    assert completed["reason"] == "exhibition_menu_tutorial_started"
+    assert completed["state"]["mode"] == "exhibition_menu_tutorial_buttons"
+    assert any(item.get("phrase_id") == "PHRASE_008" for item in completed["effects"])
 
 
 def test_current_onboarding_reset_is_idempotent_and_clears_private_state():

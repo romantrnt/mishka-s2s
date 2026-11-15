@@ -26,6 +26,13 @@ async def scenario() -> dict[str, object]:
     settings = Settings(profile="mock", runtime_mode="exhibition", hardware_mode="simulator", content_root="content").validate()
     stand = HardwareIntegrationStand(settings=settings)
     try:
+        await stand.start_hardware()
+        warmup = await stand.application.runtime_manager.warmup()
+        check(warmup.get("ok") and warmup.get("mock") and settings.profile == "mock"
+              and settings.hardware_mode == "simulator", "smoke requires an isolated synthetic runtime")
+        # This script tests the scenario after synthetic initialization. Mock
+        # warmup deliberately cannot open the production lifecycle gate.
+        stand._admits_physical_users = lambda: True
         stand.application.monotonic_now = lambda: clock[0]
         stand.application.canonical_runtime.monotonic_now = stand.application.monotonic_now
         stand.application.led.exhibition_effects.monotonic_now = stand.application.monotonic_now
@@ -70,7 +77,7 @@ async def scenario() -> dict[str, object]:
             "acceptance": "synthetic_simulator_only",
         }
     finally:
-        stand.close()
+        await stand.aclose()
         stand.close()
 
 

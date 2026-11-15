@@ -91,7 +91,11 @@ def test_content_rights_and_generated_story_validation_block_unsafe_paths():
     runtime.handle(event("AnonymousStart", 1, 0))
     runtime.handle(event("ButtonPressed", 2, 1, payload={"button_id": 2}))
     started = runtime.handle(event("ButtonPressed", 3, 2, payload={"button_id": 1}))
-    assert started["reason"] == "fixed_story_started"
+    assert started["reason"] == "story_handset_required"
+    assert not any(item["type"] == "play_fixed_story" for item in started["effects"])
+    started = runtime.handle(event("HandsetLifted", 4, started["state"]["state_version"]))
+    assert started["reason"] == "fixed_story_started_after_handset"
+    assert any(item["type"] == "play_fixed_story" for item in started["effects"])
     valid, reason = validate_generated_story({"title": "Доброе путешествие", "text": "Герой нашёл спокойную дорогу и вернулся домой.", "age_band": "3-5", "estimated_duration_sec": 70, "safety_tags": ["safe"], "ending_state": "safe_resolved"}, {"age_band": "3-5", "theme": "dinosaurs"})
     assert (valid, reason) == (True, None)
     invalid, reason = validate_generated_story({"title": "Айболит", "text": "Секрет от взрослых.", "age_band": "3-5", "estimated_duration_sec": 70, "safety_tags": [], "ending_state": "safe_resolved"}, {"age_band": "3-5", "theme": "dinosaurs"})

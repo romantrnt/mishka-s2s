@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,7 +61,7 @@ def test_operational_health_is_machine_readable_and_redacted():
         assert "transcript" not in json.dumps(health).lower()
         assert "profile_db" not in json.dumps(health).lower()
         diagnostics = stand.diagnostics_snapshot()
-        assert set(diagnostics) == {"health", "trace", "diagnostics", "physical_lighting"}
+        assert set(diagnostics) == {"health", "trace", "diagnostics", "physical_lighting", "lighting_hardware"}
         assert "session_id" not in json.dumps(diagnostics)
         assert "audio_buffer" not in json.dumps(diagnostics).lower()
     finally:
@@ -109,7 +110,7 @@ def test_simulator_harness_is_deterministic_for_welcome_reset_and_stale_hid():
 def test_clean_process_smoke_from_other_cwd_has_bounded_output():
     env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(ROOT)}
     result = subprocess.run(
-        [str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/smoke_test.py")],
+        [sys.executable, str(ROOT / "scripts/smoke_test.py")],
         cwd="/tmp", env=env, text=True, capture_output=True, timeout=20, check=False,
     )
     assert result.returncode == 0, result.stderr

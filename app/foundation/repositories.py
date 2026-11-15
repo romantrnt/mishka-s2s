@@ -146,7 +146,7 @@ class SQLiteRepository(InMemorySessionRepository):
             raise HistoryProviderError("history read failed") from exc
 
     def readiness(self):
-        base = {"provider": type(self).__name__, "path": self.path,
+        base = {"provider": type(self).__name__, "path_configured": bool(self.path),
                 "provider_state": "unavailable", "schema_state": "unknown",
                 "history_availability": "unknown"}
         if self.db is None:

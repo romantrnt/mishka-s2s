@@ -47,7 +47,7 @@ def test_canonical_exhibition_timer_is_monotonic_exact_and_cancelable() -> None:
     assert lifted["state"]["mode"] == "voice_welcome"
     assert lifted["state"]["welcome_t0_monotonic"] == 10.0
     assert lifted["state"]["welcome_deadline_monotonic"] == 14.0
-    assert [effect["type"] for effect in lifted["effects"]] == ["lighting_wave_intent", "welcome_timer_scheduled"]
+    assert [effect["type"] for effect in lifted["effects"]] == ["lighting_wave_intent", "play_asset", "welcome_timer_scheduled"]
 
     clock[0] = 13.999
     early = runtime.handle(canonical_event("WelcomeTimerFired", 1, 1, 13.999, "timer"))
@@ -187,7 +187,7 @@ def test_full_exhibition_trace_has_one_wave_one_timer_and_phrase_at_deadline() -
         )
         lifted = await app.receive_async(event)
         assert lifted["reason"] == "exhibition_handset_lifted"
-        assert [item["type"] for item in lifted["outputs"]] == ["lighting_wave_intent", "welcome_timer_scheduled"]
+        assert [item["type"] for item in lifted["outputs"]] == ["lighting_wave_intent", "play_asset", "welcome_timer_scheduled"]
         assert lifted["canonical_state"]["welcome_t0_monotonic"] == 100.0
         assert lifted["canonical_state"]["welcome_deadline_monotonic"] == 104.0
         assert not any(item.get("type") == "speak" and item.get("phrase_id") == "PHRASE_001" for item in lifted["outputs"])
@@ -205,7 +205,7 @@ def test_full_exhibition_trace_has_one_wave_one_timer_and_phrase_at_deadline() -
         assert trace[0]["canonical_event"] == "HandsetLifted"
         assert trace[0]["state_before"] == "idle"
         assert trace[0]["state_after"] == "voice_welcome"
-        assert trace[0]["effects"] == ["lighting_wave_intent", "welcome_timer_scheduled"]
+        assert trace[0]["effects"] == ["lighting_wave_intent", "play_asset", "welcome_timer_scheduled"]
         assert trace[-1]["canonical_event"] == "WelcomeTimerFired"
         assert trace[-1]["audio"] == "PHRASE_001"
 
@@ -221,8 +221,8 @@ def test_timer_boundary_races_and_audio_failure_are_terminal() -> None:
         calls = []
 
         class FailingAudio:
-            def play(self, response_id, asset_id, token):
-                calls.append((response_id, asset_id, token))
+            def play_owned(self, handle, asset_id, offset_ms=0):
+                calls.append((handle.response_id, asset_id, handle.token))
                 raise OSError("audio device unavailable")
             def cancel(self, token):
                 pass
@@ -234,7 +234,7 @@ def test_timer_boundary_races_and_audio_failure_are_terminal() -> None:
         clock[0] = 4.0
         due = await app.flush_welcome_timers()
         assert len(due) == 1
-        assert len(calls) == 1
+        assert [call[0] for call in calls] == ["RINGTONE", "PHRASE_001"]
         assert due[0]["outputs"][0]["resolution"] == "audio_dispatch_failed"
         assert await app.flush_welcome_timers() == []
         assert app.canonical_diagnostics[-1]["kind"] == "audio_dispatch_failed"
@@ -314,6 +314,7 @@ def test_missing_phrase_asset_is_visual_only_and_diagnostic() -> None:
         fired = await app.flush_welcome_timers()
         speak = next(item for item in fired[0]["outputs"] if item.get("type") == "speak")
         assert speak["resolution"] == "recorded_phrase_unavailable_visual_only"
-        assert app.canonical_diagnostics[-1]["kind"] == "recorded_phrase_unavailable"
+        assert any(item["kind"] == "recorded_phrase_unavailable" for item in app.canonical_diagnostics)
+        assert not app._active_audio, "failed welcome must also release the ringtone lease"
 
     asyncio.run(scenario())

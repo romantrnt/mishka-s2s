@@ -170,24 +170,25 @@ def test_tag_parser_allows_only_safe_actions_and_plain_text_fallback():
     with pytest.raises(ValueError): parser.parse("<unknown>bad</unknown>")
 
 
-def test_sentence_chunker_all_required_punctuation_and_long_text():
+def test_sentence_chunker_groups_complete_sentences_and_preserves_long_text():
     chunker=SentenceChunker(20)
     chunks=chunker.feed("Раз, два. Три! Четыре? Пять; Шесть: "+"слово "*8)+chunker.flush()
-    assert len(chunks)>=3 and all(len(x)<=30 for x in chunks)
+    assert chunks == ["Раз, два. Три! Четыре?", "Пять; Шесть: " + " ".join(["слово"] * 8)]
 
 
 def test_sentence_chunker_never_splits_first_word_or_first_greeting():
     chunker=SentenceChunker(20, 16)
     chunks=chunker.feed("Привет, рад приветствовать тебя")+chunker.flush()
-    assert chunks[0] == "Привет, рад"
+    assert chunks == ["Привет, рад приветствовать тебя"]
     assert all(not item.startswith(("вет", "ивет")) for item in chunks)
     assert "".join(chunks).replace(" ", "") == "Привет,радприветствоватьтебя"
 
 
 def test_sentence_chunker_waits_for_boundary_after_long_word():
-    chunker=SentenceChunker(8, 8)
+    chunker=SentenceChunker(16, 16)
     assert chunker.feed("приветств") == []
-    assert chunker.feed("овать тебя") == ["приветствовать"]
+    assert chunker.feed("овать тебя") == []
+    assert chunker.feed(".") == ["приветствовать тебя."]
 
 
 def test_output_safety_rejects_unsafe_text():
@@ -555,9 +556,9 @@ def test_real_streaming_chunk_reaches_playback_before_llm_finishes_and_logs_pipe
         async def stream(self,messages,request_id,cancelled):
             yield "<say>Первый "
             await asyncio.sleep(0)
-            yield "фрагмент."
+            yield "фрагмент.</say>"
             await release.wait()
-            yield " Второй фрагмент.</say>"
+            yield "<say>Второй фрагмент.</say>"
 
     class TimedPlayback(MockPlaybackController):
         def __init__(self):

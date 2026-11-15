@@ -1,5 +1,7 @@
 from __future__ import annotations
 import asyncio
+import json
+import inspect
 
 import os
 import logging
@@ -216,6 +218,54 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
         metrics = getattr(application, "metrics", None) or Metrics()
     lifecycle = StartupLifecycle(admission_guard=admission_guard)
     manager = getattr(application, "runtime_manager", None)
+    content_report_task = None
+    handoff_report_task = None
+    handoff_report_owner = None
+
+    async def handoff_readiness(handoff):
+        nonlocal handoff_report_task, handoff_report_owner
+        unavailable = {"ready": False, "reason": "adult_handoff_unavailable"}
+        check = getattr(handoff, "readiness", None)
+        if handoff is None or type(handoff).__name__ == "SimulatedAdultHandoff" or not callable(check):
+            return {"ready": False, "reason": "adult_handoff_unconfigured"}
+
+        async def probe():
+            try:
+                # Sync adapters must not freeze hangup/audio while a public
+                # health request waits for their external transport.
+                status = await asyncio.to_thread(check)
+                if inspect.isawaitable(status):
+                    status = await status
+                if isinstance(status, dict) and status.get("ready") is True and not status.get("simulated"):
+                    return {"ready": True, "reason": None}
+            except Exception:
+                pass
+            return unavailable
+
+        # A timed-out native check cannot be killed. Share its in-flight
+        # owner, rather than spawning an unbounded worker per health request.
+        if (handoff_report_task is None or handoff_report_task.done()
+                or handoff_report_owner is not handoff):
+            handoff_report_owner = handoff
+            handoff_report_task = asyncio.create_task(probe())
+        try:
+            return await asyncio.wait_for(asyncio.shield(handoff_report_task), 1.0)
+        except asyncio.TimeoutError:
+            return unavailable
+
+
+    async def prepared_content_report():
+        nonlocal content_report_task
+        if scenarios is None:
+            return {"external": True}
+        if content_report_task is None:
+            # Hashing/decoding WAVs is synchronous disk/CPU work. Share a
+            # single verification between startup and concurrent probes.
+            content_report_task = asyncio.create_task(asyncio.to_thread(scenarios.report))
+        try:
+            return await asyncio.shield(content_report_task)
+        except Exception as exc:
+            return {"ready": False, "reason": "content_verification_failed", "error": type(exc).__name__}
 
     @asynccontextmanager
     async def lifespan(_api):
@@ -225,6 +275,7 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
         if hardware_owner is None and hasattr(application, "start_hardware"):
             hardware_owner = application
         try:
+            await prepared_content_report()
             if hardware_owner is not None and hasattr(hardware_owner, "start_hardware"):
                 await hardware_owner.start_hardware()
             if manager is None:
@@ -388,7 +439,8 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
     async def ready(response: Response = None):
         manager=getattr(application,"runtime_manager",None)
         runtime=await _bounded_runtime_readiness(manager)
-        content_ready = scenarios is None or bool(scenarios.report().get("ready"))
+        content_report = await prepared_content_report()
+        content_ready = scenarios is None or bool(content_report.get("ready"))
         authorizer = getattr(application, "transition_authorizer", None)
         graph_status = (authorizer.status() if authorizer is not None else {
             "provider": "langgraph", "strict": True, "ready": False,
@@ -408,7 +460,6 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
             lifecycle_status = lifecycle.snapshot()
         hardware = dependency_identity(profile_status, runtime).get("hardware_backend", {})
         simulated_hardware = str(hardware.get("state", "")).lower() in {"simulator", "fake", "degraded"}
-        content_report = scenarios.report() if scenarios else {"external": True}
         voice_report = content_report.get("voice", {}) if isinstance(content_report, dict) else {}
         audio_content_ready = bool(voice_report.get("approved_recorded_count", 0) >= voice_report.get("required_recorded_count", 1))
         settings = getattr(application, "settings", None)
@@ -443,6 +494,9 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
             and voice_report.get("physical_production_ready")
             and all(bool(value) for value in content_report.get("fixed_stories", {}).values())
         )
+        handoff = getattr(application, "adult_handoff", None)
+        # Presence alone is not transport readiness or delivery confirmation.
+        handoff_status = await handoff_readiness(handoff)
         production_ready = bool(
             not local_demo
             and not simulated_hardware
@@ -451,6 +505,7 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
             and content_production_ready
             and security_ready
             and launcher_provenance_ready
+            and handoff_status["ready"]
             and (not optional_identity or bool(identity_status.get("identity_ready") and identity_status.get("reader_ready") and not identity_status.get("synthetic")))
             and bool(profile_status.get("ready"))
             and bool(history_status.get("ready"))
@@ -489,12 +544,14 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
                     ("content_not_production_ready", not content_production_ready),
                     ("mutation_policy_unconfigured_or_unsafe", not security_ready),
                     ("launcher_provenance_unestablished", not launcher_provenance_ready),
+                    ("adult_handoff_unavailable", not handoff_status["ready"]),
                 ) if blocked
             ],
             "lifecycle": lifecycle_status,
             "content": content_report,
             "metrics": metrics.snapshot(),
             "dependencies": {"s2s": runtime, "profile": profile_status, "history": history_status,
+                             "adult_handoff": handoff_status,
                              "state_machine": graph_status, **dependency_identity(profile_status, runtime)},
         }
     @api.post("/internal/s2s/warmup")
@@ -561,14 +618,21 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
         await websocket.accept()
         try:
             while True:
-                payload=await websocket.receive_json()
+                try:
+                    payload = await websocket.receive_json()
+                except json.JSONDecodeError:
+                    await websocket.send_json({"error": {"code": "invalid_json", "message": "message must be valid JSON"}})
+                    continue
+                if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
+                    await websocket.send_json({"error": {"code": "invalid_event", "message": "message must be an object with a string type"}})
+                    continue
                 if not lifecycle.admits_users():
                     await websocket.send_json({"type": "admission_error", "error": {
                         "code": "runtime_unavailable", "user_available": False,
                         "state": lifecycle.snapshot()["state"],
                     }})
                     continue
-                if payload.get("session_id") not in {None,session_id}:
+                if payload.get("session_id") is not None and payload["session_id"] != session_id:
                     await websocket.send_json({"error":{"code":"session_binding","message":"payload session_id does not match WebSocket path"}}); continue
                 try: await websocket.send_json(await dispatch(session_id,payload))
                 except (TypeError,ValueError) as exc: await websocket.send_json({"error":{"code":"invalid_event","message":str(exc)}})

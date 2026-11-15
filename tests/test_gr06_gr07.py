@@ -22,12 +22,13 @@ def test_content_readiness_report_is_machine_readable_and_separates_approval():
     assert report["catalog_count"] == 108
     assert report["valid_count"] == 108
     assert report["errors"] == []
-    assert report["approved_recorded_count"] == 0
+    assert report["approved_recorded_count"] == 108
     assert report["simulator_usable"] is True
     assert report["physical_production_ready"] is False
-    assert len(report["pending_approval"]) == 108
+    assert report["pending_approval"] == []
+    assert report["physical_audio_verified"] is False
     assert {item["phrase_id"] for item in report["required_exhibition_content"]} == {
-        "PHRASE_001", "PHRASE_007", "PHRASE_008", "PHRASE_016",
+        "PHRASE_001", "PHRASE_007", "PHRASE_008", "PHRASE_009", "PHRASE_016",
         "PHRASE_068", "PHRASE_074", "PHRASE_075", "PHRASE_078",
         "PHRASE_099", "PHRASE_102", "PHRASE_107", "PHRASE_108",
     }

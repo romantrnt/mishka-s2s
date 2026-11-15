@@ -1012,9 +1012,13 @@ async function playGenericAsset(command, generation) {
   activeSources.add(source);
   source.onended = () => {
     activeSources.delete(source);
-    if (generation === storySpeechGeneration) $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
+    if (generation !== storySpeechGeneration) return;
+    post('/stand/audio/lifecycle', {...audioIdentity(command), status: 'finished'}).catch(() => {});
+    post('/stand/audio/completed', audioIdentity(command)).catch(() => {});
+    $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
   };
   source.start();
+  post('/stand/audio/lifecycle', {...audioIdentity(command), status: 'playing'}).catch(() => {});
   $('audio-state').textContent = 'AUDIO: RINGTONE / WAV';
 }
 
@@ -1102,6 +1106,7 @@ function speakCommands(state) {
       const generation = ++storySpeechGeneration;
       playGenericAsset(command, generation).catch(error => {
         if (generation !== storySpeechGeneration) return;
+        post('/stand/audio/failed', {...audioIdentity(command), error_code: 'browser_asset_playback_failed'}).catch(() => {});
         showError(new Error('Audio asset unavailable: ' + error.message));
       });
       continue;

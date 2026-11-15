@@ -747,6 +747,7 @@
         "SessionCancel",
         "SessionReset",
         "AdultHandoffAcknowledged",
+        "AdultHandoffFailed",
         "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
