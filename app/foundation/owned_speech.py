@@ -106,6 +106,7 @@ class OwnedSpeechMixin:
             return audio
         task = asyncio.create_task(render(),name='mishka-typed-audio')
         task._mishka_session_id = session_id
+        task._mishka_owner_current = current
         self._owned_text_jobs.add(task)
         def observe(done):
             self._owned_text_jobs.discard(done)

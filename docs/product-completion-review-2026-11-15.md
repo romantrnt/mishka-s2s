@@ -37,7 +37,7 @@ Earlier diagnostic runs remain recorded: 1878 passed / 69 failed / 4 subtests, t
 - Real model story quality, validator performance, pronunciation, actual sample rate, 60-second rendering availability, RSS and GPU VRAM. Full RAM PCM can be substantial: the conservative code bounds permit up to 28.8 million samples. Low-rate synthetic tests do not validate this memory envelope.
 - Story context/shift changes can reload Ollama runners; the next ordinary dialogue request may reload again. Do not silently alter global dialogue settings to hide that cost.
 - Fixed-story menu capability discovery currently performs synchronous asset verification (roughly 52 MiB for five WAV files per call in the review inventory). Warm review-host calls were around 37 ms median, with a first call around 120 ms. These are not hardware latency acceptance; measure input-to-stop under menu activity before deployment. No unsafe cache was introduced.
-- Max's supplied client independently limits a card to 120 seconds from receipt or its earlier server expiry, not inactivity. User activity cannot extend it; its clear must override busy work. The separate requested 60-to-120 engagement lifecycle is a later, not-yet-integrated delta. Clinical Max configuration remains blocked; a rejected config change was restored byte-for-byte in its isolated copy, not applied here.
+- Max's supplied client independently limits a card to 120 seconds from receipt or its earlier server expiry, not inactivity. User activity cannot extend it; its clear must override busy work. The separate requested 60-to-120 engagement lifecycle is documented in `engagement-idle-review-2026-11-15.md`; it never overrides Max authorization. Clinical Max configuration remains blocked; a rejected config change was restored byte-for-byte in its isolated copy, not applied here.
 - Physical sound, actual LED delivery, simultaneous-key hardware limits, and the installed firmware match. The observed historical 6KRO constraint is not repaired in software.
 - Real adult transport remains unavailable. No simulated ACK may be spoken as delivery.
 - No changes to Max's source, main, live application, model configuration or firmware; no publication by this candidate.
@@ -60,3 +60,11 @@ The corrected frozen4 full run finished with **2108 passed, 5 failed and 4 subte
 The coordinating agent confirmed the new independent reviewer was explicitly started with model `gpt-6-astra`, reasoning effort `xhigh`, and no inherited turns. This confirms its configured launch, not quota/billing or the model configuration of older named reviewers. It matched all 484 frozen4 files and ran 174 integrated tests, the canonical verifier and both JS regressions successfully.
 
 This local checkpoint deliberately excludes the newer RFID engagement-idle implementation, which is undergoing independent race review in a separate copy. It is not a deployment or production release.
+
+
+The subsequent engagement-idle candidate is now described separately in `engagement-idle-review-2026-11-15.md`. The historical a5d4c0e checkpoint above remains unchanged.
+
+
+## Final integrated software verification
+
+Frozen5 tree `3a384ef9489b9110642f24565d560105a9980136`, including the engagement-idle corrections: **2157 passed, 4 subtests passed**, no failures/skips, 734.45 seconds. Canonical verifier and both JavaScript suites passed. The explicitly configured independent `gpt-6-astra`/`xhigh` reviewer matched all 493 files and the exact source union, retained original probes, and passed 40 final focused tests. All 53 Max source files remain identical to the original ZIP. After this full run, only reports and one trailing blank line in a retained test were normalized; the test AST and application code are unchanged. The two retained boundary tests were rerun after normalization. See the separate idle review for its complete scope and unresolved clinical-Max/physical/backend gates. No publication, main change or server deployment occurred.

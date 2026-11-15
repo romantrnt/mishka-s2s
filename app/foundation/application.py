@@ -16,6 +16,7 @@ from typing import Any, Callable
 from weakref import WeakSet
 
 from .game_engine import next_deadline as game_deadline
+from .engagement_idle import EngagementIdleMixin
 from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, PlaybackHandle, ScenarioRepository, SessionRecord, SessionRepository
 from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
@@ -81,7 +82,7 @@ def _set_audio_effect_status(effect: dict[str, Any], *, asset_status: str,
         effect["resolution"] = resolution
 
 
-class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMixin, DialogueMemoryMixin):
+class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMixin, DialogueMemoryMixin):
     """Use-case layer. It depends only on domain ports, never FastAPI/files/UART/LLM."""
     AUDIO_RECOVERABLE_FAILURES = frozenset({
         "vad_failure",
@@ -140,6 +141,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
         self.audio_update_hook_mandatory = False
         self._last_audio_cleanup: dict[str, Any] | None = None
         self.audio_cleanup_timeout_seconds = max(0.01, float(getattr(settings, "audio_cleanup_timeout_s", 1.0)))
+        self._init_engagement_idle()
         self._session_epochs: dict[str, int] = {}
         self._session_revisions: dict[str, int] = {}
         # A physical reset owns cleanup until it has finished publishing.
@@ -269,6 +271,9 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
 
     def cancel_identity_work(self) -> None:
         """Synchronous authority revocation for Stand.close, also outside a loop."""
+        if self._engagement_task is not None:
+            self._engagement_task.cancel()
+        self._engagement_owners.clear()
         self._identity_shutdown = True
         for session_id in tuple(self.conversation_contexts):
             self._drop_dialogue_context(session_id)
@@ -343,7 +348,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                 self._drop_identity_owner(session_id)
                 continue
             now = self.monotonic_now()
-            if state.mode == "profile_ready":
+            if state.mode == "profile_ready" and state.identity_ready_deadline is not None:
                 deadline, kind = state.identity_ready_deadline, "IdentityReadyExpired"
             else:
                 deadline, kind = state.identity_expires_monotonic, "IdentityAuthorizationExpired"
@@ -671,6 +676,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
         if identity_request is not None:
             self._identity_requests[session_id] = identity_request
         self._discard_private_welcome(session_id)
+        self._drop_engagement(session_id, keys=True)
         self._cancel_game_timer(session_id)
         self._cancel_welcome_timer(session_id)
         self._welcome_timer_sequences.pop(session_id, None)
@@ -700,6 +706,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
         current_time = self.now() if now is None else float(now)
         expired: list[dict[str, Any]] = []
         for session in self._iter_sessions():
+            if session.session_id in self._engagement_owners:
+                continue
             if session.state in {Lifecycle.IDLE, Lifecycle.ENDED} or not session.started_at:
                 continue
             last_activity = session.last_activity_at or session.started_at
@@ -1116,9 +1124,17 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                                        personal_story_authorized: bool = False,
                                        identity_event_authorized: bool = False,
                                        game_timer_authorized: bool = False,
+                                       interaction_idle_authorized: bool = False,
+                                       _interaction_nonce: str | None = None,
                                        _game_timer_scope: tuple | None = None,
                                        identity_profile: dict[str, Any] | None = None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None) -> dict[str, Any]:
+        if event.event_type == "InteractionIdleExpired" and not interaction_idle_authorized:
+            return self._identity_result(event.session_id, "interaction_idle_untrusted")
+        speech_work = event.event_type == "SpeechReceived"
+        speech_scope = (event.session_id, self._engagement_scope(event.session_id))
+        if speech_work:
+            self._engagement_ingress[speech_scope] = self._engagement_ingress.get(speech_scope,0) + 1
         try:
             waiter = self._session_reset_waiters.get(event.session_id)
             if waiter is not None and waiter[0] is not asyncio.current_task():
@@ -1134,11 +1150,17 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                 personal_story_authorized=personal_story_authorized,
                 identity_event_authorized=identity_event_authorized,
                 game_timer_authorized=game_timer_authorized, _game_timer_scope=_game_timer_scope,
+                interaction_idle_authorized=interaction_idle_authorized, _interaction_nonce=_interaction_nonce,
                 identity_profile=identity_profile,
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
             )
         finally:
+            if speech_work:
+                count = self._engagement_ingress.get(speech_scope,1) - 1
+                if count: self._engagement_ingress[speech_scope] = count
+                else: self._engagement_ingress.pop(speech_scope,None)
+                self._refresh_engagement_busy(event.session_id)
             waiter = self._session_reset_waiters.get(event.session_id)
             if waiter is not None and waiter[0] is asyncio.current_task():
                 self._session_reset_waiters.pop(event.session_id, None)
@@ -1185,6 +1207,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                                        personal_story_authorized: bool = False,
                                              identity_event_authorized: bool = False,
                                              game_timer_authorized: bool = False,
+                                             interaction_idle_authorized: bool = False,
+                                             _interaction_nonce: str | None = None,
                                              _game_timer_scope: tuple | None = None,
                                              identity_profile: dict[str, Any] | None = None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None) -> dict[str, Any]:
@@ -1195,7 +1219,13 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
         """
         profile = None
         profile_request = None
+        verified_voice_activity = False
         current = self.canonical_runtime.sessions.get(event.session_id)
+        if event.event_type == "InteractionIdleExpired":
+            if not interaction_idle_authorized:
+                return self._identity_result(event.session_id, "interaction_idle_untrusted")
+            if not self._engagement_due(event.session_id, _interaction_nonce):
+                return self._identity_result(event.session_id, "interaction_idle_stale")
         if event.event_type == "GameTimer":
             if not game_timer_authorized:
                 return self._identity_result(event.session_id, "game_timer_untrusted")
@@ -1237,7 +1267,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
         previous_state = copy.deepcopy(current)
         event_type = "VoiceIntentReady" if event.event_type == "SpeechReceived" else event.event_type
         payload = dict(event.payload)
-        accepted_monotonic = (self.monotonic_now() if event.event_type == "GameTimer" else
+        accepted_monotonic = (self.monotonic_now() if event.event_type in {"GameTimer", "InteractionIdleExpired"} else
                               event.monotonic_timestamp if event.monotonic_timestamp is not None else self.monotonic_now())
         voice_admission = None
         personal_welcome_answer_verified = False
@@ -1288,6 +1318,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
             previous_state = copy.deepcopy(current)
             state_version = current.state_version
             uncertain_stt = payload.pop("_stt_untrusted", False)
+            verified_voice_activity = bool(safety.verified and not uncertain_stt and not stale_speech_phase and text.strip())
             if uncertain_stt and safety.severity == "none" and not explicit_adult_request:
                 return {**self._identity_result(event.session_id, "audio_retry"),
                         "outputs": [{"action": "audio_retry", "reason": "stt_low_confidence"}]}
@@ -1339,11 +1370,15 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
            handoff_failure_authorized=handoff_failure_authorized,
            dialogue_fallback_authorized=dialogue_fallback_authorized,
            personal_story_authorized=personal_story_authorized,
-           identity_event_authorized=identity_event_authorized, game_timer_authorized=game_timer_authorized)
+           identity_event_authorized=identity_event_authorized, game_timer_authorized=game_timer_authorized, interaction_idle_authorized=interaction_idle_authorized)
         if decision["reason"] in {"welcome_started", "personal_welcome_started"}:
             self._choose_private_welcome(event.session_id)
         snapshot, effects = decision["state"], decision["effects"]
         exhibition_reset = bool(decision.get("reset_session"))
+        prelift_expired = bool(event.event_type == "IdentityReadyExpired" and decision["reason"] == "identity_expired"
+                              and previous_state is not None and previous_state.mode == "profile_ready")
+        interaction_stopped = decision["reason"] == "interaction_idle"
+        sync_stop = exhibition_reset or prelift_expired or interaction_stopped
         self.last_canonical_state = dict(snapshot)
         self.last_canonical_event = {"type": event_type, "source": event.source, "sequence": event.sequence, "session_id": event.session_id, "timestamp": event.timestamp, "monotonic_timestamp": accepted_monotonic, "correlation_id": event.correlation_id, "payload": dict(payload)}
         voice_open = snapshot.get("handset") == "up"
@@ -1405,7 +1440,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                 and self._max_client_boundary is not None
                 and self._max_client_boundary.session_id == event.session_id):
             self._max_client_boundary.clear_client()
-        if (takes_ownership and event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart", "HardwareDisconnected"}) or exhibition_reset or identity_owner_changed or identity_ended:
+        if (takes_ownership and event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart", "HardwareDisconnected", "InteractionIdleExpired"}) or exhibition_reset or identity_owner_changed or identity_ended:
             self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
             self._paused_story_playback.pop(event.session_id, None)
             self._discard_private_welcome(event.session_id)
@@ -1428,6 +1463,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
             self._discard_personal_story(event.session_id)
 
         self._sync_game_timer(event.session_id)
+        self._engagement_event(event, decision, accepted=takes_ownership, voice_activity=verified_voice_activity)
 
         reset_sync_results: dict[str, dict[str, Any]] = {}
 
@@ -1439,7 +1475,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                 reset_sync_results[resource] = {"status": "completed"}
             except Exception as exc:
                 failure = {"type": "cleanup_failed", "resource": resource,
-                           "operation": "exhibition_reset", "status": "failed",
+                           "operation": "interaction_idle" if interaction_stopped else "profile_ready_expiry" if prelift_expired else "exhibition_reset", "status": "failed",
                            "exception_type": type(exc).__name__}
                 reset_sync_results[resource] = failure
                 effects.append(dict(failure))
@@ -1447,7 +1483,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                 self.runtime_status["session_cleanup_last_failure"] = dict(failure)
                 logger.warning("exhibition reset %s cleanup failed: %s", resource, type(exc).__name__)
 
-        if exhibition_reset:
+        if sync_stop:
             # Physical hangup takes effect synchronously. Native/model audio
             # cleanup can await, fail or be cancelled; none may keep a stale
             # wave or tutorial lit after canonical handset-down was accepted.
@@ -1457,7 +1493,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
             self._invalidate_audio_lease(event.session_id)
             closing_record = self.sessions.get(event.session_id)
             if closing_record is not None:
-                closing_record.handset_up = False
+                if not interaction_stopped:
+                    closing_record.handset_up = False
                 closing_record.cancellation_token += 1
                 self.sessions.save(closing_record)
                 reset_sync_step("audio", lambda: self.audio.cancel(closing_record.cancellation_token))
@@ -1492,7 +1529,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
             old_record = self.sessions.get(event.session_id)
             if old_record is not None:
                 old_record.cancellation_token += 1
-                if not exhibition_reset:
+                if not sync_stop:
                     self.audio.cancel(old_record.cancellation_token)
             await self._cleanup_session_resources(event.session_id, identity_request=profile_request)
             if not still_current():
@@ -1514,6 +1551,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
         # The stored reference identifies this context generation, not a patient or card.
         record.last_activity_at = self.now()
         record.state = Lifecycle.ENDED if snapshot.get("mode") in {"soft_end", "session_closed"} else Lifecycle.ACTIVE
+        if interaction_stopped or prelift_expired:
+            record.state = Lifecycle.IDLE
         # Keep the same mutable effect objects visible while a playback adapter
         # reports its asynchronous lifecycle.
         self.last_canonical_effects = effects
@@ -1567,7 +1606,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                          "speak_dynamic", "support_question", "support_response"}:
                 effect.setdefault("session_id", event.session_id)
                 effect.setdefault("generation", int(self._session_epochs.get(event.session_id, 0)))
-            if exhibition_reset and kind in {"lighting_dark", "standby_dark_started", "exhibition_effects_cancelled"}:
+            if sync_stop and kind in {"lighting_dark", "standby_dark_started", "exhibition_effects_cancelled"}:
                 effect["cleanup"] = dict(reset_sync_results["lighting"])
                 effect["resolution"] = ("canonical_lighting_dark"
                     if reset_sync_results["lighting"]["status"] == "completed" else "lighting_cleanup_failed")
@@ -1768,7 +1807,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
             elif kind in {"audio_stop", "welcome_ring_stop"}:
                 record.cancellation_token += 1
                 self._invalidate_audio_lease(event.session_id)
-                if exhibition_reset:
+                if sync_stop:
                     effect["sync_cleanup"] = dict(reset_sync_results.get("audio", {"status": "not_owned"}))
                 else:
                     try:
@@ -1788,12 +1827,14 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                 if self.bounded_s2s is not None:
                     effect["audio_cleanup"] = await self._cancel_audio_owner(
                         self.bounded_s2s, event.session_id, operation="audio_stop",
+                        ownership_guard=still_current if interaction_stopped else None,
                     )
                 if not still_current():
                     return stale_result()
                 if self.s2s_audio is not None and self.s2s_audio is not self.bounded_s2s:
                     effect["s2s_cleanup"] = await self._cancel_audio_owner(
                         self.s2s_audio, event.session_id, operation="audio_stop",
+                        ownership_guard=still_current if interaction_stopped else None,
                     )
             elif kind == "adult_handoff_request":
                 incident_id = str(snapshot.get("incident_id") or "")
@@ -2322,6 +2363,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
             return stale_result()
         if self.optional_identity and self._identity_scope_live(event.session_id):
             self._schedule_identity_deadline(event.session_id)
+        self._refresh_engagement_busy(event.session_id)
         return {"reason": decision["reason"], "state": final_state.get("mode"),
                 "state_version": final_state.get("state_version"), "outputs": effects,
                 "canonical_state": final_state,
@@ -2336,6 +2378,8 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
         from .domain import EVENT_TYPES
         if event.event_type not in EVENT_TYPES:
             return self._identity_result(event.session_id, "unsupported_event")
+        if event.event_type == "InteractionIdleExpired":
+            return self._identity_result(event.session_id, "interaction_idle_untrusted")
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared"}:
             return self._identity_result(event.session_id, "max_json_requires_private_client_boundary")
         waiter = self._session_reset_waiters.get(event.session_id)
@@ -2345,6 +2389,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                         "reason": "stale_session_generation", "outputs": [],
                         "canonical_state": {"mode": "idle", "handset": "down"}}
             await waiter[1]
+        await self.expire_engagement_sessions()
         await self.expire_idle_sessions()
         if self.canonical_runtime is None:
             return {"session_id": event.session_id, "state": Lifecycle.IDLE.value,
@@ -2354,13 +2399,22 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
         if (event.event_type == "ButtonPressed"
                 and getattr(self.canonical_runtime, "exhibition_mode", False)):
             active = self.canonical_runtime.sessions.get(event.session_id)
-            if active is None or active.handset != "up":
+            authorized_ready = bool(self.optional_identity and active is not None
+                and active.handset == "down" and active.identity_request_id
+                and (active.mode == "profile_ready" or active.interaction_idle))
+            if active is None or (active.handset != "up" and not authorized_ready):
                 return {"session_id": event.session_id, "state": "idle",
                         "reason": "exhibition_age_not_ready", "outputs": [],
                         "canonical_state": {"mode": "idle", "handset": "down"}}
         # In exhibition mode a down edge while no physical session exists is
         # already the neutral state. Do not materialize a new repository or
         # canonical session merely to acknowledge a repeated SpacePressed.
+        active = self.canonical_runtime.sessions.get(event.session_id)
+        if (active is not None and active.interaction_idle and event.event_type == "ButtonPressed"
+                and event.payload.get("button_id") in self._engagement_pressed.get(event.session_id,set())):
+            return self._identity_result(event.session_id,"interaction_idle_button_held")
+        if active is not None and active.interaction_idle and event.event_type == "SpeechReceived":
+            return self._identity_result(event.session_id,"interaction_idle_button_required")
         callback_lease = None
         if event.event_type in {"AudioCompleted", "AudioFailed"}:
             callback_lease = self._active_audio.get(event.session_id)
@@ -2432,6 +2486,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                 self._cancel_audio_timeout(event.session_id)
                 callback_lease["status"] = "finished" if event.event_type == "AudioCompleted" else "failed"
                 self._active_audio.pop(event.session_id, None)
+        self._refresh_engagement_busy(event.session_id)
         if (event.event_type in {"SpeechReceived", "VoiceIntentReady"}
                 and result.get("reason") == "exhibition_onboarding_completed"
                 and getattr(self.canonical_runtime, "exhibition_mode", False)):
@@ -2571,7 +2626,10 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
                 or result.ingress_status in {"stt_unknown", "stt_low_confidence", "stt_failure"})
 
     async def _receive_canonical_audio(self, session_id: str, samples: tuple[float, ...], sequence: int, *, wait_for_turn: bool, _ingress_guard=None) -> dict[str, Any]:
-        await self.expire_identity_leases()
+        await self.expire_engagement_sessions()
+        state = self.canonical_runtime.sessions.get(session_id)
+        if state is not None and state.interaction_idle:
+            return {"session_id": session_id, "reason": "interaction_idle_button_required", "outputs": [], "pending": False}
         if _ingress_guard is not None and not _ingress_guard():
             return {"session_id": session_id, "reason": "stale_session_generation", "outputs": [], "pending": False}
         session = self.sessions.get(session_id)
@@ -2961,6 +3019,7 @@ class ScenarioApplication(PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMi
             return {"session_id": session_id, "state": state["mode"], "reset": False,
                     "reason": "safety_handoff_active", "canonical_state": state}
         self._discard_private_welcome(session_id)
+        self._drop_engagement(session_id, keys=True)
         self._cancel_game_timer(session_id)
         self._cancel_welcome_timer(session_id)
         self._welcome_timer_sequences.pop(session_id, None)

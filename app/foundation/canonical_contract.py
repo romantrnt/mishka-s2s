@@ -73,7 +73,7 @@ ALLOWED_EVENTS = frozenset({
     "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
     "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
     "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected", "HardwareReconnected",
-    "SessionCancel", "SessionReset", "AdultHandoffAcknowledged", "AdultHandoffFailed", "AdultResolved",
+    "SessionCancel", "SessionReset", "InteractionIdleExpired", "AdultHandoffAcknowledged", "AdultHandoffFailed", "AdultResolved",
     "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep",
 })
 # Buttons 5 (help) and 7 (exit) preempt game scoring.
@@ -239,6 +239,8 @@ class CanonicalState:
     profile_status: str = "anonymous"
     identity_request_id: str | None = None
     identity_ready_deadline: float | None = None
+    interaction_idle: bool = False
+    readiness_held_buttons: list[int] = field(default_factory=list)
     identity_expires_monotonic: float | None = None
     identity_capabilities: list[str] = field(default_factory=list)
     age_band: str = "3-5"
@@ -949,6 +951,7 @@ class CanonicalRuntime(SceneMenuMixin):
 
     def clear_identity(self, state: CanonicalState) -> None:
         """Scrub private/derived identity without resolving a safety incident."""
+        state.interaction_idle = False
         fresh = self._new_state(state.session_id, None)
         for name in (
             "profile_ref", "profile_status", "display_name", "grammatical_gender",
@@ -1113,6 +1116,7 @@ class CanonicalRuntime(SceneMenuMixin):
                personal_story_authorized: bool = False,
                identity_event_authorized: bool = False,
                game_timer_authorized: bool = False,
+               interaction_idle_authorized: bool = False,
                private_welcome_ready: bool = False,
                personal_welcome_answer_verified: bool = False) -> dict[str, Any]:
         event.validate()
@@ -1128,6 +1132,8 @@ class CanonicalRuntime(SceneMenuMixin):
         # client-controlled payload. Untrusted resolve does not consume sequence.
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired"} and not identity_event_authorized:
             return self._decision(state, [], "identity_outcome_untrusted")
+        if event.event_type == "InteractionIdleExpired" and not interaction_idle_authorized:
+            return self._decision(state, [], "interaction_idle_untrusted")
         if event.event_type == "GameTimer" and not game_timer_authorized:
             return self._decision(state, [], "game_timer_untrusted")
         if event.event_type == "AdultResolved" and not adult_resolution_authorized:
@@ -1167,6 +1173,43 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode in {"dialogue_suspended_ram", "story_suspended_ram"}:
                 state.mode = "dialogue_memory_expired"
         effects: list[dict[str, Any]] = []
+        if event.event_type == "InteractionIdleExpired":
+            if state.safety_severity == "urgent" or state.mode == "safety_handoff":
+                return self._decision(state, [], "interaction_idle_safety_preserved")
+            state.interaction_idle = True
+            if self.exhibition_mode:
+                state.dialogue_memory.clear()
+                state.history_tail.clear()
+            elif state.dialogue_memory.status != "suspended":
+                state.dialogue_memory.suspend(now)
+            state.mode = "root_menu"
+            state.expected_inputs = ["button", "handset_up", "handset_down"]
+            state.state_version += 1
+            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"},
+                                         {"type": "lighting_dark"}], "interaction_idle", clear_audio=True)
+        if event.event_type == "ButtonReleased":
+            button = int(event.payload["button_id"])
+            if button in state.readiness_held_buttons:
+                state.readiness_held_buttons.remove(button)
+                return self._decision(state, [], "readiness_button_released")
+        if event.event_type == "ButtonPressed":
+            button = int(event.payload["button_id"])
+            if button in state.readiness_held_buttons:
+                return self._decision(state, [], "readiness_button_held")
+            ready = state.mode == "profile_ready" or (state.interaction_idle and state.handset == "down" and bool(state.identity_request_id))
+            if ready and self.exhibition_mode:
+                waking = state.interaction_idle
+                state.readiness_held_buttons.append(button)
+                state.identity_ready_deadline = None
+                state.interaction_idle = False
+                if self.exhibition_mode:
+                    state.mode = "profile_ready"
+                    state.state_version += 1
+                    return self._decision(state, [{"type": "profile_ready_lighting"}] if waking else [], "profile_ready_engaged")
+            state.interaction_idle = False
+        if event.event_type == "HandsetLifted" and state.interaction_idle:
+            state.interaction_idle = False
+            state.mode = "idle"
         if self.optional_identity and event.event_type == "ClientProfileReady":
             if state.handset == "up" or state.mode not in {"idle", "profile_ready"}:
                 return self._decision(state, [], "profile_active_session_ignored")
@@ -1175,6 +1218,7 @@ class CanonicalRuntime(SceneMenuMixin):
             fresh = self._new_state(state.session_id, profile)
             for name in ("profile_ref", "profile_status", "display_name", "grammatical_gender", "language", "timezone", "age_band", "age_band_source", "age_years", "age_policy", "profile_data_incomplete", "current_date", "accessibility_policy", "schedule_ref"):
                 setattr(state, name, getattr(fresh, name))
+            state.interaction_idle = False
             state.identity_request_id = event.payload["request_id"]
             state.identity_capabilities = ["personalize"]
             state.identity_expires_monotonic = float(event.payload["expires_monotonic"])
@@ -1197,7 +1241,7 @@ class CanonicalRuntime(SceneMenuMixin):
         if self.optional_identity and event.event_type in {"IdentityReadyExpired", "IdentityAuthorizationExpired"}:
             if not state.identity_request_id or event.payload.get("request_id") != state.identity_request_id:
                 return self._decision(state, [], "stale_identity_expiry")
-            deadline = state.identity_ready_deadline if state.mode == "profile_ready" else state.identity_expires_monotonic
+            deadline = state.identity_ready_deadline if event.event_type == "IdentityReadyExpired" else state.identity_expires_monotonic
             if deadline is None or monotonic_now < deadline:
                 return self._decision(state, [], "identity_expiry_not_due")
             self.clear_identity(state)

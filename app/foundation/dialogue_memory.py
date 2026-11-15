@@ -66,7 +66,11 @@ class DialogueMemoryMixin:
                 or state.dialogue_memory.status == "expired"):
             self._drop_dialogue_context(session_id)
             return
-        clinical_down = event_type == "HandsetPlaced" and not self.canonical_runtime.exhibition_mode
+        soft_idle = event_type == "InteractionIdleExpired"
+        if soft_idle and self.canonical_runtime.exhibition_mode:
+            self._drop_dialogue_context(session_id)
+            return
+        clinical_down = event_type in {"HandsetPlaced", "InteractionIdleExpired"} and not self.canonical_runtime.exhibition_mode
         if clinical_down:
             # Keep only completed turns. Providers work on detached copies and
             # cannot mutate this snapshot after hangup, replacement or reset.
@@ -76,7 +80,9 @@ class DialogueMemoryMixin:
             current = copy.deepcopy(current)
             current._owner = (self._session_epochs.get(session_id, 0), identity)
             current._ram_suspended_at = self.monotonic_now()
-            current._ram_expires_at = self.monotonic_now() + state.dialogue_memory.ttl_seconds
+            current._ram_expires_at = (getattr(current, "_ram_expires_at", None)
+                if soft_idle and getattr(current, "_ram_expires_at", None) is not None
+                else self.monotonic_now() + state.dialogue_memory.ttl_seconds)
             self.conversation_contexts[session_id] = current
             self._schedule_dialogue_expiry(session_id, current)
         elif previous_state is not None and previous_state.mode == "bear_dialogue" and state.mode != "bear_dialogue":

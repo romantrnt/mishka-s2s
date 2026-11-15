@@ -695,6 +695,7 @@ class HardwareIntegrationStand:
             and getattr(self, "_capture_hid_fault", None) is None
             and getattr(session, "handset_up", False)
             and getattr(state, "handset", None) == "up"
+            and not getattr(state, "interaction_idle", False)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
                  or (not self.application._active_audio.get(self.active_session_id)
@@ -2046,7 +2047,7 @@ class HardwareIntegrationStand:
     def _safe_cleanup_failure(item: dict[str, Any]) -> dict[str, Any]:
         result = {"type": "cleanup_failed", "status": "failed"}
         enums = {"resource": {"audio", "lighting"},
-                 "operation": {"exhibition_reset"},
+                 "operation": {"exhibition_reset", "interaction_idle", "profile_ready_expiry"},
                  "exception_type": {"RuntimeError", "OSError", "ConnectionError",
                                     "TimeoutError", "ValueError", "TypeError", "AttributeError"}}
         for key, allowed in enums.items():

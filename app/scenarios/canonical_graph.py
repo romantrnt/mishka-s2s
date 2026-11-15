@@ -102,6 +102,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return True
     if event_type == "ButtonPressed" and current == "personal_story_playing" and target == "story_pause_announcement":
         return True
+    if event_type == "InteractionIdleExpired":
+        return target == "root_menu"
     if event_type == "ClientProfileReady":
         return current in {"idle", "profile_ready"} and target == "profile_ready"
     if event_type == "ClientProfileCleared":
@@ -160,6 +162,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return current == "safety_handoff" and target == "root_menu"
     if event_type == "ButtonPressed":
         return (
+            (current == "root_menu" and target == "profile_ready") or
             (current == "personal_welcome_listen" and target == "exhibition_menu_tutorial_prompt")
             or
             target == "wellbeing_check"
@@ -245,7 +248,7 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
         "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
         "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected",
-        "HardwareReconnected", "SessionCancel", "SessionReset", "AdultHandoffAcknowledged", "AdultHandoffFailed",
+        "HardwareReconnected", "SessionCancel", "SessionReset", "InteractionIdleExpired", "AdultHandoffAcknowledged", "AdultHandoffFailed",
         "AdultResolved", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
         "StoryChoiceWaveComplete", "MenuTutorialStep",
     }
