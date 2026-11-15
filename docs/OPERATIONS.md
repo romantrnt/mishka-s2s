@@ -41,3 +41,26 @@ Do not copy virtual environments, notebook checkpoints, training datasets,
 model caches, generated bootstrap contracts or `.env` files into a release.
 The only RVC weights retained by the service are the canonical `.pth/.index`
 pair and the runtime assets required by the worker.
+
+## Local safety response
+
+MISHKA has no caregiver messaging, request outbox, delivery acknowledgement or
+adult-resolution endpoint. It never claims that a request was sent, received or
+that someone is coming. General logs and redacted diagnostics remain available.
+
+An urgent signal or an explicit request for help stops the local interaction:
+audio and microphone capture are cancelled, scenario animations stop, SAFE_STOP
+lighting is applied, and the recorded guidance says «Позови взрослого рядом».
+The guidance starts only after previous audio cleanup has completed; a cleanup
+failure suppresses speech and records a bounded diagnostic instead of allowing
+old audio to cut into a new response. Concern without an explicit help request
+uses local support dialogue without fabricating delivery.
+
+Ordinary button presses cannot restart a stopped scenario. Replacing the handset
+ends that local interaction, clears its personal context and switches the lights
+off. This is session cleanup, not evidence that a real-world problem was solved.
+A hardware fault still requires its existing recovery procedure; a session reset
+does not clear HID or lighting fault barriers.
+
+`/health/safe` describes the local policy only. `/ready` has no dependency on a
+nonexistent caregiver transport. The other readiness gates are unchanged.

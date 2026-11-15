@@ -1,3 +1,5 @@
+> Historical report: caregiver-delivery and adult-resolution behavior described below has been removed. Current local-only behavior is documented in [OPERATIONS.md](OPERATIONS.md#local-safety-response).
+
 # MISHKA P0 audit follow-ups
 
 Date: 2026-10-26. Isolated branch `fix/p0-lifecycle-20261026`, checkout

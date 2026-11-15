@@ -41,7 +41,7 @@ ROOT_ENTRY_MODES = frozenset({
     "automatic_mood_check", "awaiting_handset",
 })
 PIPELINE_NODES = ("ingress", "normalize_event", "session_guard", "safety_precheck", "route_mode", "policy_validate", "emit_effects", "persist_snapshot", "await_event")
-GRAPH_POLICY_VERSION = "canonical-product-policy-v2"
+GRAPH_POLICY_VERSION = "canonical-product-policy-v3"
 
 # These are capabilities, not I/O implementations. The application layer
 # remains the only owner allowed to call providers, audio, LEDs or storage.
@@ -51,13 +51,13 @@ TOOL_CAPABILITY_POLICY: dict[str, dict[str, Any]] = {
     "schedule": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": True},
 }
 MODEL_ACTION_POLICY: dict[str, Any] = {
-    "led": {"patterns": frozenset({"calm", "attention", "off"}), "states": frozenset(STATE_NAMES)},
+    "led": {"patterns": frozenset({"calm", "attention", "off"}), "states": frozenset(STATE_NAMES - {"safety_stop"})},
     "return_to_scenario": {"targets": frozenset({"root_menu", "fixed_story_menu", "menu_ready"})},
 }
 SAFETY_POLICY = {
     "levels": frozenset({"none", "concern", "urgent"}),
-    "urgent_target": "safety_handoff",
-    "adult_intent": "request_adult",
+    "urgent_target": "safety_stop",
+    "help_intent": "help_request",
 }
 _SCENARIO_PATH = Path(__file__).resolve().parents[2] / "content" / "scenarios" / "canonical_product_v1.json"
 
@@ -94,6 +94,9 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return False
     if current == target:
         return True
+    if current == "safety_stop":
+        return (event_type in {"HandsetPlaced", "SessionCancel", "SessionReset"}
+                and target in {"idle", "session_closed"})
     if event_type == "PersonalStoryReady":
         return current == "personal_story_generating" and target == "personal_story_playing"
     if event_type in {"AudioCompleted", "AudioFailed"} and current == "personal_story_playing":
@@ -107,7 +110,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
     if event_type == "ClientProfileReady":
         return current in {"idle", "profile_ready"} and target == "profile_ready"
     if event_type == "ClientProfileCleared":
-        return target in {"idle", "session_closed", "safety_handoff"}
+        return target in {"idle", "session_closed", "safety_stop"}
     if event_type == "ExhibitionOnboardingComplete":
         return current == "exhibition_onboarding_complete" and target == "exhibition_menu_tutorial_buttons"
     if event_type == "AudioCompleted":
@@ -137,7 +140,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
     if event_type == "TimeoutFired":
         return current in {"dialogue_suspended_ram", "story_suspended_ram"} and target == "dialogue_memory_expired"
     if event_type in {"IdentityReadyExpired", "IdentityAuthorizationExpired"}:
-        return target in {"idle", "session_closed", "safety_handoff"}
+        return target in {"idle", "session_closed", "safety_stop"}
     if event_type == "AnonymousStart":
         return target in {"anonymous_visual", "idle", "session_closed"}
     if event_type == "SessionCancel":
@@ -149,17 +152,12 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             target == "idle"
             or (current == "voice_welcome" and target == "idle")
             or (current == "fixed_story_playing" and target == "story_suspended_ram")
-            or (current == "safety_handoff" and target == "safety_handoff")
-            or (current not in {"game_active", "safety_handoff"} and target == "dialogue_suspended_ram")
+            or (current not in {"game_active", "safety_stop"} and target == "dialogue_suspended_ram")
         )
     if event_type == "HandsetLifted":
         return target in {"awaiting_handset", "voice_welcome", "automatic_mood_check", "story_paused", "game_menu", "fixed_story_menu", "fixed_story_playing", "support_intake", "personal_story_theme", "wellbeing_check", "bear_dialogue", "schedule_weather"}
     if event_type == "HardwareDisconnected":
-        return target == "safety_handoff"
-    if event_type == "AdultHandoffAcknowledged":
-        return current == target == "safety_handoff"
-    if event_type == "AdultResolved":
-        return current == "safety_handoff" and target == "root_menu"
+        return target == "safety_stop"
     if event_type == "ButtonReleased":
         # The hold game completes its last round on a measured release.
         return current == "game_active" and target == "root_menu"
@@ -169,7 +167,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             (current == "personal_welcome_listen" and target == "exhibition_menu_tutorial_prompt")
             or
             target == "wellbeing_check"
-            or (current == "wellbeing_check" and target in {"support_intake", "safety_handoff", "root_menu"})
+            or (current == "wellbeing_check" and target in {"support_intake", "safety_stop", "root_menu"})
             or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
             or (current in {
                 "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
@@ -201,7 +199,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
              and target == "exhibition_menu_tutorial_prompt")
             or (current == "wellbeing_check" and target == "root_menu")
             or
-            target in {"safety_handoff", "support_intake"}
+            target in {"safety_stop", "support_intake"}
             or (current in {"fixed_story_playing", "story_speech_analysis"}
                 and target in {"story_pause_announcement", "fixed_story_choice_wave"})
             or (current == "story_paused" and target == "story_resume_announcement")
@@ -251,8 +249,8 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
         "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
         "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected",
-        "HardwareReconnected", "SessionCancel", "SessionReset", "InteractionIdleExpired", "AdultHandoffAcknowledged", "AdultHandoffFailed",
-        "AdultResolved", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
+        "HardwareReconnected", "SessionCancel", "SessionReset", "InteractionIdleExpired",
+        "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
         "StoryChoiceWaveComplete", "MenuTutorialStep",
     }
     return {**state, "allowed": valid, "reason": "session_guard_passed" if valid else "session_guard_rejected"}
@@ -268,7 +266,7 @@ def _safety_precheck(state: AuthorizationState) -> AuthorizationState:
     valid = safety in SAFETY_POLICY["levels"]
     if event_type == "VoiceIntentReady" and safety == "urgent":
         valid = target == SAFETY_POLICY["urgent_target"]
-    if event_type == "VoiceIntentReady" and intent == SAFETY_POLICY["adult_intent"]:
+    if event_type == "VoiceIntentReady" and intent == SAFETY_POLICY["help_intent"]:
         valid = valid and target == SAFETY_POLICY["urgent_target"]
     return {**state, "allowed": valid, "reason": "safety_precheck_passed" if valid else "safety_precheck_rejected"}
 
@@ -363,7 +361,7 @@ class CanonicalLangGraphAuthorizer:
         if action == "led":
             allowed = current in MODEL_ACTION_POLICY["led"]["states"] and target in MODEL_ACTION_POLICY["led"]["patterns"]
         elif action == "return_to_scenario":
-            allowed = target in MODEL_ACTION_POLICY["return_to_scenario"]["targets"]
+            allowed = current != "safety_stop" and target in MODEL_ACTION_POLICY["return_to_scenario"]["targets"]
         else:
             allowed = False
         return {"ok": allowed, "reason": "model_action_allowed" if allowed else "model_action_rejected",
@@ -379,4 +377,4 @@ class CanonicalLangGraphAuthorizer:
                                       for name, policy in TOOL_CAPABILITY_POLICY.items()},
                 "model_actions": {"led": sorted(MODEL_ACTION_POLICY["led"]["patterns"]),
                                   "return_to_scenario": sorted(MODEL_ACTION_POLICY["return_to_scenario"]["targets"])},
-                "safety_policy": {"urgent_target": SAFETY_POLICY["urgent_target"], "adult_intent": SAFETY_POLICY["adult_intent"]}}
+                "safety_policy": {"urgent_target": SAFETY_POLICY["urgent_target"], "help_intent": SAFETY_POLICY["help_intent"]}}

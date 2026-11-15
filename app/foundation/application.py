@@ -21,7 +21,7 @@ from .domain import AudioOutput, DisplayController, Event, EventPublisher, Inten
 from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .age_policy import trusted_canonical_age
-from .canonical_services import LED_PRESETS, DIALOGUE_FILL_ELEMENTS, DIALOGUE_ANCHOR_ELEMENTS, BUTTON_ELEMENTS, RecordedPhraseResolver, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
+from .canonical_services import LED_PRESETS, DIALOGUE_FILL_ELEMENTS, DIALOGUE_ANCHOR_ELEMENTS, BUTTON_ELEMENTS, RecordedPhraseResolver, TypedInfoRenderer, classify_intent
 from .config import settings_from_compat_env
 from .identity import IdentityDecision, IdentityValidationError, validate_identity_decision
 from .input_safety import InputSafetyGate
@@ -84,8 +84,6 @@ def _set_audio_effect_status(effect: dict[str, Any], *, asset_status: str,
 
 class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMixin, DialogueMemoryMixin):
     """Use-case layer. It depends only on domain ports, never FastAPI/files/UART/LLM."""
-    HANDOFF_TIMEOUT_SECONDS = 5.0
-    MAX_HANDOFF_TRANSPORTS = 2
     AUDIO_RECOVERABLE_FAILURES = frozenset({
         "vad_failure",
         "stt_failure",
@@ -93,7 +91,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         "audio_too_long",
     })
 
-    def __init__(self, sessions: SessionRepository, scenarios: ScenarioRepository, classifier: IntentClassifier, audio: AudioOutput, led: LEDController, publisher: EventPublisher, now=time.time, installation_id="default", threshold=0.6, bounded_s2s=None, history=None, max_session_seconds=1200, idle_timeout_seconds: float | None = None, display: DisplayController | None = None, schedule_weather: Any = None, allow_quick_replies: bool | None = None, settings: Any = None, adult_handoff: Any = None, monotonic_now=time.monotonic, background_scheduler: bool = True):
+    def __init__(self, sessions: SessionRepository, scenarios: ScenarioRepository, classifier: IntentClassifier, audio: AudioOutput, led: LEDController, publisher: EventPublisher, now=time.time, installation_id="default", threshold=0.6, bounded_s2s=None, history=None, max_session_seconds=1200, idle_timeout_seconds: float | None = None, display: DisplayController | None = None, schedule_weather: Any = None, allow_quick_replies: bool | None = None, settings: Any = None, monotonic_now=time.monotonic, background_scheduler: bool = True):
         self.sessions, self.scenarios, self.classifier, self.audio, self.led, self.publisher = sessions, scenarios, classifier, audio, led, publisher
         self.now, self.monotonic_now, self.installation_id, self.threshold = now, monotonic_now, installation_id, threshold
         self.background_scheduler = bool(background_scheduler)
@@ -105,8 +103,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._identity_deadline_tasks: dict[str, asyncio.Task[Any]] = {}
         self._identity_requests: dict[str, dict[str, Any]] = {}
         self._identity_shutdown = False
-        self._handoff_delivery_tasks: set[asyncio.Task[Any]] = set()
-        self._handoff_transport_tasks: set[asyncio.Task[Any]] = set()
         profile = str(getattr(settings, "profile", None) or "mock").strip().lower()
         self.display = display
         self.schedule_weather = schedule_weather
@@ -199,9 +195,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         # Canonical scenario documents and LangGraph are the single source of
         self.voice_manifest = RecordedPhraseResolver(f"{getattr(settings, 'content_root', 'content')}/audio/voice_manifest.json", allow_development_assets=self.allow_development_placeholders)
         self.safety_classifier = InputSafetyGate(settings)
-        # CPU/GPU and physical development profiles are used with real children:
-        # availability of placeholder assets does not authorize fake delivery.
-        self.adult_handoff = adult_handoff if adult_handoff is not None else (SimulatedAdultHandoff() if profile == "mock" else None)
         self._canonical_profiles: dict[str, dict[str, Any] | None] = {}
         self._canonical_schedule_refs: dict[str, str | None] = {}
         self.transition_authorizer = CanonicalLangGraphAuthorizer() if self.canonical_runtime is not None else None
@@ -261,7 +254,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if state is not None:
             self.canonical_runtime.clear_identity(state)
             state.state_version += 1
-            if state.safety_severity != "urgent":
+            if state.mode != "safety_stop":
                 state.mode = "session_closed" if state.handset == "up" else "idle"
                 state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
             self.last_canonical_state = state.snapshot()
@@ -286,15 +279,13 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             task.cancel()
         for session_id in tuple(self._private_welcomes):
             self._discard_private_welcome(session_id)
-        for task in tuple(self._handoff_delivery_tasks):
-            task.cancel()
         if self.max_json and self._max_client_boundary is not None:
             self._revoke_local_profile(self._max_client_boundary.session_id)
         for session_id in set(self._identity_requests) | set(self._identity_deadline_tasks):
             self._drop_identity_owner(session_id)
     async def shutdown_identity(self) -> dict[str, int]:
         """Revoke first, then drain a bounded amount of provider work."""
-        tasks = set(self._identity_deadline_tasks.values()) | self._handoff_delivery_tasks | self._private_welcome_tasks | self._owned_text_jobs | self._personal_story_jobs
+        tasks = set(self._identity_deadline_tasks.values()) | self._private_welcome_tasks | self._owned_text_jobs | self._personal_story_jobs
         tasks.discard(asyncio.current_task())
         try:
             if self.max_json and self._max_client_boundary is not None:
@@ -540,6 +531,23 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 reason=status,
             )
 
+    def _finish_unstarted_safety_guidance(self, session_id, owner, epoch, lease, effect,
+                                         *, code, status="failed") -> None:
+        """Terminate only this declared, undispatched local guidance lease."""
+        if (self.canonical_runtime.sessions.get(session_id) is not owner
+                or self._session_epochs.get(session_id, 0) != epoch
+                or owner.mode != "safety_stop" or owner.active_audio_id != "PHRASE_091"
+                or owner.playback_lease != lease or session_id in self._active_audio):
+            return
+        owner.active_audio_id = owner.playback_lease = None
+        owner.audio_status, owner.audio_failure_code = status, code
+        owner.state_version += 1
+        _set_audio_effect_status(effect, asset_status="approved", queued=False, resolution=code)
+        if status == "cancelled":
+            effect.update(audio_status="cancelled", audio_failed=False, audio_cancelled=True)
+        self.last_canonical_state = owner.snapshot()
+        self.record_audio_diagnostic(code, session_id=session_id)
+
     def _mark_audio_effect_lifecycle(
         self, response_id: str, status: str, *,
         session_id: str | None = None, generation: int | None = None,
@@ -613,11 +621,20 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         cancel_session = getattr(owner, "cancel_session", None)
         if not callable(cancel_session):
             return {"status": "unavailable", "operation": operation, "session_id": session_id}
+        captured_lease = self._active_audio.get(session_id)
+        def cleanup_current():
+            # A transition can queue a new recording without a new revision
+            # after its old provider exceeded the cleanup deadline.
+            return (self._active_audio.get(session_id) is captured_lease
+                and (ownership_guard is None or ownership_guard()))
         async def cancel_owned() -> None:
             # The cancellation task can start after a newer event has run.
             # Check authority in that task before touching the shared owner.
-            if ownership_guard is None or ownership_guard():
-                await cancel_session(session_id)
+            if cleanup_current():
+                if "ownership_guard" in inspect.signature(cancel_session).parameters:
+                    await cancel_session(session_id, ownership_guard=cleanup_current)
+                else:
+                    await cancel_session(session_id)
 
         task = asyncio.create_task(
             cancel_owned(),
@@ -663,7 +680,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return {**diagnostic, "status": "failed"}
         return {"status": "completed", "operation": operation, "session_id": session_id}
 
-    async def _cleanup_session_resources(self, session_id: str, *, identity_request: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _cleanup_session_resources(self, session_id: str, *, identity_request: dict[str, Any] | None = None,
+                                         cleanup_tasks: set[asyncio.Task[Any]] | None = None) -> dict[str, Any]:
         """Idempotently release all application-owned resources for a session."""
         revision = self._session_revisions.get(session_id, 0)
         epoch = self._session_epochs.get(session_id, 0)
@@ -697,7 +715,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return {"session_id": session_id, "cleanup_stale": True, "audio_completion_cleanup": completion_cleanup}
         if audio_owner is not None:
             await self._cancel_audio_owner(audio_owner, session_id, operation="session_cleanup",
-                                           ownership_guard=still_current)
+                                           ownership_guard=still_current, cleanup_tasks=cleanup_tasks)
             if not still_current():
                 return {"session_id": session_id, "cleanup_stale": True, "audio_completion_cleanup": completion_cleanup}
         snapshot = self.resource_snapshot()
@@ -727,8 +745,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if cleanup_result.get("cleanup_stale"):
                 continue
             state = self.canonical_runtime.sessions.get(session.session_id)
-            if self.max_json and state is not None and state.safety_severity == "urgent":
-                # Idle expiry cannot stand in for an adult's incident resolution.
+            if state is not None and state.mode == "safety_stop":
+                # A local stop ends through physical hangup or operator reset.
                 continue
             outputs = self._end(session, "idle_timeout", session.last_sequence)
             self.sessions.save(session)
@@ -1107,27 +1125,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     due.append(result)
         return due
 
-    async def _resolve_adult_incident_internal(self, session_id: str, incident_id: str) -> dict[str, Any]:
-        """Server-owned resolution seam; no external route or caller identity policy.
-
-        An authenticated adult/incident authorization adapter must be designed
-        before this seam is exposed in production.
-        """
-        state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
-        if state is None:
-            return {"reason": "adult_resolved_ignored", "outputs": [], "canonical_state": {"mode": "idle"}}
-        sequence = state.last_sequence_by_source.get("internal_adult_resolution", 0) + 1
-        return await self._receive_canonical_event(Event(
-            "AdultResolved", session_id, sequence, self.now(), "internal_adult_resolution",
-            {"incident_id": incident_id}, f"adult-resolution:{uuid.uuid4().hex}",
-            self.monotonic_now(),
-        ), adult_resolution_authorized=True)
-
     async def _receive_canonical_event(self, event: Event, transient_text: str | None = None,
-                                       *, adult_resolution_authorized: bool = False,
-                                       handoff_ack_authorized: bool = False,
-                                       handoff_failure_authorized: bool = False,
-                                       dialogue_fallback_authorized: bool = False,
+                                       *, dialogue_fallback_authorized: bool = False,
                                        personal_story_authorized: bool = False,
                                        identity_event_authorized: bool = False,
                                        game_timer_authorized: bool = False,
@@ -1135,13 +1134,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        _interaction_nonce: str | None = None,
                                        _game_timer_scope: tuple | None = None,
                                        identity_profile: dict[str, Any] | None = None,
-                                       _speech_ingress_guard=None, _speech_lifecycle_guard=None,
-                                       _handoff_lifecycle_guard=None) -> dict[str, Any]:
+                                       _speech_ingress_guard=None, _speech_lifecycle_guard=None) -> dict[str, Any]:
         if event.event_type == "InteractionIdleExpired" and not interaction_idle_authorized:
             return self._identity_result(event.session_id, "interaction_idle_untrusted")
         speech_work = event.event_type == "SpeechReceived"
         speech_scope = (event.session_id, self._engagement_scope(event.session_id))
-        handoff_effects_ready = asyncio.Event()
+        safety_guidance = {}
         if speech_work:
             self._engagement_ingress[speech_scope] = self._engagement_ingress.get(speech_scope,0) + 1
         try:
@@ -1150,13 +1148,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 await asyncio.shield(waiter[1])
             if self.optional_identity and not event.event_type.startswith("Identity") and event.event_type not in {"ClientProfileReady", "ClientProfileCleared"}:
                 await self.expire_identity_leases()
-            if _handoff_lifecycle_guard is not None and not _handoff_lifecycle_guard():
-                return self._identity_result(event.session_id, "stale_session_generation")
             return await self._receive_canonical_event_inner(
                 event, transient_text,
-                adult_resolution_authorized=adult_resolution_authorized,
-                handoff_ack_authorized=handoff_ack_authorized,
-                handoff_failure_authorized=handoff_failure_authorized,
                 dialogue_fallback_authorized=dialogue_fallback_authorized,
                 personal_story_authorized=personal_story_authorized,
                 identity_event_authorized=identity_event_authorized,
@@ -1165,12 +1158,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 identity_profile=identity_profile,
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
-                _handoff_effects_ready=handoff_effects_ready,
+                _safety_guidance=safety_guidance,
             )
+        except (asyncio.CancelledError, Exception) as exc:
+            if safety_guidance:
+                cancelled = isinstance(exc, asyncio.CancelledError)
+                self._finish_unstarted_safety_guidance(event.session_id, **safety_guidance,
+                    code="local_safety_guidance_cancelled" if cancelled else "local_safety_guidance_failed",
+                    status="cancelled" if cancelled else "failed")
+            raise
         finally:
-            # A superseded/cancelled ingress may never reach its handoff effect.
-            # Delivery still owns its outcome once preceding cleanup has ended.
-            handoff_effects_ready.set()
             if speech_work:
                 count = self._engagement_ingress.get(speech_scope,1) - 1
                 if count: self._engagement_ingress[speech_scope] = count
@@ -1182,124 +1179,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 if not waiter[1].done():
                     waiter[1].set_result(None)
 
-    def _start_handoff_delivery(self, event: Event, snapshot: dict[str, Any], effect: dict[str, Any],
-                                effects_ready: asyncio.Event, cleanup_tasks: set[asyncio.Task[Any]]):
-        """Own transport by incident, not by the current UI/audio event revision.
-
-        Start before audio cleanup yields: an ordinary button or handset-down
-        must not erase an urgent request that has already been accepted. This
-        does not grant a late response permission to speak in a new session.
-        """
-        adapter = self.adult_handoff
-        incident_id = str(snapshot.get("incident_id") or "")
-        if not incident_id:
-            return None
-        owner = self.canonical_runtime.sessions.get(event.session_id)
-        epoch = self._session_epochs.get(event.session_id, 0)
-        handoff_id = f"{event.session_id}:{event.correlation_id or event.sequence}"
-        request = {"incident_id": incident_id, "handoff_id": handoff_id, "session_id": event.session_id, "profile_ref": snapshot.get("profile_ref"), "correlation_id": event.correlation_id, "severity": effect.get("severity"), "category": "urgent" if effect.get("severity") == "urgent" else "other", "safe_summary": "Ребёнок попросил взрослого", "location_device_id": self.installation_id, "created_at": self.now(), "delivery": "pending", "state_version": snapshot.get("state_version")}
-
-        def incident_live():
-            current = self.canonical_runtime.sessions.get(event.session_id)
-            return (not self._identity_shutdown and current is owner and current is not None
-                    and current.mode == "safety_handoff" and current.incident_id == incident_id)
-
-        def incident_current():
-            return incident_live() and self._session_epochs.get(event.session_id, 0) == epoch
-
-        async def deliver():
-            # An urgent request remains deliverable after handset-down, while
-            # its response may speak only in the original physical session.
-            if not incident_live():
-                return {"resolution": "adult_handoff_stale"}
-            outcome = {"resolution": "adult_handoff_unavailable", "fallback_phrase_id": "PHRASE_091"}
-            if adapter is not None:
-                try:
-                    # Real transports must be async and cancellation-aware.
-                    # Never invoke an arbitrary blocking callable on this loop.
-                    method = getattr(adapter, "request", None)
-                    if not inspect.iscoroutinefunction(method):
-                        raise TypeError("adult_handoff request must be async")
-                    if len(self._handoff_transport_tasks) >= self.MAX_HANDOFF_TRANSPORTS:
-                        raise RuntimeError("adult_handoff transport capacity exhausted")
-                    transport = asyncio.create_task(method(request), name="mishka-handoff-transport")
-                    self._handoff_transport_tasks.add(transport)
-                    self._handoff_delivery_tasks.add(transport)
-                    transport.add_done_callback(completed)
-                    try:
-                        done, _ = await asyncio.wait({transport}, timeout=self.HANDOFF_TIMEOUT_SECONDS)
-                        if not done:
-                            raise TimeoutError("adult_handoff delivery deadline")
-                        delivery = transport.result()
-                    finally:
-                        if not transport.done():
-                            # The response deadline stays finite even if a faulty
-                            # adapter delays cancellation. Retain cleanup ownership
-                            # and capacity until it really exits; never accept its ACK.
-                            transport.cancel()
-                    if not isinstance(delivery, dict):
-                        raise TypeError("adult_handoff response must be an object")
-                    if type(delivery.get("acknowledged")) is not bool:
-                        raise ValueError("adult_handoff acknowledgement must be boolean")
-                    if "simulated" in delivery and type(delivery["simulated"]) is not bool:
-                        raise ValueError("adult_handoff simulated marker must be boolean")
-                    outcome = {"delivery": dict(delivery)}
-                    if delivery.get("simulated") is True or isinstance(adapter, SimulatedAdultHandoff):
-                        outcome.update(resolution="adult_handoff_simulated_unavailable", fallback_phrase_id="PHRASE_091")
-                    elif delivery["acknowledged"]:
-                        outcome["resolution"] = "adult_handoff_acknowledged"
-                    else:
-                        outcome["resolution"] = "adult_handoff_pending"
-                except asyncio.CancelledError:
-                    if asyncio.current_task().cancelling():
-                        raise
-                    outcome = {"resolution": "adult_handoff_delivery_failed", "fallback_phrase_id": "PHRASE_091",
-                               "error": "CancelledError"}
-                except Exception as exc:
-                    outcome = {"resolution": "adult_handoff_delivery_failed", "fallback_phrase_id": "PHRASE_091",
-                               "error": type(exc).__name__}
-            # Do not let a quick transport response speak before audio_stop.
-            # The parent also opens this barrier when it exits early/cancels.
-            await effects_ready.wait()
-            if cleanup_tasks:
-                # The ingress can exit while cancelled native teardown is still
-                # draining. Its late playback.stop must finish before new voice.
-                _, pending = await asyncio.wait(cleanup_tasks, timeout=self.audio_cleanup_timeout_seconds)
-                if pending:
-                    return {**outcome, "resolution": "adult_handoff_audio_cleanup_pending"}
-            if not incident_current():
-                return {"resolution": "adult_handoff_stale"}
-            if outcome["resolution"] == "adult_handoff_pending":
-                return outcome
-            acknowledged = outcome["resolution"] == "adult_handoff_acknowledged"
-            source = "adult_handoff_transport" if acknowledged else "internal_handoff_failure"
-            terminal = await self._receive_canonical_event(Event(
-                "AdultHandoffAcknowledged" if acknowledged else "AdultHandoffFailed",
-                event.session_id, owner.last_sequence_by_source.get(source, 0) + 1,
-                self.now(), source, {"incident_id": incident_id, "handoff_id": handoff_id},
-                f"{event.correlation_id or handoff_id}:" + ("ack" if acknowledged else "handoff-failed"),
-                self.monotonic_now(),
-            ), handoff_ack_authorized=acknowledged, handoff_failure_authorized=not acknowledged,
-               _handoff_lifecycle_guard=incident_current)
-            outcome["terminal"] = terminal
-            return outcome
-
-        task = asyncio.create_task(deliver(), name="mishka-adult-handoff")
-        self._handoff_delivery_tasks.add(task)
-        def completed(done):
-            self._handoff_transport_tasks.discard(done)
-            self._handoff_delivery_tasks.discard(done)
-            # The initiating event can have lost ownership while delivery was
-            # pending; consume exceptions even when there is no remaining waiter.
-            self._consume_detached_audio_cancel(done)
-        task.add_done_callback(completed)
-        return task
-
     async def _receive_canonical_event_inner(self, event: Event, transient_text: str | None = None,
-                                             *, adult_resolution_authorized: bool = False,
-                                             handoff_ack_authorized: bool = False,
-                                             handoff_failure_authorized: bool = False,
-                                             dialogue_fallback_authorized: bool = False,
+                                                               *, dialogue_fallback_authorized: bool = False,
                                        personal_story_authorized: bool = False,
                                              identity_event_authorized: bool = False,
                                              game_timer_authorized: bool = False,
@@ -1308,7 +1189,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              _game_timer_scope: tuple | None = None,
                                              identity_profile: dict[str, Any] | None = None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
-                                             _handoff_effects_ready: asyncio.Event) -> dict[str, Any]:
+                                             _safety_guidance: dict) -> dict[str, Any]:
         """Bridge canonical decisions to application-owned effects.
 
         The contract engine never touches audio, capture, LEDs or providers.
@@ -1379,15 +1260,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 return self._identity_result(event.session_id, rejected)
             text = transient_text or ""
             parsed_intent = classify_intent(text)
-            explicit_adult_request = parsed_intent == "request_adult"
+            explicit_help_request = parsed_intent == "help_request"
             admitted_handset = current.handset if current is not None else "down"
             epoch = self._session_epochs.get(event.session_id, 0)
             revision = self._session_revisions.get(event.session_id, 0)
             safety_started = self.monotonic_now()
             safety = await self.safety_classifier.classify(text)
             # Retain fixed outcome codes, never a transcript, name, text hash,
-            # model response or exception message. Child ACKs may replace
-            # last_canonical_event, so diagnostics must be an independent ring.
+            # model response or exception message. Keep diagnostics independent
+            # of the latest canonical event projection.
             self.record_audio_diagnostic(
                 "input_safety_decision", code=safety.reason,
                 safety_severity=safety.severity, safety_verified=bool(safety.verified),
@@ -1406,7 +1287,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if (self._session_revisions.get(event.session_id, 0) != revision
                     or current.last_sequence_by_source.get(event.source) != event.sequence
                     or stale_speech_phase):
-                if safety.severity == "none" and not explicit_adult_request:
+                if safety.severity == "none" and not explicit_help_request:
                     return self._identity_result(event.session_id, "stale_session_generation")
                 # A welcome timer or other ordinary transition must not erase
                 # a possible disclosure from the same physical session.
@@ -1416,15 +1297,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             state_version = current.state_version
             uncertain_stt = payload.pop("_stt_untrusted", False)
             verified_voice_activity = bool(safety.verified and not uncertain_stt and not stale_speech_phase and text.strip())
-            if uncertain_stt and safety.severity == "none" and not explicit_adult_request:
+            if uncertain_stt and safety.severity == "none" and not explicit_help_request:
                 return {**self._identity_result(event.session_id, "audio_retry"),
                         "outputs": [{"action": "audio_retry", "reason": "stt_low_confidence"}]}
-            intent = "request_adult" if safety.severity == "concern" else parsed_intent
+            intent = parsed_intent
             if uncertain_stt or not safety.verified or stale_speech_phase:
                 # Possible danger is still escalated, without treating the
                 # transcript as a reliable name, age, command, or memory.
                 transient_text = None
-                intent = ("request_adult" if safety.severity == "concern" or explicit_adult_request
+                intent = ("help_request" if explicit_help_request
                           else "input_retry" if safety.severity == "none" else "free_speech")
             personal_welcome_answer_verified = (safety.verified and safety.severity == "none"
                 and not uncertain_stt and bool((transient_text or "").strip()))
@@ -1462,9 +1343,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
            _voice_admission=voice_admission,
            private_welcome_ready=private_welcome_ready,
            personal_welcome_answer_verified=personal_welcome_answer_verified,
-           adult_resolution_authorized=adult_resolution_authorized,
-           handoff_ack_authorized=handoff_ack_authorized,
-           handoff_failure_authorized=handoff_failure_authorized,
            dialogue_fallback_authorized=dialogue_fallback_authorized,
            personal_story_authorized=personal_story_authorized,
            identity_event_authorized=identity_event_authorized, game_timer_authorized=game_timer_authorized, interaction_idle_authorized=interaction_idle_authorized)
@@ -1503,12 +1381,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         # A newer event owns this session as soon as its transition is
         # accepted. Handset reset also fences work that is currently awaiting
         # a provider before any cleanup await can yield.
-        # The simulated acknowledgement is a child of the current delivery
-        # decision, not a competing ingress event. External acknowledgements
-        # still acquire a new revision.
+        # Internal completions may enrich their owning decision without
+        # replacing its ingress revision.
         child_ack = (
-            (event.event_type == "AdultHandoffAcknowledged" and handoff_ack_authorized)
-            or (event.event_type == "StoryPositionUpdated" and event.source == "audio_pause")
+            (event.event_type == "StoryPositionUpdated" and event.source == "audio_pause")
             or (event.event_type in {"PersonalStoryReady", "AudioCompleted"} and personal_story_authorized)
             or (event.event_type == "DialogueFallback" and dialogue_fallback_authorized)
         )
@@ -1517,6 +1393,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         # replacement for the response triggered by its preceding press.
         semantic_effects = [item for item in effects if item.get("type") != "button_edge_ack"]
         takes_ownership = bool(semantic_effects) or snapshot.get("state_version") != previous_version or exhibition_reset
+        if (previous_state is not None and previous_state.mode == "safety_stop"
+                and snapshot.get("mode") == "safety_stop" and not effects and not exhibition_reset):
+            # Telemetry and a severity upgrade do not replace the initial
+            # guidance owner while its old playback cleanup is draining.
+            takes_ownership = False
         if (takes_ownership and self.max_json and self._max_client_boundary is not None
                 and event.session_id == self._max_client_boundary.session_id
                 and (event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart"}
@@ -1563,6 +1444,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._engagement_event(event, decision, accepted=takes_ownership, voice_activity=verified_voice_activity)
 
         reset_sync_results: dict[str, dict[str, Any]] = {}
+        local_safety_batch = snapshot.get("mode") == "safety_stop" and any(
+            effect.get("type") == "audio_stop" for effect in effects)
+        local_safety_cleanup_tasks: set[asyncio.Task[Any]] = set()
 
         def reset_sync_step(resource: str, action) -> None:
             # A failed device must not prevent another device or RAM owner
@@ -1572,15 +1456,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 reset_sync_results[resource] = {"status": "completed"}
             except Exception as exc:
                 failure = {"type": "cleanup_failed", "resource": resource,
-                           "operation": "interaction_idle" if interaction_stopped else "profile_ready_expiry" if prelift_expired else "exhibition_reset", "status": "failed",
+                           "operation": "local_safety" if local_safety_batch else "interaction_idle" if interaction_stopped else "profile_ready_expiry" if prelift_expired else "exhibition_reset", "status": "failed",
                            "exception_type": type(exc).__name__}
                 reset_sync_results[resource] = failure
                 effects.append(dict(failure))
                 self.canonical_diagnostics.append(dict(failure))
                 self.runtime_status["session_cleanup_last_failure"] = dict(failure)
-                logger.warning("exhibition reset %s cleanup failed: %s", resource, type(exc).__name__)
+                logger.warning("canonical stop %s cleanup failed: %s", resource, type(exc).__name__)
 
-        if sync_stop:
+        if sync_stop or local_safety_batch:
             # Physical hangup takes effect synchronously. Native/model audio
             # cleanup can await, fail or be cancelled; none may keep a stale
             # wave or tutorial lit after canonical handset-down was accepted.
@@ -1589,15 +1473,31 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self._cancel_lighting_wave(event.session_id)
             self._invalidate_audio_lease(event.session_id)
             closing_record = self.sessions.get(event.session_id)
+            if closing_record is None and local_safety_batch:
+                closing_record = SessionRecord(event.session_id, self.installation_id,
+                    event.correlation_id or str(uuid.uuid4()), handset_up=voice_open)
             if closing_record is not None:
-                if not interaction_stopped:
+                if not interaction_stopped and not local_safety_batch:
                     closing_record.handset_up = False
                 closing_record.cancellation_token += 1
                 self.sessions.save(closing_record)
                 reset_sync_step("audio", lambda: self.audio.cancel(closing_record.cancellation_token))
             cancel_effects = getattr(self.led, "cancel_effects", None)
-            reset_sync_step("lighting", lambda: cancel_effects(clear=True)
-                            if callable(cancel_effects) else self.led.clear_all())
+            if local_safety_batch:
+                # Commit capture closure and the complete safe frame before
+                # the first provider await. Each device cleanup is independent.
+                close_capture = getattr(self.s2s_audio, "close_capture", None)
+                reset_sync_step("capture", lambda: close_capture(event.session_id)
+                                if self.s2s_audio is not None else None)
+                reset_sync_step("lighting_effects", lambda: cancel_effects(clear=False)
+                                if callable(cancel_effects) else None)
+                desired = dict(LED_PRESETS["SAFE_STOP"])
+                reset_sync_step("lighting", lambda: self.led.set_elements(tuple(
+                    LightingCommand(element, int(desired.get(element, 0)), 0)
+                    for element in LIGHTING_ELEMENT_IDS)))
+            else:
+                reset_sync_step("lighting", lambda: cancel_effects(clear=True)
+                                if callable(cancel_effects) else self.led.clear_all())
 
         def still_current() -> bool:
             return (
@@ -1613,12 +1513,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     "state_version": current_snapshot.get("state_version", 0),
                     "outputs": [], "canonical_state": current_snapshot}
 
-        handoff_cleanup_tasks: set[asyncio.Task[Any]] = set()
-        handoff_deliveries = {
-            id(effect): self._start_handoff_delivery(event, snapshot, effect, _handoff_effects_ready,
-                                                    handoff_cleanup_tasks)
-            for effect in effects if effect.get("type") == "adult_handoff_request"
-        }
+        guidance = next((item for item in effects
+            if item.get("type") == "speak" and item.get("phrase_id") == "PHRASE_091"), None)
+        if local_safety_batch and guidance is not None and voice_open:
+            _safety_guidance.update(owner=state_owner, epoch=epoch,
+                                   lease=guidance.get("playback_lease"), effect=guidance)
 
         if identity_owner_changed or identity_ended:
             # Fence all private context/audio before any provider cleanup await.
@@ -1630,7 +1529,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 old_record.cancellation_token += 1
                 if not sync_stop:
                     self.audio.cancel(old_record.cancellation_token)
-            await self._cleanup_session_resources(event.session_id, identity_request=profile_request)
+            await self._cleanup_session_resources(event.session_id, identity_request=profile_request,
+                cleanup_tasks=local_safety_cleanup_tasks if local_safety_batch else None)
             if not still_current():
                 return stale_result()
 
@@ -1656,7 +1556,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         # reports its asynchronous lifecycle.
         self.last_canonical_effects = effects
         audio_failure: dict[str, Any] | None = None
-        handoff_failure_result: dict[str, Any] | None = None
         deferred_effects: list[dict[str, Any]] = []
 
         def dispatch_story_audio(response_id, asset_path, effect, *, asset_status="approved",
@@ -1904,9 +1803,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 effect["timer_status"] = "cancelled"
                 self._cancel_welcome_timer(event.session_id)
             elif kind in {"audio_stop", "welcome_ring_stop"}:
-                record.cancellation_token += 1
-                self._invalidate_audio_lease(event.session_id)
-                if sync_stop:
+                if not local_safety_batch:
+                    record.cancellation_token += 1
+                    self._invalidate_audio_lease(event.session_id)
+                if sync_stop or local_safety_batch:
                     effect["sync_cleanup"] = dict(reset_sync_results.get("audio", {"status": "not_owned"}))
                 else:
                     try:
@@ -1926,38 +1826,17 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 if self.bounded_s2s is not None:
                     effect["audio_cleanup"] = await self._cancel_audio_owner(
                         self.bounded_s2s, event.session_id, operation="audio_stop",
-                        ownership_guard=still_current if interaction_stopped else None,
-                        cleanup_tasks=handoff_cleanup_tasks if handoff_deliveries else None,
+                        ownership_guard=still_current,
+                        cleanup_tasks=local_safety_cleanup_tasks if local_safety_batch else None,
                     )
                 if not still_current():
                     return stale_result()
                 if self.s2s_audio is not None and self.s2s_audio is not self.bounded_s2s:
                     effect["s2s_cleanup"] = await self._cancel_audio_owner(
                         self.s2s_audio, event.session_id, operation="audio_stop",
-                        ownership_guard=still_current if interaction_stopped else None,
-                        cleanup_tasks=handoff_cleanup_tasks if handoff_deliveries else None,
+                        ownership_guard=still_current,
+                        cleanup_tasks=local_safety_cleanup_tasks if local_safety_batch else None,
                     )
-            elif kind == "adult_handoff_request":
-                incident_id = str(snapshot.get("incident_id") or "")
-                if not incident_id:
-                    effect["resolution"] = "adult_handoff_incident_missing"
-                    continue
-                effect["incident_id"] = incident_id
-                # Transport and its terminal canonical outcome are owned by
-                # the incident task, even if this UI event loses its revision.
-                _handoff_effects_ready.set()
-                delivery = await asyncio.shield(handoff_deliveries[id(effect)])
-                terminal = delivery.get("terminal")
-                effect.update({key: value for key, value in delivery.items() if key != "terminal"})
-                if terminal is not None:
-                    if delivery["resolution"] == "adult_handoff_acknowledged":
-                        effect["acknowledgement"] = {"reason": terminal.get("reason"), "simulated": False}
-                        # The child already executed these effects. Only merge
-                        # their projection after the dispatch loop is finished.
-                        deferred_effects.extend(terminal.get("outputs") or [])
-                    else:
-                        handoff_failure_result = terminal
-
             elif kind == "lighting":
                 self.led.clear_all()
                 for element_id in effect.get("elements", ()):
@@ -1992,6 +1871,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     _set_audio_effect_status(effect,asset_status="unavailable",queued=False,resolution="scene_menu_audio_unavailable")
             elif kind == "lighting_preset":
                 preset = str(effect.get("preset", ""))
+                if local_safety_batch and preset == "SAFE_STOP":
+                    effect["cleanup"] = dict(reset_sync_results["lighting"])
+                    effect["resolution"] = "local_safety_frame_committed"
+                    continue
                 # An explicit, current canonical listening effect owns this
                 # frame. Backend dialogue callbacks remain bear-mode scoped.
                 start_breathing = getattr(self.led, "start_breathing", None)
@@ -2111,6 +1994,24 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 # A device/adapter failure is terminal for this declared effect:
                 # it is diagnosed and never retried by the exhibition timer.
                 phrase_id = str(effect.get("phrase_id", ""))
+                if local_safety_batch and phrase_id == "PHRASE_091" and voice_open:
+                    pending = set()
+                    if local_safety_cleanup_tasks:
+                        _, pending = await asyncio.wait(local_safety_cleanup_tasks,
+                            timeout=self.audio_cleanup_timeout_seconds)
+                    if (not still_current() or state_owner.handset != "up"
+                            or state_owner.mode != "safety_stop"):
+                        return stale_result()
+                    failed = any(item.get("status") == "failed" for item in reset_sync_results.values())
+                    failed = failed or any(task.cancelled() or task.exception() is not None
+                        for task in local_safety_cleanup_tasks if task.done())
+                    failed = failed or any(effect.get(key, {}).get("status") in {"failed", "unavailable"}
+                        for effect in effects for key in ("audio_cleanup", "s2s_cleanup"))
+                    if pending or failed:
+                        code = "local_safety_audio_cleanup_pending" if pending else "local_safety_audio_cleanup_failed"
+                        self._finish_unstarted_safety_guidance(event.session_id,
+                            **_safety_guidance, code=code)
+                        continue
                 content_hash = str(effect.get("content_hash", ""))
                 effect["content_id"] = phrase_id
                 diagnosis = self.voice_manifest.diagnose(phrase_id, content_hash)
@@ -2186,9 +2087,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                                 content_code=diagnosis.get("code"), session_id=event.session_id)
                     audio_failure = {"response_id": phrase, "token": record.cancellation_token,
                                      "error_code": str(diagnosis.get("code") or "content_unavailable")[:80]}
-            elif kind == "adult_handoff_offer":
-                effect["phrase_id"] = "PHRASE_086"
-                effect["resolution"] = "offer_requires_explicit_button_or_speech"
             elif kind == "bounded_dialogue_turn":
                 effect["response_policy"] = "bounded_validated_dialogue"
                 fallback_reason = None
@@ -2295,7 +2193,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     decision["reason"] = fallback.get("reason")
                     snapshot = self.canonical_runtime.sessions[event.session_id].snapshot()
             elif kind in {"capture_open", "capture_close", "audio_stop"}:
-                effect["resolution"] = "application_boundary_acknowledged"
+                if local_safety_batch and kind == "capture_close":
+                    effect["cleanup"] = dict(reset_sync_results["capture"])
+                    effect["resolution"] = "local_capture_closed"
+                else:
+                    effect["resolution"] = "application_boundary_acknowledged"
             elif kind == "game_retry":
                 self.led.clear_all()
                 target = int(effect.get("target_button") or 0)
@@ -2311,7 +2213,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 effect.setdefault("resolution", "declarative_effect_emitted")
             elif kind in {"exhibition_menu_selected", "menu_tutorial_complete", "exhibition_menu_tutorial_step"}:
                 effect.setdefault("resolution", "canonical_exhibition_menu_boundary")
-            elif kind in {"content_blocked", "privacy_blocked", "offer_adult", "visual", "clear_private_display", "game_continue_visual", "adult_incident_closed", "game_exit_confirmation", "story_speech_analysis", "hardware_reconnected", "button_edge_ack", "mood_report"}:
+            elif kind in {"content_blocked", "privacy_blocked", "visual", "clear_private_display", "game_continue_visual", "game_exit_confirmation", "story_speech_analysis", "hardware_reconnected", "button_edge_ack", "mood_report"}:
                 effect.setdefault("resolution", "declarative_effect_emitted")
             elif kind == "typed_info_request":
                 if not voice_open:
@@ -2372,13 +2274,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     deferred_effects.extend(fallback.get("outputs") or [])
                     snapshot = state_owner.snapshot()
 
-        if handoff_failure_result is not None:
-            # The incident task already committed the failure and its recording.
-            if (handoff_failure_result.get("reason") == "stale_session_generation"
-                    or handoff_failure_result.get("canonical_state", {}).get("state_version") != state_owner.state_version):
-                return stale_result()
-            handoff_failure_result["outputs"] = [dict(item) for item in effects] + list(handoff_failure_result.get("outputs") or [])
-            return handoff_failure_result
         if not still_current():
             return stale_result()
         effects.extend(deferred_effects)
@@ -2789,7 +2684,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if _ingress_guard is not None and not _ingress_guard():
             return {**self._result(session, [], "stale_session_generation"), "pending": False}
         if audio_result.turn is not None and audio_result.turn.fallback_reason:
-            # This is an STT/VAD ingress retry, not an adult-handoff failure.
+            # This is an STT/VAD ingress retry, not a local safety reaction.
             # Keep it visual/diagnostic until a canonical retry phrase is
             # authorized for every mode; never dispatch untracked audio.
             return {**self._result(session, barge_outputs + [{"action": "audio_retry", "reason": audio_result.turn.fallback_reason}], "audio_retry"), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
@@ -3057,20 +2952,21 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
     async def reset_session(self, session_id: str) -> dict[str, Any]:
         boundary = self._max_client_boundary
         if not self.max_json or boundary is None or boundary.session_id != session_id:
-            return await self._reset_session_inner(session_id)
+            boundary = None
         waiter = self._session_reset_waiters.get(session_id)
         if waiter is not None and waiter[0] is not asyncio.current_task():
             await asyncio.shield(waiter[1])
         completion = asyncio.get_running_loop().create_future()
         self._session_reset_waiters[session_id] = (asyncio.current_task(), completion)
         try:
-            self._revoke_local_profile(session_id)
+            if boundary is not None:
+                self._revoke_local_profile(session_id)
             return await self._reset_session_inner(session_id)
         finally:
             try:
                 # Also discard source responses arriving while reset awaited
                 # audio cleanup. Only a subsequent scan can own the fresh session.
-                if self._max_client_boundary is boundary:
+                if boundary is not None and self._max_client_boundary is boundary:
                     boundary.clear_client()
             finally:
                 self._session_reset_waiters.pop(session_id, None)
@@ -3079,26 +2975,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
 
     async def _reset_session_inner(self, session_id: str) -> dict[str, Any]:
         self._drop_identity_owner(session_id)
-        incident = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
-        if incident is not None and incident.safety_severity == "urgent":
-            # A generic operator reset is not an AdultResolved event. Stop
-            # in-flight work while preserving the visible incident.
-            self._session_epochs[session_id] = self._session_epochs.get(session_id, 0) + 1
-            self._session_revisions[session_id] = self._session_revisions.get(session_id, 0) + 1
-            self.canonical_runtime.clear_identity(incident)
-            incident.state_version += 1
-            record = self.sessions.get(session_id)
-            self._invalidate_audio_lease(session_id)
-            if record is not None:
-                record.cancellation_token += 1
-                record.child_id, record.anonymous = None, True
-                self.audio.cancel(record.cancellation_token)
-                self.sessions.save(record)
-            await self._cleanup_session_resources(session_id)
-            state = incident.snapshot()
-            self.last_canonical_state = dict(state)
-            return {"session_id": session_id, "state": state["mode"], "reset": False,
-                    "reason": "safety_handoff_active", "canonical_state": state}
         self._discard_private_welcome(session_id)
         self._drop_engagement(session_id, keys=True)
         self._cancel_game_timer(session_id)
@@ -3110,22 +2986,54 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._session_epochs[session_id] = self._session_epochs.get(session_id, 0) + 1
         self._session_revisions[session_id] = self._session_revisions.get(session_id, 0) + 1
         self._invalidate_audio_lease(session_id)
-        cleanup = await self._cancel_audio_completions(session_id, operation="reset")
-        if self.bounded_s2s is not None:
-            await self._cancel_audio_owner(self.bounded_s2s, session_id, operation="reset")
-        if self.s2s_audio is not None:
-            await self._cancel_audio_owner(self.s2s_audio, session_id, operation="reset")
-        self._drop_dialogue_context(session_id)
+        sync_cleanup = {}
+        def stop_resource(name, action):
+            try:
+                action()
+                sync_cleanup[name] = {"status": "completed"}
+            except Exception as exc:
+                failure = {"kind": "session_reset_cleanup_failed", "resource": name,
+                           "status": "failed", "exception_type": type(exc).__name__}
+                sync_cleanup[name] = failure
+                self.canonical_diagnostics.append(failure)
+        record = self.sessions.get(session_id)
+        if record is not None:
+            record.cancellation_token += 1
+            record.handset_up = False
+            stop_resource("audio", lambda: self.audio.cancel(record.cancellation_token))
+        close_capture = getattr(self.s2s_audio, "close_capture", None)
+        if callable(close_capture):
+            stop_resource("capture", lambda: close_capture(session_id))
+        cancel_effects = getattr(self.led, "cancel_effects", None)
+        stop_resource("lighting", lambda: cancel_effects(clear=True)
+                      if callable(cancel_effects) else self.led.clear_all())
         if self.canonical_runtime is not None:
             self.canonical_runtime.reset(session_id)
+        self.last_canonical_state = {
+            "session_id": session_id, "mode": "idle", "handset": "down",
+            "expected_inputs": ["handset_up"],
+        }
+        self.last_canonical_effects = []
+        epoch, revision = self._session_epochs[session_id], self._session_revisions[session_id]
+        def reset_current():
+            return (self._session_epochs.get(session_id) == epoch
+                and self._session_revisions.get(session_id) == revision
+                and (self.canonical_runtime is None or session_id not in self.canonical_runtime.sessions))
+        cleanup = await self._cancel_audio_completions(session_id, operation="reset")
+        cleanup["sync_cleanup"] = sync_cleanup
+        if self.bounded_s2s is not None:
+            await self._cancel_audio_owner(self.bounded_s2s, session_id, operation="reset",
+                                           ownership_guard=reset_current)
+        if self.s2s_audio is not None:
+            await self._cancel_audio_owner(self.s2s_audio, session_id, operation="reset",
+                                           ownership_guard=reset_current)
+        self._drop_dialogue_context(session_id)
+        if self.canonical_runtime is not None:
             self._canonical_profiles.pop(session_id, None)
             self._canonical_schedule_refs.pop(session_id, None)
         # Reset is an application-level boundary, not only a repository
         # operation. Keep fake, PTY and physical LED implementations aligned
         # even when reset is invoked without the Stand wrapper.
-        clear_all = getattr(self.led, "clear_all", None)
-        if callable(clear_all):
-            clear_all()
         self._last_audio_ack_at.pop(session_id, None)
         self.sessions.delete(session_id)
         # Reset is also an observability boundary: do not leave the previous

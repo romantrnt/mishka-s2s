@@ -10,7 +10,7 @@ def test_menu_phase_never_swallows_existing_safety_path(phase,severity):
     runtime.sessions['s']=state
     result=runtime.handle(CanonicalEvent('VoiceIntentReady','s',1,0,'test',{'intent':'free_speech','safety_severity':severity},'safety'))
     assert result['reason']==('concern_support' if severity=='concern' else 'urgent_safety')
-    assert state.mode==('support_intake' if severity=='concern' else 'safety_handoff')
+    assert state.mode==('support_intake' if severity=='concern' else 'safety_stop')
 
 @pytest.mark.parametrize('phase',['narrating','repeat_prompt'])
 def test_ordinary_speech_during_menu_audio_cannot_route(phase):

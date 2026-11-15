@@ -7,10 +7,12 @@ import hashlib
 import json
 import math
 import struct
+import sys
 import wave
 from pathlib import Path
 
-REQUIRED_COUNT = 108
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.foundation.voice_catalog import REQUIRED_COUNT, REQUIRED_PHRASE_IDS, load_phrase_catalog
 PLACEHOLDER_IDS = frozenset()
 ALLOWED_SAMPLE_RATES = frozenset({22050, 24000, 48000})
 MAX_CLIPPED_RATIO = 0.01
@@ -73,15 +75,14 @@ def main() -> int:
     parser.add_argument("--approve", action="store_true")
     parser.add_argument("--approved-by")
     args = parser.parse_args()
-    phrases = [line.strip() for line in args.catalog.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if len(phrases) != REQUIRED_COUNT:
-        raise ValueError(f"catalog must contain {REQUIRED_COUNT} phrases")
+    phrases = load_phrase_catalog(args.catalog)
+    if set(phrases) != REQUIRED_PHRASE_IDS:
+        raise ValueError(f"catalog must contain the {REQUIRED_COUNT} required stable phrase IDs")
     if args.approve and not args.approved_by:
         raise ValueError("--approved-by is required with --approve")
     root = args.manifest.parent
     assets = []
-    for number, transcript in enumerate(phrases, 1):
-        phrase_id = f"PHRASE_{number:03d}"
+    for phrase_id, transcript in sorted(phrases.items()):
         asset_path = f"voice/{phrase_id}.wav"
         recording = root / asset_path
         recorded = recording.is_file()

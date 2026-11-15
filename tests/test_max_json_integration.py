@@ -227,15 +227,15 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.state().profile_ref)
         self.assertFalse(self.app._canonical_profiles)
 
-    async def test_urgent_incident_survives_new_scan_while_private_context_is_cleared(self):
+    async def test_local_urgent_stop_survives_new_scan_while_private_context_is_cleared(self):
         await self.scan("demo-1")
         await self.send("HandsetLifted")
         await self.send("VoiceIntentReady", {"intent": "free_speech", "safety_severity": "urgent"})
-        incident = self.state().incident_id
-        self.assertIsNotNone(incident)
+        self.assertEqual(self.state().mode, "safety_stop")
+        self.assertNotIn("incident_id", self.state().snapshot())
         await self.scan("demo-2")
-        self.assertEqual(self.state().mode, "safety_handoff")
-        self.assertEqual(self.state().incident_id, incident)
+        self.assertEqual(self.state().mode, "safety_stop")
+        self.assertNotIn("incident_id", self.state().snapshot())
         self.assertEqual(self.state().safety_severity, "urgent")
         self.assertIsNone(self.state().profile_ref)
         self.assertFalse(self.app._canonical_profiles)
@@ -417,16 +417,14 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
                 await draining
             self.app._cancel_audio_completions = original
 
-    async def test_actual_urgent_reset_clears_card_and_preserves_incident(self):
+    async def test_actual_urgent_reset_clears_card_and_finishes_local_stop(self):
         await self.scan("demo-1")
         await self.send("HandsetLifted")
         await self.send("VoiceIntentReady", {"intent": "free_speech", "safety_severity": "urgent"})
-        incident = self.state().incident_id
+        self.assertEqual(self.state().mode, "safety_stop")
         result = await self.app.reset_session(self.boundary.session_id)
-        self.assertFalse(result["reset"])
-        self.assertEqual(self.state().incident_id, incident)
-        self.assertEqual(self.state().safety_severity, "urgent")
-        self.assertIsNone(self.state().profile_ref)
+        self.assertTrue(result["reset"])
+        self.assertNotIn(self.boundary.session_id, self.app.canonical_runtime.sessions)
         self.assertFalse(self.app._canonical_profiles)
         self.assertIsNone(self.boundary.facts)
         self.assertIsNone(self.client.patient())

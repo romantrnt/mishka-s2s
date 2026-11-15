@@ -321,7 +321,7 @@ def test_missing_approved_fallback_asset_is_reported_unavailable_not_played():
     asyncio.run(run())
 
 
-def test_stt_failure_does_not_play_adult_handoff_phrase_as_generic_retry():
+def test_stt_failure_does_not_play_local_safety_guidance_as_generic_retry():
     from app.foundation.s2s import AudioTurnResult
 
     class FailedSTT:
@@ -334,7 +334,7 @@ def test_stt_failure_does_not_play_adult_handoff_phrase_as_generic_retry():
         app, _, _, _ = build_application(
             settings=Settings(profile="mock", runtime_mode="clinical"),
         )
-        sid = "stt-failure-no-adult-handoff"
+        sid = "stt-failure-no-local-safety"
         await app.receive_async(event("HandsetLifted", sid, 1))
         app.s2s_audio = FailedSTT()
         before = len(app.audio.commands)

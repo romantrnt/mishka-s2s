@@ -80,7 +80,7 @@ def test_urgent_theme_goes_to_safety_not_unavailable_story(authorized):
             await h.send("ButtonPressed", {"button_id": 4})
             h.played.clear()
             await speech(h, "Я не хочу жить")
-            assert h.state.mode == "safety_handoff" and h.state.safety_severity == "urgent"
+            assert h.state.mode == "safety_stop" and h.state.safety_severity == "urgent"
             assert "PHRASE_080" not in h.played
         finally: await h.close()
     asyncio.run(run())
@@ -114,7 +114,7 @@ def test_interruption_during_fallback_cleanup_cannot_play_stale_failure(interrup
             else: await h.send("HandsetPlaced")
             release.set(); await task
             assert "PHRASE_080" not in h.played
-            if interrupt == "urgent": assert h.state.mode == "safety_handoff"
+            if interrupt == "urgent": assert h.state.mode == "safety_stop"
             else: assert not h.app._canonical_profiles
         finally:
             release.set()

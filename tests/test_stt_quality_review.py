@@ -94,10 +94,12 @@ def test_actual_recognizer_low_decode_is_safety_only_in_both_paths(wait, text, u
             if pending:
                 await asyncio.gather(*pending)
                 result = updates[-1]
-            assert result["reason"] == ("adult_handoff_delivery_failed" if urgent else "audio_retry")
+            assert result["reason"] == ("urgent_safety" if urgent else "audio_retry")
             if urgent:
-                assert state.incident_id and state.safety_severity == "urgent"
-                assert not any(item.get("phrase_id") == "PHRASE_089" for item in result["outputs"])
+                assert state.mode == "safety_stop" and state.safety_severity == "urgent"
+                assert "incident_id" not in state.snapshot()
+                assert any(item.get("phrase_id") == "PHRASE_091" for item in result["outputs"])
+                assert not any(item.get("type") == "adult_handoff_request" for item in result["outputs"])
             state = app.canonical_runtime.sessions["audit"]
             assert state.display_name is None and not app.conversation_contexts
             assert text not in repr(state.dialogue_memory.bounded_turns)

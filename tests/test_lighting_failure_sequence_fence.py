@@ -38,7 +38,7 @@ async def test_actual_sequence_timer_cannot_relight_failed_output(monkeypatch):
         assert output.diagnostics()['generation_failed']
         if stand._lighting_fault_future is not None:
             await asyncio.wrap_future(stand._lighting_fault_future)
-        assert h.state.mode=='safety_handoff'
+        assert h.state.mode=='safety_stop'
         assert h.sid not in h.app._game_timer_scopes
         clock[0]=scope[-1]
         await h.app._fire_game_timer(h.sid,scope)

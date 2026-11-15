@@ -72,6 +72,6 @@ async def test_safety_or_explicit_adult_request_still_precedes_refusal(text):
     try:
         await h.send('HandsetLifted');h.state.mode='exhibition_name_capture';h.state.welcome_status='started'
         await h.send('SpeechReceived',text=text)
-        assert h.state.mode=='safety_handoff'
+        assert h.state.mode=='safety_stop'
         assert h.state.display_name is None and not h.state.onboarding_name_collected
     finally:await h.close()

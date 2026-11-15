@@ -1,3 +1,5 @@
+> Historical report: caregiver-delivery and adult-resolution behavior described below has been removed. Current local-only behavior is documented in [OPERATIONS.md](OPERATIONS.md#local-safety-response).
+
 # MISHKA P0 audio execution contract
 
 Date: 2026-10-26. Base: d8af32c40adacabdb28e84b1cc766cc0f20f6782.

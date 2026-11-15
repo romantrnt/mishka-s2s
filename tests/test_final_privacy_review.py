@@ -1,8 +1,6 @@
 """Final review regressions. Paths, transports and child data are synthetic."""
 import asyncio
 import json
-import threading
-import time
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -80,65 +78,11 @@ def test_stt_readiness_redacts_reference_without_changing_presence_check(tmp_pat
     assert provider.model_name == str(reference)
 
 
-def test_sync_handoff_readiness_is_bounded_nonblocking_and_single_flight():
-    application, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
-    # Isolate the external handoff probe from catalog/resource scans, which
-    # have separate coverage and no latency SLA on this machine.
-    application.scenarios = None
-    application.metrics = SimpleNamespace(snapshot=lambda: {})
-    async def runtime_ready():
-        return {"ready": False}
-    application.runtime_manager.readiness = runtime_ready
-    release = threading.Event()
-    class Handoff:
-        calls = 0
-        def readiness(self):
-            self.calls += 1
-            release.wait(3)
-            return {"ready": True}
-    handoff = Handoff()
-    application.adult_handoff = handoff
-    api = create_app(application)
-    ready = next(route.endpoint for route in api.routes if route.path == "/ready")
-    async def run():
-        started = time.monotonic()
-        first = asyncio.create_task(ready())
-        second = asyncio.create_task(ready())
-        try:
-            await asyncio.sleep(0.05)
-            assert time.monotonic() - started < 0.8, "sync handoff blocked the event loop"
-            results = await asyncio.gather(first, second)
-            assert all(not result["dependencies"]["adult_handoff"]["ready"] for result in results)
-            assert handoff.calls == 1
-            assert time.monotonic() - started < 2.5
-            # Timeout must not abandon the native owner or spawn another probe.
-            third = asyncio.create_task(ready())
-            await asyncio.sleep(0.05)
-            release.set()
-            result = await third
-            assert result["dependencies"]["adult_handoff"]["ready"] is True
-            assert handoff.calls == 1
-        finally:
-            release.set()
-            await asyncio.gather(first, second, return_exceptions=True)
-            await application.runtime_manager.close()
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("outcome", ["ready", "simulated", "error"])
-def test_async_handoff_readiness_keeps_readiness_contract(outcome):
-    application, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
-    class Handoff:
-        async def readiness(self):
-            if outcome == "error":
-                raise OSError("PRIVATE_TRANSPORT_DETAIL")
-            return {"ready": True, "simulated": outcome == "simulated"}
-    application.adult_handoff = Handoff()
-    api = create_app(application)
-    ready = next(route.endpoint for route in api.routes if route.path == "/ready")
-    try:
-        status = asyncio.run(ready())["dependencies"]["adult_handoff"]
-        assert status["ready"] is (outcome == "ready")
-        assert "PRIVATE_TRANSPORT_DETAIL" not in json.dumps(status)
-    finally:
-        asyncio.run(application.runtime_manager.close())
+def test_safe_health_describes_only_local_policy():
+    app, *_ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
+    api = create_app(app)
+    endpoint = next(route.endpoint for route in api.routes if getattr(route, "path", None) == "/health/safe")
+    result = endpoint()
+    assert result == {"safety_policy": "canonical_local_stop", "fail_closed": True}
+    assert "safe" not in result
+    assert "adult_handoff" not in result

@@ -28,13 +28,13 @@ BENIGN = [
 
 @pytest.mark.parametrize("text", COMMANDS)
 def test_direct_caregiver_command_is_request_not_new_severity(text):
-    assert classify_intent(text) == "request_adult"
+    assert classify_intent(text) == "help_request"
     assert SafetyClassifier().classify(text).severity == "none"
 
 
 @pytest.mark.parametrize("text", BENIGN)
 def test_parent_mentions_and_advice_are_not_call_requests(text):
-    assert classify_intent(text) != "request_adult"
+    assert classify_intent(text) != "help_request"
 
 
 def event(kind, seq):
@@ -69,9 +69,9 @@ def test_actual_request_path_does_not_generate_or_claim_delivery(text, available
             if app.bounded_s2s is not None:
                 app.bounded_s2s.run_text_turn = no_generation
             result = await app.receive_async(event("SpeechReceived", 2), text)
-            assert result["reason"] == "adult_handoff_delivery_failed"
-            assert state.mode == "safety_handoff" and state.incident_id
-            assert len(app.adult_handoff.outbox) == 1
+            assert result["reason"] == "help_requested"
+            assert state.mode == "safety_stop" and state.safety_severity == "concern"
+            assert not hasattr(app, "adult_handoff")
             assert played == ["PHRASE_091"] and "PHRASE_089" not in played
             assert not app.conversation_contexts
         finally:
@@ -80,7 +80,7 @@ def test_actual_request_path_does_not_generate_or_claim_delivery(text, available
 
 
 @pytest.mark.parametrize("text", ["Как позвать маму?", "В сказке герой позвал маму"])
-def test_advice_or_fiction_does_not_force_handoff_in_actual_app(text):
+def test_advice_or_fiction_does_not_force_local_stop_in_actual_app(text):
     async def run():
         app, *_ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
         try:
@@ -89,8 +89,9 @@ def test_advice_or_fiction_does_not_force_handoff_in_actual_app(text):
             state.mode = "exhibition_name_capture"
             app.safety_classifier = gate(True)
             await app.receive_async(event("SpeechReceived", 2), text)
-            assert state.mode != "safety_handoff"
-            assert not state.incident_id and not app.adult_handoff.outbox
+            assert state.mode != "safety_stop"
+            assert "incident_id" not in state.snapshot()
+            assert not hasattr(app, "adult_handoff")
         finally:
             await app._cleanup_session_resources("synthetic-caregiver")
     asyncio.run(run())

@@ -1,3 +1,5 @@
+> Historical report: caregiver-delivery and adult-resolution behavior described below has been removed. Current local-only behavior is documented in [OPERATIONS.md](OPERATIONS.md#local-safety-response).
+
 # MISHKA — статус устранения критического аудита
 
 Дата: 2026-10-26. Источник требований: [критический архитектурный аудит 24.10](https://app.notion.com/p/402a5543e6598191ad12dc11ba33ebd5?pvs=204), проверенный baseline `d8af32c40adacabdb28e84b1cc766cc0f20f6782`. Это инвентаризация уже выполненной работы, без новой проверки оборудования или переоценки всего проекта.

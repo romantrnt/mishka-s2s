@@ -1,3 +1,5 @@
+> Historical report: caregiver-delivery and adult-resolution behavior described below has been removed. Current local-only behavior is documented in [OPERATIONS.md](OPERATIONS.md#local-safety-response).
+
 # Ожидание взаимодействия и idle, 15 ноября 2026
 
 Это отдельная программная delta поверх локального `a5d4c0e`, не установка на стенд и не клиническая приёмка.

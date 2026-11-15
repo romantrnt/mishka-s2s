@@ -1847,11 +1847,11 @@ class SoundDevicePlaybackController:
 
     async def stop(self):
         self._generation += 1
+        stream = self._stream
         io_future = self._io_future
         if io_future is not None and not io_future.done():
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await asyncio.shield(io_future)
-        stream = self._stream
         if stream is not None:
             await self._close_stream(stream)
 
@@ -2062,6 +2062,8 @@ class AudioSynthesisQueue:
         self.error=None
         self.next_chunk_index=0
         self.session_id=session_id; self.token=token; self.closed=False
+        self._session_event = self.cancel.events.get(session_id)
+        self._cleanup_ownership_guard = None
         self.owner=f"s2s-tts:{session_id}:{token}"
         self.turn_id=f"{session_id}:turn:{token}"
         self.queued_bytes=0; self.submitted_chunks=0; self.cancelled_chunks=0
@@ -2218,9 +2220,13 @@ class AudioSynthesisQueue:
         if self.worker is not None and not self.worker.done():
             await self.worker
         if self.error is not None: raise self.error
-    async def abort(self,session_id, *, invalidate=True):
+    async def abort(self,session_id, *, invalidate=True, ownership_guard=None):
         self.metrics.event("audio_cancelled", reason="barge_in_or_reset")
-        if invalidate: self.cancel.cancel(session_id)
+        ownership_guard = ownership_guard or self._cleanup_ownership_guard
+        owned = self.cancel.events.get(session_id) is self._session_event
+        if invalidate and owned and not self.cancel.cancelled(session_id, self.token):
+            self.cancel.cancel(session_id)
+        generation = self.cancel.tokens.get(session_id)
         self.closed=True
         self._drain("cancelled")
         if self.worker and not self.worker.done():
@@ -2228,7 +2234,10 @@ class AudioSynthesisQueue:
             with contextlib.suppress(asyncio.CancelledError): await self.worker
         self._drain("cancelled")
         self._cancel_open_ownership("cancelled")
-        await self.playback.stop()
+        if (owned and self.cancel.events.get(session_id) is self._session_event
+                and self.cancel.tokens.get(session_id) == generation
+                and (ownership_guard is None or ownership_guard())):
+            await self.playback.stop()
     def _drain(self, terminal_state: str = "cancelled") -> int:
         drained=0
         while True:
@@ -2478,33 +2487,67 @@ class LocalS2SPipeline:
                 self.pending_tasks.pop(session_id, None)
                 self.pending_started_at.pop(session_id, None)
 
-    async def cancel_output(self, session_id: str) -> None:
+    async def _cancel_conversation_owner(self, session_id, conversation, scope, ownership_guard):
+        method = conversation.cancel_session
+        parameters = inspect.signature(method).parameters
+        kwargs = {}
+        if "_scope" in parameters:
+            kwargs["_scope"] = scope
+        elif not ownership_guard():
+            return
+        if "ownership_guard" in parameters:
+            kwargs["ownership_guard"] = ownership_guard
+        await method(session_id, **kwargs)
+
+    async def cancel_output(self, session_id: str, *, ownership_guard=None) -> None:
         """Cancel response work without discarding the currently collecting utterance."""
         self.generations[session_id] = self.generations.get(session_id, 0) + 1
+        generation, pipeline = self.generations[session_id], self.ingress.get(session_id)
+        conversation = self.conversation
+        capture_scope = getattr(conversation, "_capture_cancel_scope", None)
+        scope = capture_scope(session_id) if callable(capture_scope) else None
+        def current():
+            return (self.generations.get(session_id) == generation
+                and self.ingress.get(session_id) is pipeline and session_id not in self.pending_tasks
+                and (ownership_guard is None or ownership_guard()))
         pending = self.pending_tasks.pop(session_id, None)
         self.pending_started_at.pop(session_id, None)
         if pending is not None and not pending.done() and pending is not asyncio.current_task():
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pending
-        await self.conversation.cancel_session(session_id)
+        await self._cancel_conversation_owner(session_id, conversation, scope, current)
 
-    async def cancel_session(self, session_id: str) -> None:
+    def close_capture(self, session_id: str) -> None:
+        """Revoke captured PCM synchronously before provider cleanup can yield."""
         self.generations[session_id] = self.generations.get(session_id, 0) + 1
         pipeline = self.ingress.pop(session_id, None)
         if pipeline is not None:
             pipeline.reset()
+
+    async def cancel_session(self, session_id: str, *, ownership_guard=None) -> None:
+        self.close_capture(session_id)
+        generation = self.generations[session_id]
+        conversation = self.conversation
+        capture_scope = getattr(conversation, "_capture_cancel_scope", None)
+        scope = capture_scope(session_id) if callable(capture_scope) else None
+        def current():
+            return (self.generations.get(session_id) == generation
+                and session_id not in self.ingress and session_id not in self.pending_tasks
+                and (ownership_guard is None or ownership_guard()))
         pending = self.pending_tasks.pop(session_id, None)
         self.pending_started_at.pop(session_id, None)
         if pending is not None and not pending.done() and pending is not asyncio.current_task():
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pending
-        await self.conversation.cancel_session(session_id)
+        await self._cancel_conversation_owner(session_id, conversation, scope, current)
         # A terminal session must not retain a generation tombstone.  New
         # input starts a fresh generation; stale completions are already
         # cancelled/awaited above.
-        self.generations.pop(session_id, None)
+        if (self.generations.get(session_id) == generation
+                and session_id not in self.ingress and session_id not in self.pending_tasks):
+            self.generations.pop(session_id, None)
 
 class BoundedConversationEngine:
     def __init__(self,llm,tts,voice,playback,config=None,metrics=None,*,allow_quick_replies=None,profile=None,settings=None,lifecycle_hook=None):
@@ -2851,17 +2894,38 @@ class BoundedConversationEngine:
             raise BaseExceptionGroup("Session cleanup was incomplete", errors)
         return self.resource_snapshot()
 
-    async def cancel_session(self,session_id):
-        self.cancel.cancel(session_id)
-        task = self.active_tasks.get(session_id)
+    def _capture_cancel_scope(self, session_id):
+        return (self.active_tasks.get(session_id), self.active_queues.get(session_id),
+                getattr(self.cancel, "tokens", {}).get(session_id))
+
+    async def cancel_session(self,session_id, *, ownership_guard=None, _scope=None):
+        task, queue, accepted_generation = self._capture_cancel_scope(session_id) if _scope is None else _scope
+        authorized = (getattr(self.cancel, "tokens", {}).get(session_id) == accepted_generation
+                and (ownership_guard is None or ownership_guard()))
+        generation = accepted_generation
+        if authorized:
+            self.cancel.cancel(session_id)
+            generation = getattr(self.cancel, "tokens", {}).get(session_id)
+        def current():
+            return (authorized and getattr(self.cancel, "tokens", {}).get(session_id) == generation
+                and (self.active_tasks.get(session_id) is task or session_id not in self.active_tasks)
+                and (self.active_queues.get(session_id) is queue or session_id not in self.active_queues)
+                and (ownership_guard is None or ownership_guard()))
+        if isinstance(queue, AudioSynthesisQueue):
+            # The old turn may call abort from its cancellation handler too.
+            # Keep the same scope fence on that captured queue's final stop.
+            queue._cleanup_ownership_guard = current
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError): await task
-        if task is None or task.done():
+        if self.active_tasks.get(session_id) is task and (task is None or task.done()):
             self.task_started_at.pop(session_id, None)
-        queue = self.active_queues.get(session_id)
         if queue is not None:
-            await queue.abort(session_id, invalidate=True)
+            if "ownership_guard" in inspect.signature(queue.abort).parameters:
+                await queue.abort(session_id, invalidate=False, ownership_guard=current)
+            elif current():
+                await queue.abort(session_id, invalidate=False)
             if self.active_queues.get(session_id) is queue:
                 self.active_queues.pop(session_id, None)
-        await self.playback.stop()
+        if current():
+            await self.playback.stop()

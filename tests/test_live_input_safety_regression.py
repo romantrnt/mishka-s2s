@@ -45,7 +45,7 @@ async def ready_app(mode="exhibition_name_capture"):
     ({"severity": "none", "confidence": True}, "input_safety_invalid"),
     ({"severity": "none", "confidence": .4}, "input_safety_uncertain"),
 ])
-def test_wire_gate_failure_neither_accepts_name_nor_invents_incident(outcome, code):
+def test_wire_gate_failure_neither_accepts_name_nor_invents_danger(outcome, code):
     async def run():
         app, played = await ready_app()
         app.safety_classifier = wire_gate(outcome)
@@ -55,8 +55,7 @@ def test_wire_gate_failure_neither_accepts_name_nor_invents_incident(outcome, co
             assert result["reason"] == "input_safety_retry"
             assert state.mode == "exhibition_name_capture"
             assert state.display_name is None and not state.onboarding_name_collected
-            assert state.incident_id is None and state.safety_severity == "none"
-            assert not app.adult_handoff.outbox
+            assert state.safety_severity == "none"
             assert played == ["PHRASE_074"]
             diagnostic = [x for x in app.canonical_diagnostics if x["kind"] == "input_safety_decision"][-1]
             safe = HardwareIntegrationStand._safe_diagnostic_item(diagnostic)
@@ -87,7 +86,7 @@ def test_unverified_none_retries_without_normal_routing(mode, text):
             result = await app.receive_async(event("SpeechReceived", 2), text)
             state = app.canonical_runtime.sessions[SID]
             assert result["reason"] == "input_safety_retry" and state.mode == mode
-            assert not state.incident_id and not app.conversation_contexts
+            assert state.safety_severity == "none" and not app.conversation_contexts
             assert played == ["PHRASE_074"]
         finally: await app._cleanup_session_resources(SID)
     asyncio.run(run())
@@ -104,7 +103,7 @@ def test_gate_failure_preserves_approved_story_and_pending_game_choice():
             result = await app.receive_async(event("SpeechReceived", 2), "Привет")
             assert result["reason"] == "input_safety_retry"
             assert state.mode == mode and state.substate == previous
-            assert not state.incident_id and not played
+            assert state.safety_severity == "none" and not played
         finally: await app._cleanup_session_resources(SID)
     for mode in ("fixed_story_playing", "game_active"): asyncio.run(run(mode))
 
@@ -122,10 +121,10 @@ def test_retry_does_not_suppress_detected_danger(text, outcome, severity):
         try:
             await app.receive_async(event("SpeechReceived", 2), text)
             state = app.canonical_runtime.sessions[SID]
-            assert state.mode == "safety_handoff" and state.safety_severity == severity
-            assert state.incident_id and app.adult_handoff.outbox
+            assert state.mode == ("safety_stop" if severity == "urgent" else "support_intake")
+            assert state.safety_severity == severity
             assert "PHRASE_089" not in played
-            assert "PHRASE_091" in played
+            assert ("PHRASE_091" if severity == "urgent" else "PHRASE_071") in played
             safe = [HardwareIntegrationStand._safe_diagnostic_item(x) for x in app.canonical_diagnostics]
             assert any(x.get("kind") == "input_safety_decision" for x in safe)
         finally: await app._cleanup_session_resources(SID)
@@ -149,8 +148,7 @@ def test_explicit_adult_request_survives_classifier_failure(outcome, untrusted_s
         try:
             await app.receive_async(event("SpeechReceived", 2, {"_stt_untrusted": untrusted_stt}), "Позови взрослого")
             state = app.canonical_runtime.sessions[SID]
-            assert state.mode == "safety_handoff" and state.incident_id
-            assert app.adult_handoff.outbox
+            assert state.mode == "safety_stop" and state.safety_severity == "concern"
             assert played == ["PHRASE_091"]
             assert state.display_name is None
         finally: await app._cleanup_session_resources(SID)
@@ -181,12 +179,10 @@ def test_explicit_help_survives_ordinary_revision_but_not_session_end(interrupti
             result = await task
             if interruption == "HandsetPlaced":
                 assert result["reason"] == "stale_session_generation"
-                assert not app.adult_handoff.outbox
             else:
                 state = app.canonical_runtime.sessions[SID]
-                assert state.incident_id and state.mode == "safety_handoff"
-                assert len(app.adult_handoff.outbox) == 1
-                assert result["reason"] == "adult_handoff_delivery_failed"
+                assert state.mode == "safety_stop" and state.safety_severity == "concern"
+                assert result["reason"] == "help_requested"
         finally:
             release.set()
             if task is not None: await asyncio.gather(task, return_exceptions=True)

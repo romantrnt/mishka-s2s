@@ -56,7 +56,7 @@ class EngagementIdleMixin:
         if event.event_type=='ButtonReleased' and not any(word in reason for word in ('stale','duplicate','untrusted','invalid','rejected')):
             self._engagement_pressed.get(sid,set()).discard(event.payload.get('button_id'))
         if (state is None or state.interaction_idle or state.safety_severity=='urgent'
-                or state.mode in {'idle','soft_end','session_closed','safety_handoff'}):
+                or state.mode in {'idle','soft_end','session_closed','safety_stop'}):
             self._drop_engagement(sid)
             return
         if accepted and event.event_type in {'ClientProfileReady','ClientProfileCleared','IdentityReadyExpired','IdentityAuthorizationExpired','SessionReset','SessionCancel','HardwareDisconnected'}:
@@ -110,7 +110,7 @@ class EngagementIdleMixin:
         state=self.canonical_runtime.sessions.get(sid)
         return bool(owner and owner['nonce']==nonce and owner['scope']==self._engagement_scope(sid)
             and state is not None and not state.interaction_idle and state.safety_severity!='urgent'
-            and state.mode!='safety_handoff' and not self._engagement_ingress.get((sid,self._engagement_scope(sid)),0) and not owner['busy'] and not self._engagement_busy(sid)
+            and state.mode!='safety_stop' and not self._engagement_ingress.get((sid,self._engagement_scope(sid)),0) and not owner['busy'] and not self._engagement_busy(sid)
             and self.monotonic_now()>=owner['deadline'])
 
     async def expire_engagement_sessions(self):

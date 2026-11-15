@@ -44,9 +44,12 @@ async def test_fear_answer_has_same_semantics_for_voice_and_buttons(source,answe
         assert h.app.audio.commands[-1]['response_id']=='PHRASE_085'
         result=await h.answer(answer,source)
         if answer=='yes':
-            assert h.state.mode=='safety_handoff'
+            assert h.state.mode=='safety_stop'
             assert h.state.safety_severity=='concern'
-            assert h.app.audio.commands[-1]['response_id']=='PHRASE_091' # no real adult delivery
+            assert result['reason']=='help_requested'
+            assert h.app.audio.commands[-1]['response_id']=='PHRASE_091'
+            assert 'incident_id' not in h.state.snapshot()
+            assert not any(effect.get('type')=='adult_handoff_request' for effect in result['outputs'])
         else:
             assert result['reason']=='support_declined' and h.state.mode=='root_menu'
             assert h.app.audio.commands[-1]['response_id']=='PHRASE_087'
@@ -93,7 +96,7 @@ async def test_onboarding_decline_does_not_hide_danger():
     try:
         await h.send('HandsetLifted');h.state.mode='exhibition_name_capture'
         await h.send('SpeechReceived',text='Не хочу говорить, я не могу дышать')
-        assert h.state.mode=='safety_handoff' and h.state.safety_severity=='urgent'
+        assert h.state.mode=='safety_stop' and h.state.safety_severity=='urgent'
     finally:await h.close()
 
 @pytest.mark.asyncio

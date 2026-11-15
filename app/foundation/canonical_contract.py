@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 from .game_engine import GameState, AVAILABLE_GAME_SPECS, start as start_game, advance as advance_game, desired_buttons, pause as pause_game, arm_wait, next_deadline, timer_step, begin_demonstration
 from .age_policy import age_details, policy_for, policy_for_band
+from .voice_catalog import load_phrase_catalog
 
 RAM_TTL_SECONDS = 300
 EXHIBITION_WELCOME_DELAY_SECONDS = 5.0
@@ -64,7 +65,7 @@ STATE_NAMES = frozenset({
     "story_resume_announcement", "story_suspended_ram", "support_intake", "schedule_navigation",
     "mood_report", "complaint_intake", "personal_story_theme",
     "personal_story_generating", "personal_story_validating", "personal_story_playing",
-    "wellbeing_check", "safety_handoff", "bear_dialogue", "schedule_weather",
+    "wellbeing_check", "safety_stop", "bear_dialogue", "schedule_weather",
     "soft_end", "session_closed",
 })
 ALLOWED_EVENTS = frozenset({
@@ -73,7 +74,7 @@ ALLOWED_EVENTS = frozenset({
     "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
     "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
     "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected", "HardwareReconnected",
-    "SessionCancel", "SessionReset", "InteractionIdleExpired", "AdultHandoffAcknowledged", "AdultHandoffFailed", "AdultResolved",
+    "SessionCancel", "SessionReset", "InteractionIdleExpired",
     "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep",
 })
 # Buttons 5 (help) and 7 (exit) preempt game scoring.
@@ -285,7 +286,6 @@ class CanonicalState:
     welcome_deadline_monotonic: float | None = None
     welcome_status: str = "idle"
     safety_severity: str = "none"
-    incident_id: str | None = None
     active_story_id: str | None = None
     game_engine_state: GameState | None = None
     game_target: int | None = None
@@ -323,16 +323,24 @@ class CanonicalState:
 
 def canonical_state_nodes() -> dict[str, dict[str, Any]]:
     """Minimum scenario metadata required by the product contract."""
-    return {
+    nodes = {
         name: {
             "state_version": 1,
             "allowed_events": sorted(ALLOWED_EVENTS), "expected_input": "contextual",
             "lighting_preset": "READY", "audio_policy": "application_owned",
             "timeout_policy": "explicit", "persistence_policy": "minimal",
             "success_transition": "explicit", "retry_transition": "explicit",
-            "cancel_transition": "soft_end", "error_transition": "safe_stop",
+            "cancel_transition": "soft_end", "error_transition": "safety_stop",
         } for name in sorted(STATE_NAMES)
     }
+
+    nodes["safety_stop"].update(
+        expected_input="handset_down_or_reset", lighting_preset="SAFE_STOP",
+        audio_policy="single_local_guidance", timeout_policy="none",
+        persistence_policy="local_interaction_only", success_transition="idle",
+        retry_transition="safety_stop", cancel_transition="idle",
+    )
+    return nodes
 
 
 REQUIRED_EXHIBITION_PHRASES = (
@@ -446,7 +454,7 @@ class VoiceManifest:
     def _all_validated_assets(self) -> list[dict[str, Any]]:
         # The manifest and its hashes are immutable for a process lifetime.
         # Cache the expensive full WAV inspection so /ready and WebPanel
-        # refreshes cannot repeatedly decode all 106 files.
+        # refreshes cannot repeatedly decode the recorded files.
         if self._validated_cache is not None:
             return [dict(item) for item in self._validated_cache]
         result: list[dict[str, Any]] = []
@@ -549,11 +557,11 @@ class VoiceManifest:
             errors.append({"code": "missing_source_catalog", "source_catalog": source_ref})
         else:
             try:
-                lines = [line.strip() for line in source_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-                transcripts = [str(item.get("transcript")) for item in raw]
-                if lines != transcripts:
+                catalog = load_phrase_catalog(source_path)
+                transcripts = {str(item.get("phrase_id")): str(item.get("transcript")) for item in raw}
+                if catalog != transcripts:
                     errors.append({"code": "source_catalog_divergence", "source_catalog": source_ref})
-            except (OSError, UnicodeError) as exc:
+            except (OSError, UnicodeError, ValueError) as exc:
                 errors.append({"code": "source_catalog_unreadable", "detail": str(exc)[:120]})
         audio_root = self.path.parent / "voice"
         orphan = sorted(str(asset.relative_to(self.path.parent)) for asset in audio_root.rglob("*.wav")
@@ -913,9 +921,6 @@ class CanonicalRuntime(SceneMenuMixin):
 
 
     def reset(self, session_id: str) -> None:
-        state = self.sessions.get(session_id)
-        if state is not None and state.mode == "safety_handoff" and state.safety_severity == "urgent":
-            return
         self.sessions.pop(session_id, None)
 
     def _new_state(self, session_id: str, profile: Mapping[str, Any] | None) -> CanonicalState:
@@ -950,7 +955,7 @@ class CanonicalRuntime(SceneMenuMixin):
                               game_level=max(0, min(9, prior_level)))
 
     def clear_identity(self, state: CanonicalState) -> None:
-        """Scrub private/derived identity without resolving a safety incident."""
+        """Scrub private and derived identity independently of local safety mode."""
         state.interaction_idle = False
         fresh = self._new_state(state.session_id, None)
         for name in (
@@ -977,6 +982,40 @@ class CanonicalRuntime(SceneMenuMixin):
         state.identity_ready_deadline = None
         state.identity_expires_monotonic = None
         state.identity_capabilities = []
+
+    def _enter_local_safety(self, state: CanonicalState, *, severity: str,
+                            reason: str, guidance: bool = True) -> dict[str, Any]:
+        state.mode = "safety_stop"
+        state.safety_severity = severity
+        state.expected_inputs = ["handset_down", "reset"]
+        state.pending_tool = state.pending_mode = state.support_question_kind = None
+        state.active_story_id = state.active_game_id = None
+        state.welcome_status = "cancelled"
+        state.welcome_t0_monotonic = state.welcome_deadline_monotonic = None
+        state.dialogue_memory.clear()
+        state.state_version += 1
+        effects = [{"type": "audio_stop"}, {"type": "capture_close"},
+                   {"type": "lighting_preset", "preset": "SAFE_STOP"}]
+        if guidance:
+            effects.append({"type": "speak", "phrase_id": "PHRASE_091"})
+        return self._decision(state, effects, reason, clear_audio=True)
+
+    def _finish_local_safety(self, state: CanonicalState, event: CanonicalEvent) -> dict[str, Any]:
+        prior_deadline = state.welcome_deadline_monotonic
+        fresh = self._new_state(state.session_id, None)
+        fresh.handset = "down" if event.event_type == "HandsetPlaced" else state.handset
+        fresh.mode = "idle" if fresh.handset == "down" else "session_closed"
+        fresh.expected_inputs = ["handset_up"] if fresh.handset == "down" else ["handset_down"]
+        fresh.state_version = state.state_version + 1
+        fresh.last_sequence_by_source = dict(state.last_sequence_by_source)
+        fresh.seen_correlations = set(state.seen_correlations)
+        self.sessions[state.session_id] = fresh
+        return self._decision(fresh, [
+            {"type": "audio_stop"}, {"type": "capture_close"},
+            {"type": "welcome_timer_cancelled", "deadline_monotonic": prior_deadline},
+            {"type": "exhibition_effects_cancelled"}, {"type": "identity_cleared"},
+            {"type": "lighting_dark"},
+        ], "local_safety_closed", reset_session=True, clear_audio=True)
 
     def _support_no(self, state):
         if state.support_question_kind != "fear":
@@ -1035,8 +1074,9 @@ class CanonicalRuntime(SceneMenuMixin):
         effects = self._prepare_scene_menu(state, effects, reason)
         # Acknowledgements, audio completion and handset changes cannot answer
         # an exit question. Its explicit 6/7 choices change substate/mode first.
-        if not (state.mode == "game_active"
-                and state.substate == "game_exit_confirmation"):
+        if (not (state.mode == "game_active"
+                 and state.substate == "game_exit_confirmation")
+                and (state.mode != "safety_stop" or effects)):
             state.substate = reason
         state.timeout_at = state.dialogue_memory.expires_at
         audio_effects = [item for item in effects if item.get("type") in {
@@ -1109,9 +1149,6 @@ class CanonicalRuntime(SceneMenuMixin):
     def handle(self, event: CanonicalEvent, profile: Mapping[str, Any] | None = None, *,
                transient_text: str | None = None,
                _voice_admission: _VoiceAdmission | None = None,
-               adult_resolution_authorized: bool = False,
-               handoff_ack_authorized: bool = False,
-               handoff_failure_authorized: bool = False,
                dialogue_fallback_authorized: bool = False,
                personal_story_authorized: bool = False,
                identity_event_authorized: bool = False,
@@ -1136,14 +1173,6 @@ class CanonicalRuntime(SceneMenuMixin):
             return self._decision(state, [], "interaction_idle_untrusted")
         if event.event_type == "GameTimer" and not game_timer_authorized:
             return self._decision(state, [], "game_timer_untrusted")
-        if event.event_type == "AdultResolved" and not adult_resolution_authorized:
-            return self._decision(state, [], "adult_resolution_untrusted")
-        if event.event_type == "AdultHandoffAcknowledged" and not handoff_ack_authorized:
-            return self._decision(state, [], "handoff_ack_untrusted")
-        if event.event_type == "AdultHandoffAcknowledged" and event.payload.get("simulated", False) is not False:
-            return self._decision(state, [], "handoff_ack_simulated")
-        if event.event_type == "AdultHandoffFailed" and not handoff_failure_authorized:
-            return self._decision(state, [], "handoff_failure_untrusted")
         if event.event_type == "PersonalStoryReady" and not personal_story_authorized:
             return self._decision(state, [], "personal_story_result_untrusted")
         if event.event_type == "DialogueFallback" and not dialogue_fallback_authorized:
@@ -1158,6 +1187,47 @@ class CanonicalRuntime(SceneMenuMixin):
                     or _voice_admission.key != (event.session_id, event.source, event.sequence, event.correlation_id)):
                 raise ValueError("invalid voice admission")
             _voice_admission.consumed = True
+        if state.mode == "safety_stop":
+            if event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset"}:
+                return self._finish_local_safety(state, event)
+            if event.event_type == "VoiceIntentReady":
+                severity = str(event.payload.get("safety_severity", "none"))
+                if severity == "urgent" and state.safety_severity != "urgent":
+                    state.safety_severity = "urgent"
+                    state.state_version += 1
+                    return self._decision(state, [], "safety_severity_raised")
+            elif event.event_type == "HandsetLifted" and state.handset != "up":
+                state.handset = "up"
+                state.state_version += 1
+                return self._decision(state, [], "safety_stop_handset_lifted")
+            elif event.event_type in {"AudioStarted", "AudioCompleted", "AudioFailed"}:
+                # Only the current local guide owns audio state. Late playback
+                # callbacks from the interrupted scene cannot alter this stop.
+                if (state.active_audio_id == "PHRASE_091"
+                        and event.payload.get("response_id") == "PHRASE_091"
+                        and state.playback_lease
+                        and event.payload.get("playback_lease") == state.playback_lease):
+                    if event.event_type == "AudioStarted":
+                        if state.audio_status != "playing":
+                            state.audio_status = "playing"
+                            state.state_version += 1
+                        return self._decision(state, [], "safety_guidance_started")
+                    failed = event.event_type == "AudioFailed"
+                    state.audio_status = "failed" if failed else "finished"
+                    state.audio_failure_code = str(event.payload.get("error_code") or "audio_failed")[:80] if failed else None
+                    state.state_version += 1
+                    return self._decision(state, [], "safety_guidance_failed" if failed else "safety_guidance_finished", clear_audio=True)
+            if event.event_type not in {
+                "HardwareDisconnected", "HardwareReconnected", "ClientProfileCleared",
+                "IdentityReadyExpired", "IdentityAuthorizationExpired",
+            }:
+                # Sequence/correlation admission remains live; scenario state,
+                # revision, LEDs and the one guidance recording stay unchanged.
+                return {"reason": "safety_stop_active", "state": state.snapshot(), "effects": [],
+                        "guards": {"expected_state_version": state.state_version}, "reset_session": False}
+        if event.event_type == "HardwareDisconnected":
+            return self._enter_local_safety(state, severity=state.safety_severity,
+                                            reason="hardware_disconnected", guidance=False)
         if event.event_type in {"ButtonPressed", "ButtonReleased"}:
             button = int(event.payload["button_id"])
             if event.event_type == "ButtonPressed" and button not in state.accepted_buttons_down:
@@ -1174,7 +1244,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.mode = "dialogue_memory_expired"
         effects: list[dict[str, Any]] = []
         if event.event_type == "InteractionIdleExpired":
-            if state.safety_severity == "urgent" or state.mode == "safety_handoff":
+            if state.safety_severity == "urgent" or state.mode == "safety_stop":
                 return self._decision(state, [], "interaction_idle_safety_preserved")
             state.interaction_idle = True
             if self.exhibition_mode:
@@ -1233,7 +1303,7 @@ class CanonicalRuntime(SceneMenuMixin):
             self.clear_identity(state)
             state.state_version += 1
             effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}]
-            if state.safety_severity == "urgent" and state.mode == "safety_handoff":
+            if state.mode == "safety_stop":
                 return self._decision(state, effects + [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "profile_cleared_safety_preserved")
             state.mode = "session_closed" if state.handset == "up" else "idle"
             state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
@@ -1247,7 +1317,7 @@ class CanonicalRuntime(SceneMenuMixin):
             self.clear_identity(state)
             state.state_version += 1
             effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}]
-            if state.safety_severity == "urgent" and state.mode == "safety_handoff":
+            if state.mode == "safety_stop":
                 return self._decision(state, effects + [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "identity_expired_safety_preserved")
             state.mode = "session_closed" if state.handset == "up" else "idle"
             state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
@@ -1256,13 +1326,6 @@ class CanonicalRuntime(SceneMenuMixin):
             state.handset, state.mode, state.expected_inputs = "down", "idle", ["handset_up"]
             state.state_version += 1
             return self._decision(state, [{"type": "lighting_dark"}], "closed_handset_placed")
-        if (state.safety_severity == "urgent" and state.mode == "safety_handoff"
-                and event.event_type in {"SessionCancel", "SessionReset", "AnonymousStart"}):
-            # Administrative/session lifecycle operations cannot silently
-            # stand in for an adult's explicit incident resolution.
-            state.state_version += 1
-            self.clear_identity(state)
-            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
         if event.event_type in {"SessionCancel", "SessionReset"}:
             self.clear_identity(state)
             state.mode = ("session_closed" if state.handset == "up" else "idle") if self.optional_identity else ("soft_end" if event.event_type == "SessionCancel" else "session_closed")
@@ -1519,11 +1582,6 @@ class CanonicalRuntime(SceneMenuMixin):
                            if failed else [])
                 return self._decision(state, effects,
                     "game_exit_audio_failed" if failed else "game_exit_audio_finished", clear_audio=True)
-            if (event.event_type == "AudioCompleted" and state.mode == "safety_handoff"
-                    and response_id in {"PHRASE_089", "PHRASE_091"}):
-                state.audio_status = "finished"
-                state.state_version += 1
-                return self._decision(state, [], "handoff_audio_finished", clear_audio=True)
         if (event.event_type in {"AudioCompleted", "AudioFailed"} and state.mode == "personal_story_playing"
                 and event.payload.get("response_id") == "PERSONAL_STORY"):
             if (state.active_audio_id != "PERSONAL_STORY" or not event.payload.get("playback_lease")
@@ -1753,7 +1811,7 @@ class CanonicalRuntime(SceneMenuMixin):
             ], "fixed_story_finished", clear_audio=True)
         if event.event_type == "AudioFailed":
             state.audio_failure_code = str(event.payload.get("error_code") or event.payload.get("code") or "audio_failed")[:80]
-            if state.safety_severity == "urgent" or state.mode == "safety_handoff":
+            if state.safety_severity == "urgent" or state.mode == "safety_stop":
                 state.audio_status = "failed"
                 state.state_version += 1
                 return self._decision(state, [
@@ -1774,16 +1832,6 @@ class CanonicalRuntime(SceneMenuMixin):
             effects.append({"type": "lighting_dark"} if self.optional_identity else {"type": "lighting", "elements": [14], "state": 1})
             return self._decision(state, effects, "anonymous_started")
         if event.event_type == "HandsetPlaced":
-            if self.exhibition_mode and state.safety_severity == "urgent":
-                self.clear_identity(state)
-                state.handset = "down"
-                state.state_version += 1
-                state.expected_inputs = ["adult_resolution"]
-                return self._decision(state, [
-                    {"type": "audio_stop"}, {"type": "capture_close"},
-                    {"type": "lighting_preset", "preset": "SAFE_STOP"},
-                    {"type": "identity_cleared"},
-                ], "handset_down_safety_preserved")
             if self.exhibition_mode:
                 # Exhibition handset-down is a hard physical-session boundary.
                 # Do not enter clinical suspended RAM or preserve any dialogue.
@@ -1814,19 +1862,13 @@ class CanonicalRuntime(SceneMenuMixin):
                     {"type": "audio_stop"}, {"type": "capture_close"},
                     {"type": "welcome_timer_cancelled", "deadline_monotonic": state.welcome_deadline_monotonic},
                 ], "exhibition_standby")
-            if state.mode != "safety_handoff":
-                state.dialogue_memory.suspend(now)
+            state.dialogue_memory.suspend(now)
             if state.mode == "game_active":
                 effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "game_continue_visual"}]
                 if (state.substate != "game_exit_confirmation" and state.game_engine_state is not None
                         and state.game_engine_state.phase == "instruction"):
                     state.game_engine_state = begin_demonstration(state.game_engine_state, monotonic_now)
                     effects.append(self._game_lighting(state.game_engine_state))
-            elif state.mode == "safety_handoff":
-                # The safeguarding marker is not dialogue RAM: handset-down
-                # closes capture/audio but keeps the incident visible and
-                # awaiting adult resolution.
-                effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}]
             elif state.mode == "fixed_story_playing":
                 state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": int(event.payload.get("offset_ms", 0))}
                 state.mode = "story_suspended_ram"; effects = [{"type": "audio_stop"}, {"type": "capture_close"}]
@@ -1857,9 +1899,6 @@ class CanonicalRuntime(SceneMenuMixin):
                      "t0_monotonic": state.welcome_t0_monotonic,
                      "deadline_monotonic": state.welcome_deadline_monotonic},
                 ], "exhibition_handset_lifted")
-            if state.mode == "safety_handoff":
-                state.expected_inputs = ["adult_resolution"]
-                return self._decision(state, [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
             if state.mode == "schedule_weather":
                 state.expected_inputs = ["button", "speech", "handset_down"]
                 return self._decision(state, [{"type": "capture_open"},
@@ -1939,8 +1978,6 @@ class CanonicalRuntime(SceneMenuMixin):
             button = int(event.payload["button_id"])
             if self.exhibition_mode and state.mode in {"idle", "voice_welcome"}:
                 return self._decision(state, [], "exhibition_age_not_ready")
-            if state.mode == "safety_handoff":
-                return self._decision(state, [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
             if state.story_menu_skip_button == button:
                 return self._decision(state, [], "story_menu_hint_skip_held")
             if state.mode == "fixed_story_menu" and state.story_menu_hint_active and button != 5:
@@ -2135,10 +2172,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode == "wellbeing_check" and button == 5:
                 return self._decision(state, [{"type": "support_question", "question": "pain_or_discomfort"}], "wellbeing_repeat")
             if state.mode == "wellbeing_check" and button == 7:
-                if state.mode != "safety_handoff" or not state.incident_id:
-                    state.incident_id = uuid.uuid4().hex
-                state.mode, state.safety_severity, state.state_version = "safety_handoff", "concern", state.state_version + 1
-                return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}, {"type": "adult_handoff_request", "severity": "concern"}], "adult_handoff_requested")
+                return self._enter_local_safety(state, severity="concern", reason="help_requested")
             if state.mode == "wellbeing_check" and button == 1:
                 return self._support_no(state)
             if state.mode in {"idle", "visual_welcome", "anonymous_visual", "root_menu", "dialogue_memory_expired", "dialogue_suspended_ram", "voice_welcome", "automatic_mood_check", "awaiting_handset"}:
@@ -2262,29 +2296,15 @@ class CanonicalRuntime(SceneMenuMixin):
             severity = str(event.payload.get("safety_severity", "none"))
             if severity not in {"none", "concern", "urgent"}:
                 return self._decision(state, [], "invalid_safety_severity")
-            if state.safety_severity == "urgent" and state.mode == "safety_handoff":
-                # Follow-up speech can add context, but only AdultResolved may
-                # close or downgrade the incident. Retain no raw child audio.
-                state.dialogue_memory.bounded_turns.append({
-                    "kind": "safety_followup",
-                    "intent": str(event.payload.get("intent", "free_speech"))[:40],
-                    "severity": severity,
-                })
-                state.dialogue_memory.bounded_turns[:] = state.dialogue_memory.bounded_turns[-8:]
-                state.state_version += 1
-                return self._decision(state, [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
             if severity == "urgent":
-                if state.mode != "safety_handoff" or not state.incident_id:
-                    state.incident_id = uuid.uuid4().hex
-                state.mode, state.safety_severity, state.state_version = "safety_handoff", "urgent", state.state_version + 1
-                return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}, {"type": "adult_handoff_request", "severity": "urgent"}], "urgent_safety")
+                return self._enter_local_safety(state, severity="urgent", reason="urgent_safety")
             intent = str(event.payload.get("intent", "free_speech"))
             if intent == "input_retry":
                 if state.mode == "personal_welcome_listen" and state.audio_status == "failed":
                     return self._decision(state, [], "personal_welcome_audio_failed")
                 # A failed/uncertain classifier cannot authorize a command or
                 # identity capture, but it is not an adult-help request either.
-                # Preserve active incidents and already-approved story playback.
+                # Preserve current safety classification and approved story playback.
                 retry_modes = {
                     "exhibition_name_capture", "exhibition_age_selection",
                     "exhibition_menu_repeat_listen", "bear_dialogue",
@@ -2297,18 +2317,37 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.substate = prior_substate
                 result["state"]["substate"] = prior_substate
                 return result
-            if intent == "request_adult" or (state.mode == "wellbeing_check" and intent == "yes"):
-                if state.mode != "safety_handoff" or not state.incident_id:
-                    state.incident_id = uuid.uuid4().hex
-                state.mode, state.safety_severity, state.state_version = "safety_handoff", "concern", state.state_version + 1
-                return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}, {"type": "adult_handoff_request", "severity": "concern"}], "adult_requested")
+            if intent == "help_request" or (state.mode == "wellbeing_check" and intent == "yes"):
+                return self._enter_local_safety(state, severity="concern", reason="help_requested")
+            if severity == "concern":
+                # A disclosure is never consumed as a name, age, story theme
+                # or ordinary scene command, even during onboarding.
+                state.mode, state.safety_severity = "support_intake", "concern"
+                state.pending_tool = state.pending_mode = None
+                state.support_question_kind = None
+                state.active_story_id = state.active_game_id = None
+                state.game_target = None
+                state.game_parameters = {}
+                state.dialogue_memory.story_checkpoint = None
+                state.story_menu_hint_active = False
+                state.story_menu_skip_button = None
+                state.welcome_status = "cancelled"
+                state.welcome_t0_monotonic = state.welcome_deadline_monotonic = None
+                state.expected_inputs = (["speech", "button_5", "button_7", "handset_down"]
+                                         if state.handset == "up" else ["handset_up", "button_5"])
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "audio_stop"},
+                    {"type": "lighting_preset", "preset": "SUPPORT"},
+                    {"type": "support_response", "kind": "concern"},
+                ], "concern_support", clear_audio=True)
             if state.mode == "wellbeing_check" and intent == "no":
                 return self._support_no(state)
             if (self.exhibition_mode and state.mode in {"exhibition_name_capture", "exhibition_age_selection"}
                     and onboarding_declined(transient_text or "")):
                 # No fabricated slot, no repeated interrogation, no new identity.
                 return self._personal_welcome_menu(state, "exhibition_onboarding_declined")
-            if state.handset != "up" and state.mode not in {"safety_handoff"}:
+            if state.handset != "up":
                 return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "voice_requires_handset")
             if state.mode == "wellbeing_check" and state.handset != "up":
                 state.expected_inputs = ["handset_up", "button_5"]
@@ -2412,9 +2451,6 @@ class CanonicalRuntime(SceneMenuMixin):
                     {"type": "speak", "phrase_id": "PHRASE_108"},
                     {"type": "exhibition_onboarding_step", "step": "age_question"},
                 ], "exhibition_age_question_started", clear_audio=True)
-            if severity == "concern":
-                state.mode, state.safety_severity, state.state_version = "support_intake", "concern", state.state_version + 1
-                return self._decision(state, [{"type": "support_response", "kind": "concern"}, {"type": "adult_handoff_offer"}], "concern_support")
             if state.mode in {"support_intake", "wellbeing_check"}:
                 state.state_version += 1
                 return self._decision(state, [{"type": "support_response", "kind": intent}], "support_response")
@@ -2440,35 +2476,6 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode == "story_paused" and intent in {"stop", "free_speech"}:
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "story_returned_to_menu")
-        if event.event_type == "AdultHandoffFailed":
-            if (state.mode != "safety_handoff"
-                    or event.payload.get("incident_id") != state.incident_id):
-                return self._decision(state, [], "handoff_failure_ignored")
-            state.state_version += 1
-            return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_091"},
-                                          {"type": "lighting_preset", "preset": "SAFE_STOP"}],
-                                  "adult_handoff_delivery_failed")
-        if event.event_type == "AdultHandoffAcknowledged":
-            if (state.mode != "safety_handoff"
-                    or event.payload.get("incident_id") != state.incident_id):
-                return self._decision(state, [], "handoff_ack_ignored")
-            state.state_version += 1
-            return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_089"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}], "adult_handoff_acknowledged")
-        if event.event_type == "AdultResolved":
-            if state.mode != "safety_handoff":
-                return self._decision(state, [], "adult_resolved_ignored")
-            incident_id = event.payload.get("incident_id")
-            if not isinstance(incident_id, str) or not incident_id or incident_id != state.incident_id:
-                return self._decision(state, [], "adult_resolution_incident_mismatch")
-            state.mode, state.safety_severity, state.state_version = "root_menu", "none", state.state_version + 1
-            state.incident_id = None
-            return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"},
-                                          {"type": "adult_incident_closed", "incident_id": incident_id}], "adult_resolved")
-        if event.event_type == "HardwareDisconnected":
-            if state.mode != "safety_handoff" or not state.incident_id:
-                state.incident_id = uuid.uuid4().hex
-            state.mode, state.state_version = "safety_handoff", state.state_version + 1
-            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_preset", "preset": "SAFE_STOP"}], "hardware_disconnected")
         if event.event_type == "HardwareReconnected":
             state.state_version += 1
             return self._decision(state, [{"type": "hardware_reconnected", "reconcile_required": True}], "hardware_reconnected")

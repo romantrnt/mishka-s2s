@@ -9,9 +9,9 @@ from app.foundation.input_safety import InputSafetyDecision
 @pytest.mark.parametrize('wait_for_turn', [False, True])
 @pytest.mark.parametrize('text,severity,expected', [
     ('Хорошо', 'none', 'personal_welcome_listen'),
-    ('Мне угрожают', 'urgent', 'safety_handoff'),
-    ('Позови взрослого', 'none', 'safety_handoff'),
-    ('Мне грустно', 'concern', 'safety_handoff'),
+    ('Мне угрожают', 'urgent', 'safety_stop'),
+    ('Позови взрослого', 'none', 'safety_stop'),
+    ('Мне грустно', 'concern', 'support_intake'),
 ])
 def test_old_phase_stt_is_safety_only_after_retry(text, severity, expected, wait_for_turn):
     async def run():
@@ -70,8 +70,8 @@ def test_old_phase_stt_is_safety_only_after_retry(text, severity, expected, wait
 
 @pytest.mark.parametrize('text,severity,expected', [
     ('Хорошо', 'none', 'personal_welcome_listen'),
-    ('Мне угрожают', 'urgent', 'safety_handoff'),
-    ('Позови взрослого', 'none', 'safety_handoff'),
+    ('Мне угрожают', 'urgent', 'safety_stop'),
+    ('Позови взрослого', 'none', 'safety_stop'),
 ])
 @pytest.mark.parametrize('lifecycle_revoked', [False, True])
 def test_transport_phase_revoked_during_safety_await(text, severity, expected, lifecycle_revoked):
@@ -111,8 +111,8 @@ def test_transport_phase_revoked_during_safety_await(text, severity, expected, l
 @pytest.mark.parametrize('fragmented', ['speech', 'partial', 'preroll', 'preroll_flushed'])
 @pytest.mark.parametrize('text,severity,expected', [
     ('Хорошо', 'none', 'personal_welcome_listen'),
-    ('Мне угрожают', 'urgent', 'safety_handoff'),
-    ('Позови взрослого', 'none', 'safety_handoff'),
+    ('Мне угрожают', 'urgent', 'safety_stop'),
+    ('Позови взрослого', 'none', 'safety_stop'),
 ])
 def test_buffered_vad_utterance_keeps_original_phase(text, severity, expected, fragmented):
     async def run():

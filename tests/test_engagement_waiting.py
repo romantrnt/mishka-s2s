@@ -130,10 +130,10 @@ async def test_urgent_safeguarding_survives_waiting_deadline():
     try:
         await h.send('HandsetLifted');await h.send('ButtonPressed',{'button_id':6});await h.send('ButtonReleased',{'button_id':6});await terminal(h)
         await h.send('SpeechReceived',text='не хочу жить')
-        assert h.state.safety_severity=='urgent' and h.state.mode=='safety_handoff'
+        assert h.state.safety_severity=='urgent' and h.state.mode=='safety_stop'
         h.clock[0]=1000
         assert await h.app.expire_engagement_sessions()==[]
-        assert h.state.mode=='safety_handoff' and h.state.safety_severity=='urgent'
+        assert h.state.mode=='safety_stop' and h.state.safety_severity=='urgent'
     finally: await h.close()
 
 @pytest.mark.asyncio

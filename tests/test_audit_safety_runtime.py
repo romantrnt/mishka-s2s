@@ -24,10 +24,6 @@ def event(kind, sequence, payload=None):
     return Event(kind, "audit", sequence, 1.0, "audit", payload or {}, str(sequence), 0.0)
 
 
-class ConfirmedTestDelivery:
-    """Explicit test double for receipt paths, never an implicit mock service."""
-    async def request(self, payload):
-        return {"acknowledged": True, "simulated": False}
 
 
 def context():
@@ -87,10 +83,9 @@ def test_output_adapter_rejects_invalid_confidence(bad):
 
 
 @pytest.mark.parametrize("text", ["не хочу жить", "меня бьют"])
-def test_urgent_disclosure_reaches_canonical_handoff(text):
+def test_urgent_disclosure_reaches_local_safety_stop(text):
     async def run():
         app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
-        app.adult_handoff = ConfirmedTestDelivery()
         try:
             await app.receive_async(event("HandsetLifted", 1))
             result = await app.receive_async(event("SpeechReceived", 2), text)
@@ -111,7 +106,6 @@ def test_urgent_disclosure_reaches_canonical_handoff(text):
 def test_real_input_adapter_routes_semantics_and_failures(reply, expected):
     async def run():
         app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
-        app.adult_handoff = ConfirmedTestDelivery()
         gate = InputSafetyGate(Settings(profile="local_cpu", validation_timeout_ms=30))
         requests = []
         def request(raw):
@@ -160,7 +154,6 @@ def test_input_safety_survives_welcome_timer_or_classifier_timeout(timeout):
                 entered.set(); await release.wait()
                 return "urgent", .99
         app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
-        app.adult_handoff = ConfirmedTestDelivery()
         app.safety_classifier = InputSafetyGate(Settings(profile="mock", validation_timeout_ms=20 if timeout else 1000), Slow())
         clock = [0.]; app.monotonic_now = lambda: clock[0]
         app.canonical_runtime.monotonic_now = app.monotonic_now
@@ -184,7 +177,6 @@ def test_input_safety_survives_welcome_timer_or_classifier_timeout(timeout):
 def test_low_confidence_stt_is_safety_only_in_sync_and_async_paths(wait, text, urgent):
     async def run():
         app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
-        app.adult_handoff = ConfirmedTestDelivery()
         updates = []
         async def updated(_sid, result): updates.append(result)
         app.audio_update_hook = updated
@@ -274,7 +266,7 @@ def test_ws_invalid_shapes_do_not_disconnect(payload, path):
     finally: api.state.stand.close()
 
 
-def test_public_ready_hides_private_config_and_reports_handoff_blocker():
+def test_public_ready_hides_private_config_without_nonexistent_delivery_dependency():
     api = create_stand_app(Settings(profile="mock", stand_access_token="test-token",
         ollama_base_url="http://PRIVATE_INTERNAL:11434", rvc_model="/PRIVATE_PATH/model.pth"))
     try:
@@ -283,7 +275,8 @@ def test_public_ready_hides_private_config_and_reports_handoff_blocker():
             text = json.dumps(result)
             assert "PRIVATE_INTERNAL" not in text and "PRIVATE_PATH" not in text
             assert str(Path.cwd()) not in text
-            assert "adult_handoff_unavailable" in result["production_blockers"]
+            assert "adult_handoff_unavailable" not in result["production_blockers"]
+            assert "adult_handoff" not in result["dependencies"]
             assert not result["production_ready"]
     finally: api.state.stand.close()
 
@@ -312,15 +305,11 @@ def test_env_template_selects_default_audio_device():
     assert _parse_env_file(Path(".env.example"))["AUDIO_INPUT_DEVICE"] == ""
 
 
-@pytest.mark.parametrize("delivery", ["absent", "error"])
 @pytest.mark.parametrize("audio", ["ok", "error", "missing"])
-@pytest.mark.parametrize("text,severity", [("не хочу жить", "urgent"), ("мне страшно", "concern")])
-def test_handoff_failure_uses_owned_fallback_and_preserves_incident(delivery, audio, text, severity):
+@pytest.mark.parametrize("text,severity", [("не хочу жить", "urgent"), ("Позови взрослого", "concern")])
+def test_local_safety_guidance_is_owned_even_on_audio_failure(audio, text, severity):
     async def run():
-        class FailedDelivery:
-            async def request(self, payload): raise OSError("synthetic transport failure")
         app, *_ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
-        app.adult_handoff = None if delivery == "absent" else FailedDelivery()
         calls = []
         original = app.audio.play_owned
         def play(handle, asset, **kwargs):
@@ -329,43 +318,29 @@ def test_handoff_failure_uses_owned_fallback_and_preserves_incident(delivery, au
                 if audio == "error": raise OSError("synthetic device failure")
             return original(handle, asset, **kwargs)
         app.audio.play_owned = play
-        app.audio.play = lambda *args: pytest.fail("unowned handoff playback")
+        app.audio.play = lambda *args: pytest.fail("unowned local safety playback")
         resolve = app.voice_manifest.resolve
         app.voice_manifest.resolve = lambda phrase, *args: None if audio == "missing" and phrase == "PHRASE_091" else resolve(phrase, *args)
         try:
             await app.receive_async(event("HandsetLifted", 1))
             result = await app.receive_async(event("SpeechReceived", 2), text)
             state = app.canonical_runtime.sessions["audit"]
-            incident = state.incident_id
-            assert state.mode == "safety_handoff" and state.safety_severity == severity and incident
-            assert not any(effect.get("resolution") == "adult_handoff_acknowledged" for effect in result["outputs"])
+            assert state.mode == "safety_stop" and state.safety_severity == severity
             if audio == "ok":
-                assert result["reason"] == "adult_handoff_delivery_failed"
+                assert result["reason"] == ("urgent_safety" if severity == "urgent" else "help_requested")
                 assert calls[0].playback_lease and calls[0].playback_id
                 completed = await app.receive_async(event("AudioCompleted", 3, asdict(calls[0])))
-                assert completed["reason"] == "handoff_audio_finished"
+                assert completed["reason"] == "safety_guidance_finished"
             else:
-                assert result["reason"] == "audio_failed_safety_preserved"
+                assert result["reason"] == "safety_guidance_failed"
                 assert state.audio_status == "failed"
-            assert state.incident_id == incident and state.mode == "safety_handoff"
+            assert state.mode == "safety_stop"
             assert not app._active_audio and state.active_audio_id is None
         finally:
             await app._cleanup_session_resources("audit")
     asyncio.run(run())
 
 
-def test_handoff_failure_cannot_be_injected_or_spoofed():
-    from app.foundation.events import parse_event, EventValidationError
-    from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime, CanonicalState
-    with pytest.raises(EventValidationError):
-        parse_event({"type": "AdultHandoffFailed", "incident_id": "test"}, "audit", 1)
-    runtime = CanonicalRuntime()
-    state = CanonicalState("audit", mode="safety_handoff", handset="up", incident_id="test")
-    runtime.sessions["audit"] = state
-    request = CanonicalEvent("AdultHandoffFailed", "audit", 1, state.state_version,
-                             "internal_handoff_failure", {"incident_id": "test"})
-    assert runtime.handle(request)["reason"] == "handoff_failure_untrusted"
-    assert state.active_audio_id is None
 
 
 @pytest.mark.parametrize("kind", ["story", "placeholder", "resume", "onboarding"])

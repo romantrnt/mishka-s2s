@@ -2372,7 +2372,7 @@ class HardwareIntegrationStand:
         if mode == "wellbeing_check":
             # 1/7 are the explicit no/yes controls; 5 repeats the question.
             return [1, 5, 7]
-        if mode in {"session_closed", "safety_handoff"}:
+        if mode in {"session_closed", "safety_stop"}:
             return []
         return list(range(1, 8))
 
@@ -2750,7 +2750,7 @@ class HardwareIntegrationStand:
             result["canonical_state"] = {
                 key: state[key] for key in (
                     "mode", "state_version", "handset", "audio_status",
-                    "safety_severity", "incident_id",
+                    "safety_severity",
                 ) if key in state
             }
         if isinstance(value.get("outputs"), list):

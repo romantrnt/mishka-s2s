@@ -210,7 +210,7 @@ def test_answer_admission_and_safety_priority(kind):
                 await h.app.receive_async(Event('VoiceIntentReady',h.boundary.session_id,h.sequence,1.,'test',{'intent':'free_speech','safety_severity':'none'},'forged',h.clock[0]),'Хорошо')
             else:
                 await speech(h, {'urgent':'Я не могу дышать','adult':'Позови взрослого','empty':''}.get(kind,'Хорошо'), {'_stt_untrusted':True} if kind=='low_stt' else None)
-            if kind in {'urgent','adult'}:assert h.state.mode=='safety_handoff'
+            if kind in {'urgent','adult'}:assert h.state.mode=='safety_stop'
             elif kind=='normal':assert h.state.mode=='exhibition_menu_tutorial_prompt'
             else:assert h.state.mode=='personal_welcome_listen'
             if kind!='normal':assert 'PHRASE_007' not in h.played

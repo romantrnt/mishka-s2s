@@ -19,10 +19,10 @@ def test_content_readiness_report_is_machine_readable_and_separates_approval():
     report = manifest.readiness()
     assert report["catalog_version"] == "mishka.voice-manifest/v1"
     assert report["validator_version"] == "gr07/v1"
-    assert report["catalog_count"] == 108
-    assert report["valid_count"] == 108
+    assert report["catalog_count"] == 102
+    assert report["valid_count"] == 102
     assert report["errors"] == []
-    assert report["approved_recorded_count"] == 108
+    assert report["approved_recorded_count"] == 102
     assert report["simulator_usable"] is True
     assert report["physical_production_ready"] is False
     assert report["pending_approval"] == []

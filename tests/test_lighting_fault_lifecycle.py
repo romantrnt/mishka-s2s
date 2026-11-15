@@ -47,14 +47,16 @@ async def test_fault_preserves_urgent_and_never_fakes_hid_or_handset(monkeypatch
     try:
         await stand.application.receive_async(Event('SpeechReceived',sid,1,1.,'urgent-test',{},'urgent'),'не хочу жить')
         state=stand.application.canonical_runtime.sessions[sid]
-        assert state.safety_severity=='urgent' and state.incident_id
-        incident=state.incident_id;handset=state.handset
+        assert state.mode=='safety_stop' and state.safety_severity=='urgent'
+        assert 'incident_id' not in state.snapshot()
+        handset=state.handset
         guard=stand._audio_owner_guard(sid,physical=True)
         await fault(parts,monkeypatch)
         assert not guard() and not stand._headless_audio_accepting()
         await asyncio.wrap_future(stand._lighting_fault_future)
         state=stand.application.canonical_runtime.sessions[sid]
-        assert state.incident_id==incident and state.safety_severity=='urgent'
+        assert state.mode=='safety_stop' and state.safety_severity=='urgent'
+        assert 'incident_id' not in state.snapshot()
         assert state.handset==handset=='up'
         assert getattr(stand,'_capture_hid_fault',None) is None
         assert stand.application.last_canonical_event['source']=='physical_lighting_loss'
@@ -62,8 +64,11 @@ async def test_fault_preserves_urgent_and_never_fakes_hid_or_handset(monkeypatch
         result=await stand.inject_physical({'type':'ButtonPressed','button_id':1})
         assert result['reason']=='lighting_unavailable'
         # Real hangup may update lifecycle, but must not silently reconcile fault.
-        await stand.inject_physical({'type':'SpacePressed'})
-        assert stand.application.canonical_runtime.sessions[sid].handset=='down'
+        result=await stand.inject_physical({'type':'SpacePressed'})
+        closed=result['canonical_state']
+        assert closed['handset']=='down' and closed['mode']=='idle'
+        assert closed['safety_severity']=='none'
+        assert sid not in stand.application.canonical_runtime.sessions
         assert out.diagnostics()['fault_latched'] and not guard()
     finally:await finish(parts)
 

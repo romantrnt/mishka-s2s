@@ -26,8 +26,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -41,7 +39,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "automatic_mood_check": {
@@ -66,8 +64,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -81,7 +77,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "awaiting_handset": {
@@ -106,8 +102,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -121,7 +115,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "bear_dialogue": {
@@ -146,8 +140,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -161,7 +153,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "complaint_intake": {
@@ -186,8 +178,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -201,7 +191,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "dialogue_memory_expired": {
@@ -226,8 +216,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -241,7 +229,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "dialogue_suspended_ram": {
@@ -266,8 +254,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -281,7 +267,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "fixed_story_menu": {
@@ -306,8 +292,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -321,7 +305,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "fixed_story_playing": {
@@ -346,8 +330,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -361,7 +343,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "game_active": {
@@ -386,8 +368,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -401,7 +381,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "game_menu": {
@@ -426,8 +406,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -441,7 +419,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "idle": {
@@ -466,8 +444,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -481,7 +457,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "mood_report": {
@@ -506,8 +482,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -521,7 +495,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "personal_story_generating": {
@@ -546,8 +520,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -561,7 +533,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "personal_story_playing": {
@@ -586,8 +558,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -601,7 +571,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "personal_story_theme": {
@@ -626,8 +596,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -641,7 +609,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "personal_story_validating": {
@@ -666,8 +634,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -681,7 +647,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "root_menu": {
@@ -706,8 +672,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -721,10 +685,10 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
-    "safety_handoff": {
+    "safety_stop": {
       "allowed_events": [
         "AnonymousStart",
         "HandsetLifted",
@@ -746,23 +710,20 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultHandoffFailed",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
         "IdentityAuthorizationExpired"
       ],
-      "expected_input": "contextual",
-      "lighting_preset": "READY",
-      "audio_policy": "application_owned",
-      "timeout_policy": "explicit",
-      "persistence_policy": "minimal",
-      "success_transition": "explicit",
-      "retry_transition": "explicit",
-      "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "expected_input": "handset_down_or_reset",
+      "lighting_preset": "SAFE_STOP",
+      "audio_policy": "single_local_guidance",
+      "timeout_policy": "none",
+      "persistence_policy": "local_interaction_only",
+      "success_transition": "idle",
+      "retry_transition": "safety_stop",
+      "cancel_transition": "idle",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "schedule_navigation": {
@@ -787,8 +748,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -802,7 +761,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "schedule_weather": {
@@ -827,8 +786,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -842,7 +799,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "session_closed": {
@@ -867,8 +824,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -882,7 +837,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "soft_end": {
@@ -907,8 +862,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -922,7 +875,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "story_paused": {
@@ -947,8 +900,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -962,7 +913,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "story_speech_analysis": {
@@ -987,8 +938,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1002,7 +951,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "story_suspended_ram": {
@@ -1027,8 +976,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1042,7 +989,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "support_intake": {
@@ -1067,8 +1014,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1082,7 +1027,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "visual_welcome": {
@@ -1107,8 +1052,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1122,7 +1065,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "voice_welcome": {
@@ -1147,8 +1090,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1162,7 +1103,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "wellbeing_check": {
@@ -1187,8 +1128,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1202,7 +1141,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_age_selection": {
@@ -1227,8 +1166,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1242,7 +1179,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_name_capture": {
@@ -1267,8 +1204,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1282,7 +1217,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_onboarding_complete": {
@@ -1307,8 +1242,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1322,7 +1255,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_menu_tutorial_intro": {
@@ -1347,8 +1280,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1362,7 +1293,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_menu_tutorial_prompt": {
@@ -1387,8 +1318,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1402,7 +1331,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_menu_tutorial_buttons": {
@@ -1427,8 +1356,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1442,7 +1369,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_menu_wave": {
@@ -1467,8 +1394,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "ExhibitionMenuWaveComplete",
@@ -1483,7 +1408,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_menu_repeat_prompt": {
@@ -1508,8 +1433,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "ExhibitionMenuWaveComplete",
@@ -1524,7 +1447,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_menu_repeat_listen": {
@@ -1549,8 +1472,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "ExhibitionMenuWaveComplete",
@@ -1565,7 +1486,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_menu_replay_buttons": {
@@ -1590,8 +1511,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "ExhibitionMenuWaveComplete",
@@ -1606,7 +1525,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "menu_ready": {
@@ -1631,8 +1550,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1646,14 +1563,12 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "exhibition_age_complete": {
       "state_version": 1,
       "allowed_events": [
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "AnonymousStart",
         "AudioCompleted",
         "AudioFailed",
@@ -1687,13 +1602,11 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop"
+      "error_transition": "safety_stop"
     },
     "exhibition_age_hint": {
       "state_version": 1,
       "allowed_events": [
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "AnonymousStart",
         "AudioCompleted",
         "AudioFailed",
@@ -1727,13 +1640,11 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop"
+      "error_transition": "safety_stop"
     },
     "exhibition_age_prompt": {
       "state_version": 1,
       "allowed_events": [
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "AnonymousStart",
         "AudioCompleted",
         "AudioFailed",
@@ -1767,13 +1678,11 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop"
+      "error_transition": "safety_stop"
     },
     "exhibition_introduction": {
       "state_version": 1,
       "allowed_events": [
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "AnonymousStart",
         "AudioCompleted",
         "AudioFailed",
@@ -1807,13 +1716,11 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop"
+      "error_transition": "safety_stop"
     },
     "exhibition_name_question": {
       "state_version": 1,
       "allowed_events": [
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "AnonymousStart",
         "AudioCompleted",
         "AudioFailed",
@@ -1847,7 +1754,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop"
+      "error_transition": "safety_stop"
     },
     "fixed_story_choice_wave": {
       "allowed_events": [
@@ -1871,8 +1778,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1886,7 +1791,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "story_pause_announcement": {
@@ -1911,8 +1816,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1926,7 +1829,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "story_resume_announcement": {
@@ -1951,8 +1854,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -1966,7 +1867,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "profile_ready": {
@@ -1987,7 +1888,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     },
     "personal_welcome_listen": {
@@ -2012,8 +1913,6 @@
         "HardwareReconnected",
         "SessionCancel",
         "SessionReset",
-        "AdultHandoffAcknowledged",
-        "AdultResolved",
         "ExhibitionOnboardingComplete",
         "MenuTutorialStep",
         "IdentityReadyExpired",
@@ -2027,7 +1926,7 @@
       "success_transition": "explicit",
       "retry_transition": "explicit",
       "cancel_transition": "soft_end",
-      "error_transition": "safe_stop",
+      "error_transition": "safety_stop",
       "state_version": 1
     }
   }

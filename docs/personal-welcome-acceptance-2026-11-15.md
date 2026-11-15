@@ -1,3 +1,5 @@
+> Historical report: caregiver-delivery and adult-resolution behavior described below has been removed. Current local-only behavior is documented in [OPERATIONS.md](OPERATIONS.md#local-safety-response).
+
 # Personalized welcome acceptance candidate, 2026-11-15
 
 This is an isolated review candidate, not a deployment or production/clinical

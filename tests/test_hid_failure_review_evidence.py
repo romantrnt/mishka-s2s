@@ -44,7 +44,7 @@ def test_dispatch_hangup_exception_revokes_capture_and_clears_stale_lighting(cap
             assert stand._hid_status['state']=='dispatch_failure'
             assert stand._capture_hid_fault==1
             await asyncio.wrap_future(stand._hid_loss_future)
-            assert stand.application.canonical_runtime.sessions[stand.active_session_id].mode=='safety_handoff'
+            assert stand.application.canonical_runtime.sessions[stand.active_session_id].mode=='safety_stop'
             assert not stand._headless_audio_accepting() and not owner[1]()
             stand._headless_audio_queue=asyncio.Queue(maxsize=2)
             stand._enqueue_headless_audio_frame((.01,.02),owner)
@@ -70,14 +70,18 @@ def test_audio_cancel_exception_preserves_independent_disconnect_safe_lighting()
             app.audio.cancel=bad_cancel
             result=await app.receive_async(Event('HardwareDisconnected',stand.active_session_id,2,2.,'physical_hid_loss',{},'loss',0.))
             state=app.canonical_runtime.sessions[stand.active_session_id]
-            assert state.mode=='safety_handoff'
+            assert state.mode=='safety_stop'
             lighting=stand.lighting_output.snapshot()
             assert lighting['1']==0 and lighting['14']==1
             outputs=app.last_canonical_effects
-            assert [effect['type'] for effect in outputs]==['audio_stop','capture_close','lighting_preset']
+            assert [effect['type'] for effect in outputs]==['audio_stop','capture_close','lighting_preset','cleanup_failed']
             assert outputs[0]['sync_cleanup']['status']=='failed'
-            assert outputs[1]['resolution']=='application_boundary_acknowledged'
+            assert outputs[1]['resolution']=='local_capture_closed'
+            assert outputs[1]['cleanup']['status']=='completed'
             assert outputs[2]['preset']=='SAFE_STOP'
+            assert {'type':'cleanup_failed','resource':'audio','operation':'local_safety',
+                    'status':'failed','exception_type':'OSError'}.items()<=outputs[3].items()
+            assert outputs[3]['effect_id'].endswith(':cleanup_failed')
         finally:
             app.audio.cancel=original
             await stand.aclose()
@@ -146,7 +150,7 @@ def test_failed_hid_loss_future_recovers_only_after_successful_teardown(monkeypa
             await stand.start_hardware()
             assert opened==[True] and stand._hid_loss_future is None
             assert stand._capture_hid_fault is None and stand._hid_generation==2
-            assert stand.application.canonical_runtime.sessions[stand.active_session_id].mode=='safety_handoff'
+            assert stand.application.canonical_runtime.sessions[stand.active_session_id].mode=='safety_stop'
             assert stand.lighting_output.snapshot()['14']==1
             await stand.stop_hardware()
             assert stand._hid_generation==3

@@ -29,7 +29,7 @@ def test_catalog_is_single_canonical_boundary_and_reports_ready_content():
     assert catalog.game("catch_light")["input"] == "button"
     assert catalog.story("fixed_aibolit_v1") is not None
     assert report["ready"] is True
-    assert report["voice"]["approved_recorded_count"] == 108
+    assert report["voice"]["approved_recorded_count"] == 102
     dev_catalog = CanonicalContentCatalog("content", allow_development_assets=True)
     assert dev_catalog.story("fixed_aibolit_v1")["rights_status"] == "operator_approved"
     with pytest.raises(KeyError):
@@ -48,21 +48,19 @@ def test_profile_dob_and_accessibility_policy_are_deterministic():
     assert "display_name" not in result["state"] and "schedule_ref" not in result["state"]
 
 
-def test_button_mapping_handset_gate_and_safety_handoff_survive_no_profile_clear():
+def test_button_mapping_handset_gate_and_safety_stop_survive_no_profile_clear():
     runtime = CanonicalRuntime()
     assert runtime.handle(event("AnonymousStart", 1, 0))["state"]["mode"] == "anonymous_visual"
     gated = runtime.handle(event("ButtonPressed", 2, 1, payload={"button_id": 6}))
     assert gated["reason"] == "handset_required" and gated["state"]["pending_mode"] == "bear_dialogue"
     runtime.handle(event("HandsetLifted", 3, 2))
-    safety = runtime.handle(event("VoiceIntentReady", 4, 3, payload={"intent": "request_adult", "safety_severity": "none"}))
-    assert safety["state"]["mode"] == "safety_handoff"
+    safety = runtime.handle(event("VoiceIntentReady", 4, 3, payload={"intent": "help_request", "safety_severity": "none"}))
+    assert safety["state"]["mode"] == "safety_stop"
     preserved = runtime.handle(event("ClientProfileCleared", 5, 4), identity_event_authorized=True)
-    assert preserved["state"]["mode"] == "safety_handoff"
-    resolved = runtime.handle(event(
-        "AdultResolved", 6, runtime.sessions["acceptance"].state_version,
-        payload={"incident_id": runtime.sessions["acceptance"].incident_id},
-    ), adult_resolution_authorized=True)
-    assert resolved["state"]["mode"] == "root_menu"
+    assert preserved["state"]["mode"] == "safety_stop"
+    placed = runtime.handle(event("HandsetPlaced", 6, runtime.sessions["acceptance"].state_version))
+    assert placed["state"]["mode"] == "idle"
+    assert placed["reset_session"] is True
 
 
 def test_state_version_correlation_and_ram_ttl_are_fail_closed():

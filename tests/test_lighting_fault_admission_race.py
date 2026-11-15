@@ -40,7 +40,7 @@ async def test_native_fault_after_button_admission_is_not_reclassified_as_hid_fa
         assert getattr(stand,'_capture_hid_fault',None) is None
         assert stand._hid_status['state']=='active'
         cleanup_release.set();await asyncio.wrap_future(stand._lighting_fault_future)
-        assert app.canonical_runtime.sessions[stand.active_session_id].mode=='safety_handoff'
+        assert app.canonical_runtime.sessions[stand.active_session_id].mode=='safety_stop'
         assert getattr(stand,'_capture_hid_fault',None) is None
     finally:
         resume.set();cleanup_release.set()

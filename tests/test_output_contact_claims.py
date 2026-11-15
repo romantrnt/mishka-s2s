@@ -14,6 +14,23 @@ UNSAFE = (
     "Взрослый получил просьбу.",
     "Мама сейчас придёт.",
     "Я отправлю сообщение маме.",
+    "Я тебя услышал. Передаю просьбу взрослому",
+    "Я передам просьбу врачу.",
+    "Запрос взрослому отправлен",
+    "Просьба доставлена маме",
+    "Уведомление уже передано",
+    "Я отправляю сообщение взрослому.",
+    "Я позвоню маме.",
+    "Передаю просьбу.",
+    "Я уже отправил запрос.",
+    "Мы сообщаем взрослому.",
+    "Я уведомляю родителей.",
+    "Позвоню папе.",
+    "Я буду звонить маме.",
+    "Я буду отправлять сообщение взрослому.",
+    "Мы отправим запрос.",
+    "Уже отправил уведомление.",
+    "Сейчас передам твою просьбу.",
 )
 SAFE = (
     "Я напишу сказку о динозаврах.",
@@ -23,6 +40,19 @@ SAFE = (
     "Я не могу отправить сообщение маме.",
     "В сказке медведь позвал маму зайчонка.",
     "Сказочный почтальон доставил письмо королю.",
+    "В сказке просьба доставлена маме.",
+    "Запрос врачу не отправлен.",
+    "Позови взрослого рядом.",
+    "Я не отправляю сообщение взрослому.",
+    "Я не позвоню маме.",
+    "Я не буду звонить маме.",
+    "Я не отправил запрос.",
+    "Я не передаю просьбу.",
+    "Сообщение не доставлено.",
+    "В сказке медведь отправлял сообщения маме.",
+    "В сказке лиса позвонит маме зайчонка.",
+    "Можно позвонить маме вместе со взрослым рядом.",
+    "Я передаю ход тебе.",
 )
 
 
@@ -42,6 +72,16 @@ class WrongAllow:
         return ValidationDecision("allow", True, "synthetic_wrong_allow", .9999, "test")
 
 
+class RecordingTTS(MockTTSProvider):
+    def __init__(self):
+        super().__init__()
+        self.texts = []
+
+    async def synthesize(self, text, token, cancelled):
+        self.texts.append(text)
+        return await super().synthesize(text, token, cancelled)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", UNSAFE)
 async def test_streamed_output_is_silent_despite_wrong_semantic_allow(text):
@@ -49,14 +89,17 @@ async def test_streamed_output_is_silent_despite_wrong_semantic_allow(text):
     # say block is considered, so raw streaming cannot bypass the regex gate.
     tokens = ["<say>"] + [text[i:i+4] for i in range(0, len(text), 4)] + ["</say>"]
     playback = MockPlaybackController()
-    engine = BoundedConversationEngine(MockLLMProvider(tokens=tokens), MockTTSProvider(),
+    tts = RecordingTTS()
+    engine = BoundedConversationEngine(MockLLMProvider(tokens=tokens), tts,
         RVCProvider(), playback, settings=Settings(profile="mock"))
     engine.response_validator = AsyncResponseValidator(WrongAllow())
     context = ConversationContext("secrecy", "canonical_product", "bear_dialogue", ("__all__",), (), 5, 120, 2)
     result = await engine.run_text_turn("Привет", context)
     assert result.return_to_scenario
     assert not playback.played
+    assert not tts.texts
     assert engine.response_validator.metrics.regex_blocks == 1
+    assert engine.response_validator.metrics.mini_calls == 0
     assert not engine.active_queues and not engine.active_tasks
 
 

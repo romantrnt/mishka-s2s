@@ -1,3 +1,5 @@
+> Historical report: caregiver-delivery and adult-resolution behavior described below has been removed. Current local-only behavior is documented in [OPERATIONS.md](OPERATIONS.md#local-safety-response).
+
 # Проверка аппаратного пути и интеграции, 15 ноября 2026
 
 Исходный снимок: `ea5116c3634e33cfc53d4eadfda7aac09216132c`.

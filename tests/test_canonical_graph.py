@@ -12,7 +12,7 @@ def test_compiled_langgraph_authorizes_only_allowlisted_transition() -> None:
     graph = CanonicalLangGraphAuthorizer()
     assert graph.status()["ready"] is True
     assert graph.authorize("idle", "game_menu", "ButtonPressed")["ok"] is True
-    assert graph.authorize("game_menu", "safety_handoff", "ButtonPressed")["ok"] is False
+    assert graph.authorize("game_menu", "safety_stop", "ButtonPressed")["ok"] is False
 
 
 def test_langgraph_allows_headless_onboarding_voice_and_tutorial_skip() -> None:
@@ -91,7 +91,7 @@ def test_exhibition_application_ignores_buttons_before_handset_lift() -> None:
 
 
 
-def test_guest_stays_anonymous_and_safety_handoff_survives_no_profile_clear() -> None:
+def test_guest_stays_anonymous_and_safety_stop_survives_no_profile_clear() -> None:
     from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime
 
     runtime = CanonicalRuntime()
@@ -102,10 +102,10 @@ def test_guest_stays_anonymous_and_safety_handoff_survives_no_profile_clear() ->
     assert unknown["state"]["profile_status"] == "anonymous"
     assert unknown["state"]["mode"] == "anonymous_visual"
     runtime.handle(event("HandsetLifted", 2, 1), None)
-    handoff = runtime.handle(event("VoiceIntentReady", 3, 2, {"intent": "request_adult", "safety_severity": "none"}), None)
-    assert handoff["state"]["mode"] == "safety_handoff"
+    handoff = runtime.handle(event("VoiceIntentReady", 3, 2, {"intent": "help_request", "safety_severity": "none"}), None)
+    assert handoff["state"]["mode"] == "safety_stop"
     removed = runtime.handle(event("ClientProfileCleared", 4, 3), None, identity_event_authorized=True)
-    assert removed["state"]["mode"] == "safety_handoff"
+    assert removed["state"]["mode"] == "safety_stop"
 
 
 def test_story_validator_rejects_ip_and_invalid_schema_before_playback() -> None:

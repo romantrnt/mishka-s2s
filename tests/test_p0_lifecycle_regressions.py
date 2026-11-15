@@ -12,37 +12,26 @@ def _event(kind: str, sid: str, seq: int, payload=None, source="test") -> Event:
     return Event(kind, sid, seq, 1.0, source, payload or {}, f"{source}:{seq}", 0.0)
 
 
-def test_urgent_incident_survives_later_child_speech_until_adult_resolution():
+def test_urgent_local_stop_ignores_later_speech_until_handset_down():
     runtime = CanonicalRuntime()
     sid = "urgent-priority"
-
     def send(kind, seq, payload=None):
-        current = runtime.sessions.get(sid)
-        return runtime.handle(CanonicalEvent(
-            kind, sid, seq, current.state_version if current else 0,
-            "test", payload or {}, f"corr:{seq}", 1.0,
-        ))
-
-    send("AnonymousStart", 1)
-    send("HandsetLifted", 2)
-    urgent = send("VoiceIntentReady", 3, {"intent": "free_speech", "safety_severity": "urgent"})
-    assert urgent["state"]["mode"] == "safety_handoff"
-    for seq, payload in enumerate((
-        {"intent": "free_speech", "safety_severity": "none"},
-        {"intent": "request_adult", "safety_severity": "concern"},
-        {"intent": "free_speech", "safety_severity": "concern"},
-    ), start=4):
-        result = send("VoiceIntentReady", seq, payload)
-        assert result["state"]["mode"] == "safety_handoff"
+        state = runtime.sessions.get(sid)
+        return runtime.handle(CanonicalEvent(kind, sid, seq, state.state_version if state else 0,
+            "test", payload or {}, f"corr:{seq}", 1.0))
+    send("HandsetLifted", 1)
+    send("VoiceIntentReady", 2, {"intent": "free_speech", "safety_severity": "urgent"})
+    owner = runtime.sessions[sid].state_version
+    for seq, severity in enumerate(("none", "concern", "urgent"), 3):
+        result = send("VoiceIntentReady", seq, {"intent": "free_speech", "safety_severity": severity})
+        assert result["state"]["mode"] == "safety_stop"
         assert result["state"]["safety_severity"] == "urgent"
-        assert not any(e.get("type") == "adult_incident_closed" for e in result["effects"])
-    resolved = runtime.handle(CanonicalEvent(
-        "AdultResolved", sid, 7, runtime.sessions[sid].state_version,
-        "internal_test", {"incident_id": urgent["state"]["incident_id"]},
-        "trusted-resolution", 1.0,
-    ), adult_resolution_authorized=True)
-    assert resolved["state"]["safety_severity"] == "none"
-    assert resolved["state"]["mode"] == "root_menu"
+        assert result["state"]["state_version"] == owner and result["effects"] == []
+    result = send("HandsetPlaced", 6)
+    assert result["reset_session"] is True
+    assert result["state"]["mode"] == "idle" and result["state"]["handset"] == "down"
+    assert any(e["type"] == "lighting_dark" for e in result["effects"])
+
 
 
 def test_hangup_during_provider_cancel_cannot_emit_old_audio_or_raise():
@@ -127,29 +116,20 @@ def test_repeated_phrase_has_distinct_playback_lease_without_version_change():
     assert a_audio["playback_lease"] != b_audio["playback_lease"]
 
 
-def test_urgent_survives_exhibition_handset_down_and_session_cancel():
-    runtime = CanonicalRuntime(exhibition_mode=True)
-    sid = "urgent-exhibition"
-    def send(kind, seq, payload=None):
-        current = runtime.sessions.get(sid)
-        return runtime.handle(CanonicalEvent(
-            kind, sid, seq, current.state_version if current else 0,
-            "test", payload or {}, f"corr:{seq}", 1.0,
-        ))
-    send("HandsetLifted", 1)
-    send("VoiceIntentReady", 2, {"intent": "free_speech", "safety_severity": "urgent"})
-    for kind, seq in (("HandsetPlaced", 3), ("SessionCancel", 4), ("SessionReset", 5), ("AnonymousStart", 6)):
-        result = send(kind, seq)
-        assert result["state"]["safety_severity"] == "urgent"
-        assert result["state"]["mode"] == "safety_handoff"
-        assert not result.get("reset_session")
-    incident_id = runtime.sessions[sid].incident_id
-    resolved = runtime.handle(CanonicalEvent(
-        "AdultResolved", sid, 7, runtime.sessions[sid].state_version,
-        "internal_test", {"incident_id": incident_id},
-        "trusted-resolution", 1.0,
-    ), adult_resolution_authorized=True)
-    assert resolved["state"]["safety_severity"] == "none"
+def test_local_safety_can_end_without_nonexistent_adult_acknowledgement():
+    for ending in ("HandsetPlaced", "SessionCancel", "SessionReset"):
+        runtime = CanonicalRuntime(exhibition_mode=True)
+        sid = "local-ending"
+        runtime.handle(CanonicalEvent("HandsetLifted", sid, 1, 0, "test", {}, "lift", 1.))
+        state = runtime.sessions[sid]
+        runtime.handle(CanonicalEvent("VoiceIntentReady", sid, 2, state.state_version,
+            "test", {"intent": "free_speech", "safety_severity": "urgent"}, "urgent", 1.))
+        result = runtime.handle(CanonicalEvent(ending, sid, 3, state.state_version, "test", {}, "end", 1.))
+        assert result["reset_session"] is True
+        assert result["state"]["mode"] != "safety_stop"
+        assert result["state"]["safety_severity"] == "none"
+        assert any(e["type"] == "lighting_dark" for e in result["effects"])
+
 
 
 def test_late_stt_result_after_hangup_cannot_recreate_session():
@@ -189,47 +169,41 @@ def test_late_stt_result_after_hangup_cannot_recreate_session():
     asyncio.run(run("clinical"))
 
 
-def test_generic_application_reset_does_not_close_urgent_incident():
+def test_generic_application_reset_clears_local_safety_and_private_session():
     async def run():
-        app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"))
-        sid = "reset-urgent"
-        await app.receive_async(_event("HandsetLifted", sid, 1))
-        await app.receive_async(_event(
-            "VoiceIntentReady", sid, 2,
-            {"intent": "free_speech", "safety_severity": "urgent"},
-        ))
-        result = await app.reset_session(sid)
-        assert result["reset"] is False
-        assert result["reason"] == "safety_handoff_active"
-        assert app.canonical_runtime.sessions[sid].safety_severity == "urgent"
-        assert app.sessions.get(sid) is not None
-
+        app, *_ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"))
+        sid = "reset-local-stop"
+        try:
+            await app.receive_async(_event("HandsetLifted", sid, 1))
+            await app.receive_async(_event("VoiceIntentReady", sid, 2,
+                {"intent": "free_speech", "safety_severity": "urgent"}))
+            result = await app.reset_session(sid)
+            assert result["reset"] is True
+            assert sid not in app.canonical_runtime.sessions
+            assert app.sessions.get(sid) is None
+            assert sid not in app._active_audio
+        finally:
+            await app._cleanup_session_resources(sid)
     asyncio.run(run())
 
 
-def test_urgent_delivery_ack_keeps_parent_safety_effects():
-    class ConfirmedTestDelivery:
-        async def request(self, _request):
-            return {"acknowledged": True, "simulated": False}
 
+def test_urgent_local_guidance_keeps_safety_lighting():
     async def run():
-        app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"))
-        # This test covers an actual receipt; a mock outbox is not a receipt.
-        app.adult_handoff = ConfirmedTestDelivery()
-        sid = "urgent-ack"
-        app.monotonic_now = lambda: 0.0
-        app.canonical_runtime.monotonic_now = app.monotonic_now
-        await app.receive_async(_event("HandsetLifted", sid, 1))
-        result = await app.receive_async(_event(
-            "VoiceIntentReady", sid, 2,
-            {"intent": "free_speech", "safety_severity": "urgent"},
-        ))
-        assert result["reason"] == "urgent_safety"
-        assert result["canonical_state"]["safety_severity"] == "urgent"
-        assert any(e.get("preset") == "SAFE_STOP" for e in result["outputs"])
-        assert any(e.get("phrase_id") == "PHRASE_089" for e in result["outputs"])
-
+        app, *_ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"))
+        sid = "urgent-local"
+        try:
+            await app.receive_async(_event("HandsetLifted", sid, 1))
+            result = await app.receive_async(_event("VoiceIntentReady", sid, 2,
+                {"intent": "free_speech", "safety_severity": "urgent"}))
+            assert result["reason"] == "urgent_safety"
+            assert result["canonical_state"]["safety_severity"] == "urgent"
+            assert any(e.get("preset") == "SAFE_STOP" for e in result["outputs"])
+            assert any(e.get("phrase_id") == "PHRASE_091" for e in result["outputs"])
+        finally:
+            await app._cleanup_session_resources(sid)
     asyncio.run(run())
+
 
 
 def test_exhibition_help_hangup_fences_waiting_provider():

@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.foundation.canonical_contract import VoiceManifest
+from app.foundation.voice_catalog import REQUIRED_COUNT, REQUIRED_PHRASE_IDS
 
 
 def main() -> int:
@@ -18,8 +19,8 @@ def main() -> int:
     args = parser.parse_args()
     manifest = VoiceManifest(args.manifest, allow_development_assets=args.development)
     report = manifest.readiness()
-    expected_count = 108
-    expected = {f"PHRASE_{number:03d}" for number in range(1, expected_count + 1)}
+    expected_count = REQUIRED_COUNT
+    expected = REQUIRED_PHRASE_IDS
     ids = {
         str(item.get("phrase_id"))
         for item in manifest.document.get("assets", [])
@@ -27,7 +28,11 @@ def main() -> int:
     }
     errors = []
     if ids != expected:
-        errors.append("catalog_ids_must_be_exactly_PHRASE_001_to_PHRASE_108")
+        errors.append("catalog_ids_must_match_required_stable_ids")
+    if report["errors"]:
+        errors.append("invalid_catalog_contract")
+    if report["orphan_audio_assets"]:
+        errors.append("orphan_audio_assets")
     if report["duplicate_phrase_ids"]:
         errors.append("duplicate_phrase_ids")
     if report["valid_count"] != expected_count:

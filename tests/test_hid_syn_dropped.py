@@ -168,7 +168,7 @@ async def test_raw_fault_revokes_stand_and_queued_lift_before_dispatch(already_a
         await asyncio.sleep(.01)
         assert seen == ["HardwareDisconnected"]
         state = stand.application.canonical_runtime.sessions[stand.active_session_id]
-        assert state.mode == "safety_handoff"
+        assert state.mode == "safety_stop"
         assert not stand._headless_audio_accepting()
         # Later direct ordinary dispatch is blocked by the same latch.
         await stand.inject_physical({"type": "ButtonPressed", "button_id": 7,

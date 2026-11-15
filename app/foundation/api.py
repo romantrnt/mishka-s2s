@@ -219,41 +219,6 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
     lifecycle = StartupLifecycle(admission_guard=admission_guard)
     manager = getattr(application, "runtime_manager", None)
     content_report_task = None
-    handoff_report_task = None
-    handoff_report_owner = None
-
-    async def handoff_readiness(handoff):
-        nonlocal handoff_report_task, handoff_report_owner
-        unavailable = {"ready": False, "reason": "adult_handoff_unavailable"}
-        check = getattr(handoff, "readiness", None)
-        if handoff is None or type(handoff).__name__ == "SimulatedAdultHandoff" or not callable(check):
-            return {"ready": False, "reason": "adult_handoff_unconfigured"}
-
-        async def probe():
-            try:
-                # Sync adapters must not freeze hangup/audio while a public
-                # health request waits for their external transport.
-                status = await asyncio.to_thread(check)
-                if inspect.isawaitable(status):
-                    status = await status
-                if isinstance(status, dict) and status.get("ready") is True and not status.get("simulated"):
-                    return {"ready": True, "reason": None}
-            except Exception:
-                pass
-            return unavailable
-
-        # A timed-out native check cannot be killed. Share its in-flight
-        # owner, rather than spawning an unbounded worker per health request.
-        if (handoff_report_task is None or handoff_report_task.done()
-                or handoff_report_owner is not handoff):
-            handoff_report_owner = handoff
-            handoff_report_task = asyncio.create_task(probe())
-        try:
-            return await asyncio.wait_for(asyncio.shield(handoff_report_task), 1.0)
-        except asyncio.TimeoutError:
-            return unavailable
-
-
     async def prepared_content_report():
         nonlocal content_report_task
         if scenarios is None:
@@ -413,12 +378,7 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
         return {"live": True, "service": "mishka"}
     @api.get("/health/safe")
     def health_safe():
-        handoff = getattr(application, "adult_handoff", None)
-        simulated = type(handoff).__name__ == "SimulatedAdultHandoff"
-        configured = handoff is not None
-        return {"safe": configured and not simulated, "adult_handoff_simulated": simulated,
-                "adult_handoff": {"configured": configured, "simulated": simulated},
-                "safety_policy": "canonical_fail_closed", "fail_closed": True}
+        return {"safety_policy": "canonical_local_stop", "fail_closed": True}
     async def _bounded_runtime_readiness(manager):
         if manager is None:
             return {"ready": False, "profile": "external", "reason": "runtime_manager_unavailable"}
@@ -494,9 +454,6 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
             and voice_report.get("physical_production_ready")
             and all(bool(value) for value in content_report.get("fixed_stories", {}).values())
         )
-        handoff = getattr(application, "adult_handoff", None)
-        # Presence alone is not transport readiness or delivery confirmation.
-        handoff_status = await handoff_readiness(handoff)
         production_ready = bool(
             not local_demo
             and not simulated_hardware
@@ -505,7 +462,6 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
             and content_production_ready
             and security_ready
             and launcher_provenance_ready
-            and handoff_status["ready"]
             and (not optional_identity or bool(identity_status.get("identity_ready") and identity_status.get("reader_ready") and not identity_status.get("synthetic")))
             and bool(profile_status.get("ready"))
             and bool(history_status.get("ready"))
@@ -544,14 +500,12 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
                     ("content_not_production_ready", not content_production_ready),
                     ("mutation_policy_unconfigured_or_unsafe", not security_ready),
                     ("launcher_provenance_unestablished", not launcher_provenance_ready),
-                    ("adult_handoff_unavailable", not handoff_status["ready"]),
                 ) if blocked
             ],
             "lifecycle": lifecycle_status,
             "content": content_report,
             "metrics": metrics.snapshot(),
             "dependencies": {"s2s": runtime, "profile": profile_status, "history": history_status,
-                             "adult_handoff": handoff_status,
                              "state_machine": graph_status, **dependency_identity(profile_status, runtime)},
         }
     @api.post("/internal/s2s/warmup")

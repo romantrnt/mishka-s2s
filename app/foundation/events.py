@@ -20,7 +20,6 @@ _EVENT_FIELDS = {
     "ExhibitionMenuWaveComplete": frozenset({"phase"}),
     "StoryChoiceWaveComplete": frozenset({"phase"}),
     "MenuTutorialStep": frozenset({"button"}),
-    "AdultHandoffAcknowledged": frozenset({"incident_id"}),
 }
 _INTEGER_FIELDS = frozenset({"button_id", "button", "duration_ms", "offset_ms", "step", "token", "generation", "reader_generation", "connection_epoch", "state_version", "length"})
 _PUBLIC_FIELDS = {
@@ -76,7 +75,7 @@ def parse_event(payload: dict[str, Any], session_id: str, sequence: int, source:
     name = _ALIASES.get(event_name, event_name)
     if name not in EVENT_TYPES:
         raise EventValidationError("unknown event type")
-    if name in {"AdultResolved", "AdultHandoffAcknowledged", "AdultHandoffFailed", "DialogueFallback"} | IDENTITY_INTERNAL_EVENT_TYPES:
+    if name in {"DialogueFallback"} | IDENTITY_INTERNAL_EVENT_TYPES:
         # Generic API/UART frames have no authority to assert internal
         # resolution or provider outcomes, regardless of payload/source.
         raise EventValidationError("internal event is not accepted from generic ingress")

@@ -104,7 +104,7 @@ class SafetyClassifier:
         return SafetyClassification(severity, "deterministic" if severity == deterministic else "semantic")
 
 # Only a direct command, not a parent mentioned in a story or an advice query.
-# Keep this an intent: severity and delivery acknowledgements belong elsewhere.
+# This intent requests a local safety pause and nearby-adult guidance.
 _CAREGIVER_REQUEST = re.compile(r"""
     (?:(?:мишка|пожалуйста)[,\s]+)*
     (?:позови(?:те)?(?:\s+|,\s*пожалуйста[,\s]+)(?:пожалуйста[,\s]+)?(?:маму|папу)
@@ -116,16 +116,16 @@ _CAREGIVER_REQUEST = re.compile(r"""
 
 def classify_intent(text: str) -> str:
     value = text.casefold().strip()
-    if _CAREGIVER_REQUEST.fullmatch(value): return "request_adult"
+    if _CAREGIVER_REQUEST.fullmatch(value): return "help_request"
     # An explicit request for an adult outranks ordinary navigation/mood.
-    if re.search(r"(позвать\s+взросл|позови(?:те)?\s+взросл|нужен\s+взросл)", value): return "request_adult"
+    if re.search(r"(позвать\s+взросл|позови(?:те)?\s+взросл|нужен\s+взросл)", value): return "help_request"
     if re.search(r"(поставь|поставить|на)\s*пауз|пауза", value): return "pause_story"
     if re.search(r"(продолжи|продолжить|дальше|возобнови)", value): return "resume_story"
     if re.search(r"\b(стоп|хватит|закончить сказку|выключи сказку)\b", value): return "stop_story"
     if re.search(r"(вау|класс|здорово|смешно|ха-ха|ура|ух ты)", value): return "emotional_reaction"
     if re.search(r"(настроени|груст|рад|весел)", value): return "mood"
     if re.search(r"(куда|маршрут|идти)", value): return "where_now"
-    if re.search(r"помоги", value): return "request_adult"
+    if re.search(r"помоги", value): return "help_request"
     if re.search(r"(болит|страшно|обид|жалоб)", value): return "support"
     theme_map = (
         (r"динозавр", "dinosaurs"), (r"космос|звезд", "космос"),
@@ -157,25 +157,6 @@ class RecordedPhraseResolver:
 
     def diagnose(self, phrase_id: str, content_hash: str = "") -> dict[str, Any]:
         return self.manifest.diagnose(phrase_id, content_hash)
-
-class SimulatedAdultHandoff:
-    """Development-only request outbox, never evidence of delivery to an adult."""
-
-    def __init__(self) -> None:
-        self.outbox: list[dict[str, Any]] = []
-
-    async def request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        item = dict(payload)
-        item["transport"] = "simulated_local_outbox"
-        item["simulated"] = True
-        item["delivery"] = "simulated_only"
-        self.outbox.append(item)
-        return {
-            "acknowledged": False,
-            "simulation_id": f"simulated-{len(self.outbox)}",
-            "transport": "simulated_local_outbox",
-            "simulated": True,
-        }
 
 class TypedInfoRenderer:
     """Render only typed provider facts; it never asks an LLM for information."""

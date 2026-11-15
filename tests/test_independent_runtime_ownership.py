@@ -25,7 +25,6 @@ def ev(kind, seq, payload=None, source="phone"):
 @pytest_asyncio.fixture
 async def app():
     value, *_ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
-    value.adult_handoff = None
     yield value
     await value._cleanup_session_resources("review")
 
@@ -52,8 +51,10 @@ async def test_urgent_admitted_before_classifier_survives_newer_same_source(app,
     release.set()
     result = await task
     state = app.canonical_runtime.sessions["review"]
-    assert result["reason"] == "adult_handoff_delivery_failed"
-    assert state.safety_severity == "urgent" and state.incident_id
+    assert result["reason"] == "urgent_safety"
+    assert state.mode == "safety_stop" and state.safety_severity == "urgent"
+    assert "incident_id" not in state.snapshot()
+    assert not any(effect.get("type") == "adult_handoff_request" for effect in result["outputs"])
     assert state.last_sequence_by_source["phone"] == 3
     assert {"phone:2", "phone:3"} <= state.seen_correlations
     assert (await app.receive_async(ev("SpeechReceived", 2), "disclosure"))["reason"] == "idempotent_duplicate"
@@ -228,7 +229,7 @@ async def test_hid_loss_stops_capture_cancels_pipeline_and_fences_pending_frames
     assert stopped and "review" in pipeline.cancelled
     assert stand._headless_audio_queue is None and stand._headless_audio_task is None
     assert not owner[1]() and pipeline.received == []
-    assert stand.application.canonical_runtime.sessions["review"].mode == "safety_handoff"
+    assert stand.application.canonical_runtime.sessions["review"].mode == "safety_stop"
     stand._capture_hid_fault = None
     stand._hid_generation = 2
     stand._on_hid_error({"kind": "device_disconnected"}, 1)
@@ -239,7 +240,7 @@ async def test_hid_loss_stops_capture_cancels_pipeline_and_fences_pending_frames
 @pytest.mark.parametrize("mode, text, expected", [
     ("fixed_story_playing", "пауза", "story_pause_announcement"),
     ("story_paused", "продолжить", "story_resume_announcement"),
-    ("fixed_story_playing", "не хочу жить", "safety_handoff"),
+    ("fixed_story_playing", "не хочу жить", "safety_stop"),
     ("fixed_story_playing", "случайные слова", "story_speech_analysis")])
 async def test_headless_story_pcm_reaches_real_vad_stt_and_canonical_transition(stand, mode, text, expected):
     app = stand.application

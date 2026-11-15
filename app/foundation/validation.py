@@ -43,14 +43,33 @@ class RegexSafetyFilter:
     """Fast deterministic filter; never generates or rewrites a response."""
 
     _rules = (
-        # Model speech cannot perform or attest external contact. Verified
-        # transport ACK recordings are dispatched outside this model gate.
+        # No part of the runtime contacts caregivers. Reject model claims of
+        # delivery even when the semantic gate incorrectly allows them.
         ("unverified_external_contact", re.compile(
             r"(?:^|[.!?]\s*|,\s*)(?:(?:хорошо|конечно|да)\s*,?\s*)?"
             r"(?:(?:я|мы)\s+(?:(?:уже|сейчас|сразу)\s+)?|(?:сейчас|уже)\s+)"
-            r"(?:позвал[аи]?|позову|позов[её]м|вызвал[аи]?|вызову|сообщил[аи]?|сообщу|"
-            r"уведомил[аи]?|уведомлю|написал[аи]?|напишу|отправил[аи]?|отправлю|попросил[аи]?|попрошу)\b"
+            r"(?:позвал[аи]?|позову|позов[её]м|зову|зов[её]м|позвонил[аи]?|позвоню|позвоним|звоню|звоним|"
+            r"вызвал[аи]?|вызову|вызываю|сообщил[аи]?|сообщу|сообщаю|сообщаем|"
+            r"уведомил[аи]?|уведомлю|уведомляю|уведомляем|написал[аи]?|напишу|пишу|пишем|"
+            r"отправил[аи]?|отправлю|отправим|отправляю|отправляем|попросил[аи]?|попрошу|"
+            r"передал[аи]?|передаю|передам|передадим|(?:буду|будем)\s+"
+            r"(?:звонить|сообщать|уведомлять|писать|отправлять|передавать|звать|вызывать|просить))\b"
             r"[^.!?]{0,60}\b(?:мам\w*|пап\w*|взросл\w*|родител\w*|врач\w*|медсестр\w*|помощь)\b"
+            r"|(?:^|[.!?]\s*)(?:(?:сейчас|уже)\s+)?"
+            r"(?:передаю|передам|отправляю|отправлю|сообщу|сообщаю|уведомлю|уведомляю|"
+            r"позову|зову|позвоню|позвоним|звоню|звоним)\b"
+            r"[^.!?]{0,60}\b(?:мам\w*|пап\w*|взросл\w*|родител\w*|врач\w*|медсестр\w*|помощь)\b"
+            # A delivered request/message is still a false external action
+            # when the sentence leaves its caregiver recipient implicit.
+            r"|(?:^|[.!?]\s*)(?:(?:я|мы)\s+)?(?:(?:сейчас|уже|сразу)\s+)?"
+            r"(?:передал[аи]?|передаю|передам|передадим|отправил[аи]?|отправляю|"
+            r"отправляем|отправлю|отправим|(?:буду|будем)\s+(?:отправлять|передавать))\s+"
+            r"(?:(?:твою|твоё|твой|вашу|ваше|ваш|эту|это|этот)\s+)?"
+            r"(?:просьбу|сообщение|запрос|уведомление)\b"
+            r"|(?:^|[.!?]\s*)(?:твоя\s+|твоё\s+|твой\s+)?"
+            r"(?:просьба|сообщение|запрос|уведомление)\s+"
+            r"(?:(?:маме|папе|взрослому|родителям|врачу|медсестре)\s+)?(?:уже\s+)?"
+            r"(?:отправлен[ао]?|доставлен[ао]?|передан[ао]?)\b"
             r"|\b(?:твоя\s+мама|твой\s+папа|взрослый|родители)\s+(?:уже\s+)?"
             r"(?:получил[аи]?|получили)\s+(?:мо[её]\s+)?(?:сообщение|просьбу|уведомление)\b"
             r"|(?:^|[.!?]\s*)(?:мама|папа|взрослый|помощь)\s+(?:уже\s+|сейчас\s+|скоро\s+)"
@@ -176,8 +195,7 @@ class OllamaMiniLLMValidator:
                   "and unsafe instructions. Also block claims or promises that this assistant has called, "
                   "will call, messaged, notified, or contacted real people, that a caregiver received "
                   "a message/request, or that real help/adults are coming. The model has no external "
-                  "communication capability or delivery evidence; only a separate trusted protocol can "
-                  "confirm delivery. Ordinary advice to ask a nearby trusted adult is allowed, as is "
+                  "communication capability or delivery evidence. Ordinary advice to ask a nearby trusted adult is allowed, as is "
                   "clearly fictional third-person storytelling without real-world contact claims. "
                   "Use review when uncertain. Never rewrite the candidate.")
         keep_alive = self.keep_alive.strip()

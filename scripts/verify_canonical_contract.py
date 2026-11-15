@@ -49,7 +49,8 @@ def main() -> None:
     assert help["reason"] == "help_priority" and help["state"]["mode"] == "wellbeing_check"
     help_runtime.handle(event("ButtonPressed", 4, version=3, payload={"button_id": 7}), None)
     down = help_runtime.handle(event("HandsetPlaced", 5, version=4), None)
-    assert down["state"]["mode"] == "safety_handoff"
+    assert down["state"]["mode"] == "idle"
+    assert down["reset_session"] is True
     stale = runtime.handle(event("ButtonPressed", 8, version=0, payload={"button_id": 1}), None)
     assert stale["reason"] == "stale_state_version"
     fixed = CanonicalRuntime(stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
@@ -63,7 +64,7 @@ def main() -> None:
     assert started["state"]["active_story_id"] == "fixed_aibolit_v1"
     voice_readiness = VoiceManifest("content/audio/voice_manifest.json").readiness()
     assert voice_readiness["ready"]
-    assert voice_readiness["approved_recorded_count"] == 108
+    assert voice_readiness["approved_recorded_count"] == 102
     graph_status = CanonicalLangGraphAuthorizer().status()
     assert graph_status["scenario_id"] == "canonical_product" and graph_status["topology"][0] == "ingress"
     game_resume = CanonicalRuntime(stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
@@ -77,9 +78,9 @@ def main() -> None:
     assert resumed_game["state"]["mode"] == "game_active" and resumed_game["reason"] == "game_voice_join"
     help_guard = CanonicalRuntime(stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
     help_guard.handle(event("AnonymousStart", 1, version=0), None)
-    help_guard.handle(event("VoiceIntentReady", 2, version=1, payload={"intent": "request_adult", "safety_severity": "urgent"}), None)
+    help_guard.handle(event("VoiceIntentReady", 2, version=1, payload={"intent": "help_request", "safety_severity": "urgent"}), None)
     blocked_help = help_guard.handle(event("ButtonPressed", 3, version=2, payload={"button_id": 5}), None)
-    assert blocked_help["state"]["mode"] == "safety_handoff"
+    assert blocked_help["state"]["mode"] == "safety_stop"
     ok, reason = validate_generated_story(
         {"title": "Добрая прогулка", "text": "Мишка помог другу и они спокойно вернулись домой.",
          "age_band": "3-5", "estimated_duration_sec": 70, "safety_tags": [], "ending_state": "safe_resolved"},

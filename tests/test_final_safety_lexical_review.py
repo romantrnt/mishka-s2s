@@ -50,7 +50,7 @@ def test_lexical_exceptions_never_override_semantic_safety(text, semantic):
 @pytest.mark.parametrize("text", ["Позови взрослого", "Позовите взрослого", "Пожалуйста, позови взрослого!", "Позовите взрослую", "Позвать взрослого", "Мне нужен взрослый", "Помоги"])
 def test_explicit_adult_request_imperative_remains_reachable(text):
     from app.foundation.canonical_services import classify_intent
-    assert classify_intent(text) == "request_adult"
+    assert classify_intent(text) == "help_request"
 
 
 def test_question_or_extra_clause_is_not_a_negation_bypass():
@@ -86,14 +86,14 @@ def test_air_or_breathing_words_alone_are_not_an_urgent_disclosure(text):
 def test_explicit_adult_request_outranks_other_clauses(ordinary, adult_request, request_first):
     from app.foundation.canonical_services import classify_intent
     text = f"{adult_request}, {ordinary}" if request_first else f"{ordinary}, {adult_request}"
-    assert classify_intent(text) == "request_adult"
+    assert classify_intent(text) == "help_request"
 
 
 @pytest.mark.parametrize("text,expected", [
     ("Мне грустно", "mood"), ("Куда мне идти", "where_now"),
     ("Поставь на паузу", "pause_story"), ("Продолжи сказку", "resume_story"),
     ("Выключи сказку", "stop_story"), ("Вау, класс", "emotional_reaction"),
-    ("Помоги продолжить сказку", "resume_story"), ("Помоги", "request_adult"),
+    ("Помоги продолжить сказку", "resume_story"), ("Помоги", "help_request"),
 ])
 def test_no_explicit_adult_request_keeps_existing_ordinary_priority(text, expected):
     from app.foundation.canonical_services import classify_intent

@@ -150,12 +150,23 @@ def test_generic_ingress_rejects_raw_uid_events_without_echoing_values(name, sou
     assert "PRIVATE_MARKER" not in json.dumps(redacted_event(direct))
 
 
-@pytest.mark.parametrize("name", sorted(IDENTITY_INTERNAL_EVENT_TYPES | {"AdultResolved", "DialogueFallback"}))
+@pytest.mark.parametrize("name", sorted(IDENTITY_INTERNAL_EVENT_TYPES | {"DialogueFallback"}))
 @pytest.mark.parametrize("source", ["api", "uart_pty", "internal_identity", "trusted_provider"])
 def test_generic_ingress_cannot_forge_internal_outcomes(name, source):
     with pytest.raises(EventValidationError, match="internal event"):
         parse_event({"type": name, "status": "authorized", "authorized": True,
                      "profile": {"profile_ref": "forged"}}, "test", 1, source)
+
+
+@pytest.mark.parametrize("name", ["AdultResolved", "AdultHandoffAcknowledged", "AdultHandoffFailed"])
+@pytest.mark.parametrize("source", ["api", "uart_pty", "internal_identity", "trusted_provider"])
+def test_removed_delivery_events_are_unknown_and_do_not_echo_private_data(name, source):
+    with pytest.raises(EventValidationError, match="unknown event type") as error:
+        parse_event({"type": name, "incident_id": "INCIDENT_PRIVATE_MARKER",
+                     "profile": {"profile_ref": "PROFILE_PRIVATE_MARKER"}}, "test", 1, source)
+    assert "PRIVATE_MARKER" not in str(error.value)
+    direct = Event(name, "test", 1, 0, source, {"incident_id": "INCIDENT_PRIVATE_MARKER"})
+    assert redacted_event(direct)["payload"] == {}
 
 
 @pytest.mark.parametrize("name", ["SessionStarted", "SessionReset", "AnonymousStart", "HandsetPlaced", "SessionCancel", "HardwareReconnected"])
