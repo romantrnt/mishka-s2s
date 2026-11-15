@@ -153,6 +153,7 @@ class Settings:
     mutation_auth_policy: str = "token_required"
     audio_output_device: str = ""
     audio_input_device: str = ""
+    headless_turn_taking: bool = False
     vad_device: str = "cpu"
     hardware_mode: str = "fake"
     # Explicit exhibition operational policies. These are configuration
@@ -506,6 +507,7 @@ class Settings:
             no_voice_recording=_bool("NO_VOICE_RECORDING", True), content_root=_text("MISHKA_CONTENT_ROOT", "content"),
             history_db=_text("MISHKA_HISTORY_DB", "runtime/data/session_history.sqlite3"), stand_access_token=_text("STAND_ACCESS_TOKEN", ""), allow_query_token=_bool("MISHKA_ALLOW_QUERY_TOKEN", False), mutation_auth_policy=_text("MISHKA_MUTATION_AUTH_POLICY", "token_required").lower(),
             audio_output_device=_text("AUDIO_OUTPUT_DEVICE", ""), audio_input_device=_text("AUDIO_INPUT_DEVICE", ""), vad_device=_text("MISHKA_VAD_DEVICE", "cpu").lower(),
+            headless_turn_taking=_bool("MISHKA_HEADLESS_TURN_TAKING", False),
             max_input_chars=_int("MAX_INPUT_CHARS", 512), session_timeout_s=_int("MISHKA_MAX_SESSION_SECONDS", 1200),
             session_idle_timeout_s=_int("MISHKA_SESSION_IDLE_TTL_SECONDS", 300), confidence_threshold=_float("INTENT_CONFIDENCE_THRESHOLD", 0.6),
             llm_provider=_text("LLM_PROVIDER", "ollama"), llm_model=_text("LLM_MODEL", "qwen3:14b"),
@@ -564,6 +566,7 @@ class Settings:
             "audio_policy": self.audio_policy,
             "audio_output_device": self.audio_output_device,
             "audio_input_device": self.audio_input_device,
+            "headless_turn_taking": self.headless_turn_taking,
             "hid_policy": self.hid_policy,
             "lighting_policy": self.lighting_policy,
             "hardware_mode": self.hardware_mode,

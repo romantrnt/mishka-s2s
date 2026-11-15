@@ -635,6 +635,11 @@ class AudioIngressPipeline:
         # 512 samples, so collect a small RAM-only VAD window first.
         self._vad_pending: list[float] = []
         self._pre_roll: deque[float] = deque(maxlen=max(0, int(config.sample_rate * config.vad_preroll_ms / 1000)))
+        self._speech_samples = 0
+        self._silence_samples = 0
+        self._speech_confirmed = False
+        # Monotonic so confirmation survives an utterance ending in the same feed.
+        self.speech_confirmations = 0
     def feed(self, samples: tuple[float, ...], token: int) -> tuple[str, AudioChunk | None]:
         self._vad_pending.extend(samples)
         if len(self._vad_pending) < 512:
@@ -658,24 +663,34 @@ class AudioIngressPipeline:
                     self._pre_roll.extend(samples)
                 return "collecting", None
             self.active=True; self.buffer.clear(); self.silence_ms=0
+            # Keep onset context in the PCM, but count speech from this frame.
+            self._speech_samples = len(samples)
+            self._silence_samples = 0
             if self._pre_roll:
                 self.buffer.append(tuple(self._pre_roll)); self._pre_roll.clear()
             self.buffer.append(samples)
         elif probability >= self.config.vad_continue_threshold:
-            self.silence_ms=0; self.buffer.append(samples)
+            self._speech_samples += self._silence_samples + len(samples)
+            self.silence_ms=0; self._silence_samples=0; self.buffer.append(samples)
         elif self.active:
-            self.silence_ms += frame_ms; self.buffer.append(samples)
+            self.silence_ms += frame_ms; self._silence_samples += len(samples); self.buffer.append(samples)
+        if not self._speech_confirmed and self._speech_samples * 1000 >= self.config.min_speech_ms * self.config.sample_rate:
+            self._speech_confirmed = True
+            self.speech_confirmations += 1
         if self.buffer.duration_ms >= self.config.max_speech_ms:
             chunk=self.buffer.chunk(token); self.reset(); return "max_duration", chunk
         # ``silence_ms`` already includes the current silent frame above.
         # Comparing it again with ``+ frame_ms`` would end speech one VAD
         # window early and truncate the final syllable.
         if self.active and self.silence_ms >= self.config.vad_silence_ms:
-            chunk=self.buffer.chunk(token); duration=self.buffer.duration_ms-self.silence_ms; self.reset()
-            if duration < self.config.min_speech_ms: return "too_short", None
+            chunk=self.buffer.chunk(token)
+            speech_samples = self._speech_samples
+            self.reset()
+            # Compare exact PCM counts so rounding cannot reject the minimum.
+            if speech_samples * 1000 < self.config.min_speech_ms * self.config.sample_rate: return "too_short", None
             return "speech_end", chunk
         return "collecting", None
-    def reset(self): self.active=False; self.silence_ms=0; self.buffer.clear(); self._vad_pending.clear(); self._pre_roll.clear(); self._canonical_private_owner = None; self._canonical_private_stale_samples = 0; self._canonical_private_replacement_owner = None
+    def reset(self): self.active=False; self.silence_ms=0; self._speech_samples=0; self._silence_samples=0; self._speech_confirmed=False; self.buffer.clear(); self._vad_pending.clear(); self._pre_roll.clear(); self._canonical_private_owner = None; self._canonical_private_stale_samples = 0; self._canonical_private_replacement_owner = None
 
 
 class MockSpeechRecognizer:
@@ -2415,7 +2430,7 @@ class LocalS2SPipeline:
         self.conversation.metrics.begin_voice_turn(session_id, generation_id=generation)
         self.conversation.metrics.mark_voice(session_id, "ingress", generation_id=generation)
         pipeline = self.ingress.setdefault(session_id, AudioIngressPipeline(self.vad, self.config))
-        was_active = pipeline.active
+        confirmations_before = pipeline.speech_confirmations
         vad_started = time.monotonic()
         try:
             status, audio = pipeline.feed(samples, generation)
@@ -2429,13 +2444,15 @@ class LocalS2SPipeline:
             self.conversation.metrics.finish_voice_turn(session_id, "vad_failure", generation_id=generation)
             return AudioTurnResult("vad_failure", turn=TurnResult((), (), True, "vad_failure"))
         pending = self.pending_tasks.get(session_id)
-        barge_in=not was_active and pipeline.active and (self.conversation.is_active(session_id) or bool(pending and not pending.done()))
+        barge_in=pipeline.speech_confirmations != confirmations_before and (self.conversation.is_active(session_id) or bool(pending and not pending.done()))
         if barge_in:
-            # New speech while output is active is a barge-in. The old task is
-            # cancelled before any newly recognized turn can be dispatched.
+            # Only speech reaching the minimum may interrupt output or pending
+            # recognition. PCM collection continues through this cancellation.
             self.conversation.metrics.event("barge_in", session_id=session_id)
             await self.cancel_output(session_id)
             generation = self.generations.get(session_id, 0)
+            if audio is not None:
+                audio = AudioChunk(audio.samples, audio.sample_rate, generation)
             self.conversation.metrics.begin_voice_turn(session_id, generation_id=generation)
             self.conversation.metrics.mark_voice(session_id, "ingress", generation_id=generation)
         if status in {"collecting", "too_short"}:

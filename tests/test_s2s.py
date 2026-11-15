@@ -506,12 +506,40 @@ def test_nonblocking_audio_turn_releases_ingress_before_stt_finishes():
         await started.wait()
         assert not result.pending.done()
 
-        # New speech is accepted while the old recognizer is still blocked;
-        # it is classified as barge-in and cancels the stale generation.
+        # Short speech keeps the old recognizer pending until the 100 ms minimum.
+        before_generation = pipeline.generations.get("s", 0)
         next_result = await pipeline.feed_audio("s", tuple([.2] * 512), context(), wait_for_turn=False)
-        assert next_result.barge_in is True and next_result.ingress_status == "collecting"
+        assert next_result.barge_in is False and next_result.ingress_status == "collecting"
+        assert not result.pending.done()
+        below_minimum = await pipeline.feed_audio("s", tuple([.2] * 1024), context(), wait_for_turn=False)
+        assert below_minimum.barge_in is False and below_minimum.ingress_status == "collecting"
+        assert not result.pending.done()
+        assert pipeline.generations.get("s", 0) == before_generation
+
+        confirmed = await pipeline.feed_audio("s", tuple([.2] * 512), context(), wait_for_turn=False)
+        assert confirmed.barge_in is True and confirmed.ingress_status == "collecting"
         assert result.pending.cancelled() or result.pending.done()
+        assert pipeline.generations["s"] == before_generation + 1
+        continued = await pipeline.feed_audio("s", tuple([.2] * 512), context(), wait_for_turn=False)
+        assert continued.barge_in is False and continued.ingress_status == "collecting"
+        assert pipeline.generations["s"] == before_generation + 1
+        assert sum(item["event"] == "barge_in" for item in engine.metrics.events) == 1
         release.set()
+
+        handled = []
+
+        async def handle_turn(text, generation):
+            handled.append((text, generation))
+            return s2s_module.TurnResult((), (), False)
+
+        fresh = await pipeline.feed_audio(
+            "s", tuple([0.0] * 4096), context(), wait_for_turn=False, turn_handler=handle_turn,
+        )
+        assert fresh.pending is not None and fresh.ingress_status == "speech_end"
+        completed = await fresh.pending
+        assert completed.stt is not None and completed.stt.text == "fixture"
+        assert completed.turn is not None and completed.turn.fallback_reason is None
+        assert handled == [("fixture", before_generation + 1)]
 
     asyncio.run(flow())
 

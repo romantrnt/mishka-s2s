@@ -49,6 +49,7 @@ from .lighting import (
 
 AUDIO_SAMPLE_RATES = {16000, 22050, 24000, 48000}
 MAX_AUDIO_SECONDS = 15
+HEADLESS_OUTPUT_TAIL_S = 0.350
 MAX_AUDIO_WAV_BYTES = 6 * 1024 * 1024
 HEADLESS_AUDIO_NODES = frozenset({
     "personal_welcome_listen", "fixed_story_menu", "game_menu",
@@ -527,6 +528,23 @@ class UARTDisplayController:
         self.adapter.send({"type":"display","payload":{"asset_id":asset_id,"text":text,"token":token}})
 
 
+class _HeadlessTurnTakingPlaybackController(SoundDevicePlaybackController):
+    """Observe both recorded and generated physical PCM at the shared backend."""
+
+    def __init__(self, device, output_started, output_finished):
+        super().__init__(device)
+        self._output_started = output_started
+        self._output_finished = output_finished
+
+    async def _play_guarded(self, audio, owner_current=None, *, start_position_samples=None):
+        owner = self._output_started(audio.session_id)
+        try:
+            return await super()._play_guarded(
+                audio, owner_current, start_position_samples=start_position_samples)
+        finally:
+            self._output_finished(owner)
+
+
 class HeadlessAudioOutput:
     """Scenario audio port that delegates playback to the local USB device."""
 
@@ -607,6 +625,9 @@ class HardwareIntegrationStand:
         self._headless_audio_queue: asyncio.Queue[Any] | None = None
         self._headless_audio_task: asyncio.Task[Any] | None = None
         self._headless_audio_dropped = 0
+        self._headless_output_epoch = 0
+        self._headless_output_owners: set[Any] = set()
+        self._headless_output_resume_at = 0.0
         self._headless_audio_status: dict[str, Any] = {"state": "not_started"}
         self._startup_state = "starting"
         self._startup_diagnostics: deque[dict[str, Any]] = deque(maxlen=50)
@@ -629,7 +650,13 @@ class HardwareIntegrationStand:
         self.transport=PosixSerialTransport(self.pty.slave_path)
         self.adapter=SerialHardwareAdapter(self.transport,raw_observer=self._observe_raw); self.adapter.connect()
         if self.hardware_mode == "physical":
-            self.playback = SoundDevicePlaybackController(self.settings.audio_output_device or None)
+            self.playback = (
+                _HeadlessTurnTakingPlaybackController(
+                    self.settings.audio_output_device or None,
+                    self._headless_output_started, self._headless_output_finished)
+                if self.settings.headless_turn_taking
+                else SoundDevicePlaybackController(self.settings.audio_output_device or None)
+            )
             self.playback.hardware_current = lambda: not self._physical_output_faulted()
             self.audio_input = SoundDeviceCaptureController(
                 self.settings.audio_input_device or None,
@@ -695,6 +722,38 @@ class HardwareIntegrationStand:
             if frame.type=="capabilities":
                 self.adapter.capabilities=dict(frame.payload); self.adapter.firmware_version=str(frame.payload.get("firmware",""))
 
+    def _headless_turn_taking_enabled(self) -> bool:
+        record = self.application.sessions.get(self.active_session_id)
+        return bool(getattr(self, "hardware_mode", None) == "physical"
+                    and getattr(self.settings, "headless_turn_taking", False)
+                    and getattr(record, "current_node", None) == "bear_dialogue")
+
+    def _headless_output_started(self, sid: str | None):
+        sid = sid or self.active_session_id
+        # Runs on the event loop, never on the sounddevice capture thread.
+        # A fresh owner also fences frames already waiting in the ingress queue.
+        owner = object()
+        self._headless_output_epoch += 1
+        self._headless_output_owners.add(owner)
+        engine = self.application.bounded_s2s
+        queue = getattr(engine, "active_queues", {}).get(sid)
+        worker = getattr(queue, "worker", None)
+        if worker is not None and not worker.done() and worker not in self._headless_output_owners:
+            # Keep the microphone closed across synthesis gaps between chunks
+            # of this reply, beginning only when its first PCM reaches playback.
+            self._headless_output_owners.add(worker)
+            worker.add_done_callback(self._headless_output_finished)
+        if sid == self.active_session_id and self._headless_turn_taking_enabled():
+            ingress = getattr(self.application.s2s_audio, "ingress", {}).get(sid)
+            if ingress is not None:
+                ingress.reset()
+        return owner
+
+    def _headless_output_finished(self, owner) -> None:
+        self._headless_output_owners.discard(owner)
+        self._headless_output_epoch += 1
+        self._headless_output_resume_at = time.monotonic() + HEADLESS_OUTPUT_TAIL_S
+
     def _headless_audio_accepting(self) -> bool:
         session = self.application.sessions.get(self.active_session_id)
         runtime = getattr(self.application, "canonical_runtime", None)
@@ -703,6 +762,9 @@ class HardwareIntegrationStand:
             session is not None
             and getattr(self, "_capture_hid_fault", None) is None
             and not self._physical_output_faulted()
+            and (not self._headless_turn_taking_enabled()
+                 or (not self._headless_output_owners
+                     and time.monotonic() >= self._headless_output_resume_at))
             and getattr(session, "handset_up", False)
             and getattr(state, "handset", None) == "up"
             and not getattr(state, "interaction_idle", False)
@@ -747,7 +809,9 @@ class HardwareIntegrationStand:
         # Called in the capture callback, before scheduling on the event loop.
         sid = self.active_session_id
         owner_current = self._audio_owner_guard(sid, physical=True)
+        output_epoch = getattr(self, "_headless_output_epoch", 0)
         accepting = self._headless_audio_accepting()
+        turn_taking = self._headless_turn_taking_enabled()
         record = self.application.sessions.get(sid)
         node = getattr(record, "current_node", None)
         runtime = getattr(self.application, "canonical_runtime", None)
@@ -760,6 +824,7 @@ class HardwareIntegrationStand:
         def phase_current():
             current = runtime.sessions.get(sid) if runtime is not None else None
             return (accepting and owner_current() and self._headless_audio_accepting()
+                    and (not turn_taking or getattr(self, "_headless_output_epoch", 0) == output_epoch)
                     and (not private_phase or (
                         getattr(record, "current_node", None) == node
                         and getattr(current, "state_version", None) == version
