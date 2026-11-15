@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest
 from app.foundation.config import Settings
@@ -120,6 +120,9 @@ def test_physical_completion_uses_original_handle_after_new_playback(tmp_path):
         playback=Playback(), application=Application(), stories={},
         commands=[], errors=[], _audio_event_sequence=0,
         _offload_audio=offload, _collect_events=lambda: None,
+    )
+    stand._physical_output_faulted = MethodType(
+        HardwareIntegrationStand._physical_output_faulted, stand,
     )
     old = SimpleNamespace(
         session_id="sid", generation=3, playback_id="old-play",
@@ -275,6 +278,9 @@ def test_two_real_physical_callbacks_reach_canonical_with_distinct_execution_ids
             playback=Playback(), application=app, stories={},
             commands=[], errors=[], _audio_event_sequence=0,
             _offload_audio=offload, _collect_events=lambda: None,
+        )
+        fake_stand._physical_output_faulted = MethodType(
+            HardwareIntegrationStand._physical_output_faulted, fake_stand,
         )
         token = app.sessions.get(sid).cancellation_token
         handles = [
@@ -557,6 +563,9 @@ def test_two_physical_failures_for_repeated_phrase_have_distinct_canonical_ids(t
             playback=FailingPlayback(), application=app, stories={},
             commands=[], errors=[], _audio_event_sequence=0,
             _offload_audio=offload, _collect_events=lambda: None,
+        )
+        fake_stand._physical_output_faulted = MethodType(
+            HardwareIntegrationStand._physical_output_faulted, fake_stand,
         )
         for identity in ("A", "B"):
             lease = "lease-" + identity

@@ -61,7 +61,11 @@ def test_operational_health_is_machine_readable_and_redacted():
         assert "transcript" not in json.dumps(health).lower()
         assert "profile_db" not in json.dumps(health).lower()
         diagnostics = stand.diagnostics_snapshot()
-        assert set(diagnostics) == {"health", "trace", "diagnostics", "physical_lighting", "lighting_hardware"}
+        assert set(diagnostics) == {"health", "trace", "diagnostics", "physical_lighting", "lighting_hardware", "input_hardware"}
+        assert diagnostics["input_hardware"] == {
+            "level_source": "last_observed_hid", "ready": False,
+            "semantic_input_accepted": False, "physical_ready": False,
+        }
         assert "session_id" not in json.dumps(diagnostics)
         assert "audio_buffer" not in json.dumps(diagnostics).lower()
     finally:
