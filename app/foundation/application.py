@@ -21,7 +21,7 @@ from .domain import AudioOutput, DisplayController, Event, EventPublisher, Inten
 from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .age_policy import trusted_canonical_age
-from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseResolver, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
+from .canonical_services import LED_PRESETS, DIALOGUE_FILL_ELEMENTS, DIALOGUE_ANCHOR_ELEMENTS, BUTTON_ELEMENTS, RecordedPhraseResolver, SimulatedAdultHandoff, TypedInfoRenderer, classify_intent
 from .config import settings_from_compat_env
 from .identity import IdentityDecision, IdentityValidationError, validate_identity_decision
 from .input_safety import InputSafetyGate
@@ -382,8 +382,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             await self.expire_identity_leases()
             return None
         phase = str(phase or "listening")
-        fills = tuple(BUTTON_FILL_ELEMENTS[button] for button in range(1, 8))
-        anchors = (PICTOGRAM_ELEMENTS[6], BUTTON_DIGIT_ELEMENTS[7][1])
+        fills = DIALOGUE_FILL_ELEMENTS
+        anchors = DIALOGUE_ANCHOR_ELEMENTS
         if phase == "processing":
             start_wave = getattr(self.led, "start_wave", None)
             if not callable(start_wave):
@@ -1917,6 +1917,18 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         "error_code":"scene_menu_audio_unavailable"}
                     _set_audio_effect_status(effect,asset_status="unavailable",queued=False,resolution="scene_menu_audio_unavailable")
             elif kind == "lighting_preset":
+                preset = str(effect.get("preset", ""))
+                # An explicit, current canonical listening effect owns this
+                # frame. Backend dialogue callbacks remain bear-mode scoped.
+                start_breathing = getattr(self.led, "start_breathing", None)
+                if preset == "LISTENING" and callable(start_breathing):
+                    effect["lighting_effect"] = dict(start_breathing(
+                        now=self.monotonic_now(), elements=DIALOGUE_FILL_ELEMENTS,
+                        base_elements=DIALOGUE_ANCHOR_ELEMENTS, phase="listening",
+                        preserve_current=True,
+                    ))
+                    effect["resolution"] = "canonical_listening_lighting"
+                    continue
                 # Replace the complete logical frame in one ordered batch.
                 # Sending clear_all() first caused a visible off-to-on pulse
                 # on the large weather pictogram (element 17).

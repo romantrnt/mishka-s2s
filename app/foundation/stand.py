@@ -33,6 +33,7 @@ from .s2s import AudioChunk, SoundDeviceCaptureController, SoundDevicePlaybackCo
 from .input_adapters import KeyboardHIDInputAdapter, NormalizedInputEvent
 from .led_contract import BUTTON_LED_COLORS, button_contract, canonical_led_state, canonical_led_state_from_lighting, fixed_button_colors
 from .lighting import (
+    LightingFaultLatchedError,
     BUTTON_OUTPUT_ELEMENTS,
     FakeLightingOutput,
     PhysicalLightingOutput,
@@ -590,6 +591,13 @@ class HardwareIntegrationStand:
         self.lighting_serial = None
         self.input_adapter = None
         self._physical_loop = None
+        try:
+            self._lighting_owner_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._lighting_owner_loop = None
+        self._lighting_fault = None
+        self._lighting_fault_generation = 0
+        self._lighting_fault_future = None
         self._physical_sequence = 0
         self._admits_physical_users = None
         self._hid_generation = 0
@@ -622,6 +630,7 @@ class HardwareIntegrationStand:
         self.adapter=SerialHardwareAdapter(self.transport,raw_observer=self._observe_raw); self.adapter.connect()
         if self.hardware_mode == "physical":
             self.playback = SoundDevicePlaybackController(self.settings.audio_output_device or None)
+            self.playback.hardware_current = lambda: not self._physical_output_faulted()
             self.audio_input = SoundDeviceCaptureController(
                 self.settings.audio_input_device or None,
                 sample_rate=self.settings.audio_sample_rate,
@@ -634,7 +643,7 @@ class HardwareIntegrationStand:
                     raise RuntimeError("MISHKA_LIGHTING_DEVICE is required in physical hardware mode")
                 self.lighting_serial = SerialLightingAdapter(self.settings.lighting_device, baudrate=self.settings.lighting_baudrate, timeout_s=self.settings.lighting_timeout_s)
                 self.lighting_serial.open()
-                self.lighting_output = PhysicalLightingOutput(self.lighting_serial)
+                self.lighting_output = PhysicalLightingOutput(self.lighting_serial, auto_dark_recovery=True, on_fault=self._on_lighting_fault)
                 self._lighting_status = {"state": "available", "backend": "physical_serial_lighting"}
             except Exception as exc:
                 self.lighting_serial = None
@@ -693,6 +702,7 @@ class HardwareIntegrationStand:
         return bool(
             session is not None
             and getattr(self, "_capture_hid_fault", None) is None
+            and not self._physical_output_faulted()
             and getattr(session, "handset_up", False)
             and getattr(state, "handset", None) == "up"
             and not getattr(state, "interaction_idle", False)
@@ -716,6 +726,7 @@ class HardwareIntegrationStand:
         epoch = self.application._session_epochs.get(sid, 0)
         hid_generation = getattr(self, "_hid_generation", 0)
         capture_generation = getattr(self, "_capture_generation", 0)
+        lighting_generation = getattr(self, "_lighting_fault_generation", 0)
 
         def current():
             return (self.application.sessions.get(sid) is record
@@ -726,6 +737,8 @@ class HardwareIntegrationStand:
                         and getattr(self, "_hid_generation", 0) == hid_generation
                         and getattr(self, "_capture_generation", 0) == capture_generation
                         and getattr(self, "_capture_hid_fault", None) is None
+                        and getattr(self, "_lighting_fault_generation", 0) == lighting_generation
+                        and not self._physical_output_faulted()
                         and getattr(self.application.canonical_runtime.sessions.get(sid), "handset", None) == "up"
                         and bool(record and record.handset_up))))
         return current
@@ -871,6 +884,8 @@ class HardwareIntegrationStand:
     async def _start_hardware_locked(self):
         if self.hardware_mode != "physical":
             return
+        if getattr(self, "_lighting_fault", None) is not None:
+            raise RuntimeError("lighting fault requires a new hardware lifecycle")
         pending_loss = getattr(self, "_hid_loss_future", None)
         if pending_loss is not None:
             await self._settle_hid_loss(pending_loss)
@@ -888,6 +903,7 @@ class HardwareIntegrationStand:
                 return
             raise RuntimeError(self._input_start_error["detail"])
         self._physical_loop = asyncio.get_running_loop()
+        self._lighting_owner_loop = self._physical_loop
         old_adapter = self.input_adapter
         self.input_adapter = None
         self._hid_generation = getattr(self, "_hid_generation", 0) + 1
@@ -965,7 +981,7 @@ class HardwareIntegrationStand:
 
     def _pcm_owner_current(self, handle: PlaybackHandle, identity_binding) -> bool:
         # Reader faults revoke output synchronously, before owner-loop teardown.
-        if getattr(self, "_capture_hid_fault", None) is not None:
+        if getattr(self, "_capture_hid_fault", None) is not None or self._physical_output_faulted():
             return False
         from .owned_speech import OWNED_PCM_IDS, PRIVATE_TYPED_AUDIO_IDS
         lease = self.application._active_audio.get(handle.session_id)
@@ -998,6 +1014,7 @@ class HardwareIntegrationStand:
         return bool(handle.response_id == "PERSONAL_STORY" and paused
             and self.active_session_id == handle.session_id
             and getattr(self, "_capture_hid_fault", None) is None
+            and not self._physical_output_faulted()
             and getattr(self, "_hid_generation", 0) == hid_generation
             and app._session_epochs.get(handle.session_id, 0) == handle.generation
             and app._personal_story_scope(handle.session_id, story_owner, checkpoint=True)
@@ -1158,6 +1175,7 @@ class HardwareIntegrationStand:
         physical = getattr(self, "hardware_mode", None) == "physical"
         def current():
             if (getattr(self, "_capture_hid_fault", None) is not None
+                    or self._physical_output_faulted()
                     or getattr(self, "_hid_generation", 0) != hid_generation):
                 return False
             if not physical:
@@ -1184,6 +1202,7 @@ class HardwareIntegrationStand:
                 and state.active_story_id == response_id
                 and self.active_session_id == session_id
                 and getattr(self, "_capture_hid_fault", None) is None
+                and not self._physical_output_faulted()
                 and getattr(self, "_hid_generation", 0) == hid_generation
                 and self.application._session_epochs.get(session_id, 0) == handle.generation
                 and all(paused.get(key) == value for key, value in {
@@ -1318,6 +1337,111 @@ class HardwareIntegrationStand:
                       f"audio-failed:{handle.playback_id}"),
             )
 
+    def _physical_output_faulted(self) -> bool:
+        if getattr(self, "_lighting_fault", None) is not None:
+            return True
+        if getattr(self, "hardware_mode", None) != "physical":
+            return False
+        diagnostics = getattr(getattr(self, "lighting_output", None), "diagnostics", None)
+        if not callable(diagnostics):
+            return False
+        try:
+            return not diagnostics().get("output_ready", True)
+        except Exception:
+            return True
+
+    def _on_lighting_fault(self, output, diagnostic) -> None:
+        # Called on the sole serial writer. The latch revokes already-issued
+        # capture/playback guards before scheduling any asynchronous teardown.
+        if (output is not getattr(self, "lighting_output", None) or getattr(self, "_closed", False)
+                or getattr(output, "_closing", False) or getattr(output, "_closed", False)):
+            return
+        if getattr(self, "_lighting_fault", None) is not None:
+            return
+        self._lighting_fault_generation = getattr(self, "_lighting_fault_generation", 0) + 1
+        fault = {"owner_generation": self._lighting_fault_generation,
+                 "output_generation": diagnostic.get("generation"),
+                 "stage": "physical_lighting_loss", "at_monotonic": time.monotonic()}
+        self._lighting_fault = fault
+        loop = getattr(self, "_physical_loop", None) or getattr(self, "_lighting_owner_loop", None)
+        if loop is None or loop.is_closed():
+            return
+        self._lighting_fault_future = asyncio.run_coroutine_threadsafe(
+            self._handle_lighting_fault(output, fault, self.active_session_id), loop)
+        self._lighting_fault_future.add_done_callback(self._observe_lighting_fault_cleanup)
+
+    def _observe_lighting_fault_cleanup(self, done) -> None:
+        if done.cancelled():
+            return
+        try:
+            done.result()
+        except Exception:
+            self.errors.append({"at": time.time(), "stage": "physical_lighting_loss",
+                                "error_code": "lighting_cleanup_failed"})
+
+    async def _handle_lighting_fault(self, output, fault, sid: str) -> None:
+        if (getattr(self, "_closed", False) or self._lighting_fault is not fault
+                or self.lighting_output is not output):
+            return
+        app = self.application
+        self._cancel_response_audio(); self._cancel_story_audio()
+        app._cancel_game_timer(sid); app._cancel_welcome_timer(sid)
+        app._cancel_menu_tutorial(sid); app._cancel_lighting_wave(sid)
+        app._cancel_owned_text(sid)
+        # Capture queues are revoked synchronously on the owner loop. The
+        # potentially blocking device stop is bounded and kept off that loop.
+        self._capture_generation = getattr(self, "_capture_generation", 0) + 1
+        capture, playback = self.audio_input, self.playback
+        task, self._headless_audio_task = self._headless_audio_task, None
+        self._headless_audio_queue = None
+        if task is not None:
+            task.cancel(); task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+        self._headless_audio_status = {"state": "unavailable", "error_code": "lighting_unavailable"}
+        try:
+            # A lighting-device failure is a generic hardware fault, not an
+            # invented HID edge. This transition preserves any urgent incident.
+            await app._receive_canonical_event(Event("HardwareDisconnected", sid,
+                fault["owner_generation"], time.time(), "physical_lighting_loss", {},
+                "lighting-loss:" + str(fault["owner_generation"])))
+        except LightingFaultLatchedError:
+            # SAFE_STOP's lit frame is deliberately forbidden by the physical
+            # fault latch. Canonical fault/epoch transition already committed.
+            pass
+        finally:
+            def owns_fault():
+                return (not self._closed and self._lighting_fault is fault
+                        and self.lighting_output is output and self.application is app)
+            if owns_fault():
+                app._cancel_game_timer(sid); app._invalidate_audio_lease(sid)
+            async def stop_resource(resource):
+                if not owns_fault() or (resource == "capture" and capture is None):
+                    return
+                try:
+                    if resource == "playback":
+                        await playback.stop()
+                    else:
+                        def stop_capture():
+                            if owns_fault():
+                                capture.stop()
+                        await asyncio.to_thread(stop_capture)
+                except Exception:
+                    if owns_fault():
+                        self.errors.append({"at": time.time(), "stage": "physical_lighting_loss",
+                                            "error_code": "lighting_device_stop_failed", "resource": resource})
+            async def stop_owned():
+                # Independent attempts on captured objects: a broken or slow
+                # speaker must not leave microphone stop unattempted (or vice versa).
+                await asyncio.gather(stop_resource("playback"), stop_resource("capture"),
+                                     return_exceptions=True)
+            stop = asyncio.create_task(stop_owned(), name="mishka-lighting-fault-stop")
+            stop.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+            try:
+                await asyncio.wait_for(asyncio.shield(stop), timeout=1.0)
+            except asyncio.TimeoutError:
+                if owns_fault():
+                    self.errors.append({"at": time.time(), "stage": "physical_lighting_loss",
+                                        "error_code": "lighting_cleanup_timeout"})
+
     def _on_hid_error(self, diagnostic: dict[str, Any], generation: int) -> None:
         if generation != getattr(self, "_hid_generation", 0):
             return
@@ -1438,10 +1562,22 @@ class HardwareIntegrationStand:
         if event.event_type not in {"HandsetPlaced", "HardwareDisconnected"}:
             if getattr(self, "_capture_hid_fault", None) is not None:
                 return {"state": "idle", "reason": "hid_unavailable", "outputs": []}
+            if self._physical_output_faulted():
+                return {"state": "idle", "reason": "lighting_unavailable", "outputs": []}
             admits = self._admits_physical_users
             if admits is None or not admits():
                 return {"state": "idle", "reason": "runtime_unavailable", "outputs": []}
-        result = await self.application.receive_async(event, None)
+        try:
+            result = await self.application.receive_async(event, None)
+        except LightingFaultLatchedError:
+            # The native writer may latch after admission, including for an
+            # ordinary button. Report that known lighting failure, not HID loss.
+            current = self.application.canonical_runtime.sessions.get(event.session_id)
+            reason = ("lighting_unavailable_cleanup" if event.event_type in
+                      {"HandsetPlaced", "HardwareDisconnected"} else "lighting_unavailable")
+            result = {"reason": reason, "outputs": [],
+                      "canonical_state": current.snapshot() if current else {"mode": "idle", "handset": "down"},
+                      "host_write_completed": False, "firmware_acknowledged": False}
         self._collect_events()
         await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
         return result
@@ -2081,6 +2217,47 @@ class HardwareIntegrationStand:
                 result["latency_ms"] = latency
         return result
 
+    @staticmethod
+    def _safe_input_diagnostics(value: Any) -> dict[str, Any]:
+        """Fixed, bounded HID evidence; never paths, tokens or arbitrary text."""
+        if not isinstance(value, dict):
+            return {}
+        result = {"level_source": "last_observed_hid"}
+        for key in ("ready", "reader_alive", "input_desynchronized",
+                    "semantic_input_accepted", "physical_ready"):
+            if type(value.get(key)) is bool:
+                result[key] = value[key]
+        for key in ("events", "raw_key_events", "errors", "unverified_events"):
+            item = value.get(key)
+            if type(item) is int and 0 <= item < 2 ** 63:
+                result[key] = item
+        status = value.get("status")
+        if isinstance(status, str) and status in {"active", "stopped", "device_unavailable", "device_disconnected",
+                      "reader_exception", "dispatch_failure", "input_desynchronized"}:
+            result["status"] = status
+        levels = value.get("pressed_buttons")
+        if (isinstance(levels, (list, tuple)) and len(levels) <= 8
+                and all(type(item) is int and item in (*range(1, 8), 57) for item in levels)):
+            result["pressed_buttons"] = sorted({item for item in levels
+                if type(item) is int and item in range(1, 8)})
+            result["space_pressed"] = any(type(item) is int and item == 57 for item in levels)
+        edge = value.get("last_raw_key")
+        if (isinstance(edge, dict) and isinstance(edge.get("kind"), str)
+                and edge["kind"] in {"press", "release", "repeat"}):
+            control = edge.get("control")
+            if isinstance(control, str) and control in {"button", "handset"}:
+                safe = {"kind": edge["kind"], "control": control}
+                if control == "button" and type(edge.get("button_id")) is int and edge["button_id"] in range(1, 8):
+                    safe["button_id"] = edge["button_id"]
+                at = edge.get("at_monotonic")
+                if type(at) in (int, float) and 0 <= at <= 10 ** 15:
+                    safe["at_monotonic"] = at
+                result["last_raw_key"] = safe
+        return result
+
+    def _input_diagnostics(self) -> dict[str, Any]:
+        return self._safe_input_diagnostics(_hid_diagnostics(self.input_adapter))
+
     def _lighting_diagnostics(self) -> dict[str, Any]:
         runtime = (self.lighting_serial.diagnostics() if self.lighting_serial is not None
                    else dict(getattr(self, "_lighting_status", {})))
@@ -2089,9 +2266,11 @@ class HardwareIntegrationStand:
             output = output_diagnostics()
             for key in ("output_ready", "generation_failed", "pending_batches", "in_flight",
                         "max_pending_batches", "submitted_batches", "written_batches",
-                        "dropped_batches", "failed_batches", "overflow_batches"):
+                        "dropped_batches", "failed_batches", "overflow_batches", "generation",
+                        "last_failure", "dark_recovery_attempts", "dark_recovery", "fault_latched"):
                 if key in output:
                     runtime[key] = output[key]
+        runtime["owner_fault_latched"] = getattr(self, "_lighting_fault", None) is not None
         runtime["state_kind"] = "desired_targets"
         # A completed host write is not a firmware acknowledgement or optical
         # measurement. Do not claim observed physical brightness from targets.
@@ -2100,7 +2279,7 @@ class HardwareIntegrationStand:
 
     def physical_hardware_ready(self) -> bool:
         """Live host-side controls/audio readiness, not acoustic/firmware acceptance."""
-        if self.hardware_mode != "physical" or self._closed:
+        if self.hardware_mode != "physical" or self._closed or self._physical_output_faulted():
             return False
         try:
             hid = _hid_diagnostics(self.input_adapter)
@@ -2145,7 +2324,8 @@ class HardwareIntegrationStand:
         lighting_state = str(getattr(self, "_lighting_status", {}).get("state") or "unavailable")
         lighting_runtime = self._lighting_diagnostics()
         if self.hardware_mode == "physical" and self.lighting_serial is not None and (
-                not lighting_runtime.get("ready", False) or not lighting_runtime.get("output_ready", True)):
+                not lighting_runtime.get("ready", False) or not lighting_runtime.get("output_ready", True)
+                or lighting_runtime.get("owner_fault_latched", False)):
             # A serial adapter can open successfully and fail later while a
             # USB CDC device is busy.  Readiness must reflect the live
             # transport, otherwise the panel claims production readiness
@@ -2228,6 +2408,7 @@ class HardwareIntegrationStand:
             "trace": list(reversed(trace)),
             "diagnostics": diagnostic_items,
             "lighting_hardware": self._lighting_diagnostics(),
+            "input_hardware": self._input_diagnostics(),
             # Bounded and redacted, but lossless for every physical lighting ID.
             "physical_lighting": dict(self.lighting_output.snapshot()),
         }
@@ -2509,6 +2690,7 @@ class HardwareIntegrationStand:
             "lighting": dict(source.get("lighting") or {}),
             "physical_lighting": dict(source.get("physical_lighting") or source.get("lighting") or {}),
             "lighting_hardware": dict((source.get("hardware") or {}).get("lighting") or {}),
+            "input_hardware": self._safe_input_diagnostics((source.get("hardware") or {}).get("input")),
             "audio_input": dict((source.get("hardware") or {}).get("audio_input") or {}),
             "lighting_wave": dict(source.get("lighting_wave") or {}),
             "lighting_effects": dict(source.get("lighting_effects") or {}),

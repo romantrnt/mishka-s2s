@@ -27,6 +27,11 @@ def _button_lights(*button_ids: int, digits: bool = False, pictograms: bool = Fa
             commands.append((element_id, 1))
     return tuple(commands)
 
+# Shared with the existing conversational listening/output renderer.
+# These are logical roles, not the pre-remap flat channel 14.
+DIALOGUE_FILL_ELEMENTS = tuple(BUTTON_FILL_ELEMENTS[button] for button in range(1, 8))
+DIALOGUE_ANCHOR_ELEMENTS = (PICTOGRAM_ELEMENTS[6], BUTTON_DIGIT_ELEMENTS[7][1])
+
 LED_PRESETS = {
     # READY is deliberately attract-light only; menu controls are enabled
     # by ROOT_MENU after the physical session has entered the menu.
@@ -42,7 +47,7 @@ LED_PRESETS = {
     "BEAR_DIALOGUE": ((14, 1),),
     "SCHEDULE_WEATHER": ((6, 1), (15, 1)),
     "MOOD_CHOICES": _button_lights(1, 2, 3, 4, 5, 6, 7),
-    "LISTENING": ((14, 1),),
+    "LISTENING": tuple((element, 1) for element in DIALOGUE_FILL_ELEMENTS + DIALOGUE_ANCHOR_ELEMENTS),
     "EXHIBITION_AGE_CHOICES": _button_lights(1, 2, 3),
     "EXHIBITION_MENU_TUTORIAL": (),
     "THINKING": ((14, 1),),

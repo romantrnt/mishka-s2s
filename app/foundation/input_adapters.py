@@ -57,6 +57,8 @@ class KeyboardHIDInputAdapter:
         self._ready = False
         self._closed = False
         self._events = 0
+        self._raw_key_events = 0
+        self._last_raw_key: dict | None = None
         self._errors = 0
         self._last_error: dict | None = None
         self._status = "stopped"
@@ -92,7 +94,7 @@ class KeyboardHIDInputAdapter:
         for code in self.SUPPORTED_KEY_CODES:
             if bitmap[code // 8] & (1 << (code % 8)):
                 self._pressed.add(self.KEY_CODES.get(code, code))
-        self._initial_level_sync = {"status": "synced", "space_pressed": self.KEY_SPACE in self._pressed, "pressed_buttons": sorted(self.KEY_CODES[code] for code in self.KEY_CODES if code in self._pressed), "first_event_policy": "accept_edges_against_synced_level"}
+        self._initial_level_sync = {"status": "synced", "space_pressed": self.KEY_SPACE in self._pressed, "pressed_buttons": sorted(button for button in self.KEY_CODES.values() if button in self._pressed), "first_event_policy": "accept_edges_against_synced_level"}
 
     def open(self) -> None:
         with self._lock:
@@ -158,6 +160,17 @@ class KeyboardHIDInputAdapter:
 
     def feed_key(self, key_code: int, value: int, *, timestamp: float | None = None) -> None:
         """Inject a Linux key edge (1=down, 0=up, 2=autorepeat)."""
+        # Observe only our eight supported controls, before normalization and
+        # admission. This is evidence of received HID, not accepted user intent
+        # or proof of current physical levels after a stalled device.
+        if int(key_code) in self.SUPPORTED_KEY_CODES and value in (0, 1, 2):
+            self._raw_key_events += 1
+            self._last_raw_key = {
+                "kind": {0: "release", 1: "press", 2: "repeat"}[value],
+                "control": "handset" if int(key_code) == self.KEY_SPACE else "button",
+                "button_id": self.KEY_CODES.get(int(key_code)),
+                "at_monotonic": time.monotonic() if timestamp is None else float(timestamp),
+            }
         # After evdev queue loss no buffered edge has physical authority.
         # Only explicit close/open recovery may establish a new level baseline.
         if self._desynchronized:
@@ -261,6 +274,9 @@ class KeyboardHIDInputAdapter:
             "backend": "hid",
                         "pressed_buttons": sorted(self._pressed),
             "events": self._events,
+            "raw_key_events": self._raw_key_events,
+            "last_raw_key": dict(self._last_raw_key) if self._last_raw_key else None,
+            "level_source": "last_observed_hid",
             "errors": self._errors,
             "last_error": self._last_error,
             "status": self._status,

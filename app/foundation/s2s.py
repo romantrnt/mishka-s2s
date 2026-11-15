@@ -1687,6 +1687,7 @@ class SoundDevicePlaybackController:
         self._generation = 0
         self._io_future: asyncio.Task[Any] | None = None
         self._play_lock = asyncio.Lock()
+        self.hardware_current = None
         self._close_lock = asyncio.Lock()
         self.position_samples = 0
         self.start_position_samples = 0
@@ -1768,6 +1769,7 @@ class SoundDevicePlaybackController:
         def current():
             return (not task.cancelling()
                     and generation == self._generation and audio.token == self.active_token
+                    and (self.hardware_current is None or self.hardware_current())
                     and (owner_current is None or owner_current()))
         async with self._play_lock:
             # Ordinary queued assets historically sample stop-generation here.

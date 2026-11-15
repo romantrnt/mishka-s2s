@@ -686,6 +686,25 @@ class ExhibitionLightingEngine:
 
 
 
+def _lighting_failure_evidence(exc: BaseException, *, stage: str) -> dict[str, object]:
+    """Fixed-shape transport evidence, never arbitrary exception messages."""
+    cause = exc
+    for _ in range(4):
+        nested = cause.__cause__
+        if nested is None or nested is cause:
+            break
+        cause = nested
+    number = getattr(cause, "errno", None)
+    known = {"OSError", "TimeoutError", "ConnectionError", "BufferError", "RuntimeError",
+             "ValueError", "TypeError", "InterruptedError", "BlockingIOError",
+             "FileNotFoundError", "PermissionError", "BrokenPipeError",
+             "_IncompleteLightingLineError"}
+    code = lambda error: type(error).__name__ if type(error).__name__ in known else "OtherError"
+    return {"exception_type": code(exc), "cause_type": code(cause),
+            "errno": number if type(number) is int else None,
+            "stage": stage, "at_monotonic": time.monotonic()}
+
+
 class _IncompleteLightingLineError(ConnectionError):
     """A partial or unconfirmed CSV line cannot safely be replayed."""
 
@@ -714,6 +733,7 @@ class SerialLightingAdapter:
         self._failed = 0
         self._last_error: dict | None = None
         self._last_open_at: float | None = None
+        self._last_write_failure: dict | None = None
         self._drain_stop = threading.Event()
         self._drain_thread: threading.Thread | None = None
         self._drained_bytes = 0
@@ -836,10 +856,8 @@ class SerialLightingAdapter:
                     self._sent += 1
                 return True
             except Exception as exc:
-                first_error = {
-                    "exception_type": type(exc).__name__,
-                    "detail": str(exc)[:200],
-                }
+                first_error = _lighting_failure_evidence(exc, stage="serial_batch_write")
+                self._last_write_failure = dict(first_error)
                 self._failed += 1
                 self._ready = False
                 self._last_error = {**first_error, "attempt": 1}
@@ -871,11 +889,10 @@ class SerialLightingAdapter:
                         self._line_boundary_pending = True
                     self._ready = False
                     self._last_error = {
-                        "exception_type": type(retry_exc).__name__,
-                        "detail": str(retry_exc)[:200],
-                        "attempt": 2,
-                        "first_error": first_error,
+                        **_lighting_failure_evidence(retry_exc, stage="serial_batch_retry"),
+                        "attempt": 2, "first_error": first_error,
                     }
+                    self._last_write_failure = dict(self._last_error)
                     raise ConnectionError("lighting serial write failed") from retry_exc
 
     def reconnect(self) -> None:
@@ -892,12 +909,17 @@ class SerialLightingAdapter:
             "sent_commands": self._sent,
             "failed_commands": self._failed,
             "last_error": self._last_error,
+            "last_write_failure": dict(self._last_write_failure) if self._last_write_failure else None,
             "last_open_at": self._last_open_at,
             "drained_bytes": self._drained_bytes,
             "framing_recovery_pending": self._line_boundary_pending,
             "framing_recoveries": self._line_boundary_recoveries,
             "drain_alive": bool(self._drain_thread and self._drain_thread.is_alive()),
         }
+
+
+class LightingFaultLatchedError(ConnectionError):
+    """A scenario producer cannot revive a failed physical device owner."""
 
 
 class PhysicalLightingOutput:
@@ -908,7 +930,8 @@ class PhysicalLightingOutput:
     it. Flush means host writes completed, never firmware acknowledgement.
     """
 
-    def __init__(self, adapter: SerialLightingAdapter, *, max_pending_batches: int = 32) -> None:
+    def __init__(self, adapter: SerialLightingAdapter, *, max_pending_batches: int = 32,
+                 auto_dark_recovery: bool = False, on_fault=None) -> None:
         if isinstance(max_pending_batches, bool) or not isinstance(max_pending_batches, int) or max_pending_batches < 2:
             raise ValueError("max_pending_batches must be an integer of at least two")
         self.adapter = adapter
@@ -930,20 +953,57 @@ class PhysicalLightingOutput:
         self._dropped_batches = 0
         self._failed_batches = 0
         self._overflow_batches = 0
+        self._auto_dark_recovery = bool(auto_dark_recovery)
+        self._on_fault = on_fault
+        self._fault_latched = False
+        self._dark_recovery_attempts = 0
+        self._dark_recovery: dict[str, object] | None = None
 
     def _is_current(self, generation: int) -> bool:
         with self._lock:
             return generation == self._generation
 
-    def _write_batch(self, generation: int, commands: tuple[LightingCommand, ...]) -> bool:
-        if not self._is_current(generation):
+    def _write_batch(self, generation: int, commands: tuple[LightingCommand, ...], *, deadline=None) -> bool:
+        def current():
+            return self._is_current(generation) and (deadline is None or time.monotonic() < deadline)
+        if not current():
             return False
         if hasattr(self.adapter, "is_ready") and not self.adapter.is_ready():
             reconnect = getattr(self.adapter, "reconnect", None)
             if not callable(reconnect):
                 raise ConnectionError("lighting serial adapter is not ready")
             reconnect()
-        return self.adapter.send_batch(commands, is_current=lambda: self._is_current(generation))
+        return self.adapter.send_batch(commands, is_current=current)
+
+    def _recover_dark_once(self, generation: int) -> None:
+        # Run on the same sole writer, not another executor or periodic task.
+        # Never replay failed lit targets and never clear the failed-owner latch.
+        with self._condition:
+            if (not self._auto_dark_recovery or generation != self._generation
+                    or self._closed or self._closing or self._dark_recovery_attempts):
+                return
+            self._dark_recovery_attempts += 1
+            recovery = {"generation": generation, "stage": "terminal_dark_recovery",
+                        "at_monotonic": time.monotonic(), "status": "pending",
+                        "host_write_completed": False, "firmware_acknowledged": False}
+            self._dark_recovery = recovery
+            commands = tuple(LightingCommand(i, 0) for i in LIGHTING_ELEMENT_IDS)
+            for command in commands:
+                self.state.apply(command)
+        # One native POSIX line may finish after this budget, but no further
+        # line is admitted. No retry loop and no extra queued batch is created.
+        deadline = time.monotonic() + 1.0
+        try:
+            written = self._write_batch(generation, commands, deadline=deadline)
+            result = {"status": "host_dark_written" if written else "superseded_or_timed_out",
+                      "host_write_completed": bool(written)}
+        except Exception as exc:
+            result = {"status": "failed", "host_write_completed": False,
+                      "failure": _lighting_failure_evidence(exc, stage="terminal_dark_recovery")}
+        with self._condition:
+            recovery.update(result)
+            recovery["completed_at_monotonic"] = time.monotonic()
+            # output_ready remains false until an explicit new generation.
 
     def _drain_pending(self) -> None:
         while True:
@@ -962,19 +1022,28 @@ class PhysicalLightingOutput:
                     else:
                         self._dropped_batches += 1
             except Exception as exc:
+                notify_fault = False
                 with self._condition:
-                    error = {
-                        "exception_type": type(exc).__name__,
-                        "detail": str(exc)[:200], "generation": generation,
-                    }
+                    error = {**_lighting_failure_evidence(exc, stage="output_batch_write"),
+                             "generation": generation}
                     self._last_async_error = error
                     self._failed_batches += 1
                     if generation == self._generation:
                         self._generation_error = error
+                        notify_fault = not self._fault_latched
+                        self._fault_latched = self._fault_latched or self._auto_dark_recovery or callable(self._on_fault)
                         # Stop the failed producer's queued backlog. A new
                         # generation/reset may explicitly reconcile output.
                         self._dropped_batches += len(self._pending)
                         self._pending.clear()
+                if notify_fault and callable(self._on_fault):
+                    try:
+                        self._on_fault(self, dict(error))
+                    except Exception:
+                        # The output fence is already latched. Never reopen it
+                        # because an owner-loop notification could not be sent.
+                        pass
+                self._recover_dark_once(generation)
             finally:
                 with self._condition:
                     self._in_flight = False
@@ -984,6 +1053,8 @@ class PhysicalLightingOutput:
         if len(self._pending) + int(self._in_flight) >= self._max_pending_batches:
             self._overflow_batches += 1
             raise BufferError("lighting output queue is full")
+        if self._fault_latched and any(command.state for command in commands):
+            raise LightingFaultLatchedError("lighting fault requires a new hardware lifecycle")
         if self._generation_error is not None:
             raise ConnectionError("lighting output requires a new generation after failure")
         self._pending.append((self._generation, commands))
@@ -1028,7 +1099,7 @@ class PhysicalLightingOutput:
 
     def invalidate_pending(self) -> None:
         with self._lock:
-            if self._closing or self._closed:
+            if self._closing or self._closed or self._fault_latched:
                 return
             self._invalidate_locked()
 
@@ -1084,8 +1155,12 @@ class PhysicalLightingOutput:
                 "failed_batches": self._failed_batches,
                 "overflow_batches": self._overflow_batches,
                 "async_error": dict(self._last_async_error) if self._last_async_error else None,
-                "output_ready": not (self._closed or self._closing or self._generation_error is not None),
-                "generation_failed": self._generation_error is not None,
+                "last_failure": dict(self._last_async_error) if self._last_async_error else None,
+                "dark_recovery_attempts": self._dark_recovery_attempts,
+                "dark_recovery": dict(self._dark_recovery) if self._dark_recovery else None,
+                "output_ready": not (self._closed or self._closing or self._fault_latched or self._generation_error is not None),
+                "generation_failed": self._fault_latched or self._generation_error is not None,
+                "fault_latched": self._fault_latched,
                 "firmware_acknowledged": False,
             }
         return {"backend": "serial", **self.adapter.diagnostics(), **output}
