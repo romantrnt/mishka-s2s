@@ -30,7 +30,10 @@ async def test_two_explicit_recovery_callers_do_not_cleanup_new_generation(monke
             await release.wait()
         return {'outputs':[]}
     stand.application.receive_async=receive
-    stand._start_headless_audio_capture=lambda:None
+    def start_capture():
+        stand._headless_audio_task = asyncio.create_task(asyncio.Event().wait())
+        stand._headless_audio_status = {"state": "active"}
+    stand._start_headless_audio_capture = start_capture
     try:
         first=asyncio.create_task(stand.start_hardware())
         await asyncio.wait_for(entered.wait(), 2)

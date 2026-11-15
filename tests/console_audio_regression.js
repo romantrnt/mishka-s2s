@@ -109,15 +109,15 @@ async function run() {
 
   let wireBody = null;
   const transport = vm.createContext({
-    postQueue: Promise.resolve(), session: () => "display-session",
+    AbortController, session: () => "display-session",
     recordLiveInput: () => {}, recordLiveResult: () => {},
     fetchWithTimeout: async (_path, options) => {
       wireBody = JSON.parse(options.body);
-      return {ok: true, text: async () => "{}"};
+      return options.readResponse({ok: true, text: async () => "{}"});
     },
     current: null, showError: error => { throw error; },
   });
-  const postStart = source.indexOf("function post(path, body = {}) {");
+  const postStart = source.indexOf("const MAX_PENDING_POSTS =");
   const postEnd = source.indexOf("function recordLiveInput(", postStart);
   vm.runInContext(source.slice(postStart, postEnd), transport);
   await transport.post("/stand/audio/completed", {session_id: "owner-session", playback_id: "B"});

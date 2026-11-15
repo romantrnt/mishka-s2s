@@ -35,7 +35,7 @@ async def test_actual_engine_factory_and_controlled_runtime_refresh(tmp_path,mon
     mini=engine.response_validator.mini
     assert not llm.supports_full_story and not mini.supports_full_story
     calls=[]
-    def metadata(self,path):
+    async def metadata(self,path):
         calls.append(path)
         return {'version':'0.40.11'} if path=='/api/version' else {'models':[{'name':self.receipt.model,'digest':self.receipt.model_digest,'runner':'llamacpp','context_length':1024}]}
     monkeypatch.setattr(StoryBackendContract,'_metadata',metadata)

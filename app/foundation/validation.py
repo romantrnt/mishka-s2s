@@ -12,7 +12,9 @@ import math
 import os
 import re
 import time
-import urllib.request
+import inspect
+
+import httpx
 from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
 
@@ -115,11 +117,39 @@ class OllamaMiniLLMValidator:
         self.num_ctx = int(num_ctx)
         self.keep_alive = keep_alive
         self.story_backend_contract=story_backend_contract
+        self._http_slots = asyncio.Semaphore(2)
 
-    def _request(self, payload: bytes) -> bytes:
-        request = urllib.request.Request(self.base_url + "/api/chat", data=payload, headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
-            return response.read()
+    MAX_RESPONSE_BYTES = 64 * 1024
+
+    async def _request(self, payload: bytes) -> bytes:
+        async with httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=False) as client:
+            async with client.stream(
+                "POST", self.base_url + "/api/chat", content=payload,
+                headers={"Content-Type": "application/json", "Accept-Encoding": "identity"},
+            ) as response:
+                response.raise_for_status()
+                if int(response.headers.get("content-length", "0")) > self.MAX_RESPONSE_BYTES:
+                    raise ValueError("validation_response_too_large")
+                body = bytearray()
+                async for chunk in response.aiter_raw():
+                    if len(body) + len(chunk) > self.MAX_RESPONSE_BYTES:
+                        raise ValueError("validation_response_too_large")
+                    body.extend(chunk)
+                return bytes(body)
+
+    async def _request_bytes(self, payload: bytes) -> bytes:
+        # One deadline includes queueing, connect and the complete body. Closing
+        # the async stream on cancellation also closes the network operation.
+        async with asyncio.timeout(self.timeout_s):
+            async with self._http_slots:
+                value = self._request(payload)
+                # Keep existing in-memory test doubles; production _request is
+                # async and never occupies the shared native executor.
+                if inspect.isawaitable(value):
+                    value = await value
+                if not isinstance(value, bytes) or len(value) > self.MAX_RESPONSE_BYTES:
+                    raise ValueError("invalid_validation_response")
+                return value
 
     @property
     def supports_full_story(self):
@@ -174,7 +204,7 @@ class OllamaMiniLLMValidator:
             except StoryContextError as exc:
                 return ValidationDecision('block',False,str(exc),0.,'story_context')
         try:
-            raw = await asyncio.wait_for(asyncio.to_thread(self._request, payload), timeout=self.timeout_s + 0.03)
+            raw = await self._request_bytes(payload)
             if story:
                 await contract.refresh()
             outer = json.loads(raw.decode("utf-8"))

@@ -115,7 +115,7 @@ def test_empty_serial_read_yields_instead_of_busy_spinning():
         if wire.reads > 2: raise AssertionError('empty read spun without yielding')
         return original()
     wire.read_available = bounded_read
-    adapter._drain_loop()
+    adapter._drain_loop(stop, wire)
     assert wire.reads == 1 and stop.waits == [0.02]
 
 @pytest.mark.asyncio

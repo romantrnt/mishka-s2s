@@ -2835,9 +2835,20 @@ class BoundedConversationEngine:
     async def cancel_all_sessions(self) -> dict[str, int]:
         """Cancel every owned session and drain its generation during recovery."""
         sessions = set(self.active_tasks) | set(self.active_queues)
+        errors = []
         for session_id in tuple(sessions):
-            await self.cancel_session(session_id)
-        await self.playback.stop()
+            try:
+                await self.cancel_session(session_id)
+            except BaseException as error:
+                errors.append(error)
+        try:
+            await self.playback.stop()
+        except BaseException as error:
+            errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("Session cleanup was incomplete", errors)
         return self.resource_snapshot()
 
     async def cancel_session(self,session_id):

@@ -108,37 +108,117 @@ function apiPath(path) {
   return path;
 }
 
-let postQueue = Promise.resolve();
+const MAX_PENDING_POSTS = 16;
+const MAX_PENDING_LIFECYCLE_POSTS = 32;
+const LIFECYCLE_POST_PATHS = new Set([
+  '/stand/button-released', '/stand/audio/lifecycle', '/stand/audio/completed',
+  '/stand/audio/failed', '/stand/audio/checkpoint',
+]);
+let postQueue = [];
+let activePost = null;
+let postGeneration = 0;
 
 function post(path, body = {}) {
-  const run = async () => {
-    recordLiveInput(path, body);
-    try {
-      const response = await fetchWithTimeout(path, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ session_id: session(), ...body })
-      });
-      const raw = await response.text();
-      let value;
-      try { value = raw ? JSON.parse(raw) : {}; } catch (parseError) {
-        if (current?.session?.state === 'ENDED') return null;
-        throw new Error(response.ok ? 'Invalid JSON response: ' + raw.slice(0, 160) : 'HTTP ' + response.status + ': ' + raw.slice(0, 160));
-      }
-      if (!response.ok) {
-        if (current?.session?.state === 'ENDED') return null;
-        throw new Error(JSON.stringify(value));
-      }
-      recordLiveResult(value);
-      return value;
-    } catch (error) {
-      showError(error);
-      throw error;
+  // Capture both the selected session and the wire payload before waiting.
+  const wireBody = JSON.stringify({ session_id: session(), ...body });
+  const payload = JSON.parse(wireBody);
+  const urgent = path === '/stand/reset' || (path === '/stand/handset' && body.state === 'down');
+  const lifecycle = LIFECYCLE_POST_PATHS.has(path);
+  const owner = path.startsWith('/stand/button')
+    ? JSON.stringify(['button', payload.session_id, payload.button_id])
+    : path.startsWith('/stand/audio/')
+      ? JSON.stringify(['audio', payload.session_id, payload.response_id, payload.playback_id,
+        payload.playback_lease, payload.generation, payload.token])
+      : null;
+  if (urgent) {
+    postGeneration += 1;
+    postQueue = postQueue.filter(item => {
+      if (item.urgent) return true;
+      item.resolve(null);
+      return false;
+    });
+    if (activePost && !activePost.urgent) {
+      const obsolete = activePost;
+      activePost = null;
+      obsolete.resolve(null);
+      obsolete.controller.abort();
     }
-  };
-  const next = postQueue.then(run, run);
-  postQueue = next.catch(() => {});
-  return next;
+    // Keep cleanup in FIFO order, but collapse repeated identical cleanup.
+    const tail = postQueue.at(-1) || activePost;
+    if (tail?.urgent && tail.path === path && tail.wireBody === wireBody) {
+      tail.generation = postGeneration;
+      return tail.promise;
+    }
+  }
+  if (lifecycle) {
+    // Repeated callbacks may share pending work only until another event for
+    // this exact owner intervenes. In particular press/release/press/release
+    // must retain both releases, and audio statuses must keep their order.
+    let previous = activePost?.owner === owner ? activePost : null;
+    for (const pending of postQueue) if (pending.owner === owner) previous = pending;
+    if (previous?.path === path && previous.wireBody === wireBody) return previous.promise;
+  }
+  // Keep one FIFO, with a reserved bounded budget for release/audio callbacks.
+  // Ordinary input cannot consume the space needed to finish accepted work.
+  const pendingCount = postQueue.filter(item => item.lifecycle === lifecycle).length;
+  if (pendingCount >= (lifecycle ? MAX_PENDING_LIFECYCLE_POSTS : MAX_PENDING_POSTS)) {
+    const error = new Error('Очередь команд заполнена. Дождитесь ответа и повторите ввод.');
+    showError(error);
+    const rejected = Promise.reject(error);
+    rejected.catch(() => {});
+    return rejected;
+  }
+  const item = { path, wireBody, owner, lifecycle, urgent, generation: postGeneration, controller: new AbortController() };
+  item.promise = new Promise((resolve, reject) => { item.resolve = resolve; item.reject = reject; });
+  // Some DOM handlers ignore the return value; errors are already shown here.
+  item.promise.catch(() => {});
+  postQueue.push(item);
+  dispatchNextPost();
+  return item.promise;
+}
+
+function dispatchNextPost() {
+  if (activePost || !postQueue.length) return;
+  const item = postQueue.shift();
+  activePost = item;
+  runPost(item).then(item.resolve, item.reject).finally(() => {
+    // An urgent request may already have replaced this cancelled request.
+    if (activePost !== item) return;
+    activePost = null;
+    dispatchNextPost();
+  });
+}
+
+async function runPost(item) {
+  try {
+    recordLiveInput(item.path, JSON.parse(item.wireBody));
+    const value = await fetchWithTimeout(item.path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: item.wireBody,
+      signal: item.controller.signal,
+      readResponse: async response => {
+        const raw = await response.text();
+        let value;
+        try { value = raw ? JSON.parse(raw) : {}; } catch (parseError) {
+          if (current?.session?.state === 'ENDED') return null;
+          throw new Error(response.ok ? 'Invalid JSON response: ' + raw.slice(0, 160) : 'HTTP ' + response.status + ': ' + raw.slice(0, 160));
+        }
+        if (!response.ok) {
+          if (current?.session?.state === 'ENDED') return null;
+          throw new Error(JSON.stringify(value));
+        }
+        return value;
+      },
+    });
+    if (item.generation !== postGeneration) return null;
+    recordLiveResult(value);
+    return value;
+  } catch (error) {
+    if (item.generation !== postGeneration || item.controller.signal.aborted) return null;
+    showError(error);
+    throw error;
+  }
 }
 
 function recordLiveInput(path, body) {
@@ -458,25 +538,38 @@ function connect() {
 }
 
 async function fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
-  const { allowStatuses = [], ...requestOptions } = options;
+  const { allowStatuses = [], readResponse, ...requestOptions } = options;
   const controller = new AbortController();
   const parentSignal = requestOptions.signal;
   const abortFromParent = () => controller.abort();
+  let rejectOnAbort;
+  const aborted = new Promise((_, reject) => {
+    rejectOnAbort = () => {
+      const error = new Error('Request aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
+  });
   if (parentSignal) {
     if (parentSignal.aborted) controller.abort();
     else parentSignal.addEventListener('abort', abortFromParent, { once: true });
   }
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(apiPath(path), { cache: 'no-store', ...requestOptions, signal: controller.signal });
-    if (!response.ok && !allowStatuses.includes(response.status)) {
-      const error = new Error(`HTTP ${response.status}`);
-      error.status = response.status;
-      throw error;
-    }
-    return response;
+    return await Promise.race([(async () => {
+      const response = await fetch(apiPath(path), { cache: 'no-store', ...requestOptions, signal: controller.signal });
+      if (!response.ok && !allowStatuses.includes(response.status)) {
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      // POST owns its response body inside the same total request deadline.
+      return readResponse ? await readResponse(response) : response;
+    })(), aborted]);
   } finally {
     window.clearTimeout(timeout);
+    controller.signal.removeEventListener('abort', rejectOnAbort);
     parentSignal?.removeEventListener('abort', abortFromParent);
   }
 }
@@ -1234,11 +1327,11 @@ function initDiagnostics() {
   }
 }
 
-function releaseButton(id) {
+function releaseButton(id, sessionId = session()) {
   buttonInputs[id] = 'released';
   const button = buttonRefs.get(id);
   if (button) button.classList.remove('pressed');
-  return post('/stand/button-released', { button_id: Number(id), state: 'released' });
+  return post('/stand/button-released', { session_id: sessionId, button_id: Number(id), state: 'released' });
 }
 
 function createButtons() {
@@ -1266,11 +1359,13 @@ function createButtons() {
       event.preventDefault();
       button.classList.remove('pressed');
       const duration = Math.round(performance.now() - down);
+      const sessionId = session();
       try {
-        if (duration >= 5000) await post('/stand/button-long-hold', { button_id: Number(id), duration_ms: duration });
-        else if (duration >= 600) await post('/stand/button-hold', { button_id: Number(id), duration_ms: duration });
-        await releaseButton(id);
-      } catch (_) { /* shown in the error panel */ }
+        if (duration >= 5000) await post('/stand/button-long-hold', { session_id: sessionId, button_id: Number(id), duration_ms: duration });
+        else if (duration >= 600) await post('/stand/button-hold', { session_id: sessionId, button_id: Number(id), duration_ms: duration });
+      } catch (_) { /* shown in the error panel */ } finally {
+        await releaseButton(id, sessionId).catch(() => {});
+      }
     };
     button.onpointercancel = () => releaseButton(id).catch(() => {});
     buttonRefs.set(id, button);

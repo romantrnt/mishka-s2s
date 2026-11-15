@@ -24,7 +24,10 @@ async def test_two_explicit_recovery_callers_do_not_cleanup_new_generation(monke
     async def receive(event,*args):
         events.append((event.event_type,stand._hid_generation));return {'outputs':[]}
     stand.application.receive_async=receive
-    stand._start_headless_audio_capture=lambda:None
+    def start_capture():
+        stand._headless_audio_task = asyncio.create_task(asyncio.Event().wait())
+        stand._headless_audio_status = {"state": "active"}
+    stand._start_headless_audio_capture = start_capture
     try:
         await asyncio.gather(stand.start_hardware(),stand.start_hardware())
         assert opened==[2]
@@ -53,7 +56,10 @@ async def test_held_cleanup_serializes_explicit_lifecycle_operations(monkeypatch
         events.append((event.event_type,stand._hid_generation))
         entered.set();await release.wait();return {'outputs':[]}
     stand.application.receive_async=receive
-    stand._start_headless_audio_capture=lambda:None
+    def start_capture():
+        stand._headless_audio_task = asyncio.create_task(asyncio.Event().wait())
+        stand._headless_audio_status = {"state": "active"}
+    stand._start_headless_audio_capture = start_capture
     tasks=[]
     try:
         tasks.append(asyncio.create_task(getattr(stand,operations[0]+'_hardware')()))

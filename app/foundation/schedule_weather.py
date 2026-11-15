@@ -5,7 +5,7 @@ import json
 import math
 import re
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+import httpx
 from typing import Any
 
 
@@ -41,12 +41,12 @@ class YandexWeatherProvider:
     }
 
     def __init__(self, api_key: str | None, latitude: float | None, longitude: float | None,
-                 timeout_s: float = 2.0, opener=urlopen, endpoint: str | None = None):
+                 timeout_s: float = 2.0, *, endpoint: str | None = None):
         self.api_key = api_key.strip() if isinstance(api_key, str) else None
         self.latitude = latitude
         self.longitude = longitude
         self.timeout_s = timeout_s
-        self._opener = opener
+        self._http_slots = asyncio.Semaphore(2)
         self.endpoint = (endpoint or self._endpoint).rstrip("?")
 
     @classmethod
@@ -70,19 +70,34 @@ class YandexWeatherProvider:
             raise ScheduleWeatherProviderError("yandex_weather_coordinates_not_configured")
         if not -90 <= self.latitude <= 90 or not -180 <= self.longitude <= 180:
             raise ScheduleWeatherProviderError("yandex_weather_coordinates_invalid")
-        return await asyncio.to_thread(self._fetch)
+        return await self._fetch()
 
-    def _fetch(self) -> dict[str, Any]:
+    MAX_RESPONSE_BYTES = 256 * 1024
+
+    async def _fetch(self) -> dict[str, Any]:
         query = urlencode({"lat": self.latitude, "lon": self.longitude, "lang": "ru_RU", "limit": 1, "hours": False})
-        request = Request(
-            f"{self.endpoint}?{query}",
-            headers={"X-Yandex-Weather-Key": self.api_key or "", "Accept": "application/json"},
-        )
         try:
-            with self._opener(request, timeout=self.timeout_s) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            async with asyncio.timeout(self.timeout_s):
+                async with self._http_slots:
+                    async with httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=False) as client:
+                        async with client.stream(
+                            "GET", f"{self.endpoint}?{query}",
+                            headers={"X-Yandex-Weather-Key": self.api_key or "",
+                                     "Accept": "application/json", "Accept-Encoding": "identity"},
+                        ) as response:
+                            response.raise_for_status()
+                            if int(response.headers.get("content-length", "0")) > self.MAX_RESPONSE_BYTES:
+                                raise ScheduleWeatherProviderError("yandex_weather_response_too_large")
+                            body = bytearray()
+                            async for chunk in response.aiter_raw():
+                                if len(body) + len(chunk) > self.MAX_RESPONSE_BYTES:
+                                    raise ScheduleWeatherProviderError("yandex_weather_response_too_large")
+                                body.extend(chunk)
+            payload = json.loads(body.decode("utf-8"))
         except ScheduleWeatherProviderError:
             raise
+        except TimeoutError:
+            raise ScheduleWeatherProviderError("weather_provider_timeout") from None
         except Exception as exc:
             raise ScheduleWeatherProviderError("yandex_weather_network_failure") from exc
         return self._normalize(payload)

@@ -39,7 +39,7 @@ class OllamaInputClassifier(OllamaMiniLLMValidator):
                          {"role": "user", "content": json.dumps({"utterance": text}, ensure_ascii=False)}],
             "options": {"temperature": 0, "num_predict": 64, "num_ctx": self.num_ctx},
         }, ensure_ascii=False).encode("utf-8")
-        raw = await asyncio.to_thread(self._request, payload)
+        raw = await self._request_bytes(payload)
         result = json.loads(json.loads(raw.decode("utf-8"))["message"]["content"])
         return result["severity"], result["confidence"]
 

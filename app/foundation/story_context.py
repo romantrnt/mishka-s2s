@@ -7,7 +7,7 @@ import math
 import re
 import time
 from urllib.parse import urlparse
-from urllib.request import build_opener, HTTPRedirectHandler
+import httpx
 
 @dataclass(frozen=True)
 class StoryContextReceipt:
@@ -28,9 +28,6 @@ class StoryContextReceipt:
 class StoryContextError(RuntimeError):
     pass
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self,*args,**kwargs):return None
-
 class StoryBackendContract:
     def __init__(self, receipt: StoryContextReceipt, *, timeout_s: float = 2.0):
         self.receipt=receipt
@@ -38,6 +35,7 @@ class StoryBackendContract:
             raise StoryContextError("story_backend_timeout")
         self.timeout_s=timeout_s
         self._observed=None
+        self._http_slots=asyncio.Semaphore(2)
 
     def matches(self, base_url, model):
         r=self.receipt
@@ -66,16 +64,27 @@ class StoryBackendContract:
         if needed>r.context_ceiling:raise StoryContextError('story_context_budget')
         return needed
 
-    def _metadata(self,path):
+    MAX_METADATA_BYTES = 1024 * 1024
+
+    async def _metadata(self,path):
         # No caller-provided destination, credentials, profile or prompt is sent.
         parsed=urlparse(self.receipt.base_url)
         if (parsed.scheme!='http' or parsed.hostname not in {'localhost','127.0.0.1','::1'}
                 or parsed.username or parsed.password or parsed.query or parsed.fragment
                 or parsed.path not in {'','/'}):
             raise StoryContextError('story_backend_endpoint')
-        with build_opener(_NoRedirect()).open(self.receipt.base_url.rstrip('/')+path,timeout=self.timeout_s) as response:
-            raw=response.read(1024*1024+1)
-        if len(raw)>1024*1024:raise StoryContextError('story_backend_metadata')
+        # The receipt permits a direct local endpoint, never an environment proxy.
+        async with httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=False, trust_env=False) as client:
+            async with client.stream("GET", self.receipt.base_url.rstrip('/')+path,
+                                     headers={"Accept-Encoding": "identity"}) as response:
+                response.raise_for_status()
+                if int(response.headers.get("content-length", "0")) > self.MAX_METADATA_BYTES:
+                    raise StoryContextError('story_backend_metadata')
+                raw=bytearray()
+                async for chunk in response.aiter_raw():
+                    if len(raw)+len(chunk)>self.MAX_METADATA_BYTES:
+                        raise StoryContextError('story_backend_metadata')
+                    raw.extend(chunk)
         return json.loads(raw)
 
     async def refresh(self):
@@ -83,11 +92,11 @@ class StoryBackendContract:
         r=self.receipt
         if not self.matches(r.base_url,r.model):raise StoryContextError('story_backend_unverified')
         try:
-            async def read():
-                version=await asyncio.to_thread(self._metadata,'/api/version')
-                running=await asyncio.to_thread(self._metadata,'/api/ps')
-                return version,running
-            version,running=await asyncio.wait_for(read(),timeout=self.timeout_s)
+            # Queueing and both metadata calls share one cancellable deadline.
+            async with asyncio.timeout(self.timeout_s):
+                async with self._http_slots:
+                    version=await self._metadata('/api/version')
+                    running=await self._metadata('/api/ps')
             row=next((m for m in running.get('models',[]) if m.get('name')==r.model or m.get('model')==r.model),None)
             if (version.get('version')!=r.server_version or row is None
                     or row.get('digest')!=r.model_digest

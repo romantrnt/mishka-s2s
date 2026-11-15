@@ -13,7 +13,7 @@ async def contract(**changes):
     receipt=replace(receipt,**changes)
     c=StoryBackendContract(receipt)
     c.calls=[]
-    def metadata(path):
+    async def metadata(path):
         c.calls.append(path)
         return {'version':'0.40.11'} if path=='/api/version' else {'models':[{'name':MODEL,'digest':DIGEST,'runner':'llamacpp','context_length':1024}]}
     c._metadata=metadata
@@ -65,8 +65,8 @@ async def test_large_unicode_fails_budget_before_even_metadata_io():
 async def test_serving_change_invalidates_before_candidate_sent(change):
     c=await contract();mini=OllamaMiniLLMValidator(URL,MODEL,story_backend_contract=c)
     old=c._metadata
-    def metadata(path):
-        value=old(path)
+    async def metadata(path):
+        value=await old(path)
         if change=='version' and path=='/api/version':value['version']='0.40.12'
         if path=='/api/ps':
             if change=='runner':value['models'][0]['runner']='other'

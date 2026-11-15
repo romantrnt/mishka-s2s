@@ -130,6 +130,12 @@ def test_physical_launcher_starts_one_hid_reader_and_simulator_stays_headless(mo
         physical.input_adapter = None
         physical._physical_loop = None
         physical.lighting_serial = None
+        # This test isolates the HID reader; model an active capture worker so
+        # repeated start meets the real physical-readiness postconditions.
+        def start_capture():
+            physical._headless_audio_task = asyncio.create_task(asyncio.Event().wait())
+            physical._headless_audio_status = {"state": "active"}
+        physical._start_headless_audio_capture = start_capture
         await physical.start_hardware()
         await physical.start_hardware()
         assert FakeReader.instances == 1

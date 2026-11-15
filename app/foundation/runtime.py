@@ -6,6 +6,7 @@ import logging
 import shutil
 import time
 import uuid
+import weakref
 from pathlib import Path
 from collections.abc import Mapping
 from typing import Any
@@ -30,16 +31,97 @@ class ResourceProbe:
         except (OSError,KeyError,ValueError):
             return None
 
+    VRAM_TIMEOUT_S = 2.0
+    VRAM_CACHE_S = 1.0
+    _vram_states = weakref.WeakKeyDictionary()
+
     @staticmethod
-    async def available_vram_gb() -> float | None:
-        binary=shutil.which("nvidia-smi")
-        if not binary: return None
+    async def _reap_diagnostic(process) -> None:
+        if process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), .25)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+        await process.wait()
+
+    @classmethod
+    async def _read_vram(cls) -> float | None:
+        binary = shutil.which("nvidia-smi")
+        if not binary:
+            return None
+        process = None
         try:
-            process=await asyncio.create_subprocess_exec(binary,"--query-gpu=memory.free","--format=csv,noheader,nounits",stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL)
-            stdout,_=await asyncio.wait_for(process.communicate(),3)
-            values=[float(line) for line in stdout.decode().splitlines() if line.strip()]
-            return round(max(values)/1024,2) if process.returncode==0 and values else None
-        except (OSError,ValueError,TimeoutError): return None
+            process = await asyncio.create_subprocess_exec(
+                binary, "--query-gpu=memory.free", "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), cls.VRAM_TIMEOUT_S)
+            values = [float(line) for line in stdout.decode().splitlines() if line.strip()]
+            return round(max(values) / 1024, 2) if process.returncode == 0 and values else None
+        except (OSError, ValueError, TimeoutError):
+            return None
+        finally:
+            if process is not None:
+                # Retain cleanup ownership even if shutdown cancels us again.
+                cleanup = asyncio.create_task(cls._reap_diagnostic(process))
+                interrupted = False
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        interrupted = True
+                cleanup.result()
+                if interrupted:
+                    raise asyncio.CancelledError
+
+    @classmethod
+    async def available_vram_gb(cls) -> float | None:
+        loop = asyncio.get_running_loop()
+        state = cls._vram_states.setdefault(loop, {"task": None, "waiters": 0,
+                                                   "expires": 0., "value": None})
+        if state["task"] is None and loop.time() < state["expires"]:
+            return state["value"]
+        if state["task"] is None:
+            async def probe():
+                try:
+                    value = await cls._read_vram()
+                    state["value"] = value
+                    state["expires"] = loop.time() + cls.VRAM_CACHE_S
+                    return value
+                finally:
+                    state["task"] = None
+            state["task"] = asyncio.create_task(probe(), name="mishka-vram-probe")
+        task = state["task"]
+        state["waiters"] += 1
+        try:
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise
+                # A new caller may join while the previous final waiter is
+                # draining a cancelled probe. Retry after that owner exits.
+                return await cls.available_vram_gb()
+        finally:
+            state["waiters"] -= 1
+            if state["waiters"] == 0 and not task.done():
+                # One disconnected health caller must not cancel other callers;
+                # when the final waiter leaves, stop and reap its child.
+                task.cancel()
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        pass
+                if not task.cancelled():
+                    task.result()
 
 
 class S2SRuntimeManager:
@@ -60,12 +142,24 @@ class S2SRuntimeManager:
         self.last_recovery: dict[str, Any] | None = None
 
     async def close(self) -> None:
-        """Release session-owned audio and resident native workers."""
-        await self.engine.cancel_all_sessions()
-        closer=getattr(self.voice,"close",None)
+        """Release independent owners even when another cleanup step fails."""
+        errors = []
+        try:
+            await self.engine.cancel_all_sessions()
+        except BaseException as error:
+            errors.append(error)
+        closer = getattr(self.voice, "close", None)
         if closer is not None:
-            result=closer()
-            if inspect.isawaitable(result): await result
+            try:
+                result = closer()
+                if inspect.isawaitable(result):
+                    await result
+            except BaseException as error:
+                errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("Runtime cleanup was incomplete", errors)
 
     def configuration(self) -> dict[str,Any]:
         provider="mock" if self.settings.profile=="mock" else self.settings.llm_provider
@@ -120,7 +214,15 @@ class S2SRuntimeManager:
                 if pipeline is not None:
                     for session_id in tuple(set(pipeline.pending_tasks) | set(pipeline.ingress) | set(pipeline.generations)):
                         await pipeline.cancel_session(session_id)
-                cleanup = await self.engine.cancel_all_sessions()
+                try:
+                    cleanup = await self.engine.cancel_all_sessions()
+                except BaseExceptionGroup as errors:
+                    # Cleanup can group cancellation with device failures after
+                    # draining every owner. Keep recovery cancellation visible
+                    # to its terminal handler and retain the full failure cause.
+                    if errors.subgroup(asyncio.CancelledError) is not None:
+                        raise asyncio.CancelledError from errors
+                    raise
                 resources = await self.resource_readiness()
                 if not resources.get("ready"):
                     result = {"ok": False, "reason": "resource_capacity_insufficient", "diagnostic": {"stage": "resource_readiness", "resources": resources}}

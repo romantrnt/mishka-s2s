@@ -11,6 +11,7 @@ import os
 import numpy as np
 import secrets
 import struct
+import threading
 import time
 import wave
 from collections import deque
@@ -227,6 +228,7 @@ class StandHub:
     """Broadcast hub with one write lease for the active browser session."""
     MAX_CLIENTS = 16
     SEND_TIMEOUT_S = 0.75
+    MAX_PENDING_PUBLICATIONS = 16
 
     def __init__(self):
         self.clients: set[Any] = set()
@@ -234,6 +236,11 @@ class StandHub:
         self._lease_generation = 0
         self._send_locks: dict[Any, asyncio.Lock] = {}
         self._publish_lock = asyncio.Lock()
+        self._pending_state = None
+        self._publication_sequence = 0
+        self._ordered_publications = set()
+        self._state_publish_task = None
+        self._closed = False
         self._accepted = 0
         self._disconnected = 0
         self._send_failures = 0
@@ -279,8 +286,83 @@ class StandHub:
         }
 
     async def publish(self, payload: dict[str, Any]) -> list[dict[str, str]]:
+        if self._closed or not self.clients:
+            return []
+        self._publication_sequence += 1
+        sequence = self._publication_sequence
+        # Observer snapshots are replaceable. A slow browser must not retain
+        # one physical-input coroutine per obsolete snapshot. Audio and event
+        # envelopes retain their ordered, awaited delivery contract.
+        if set(payload) == {"type", "state"} and payload["type"] == "stand_state":
+            if self._publish_lock.locked() or self._state_publish_task is not None:
+                self._pending_state = (sequence, payload)
+                if self._state_publish_task is None:
+                    self._state_publish_task = asyncio.create_task(
+                        self._drain_state(), name="mishka-observer-state")
+                return []
+        if len(self._ordered_publications) >= self.MAX_PENDING_PUBLICATIONS:
+            # Ordered audio/event traffic cannot be coalesced. Drop lagging
+            # connections at the bounded backlog instead of retaining tasks.
+            clients = tuple(self.clients)
+            self._slow_clients += len(clients)
+            self._send_failures += len(clients)
+            self._pending_state = None
+            await self._evict_clients(clients)
+            return [{"exception_class": "BufferError", "reason": "observer backlog exceeded"}]
+        self._ordered_publications.add(sequence)
+        try:
+            async with self._publish_lock:
+                return await self._publish_locked(payload)
+        finally:
+            self._ordered_publications.discard(sequence)
+
+    async def _drain_state(self):
+        try:
+            while self._pending_state is not None and not self._closed:
+                async with self._publish_lock:
+                    pending = self._pending_state
+                    if pending is None:
+                        continue
+                    sequence, payload = pending
+                    if any(earlier < sequence for earlier in self._ordered_publications):
+                        # A newer replaceable snapshot must not overtake an
+                        # older event envelope that also carries state.
+                        continue
+                    self._pending_state = None
+                    if not self._closed:
+                        await self._publish_locked(payload)
+        finally:
+            self._state_publish_task = None
+
+    def close(self):
+        self._closed = True
+        self._pending_state = None
+        task = self._state_publish_task
+        if task is not None and not task.done() and not task.get_loop().is_closed():
+            task.get_loop().call_soon_threadsafe(task.cancel)
+
+    async def aclose(self):
+        task = self._state_publish_task
+        self.close()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _evict_clients(self, clients):
+        for client in clients:
+            self.disconnect(client)
+        async def close_one(client):
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    await asyncio.wait_for(close(code=1013, reason="stand observer unavailable"),
+                                           timeout=self.SEND_TIMEOUT_S)
+                except Exception:
+                    pass
+        await asyncio.gather(*(close_one(client) for client in clients))
+
+    async def _publish_locked(self, payload):
         failures: list[dict[str, str]] = []
-        async with self._publish_lock:
+        if not self._closed:
             clients = tuple(self.clients)
 
             async def send_one(client):
@@ -298,12 +380,15 @@ class StandHub:
                 return client, None
 
             results = await asyncio.gather(*(send_one(client) for client in clients))
+            evicted = []
             for client, failure in results:
                 if failure is None:
                     continue
                 self._send_failures += 1
                 failures.append(failure)
-                self.disconnect(client)
+                evicted.append(client)
+            if evicted:
+                await self._evict_clients(evicted)
         return failures
 
 
@@ -617,6 +702,9 @@ class HardwareIntegrationStand:
         self._lighting_fault_generation = 0
         self._lighting_fault_future = None
         self._physical_sequence = 0
+        self._physical_ingress_lock = threading.Lock()
+        self._physical_pending = {}
+        self._physical_pending_count = 0
         self._admits_physical_users = None
         self._hid_generation = 0
         self._hid_status: dict[str, Any] = {"state": "not_started", "generation": 0}
@@ -885,6 +973,10 @@ class HardwareIntegrationStand:
         capture = getattr(self, "audio_input", None)
         if capture is None or getattr(self, "_headless_audio_task", None) is not None:
             return
+        pending_stop = getattr(self, "_capture_stop_task", None)
+        if pending_stop is not None and not pending_stop.done():
+            raise RuntimeError("audio capture cleanup is still pending")
+        self._capture_stop_task = None
         loop = self._physical_loop or asyncio.get_running_loop()
         self._capture_generation = getattr(self, "_capture_generation", 0) + 1
         self._headless_audio_queue = asyncio.Queue(maxsize=64)
@@ -918,6 +1010,20 @@ class HardwareIntegrationStand:
                 "component": "audio_input",
             })
 
+    async def _stop_capture_device(self, capture) -> None:
+        task = getattr(self, "_capture_stop_task", None)
+        if task is not None and getattr(self, "_capture_stop_owner", None) is not capture:
+            if not task.done():
+                raise RuntimeError("previous audio capture cleanup is still pending")
+            task = None
+        if task is None:
+            task = self._capture_stop_task = asyncio.create_task(
+                asyncio.to_thread(capture.stop), name="mishka-capture-stop")
+            self._capture_stop_owner = capture
+            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        timeout = getattr(getattr(self, "settings", None), "audio_cleanup_timeout_s", 1.0)
+        await asyncio.wait_for(asyncio.shield(task), timeout=max(.01, min(2.0, timeout)))
+
     async def _stop_headless_audio_capture(self) -> None:
         self._capture_generation = getattr(self, "_capture_generation", 0) + 1
         capture = getattr(self, "audio_input", None)
@@ -925,7 +1031,7 @@ class HardwareIntegrationStand:
         self._headless_audio_queue = None
         try:
             if capture is not None:
-                capture.stop()
+                await self._stop_capture_device(capture)
         except Exception:
             self._headless_audio_status = {"state": "unavailable", "error_code": "capture_stop_failed"}
             raise
@@ -954,7 +1060,14 @@ class HardwareIntegrationStand:
         pending_loss = getattr(self, "_hid_loss_future", None)
         if pending_loss is not None:
             await self._settle_hid_loss(pending_loss)
-        if self.input_adapter is not None and self.input_adapter.is_ready() and getattr(self, "_capture_hid_fault", None) is None:
+        pending_stop = getattr(self, "_capture_stop_task", None)
+        if pending_stop is not None and not pending_stop.done():
+            raise RuntimeError("audio capture cleanup is still pending")
+        if (self.input_adapter is not None and self.input_adapter.is_ready()
+                and getattr(self, "_capture_hid_fault", None) is None
+                and getattr(self, "_headless_audio_task", None) is not None
+                and not self._headless_audio_task.done()
+                and getattr(self, "_headless_audio_status", {}).get("state") == "active"):
             hid_diag = _hid_diagnostics(self.input_adapter); self._hid_status = {"state": "active", "generation": getattr(self, "_hid_generation", 0), "initial_level_sync": hid_diag.get("initial_level_sync"), "semantic_input_accepted": bool(hid_diag.get("semantic_input_accepted")), "physical_ready": bool(hid_diag.get("physical_ready"))}
             return
         if not getattr(self.settings, "hid_device", ""):
@@ -1011,29 +1124,48 @@ class HardwareIntegrationStand:
             await self._stop_hardware_locked()
 
     async def _stop_hardware_locked(self):
+        failures = []
         pending_loss = getattr(self, "_hid_loss_future", None)
         if pending_loss is not None:
-            await self._settle_hid_loss(pending_loss)
-        await self._stop_headless_audio_capture()
+            try:
+                await self._settle_hid_loss(pending_loss)
+            except BaseException as exc:
+                failures.append(exc)
+        try:
+            await self._stop_headless_audio_capture()
+        except BaseException as exc:
+            failures.append(exc)
         led = getattr(getattr(self, "application", None), "led", None)
         cancel_effects = getattr(led, "cancel_effects", None)
-        if callable(cancel_effects):
-            cancel_effects(clear=True)
+        try:
+            if callable(cancel_effects):
+                cancel_effects(clear=True)
+        except BaseException as exc:
+            failures.append(exc)
         self._hid_generation = getattr(self, "_hid_generation", 0) + 1
         stopped_generation = self._hid_generation
         if self.input_adapter is not None:
-            self.input_adapter.close()
-            self.input_adapter = None
+            try:
+                await asyncio.to_thread(self.input_adapter.close)
+                self.input_adapter = None
+            except BaseException as exc:
+                failures.append(exc)
         self._hid_status = {"state": "stopped", "generation": stopped_generation}
         self._physical_loop = None
         lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
         try:
             if callable(lighting_output_close):
                 await asyncio.to_thread(lighting_output_close)
-        finally:
-            if self.lighting_serial is not None:
-                self.lighting_serial.close()
+        except BaseException as exc:
+            failures.append(exc)
+        if self.lighting_serial is not None:
+            try:
+                await asyncio.to_thread(self.lighting_serial.close)
                 self.lighting_serial = None
+            except BaseException as exc:
+                failures.append(exc)
+        if failures:
+            raise failures[0]
 
     def _headless_audio_play(self, response_id: str, text: str | None):
         resolved = text
@@ -1485,10 +1617,7 @@ class HardwareIntegrationStand:
                     if resource == "playback":
                         await playback.stop()
                     else:
-                        def stop_capture():
-                            if owns_fault():
-                                capture.stop()
-                        await asyncio.to_thread(stop_capture)
+                        await self._stop_capture_device(capture)
                 except Exception:
                     if owns_fault():
                         self.errors.append({"at": time.time(), "stage": "physical_lighting_loss",
@@ -1517,6 +1646,7 @@ class HardwareIntegrationStand:
         # Close ingress immediately, including queued callbacks and frames
         # already waiting for UART/audio locks. Cleanup runs on the owner loop.
         self._capture_hid_fault = generation
+        self._cancel_pending_physical_inputs()
         loop = getattr(self, "_physical_loop", None)
         if loop is not None and not loop.is_closed():
             self._hid_loss_future = asyncio.run_coroutine_threadsafe(
@@ -1550,14 +1680,8 @@ class HardwareIntegrationStand:
         if generation != getattr(self, "_hid_generation", 0):
             return
         try:
-            capture = getattr(self, "audio_input", None)
-            if capture is not None:
-                try:
-                    capture.stop()
-                except Exception:
-                    # Ingress is already fenced; an input-device failure must
-                    # not prevent the independent audio/lighting teardown.
-                    self._headless_audio_status = {"state": "unavailable", "error_code": "capture_stop_failed"}
+            # Ingress was already fenced by _on_hid_error. Commit the fault
+            # transition before waiting for any native capture-driver cleanup.
             self._hid_cleanup_sequence = getattr(self, "_hid_cleanup_sequence", 0) + 1
             sequence = self._hid_cleanup_sequence
             result = await self.application.receive_async(Event(
@@ -1572,24 +1696,65 @@ class HardwareIntegrationStand:
         finally:
             await self._stop_headless_audio_capture()
 
+    MAX_PENDING_PHYSICAL_INPUTS = 64
+
+    def _cancel_pending_physical_inputs(self, *, include_cleanup=False):
+        lock = getattr(self, "_physical_ingress_lock", None)
+        if lock is None:
+            return []
+        with lock:
+            pending = [task for task, cleanup in self._physical_pending.items()
+                       if include_cleanup or not cleanup]
+        for task in pending:
+            if not task.get_loop().is_closed():
+                task.get_loop().call_soon_threadsafe(task.cancel)
+        return pending
+
     def _on_physical_input(self, event: NormalizedInputEvent, generation: int | None = None):
-        if generation is not None and generation != getattr(self, "_hid_generation", 0):
+        owner = self._hid_generation if generation is None else generation
+        cleanup = event.type in {"SpacePressed", "handset_down", "HandsetPlaced"}
+        if owner != self._hid_generation or self._closed:
             return
-        if getattr(self, "_capture_hid_fault", None) is not None:
+        if getattr(self, "_capture_hid_fault", None) is not None and not cleanup:
             return
         loop = self._physical_loop
-        if loop is None:
+        if loop is None or loop.is_closed():
             return
-        self._physical_sequence += 1
+        with self._physical_ingress_lock:
+            # One extra slot is reserved for hangup when ordinary work is full.
+            limit = self.MAX_PENDING_PHYSICAL_INPUTS + int(cleanup)
+            overflow = self._physical_pending_count >= limit
+            if not overflow:
+                self._physical_pending_count += 1
+                self._physical_sequence += 1
+                sequence = self._physical_sequence
+        if overflow:
+            self._on_hid_error({"kind": "dispatch_failure", "error_code": "hid_input_overflow"}, owner)
+            self._cancel_pending_physical_inputs()
+            return
         payload = dict(event.payload)
-        payload["type"] = event.type
-        payload["_source"] = "physical_hid"
-        payload["_sequence"] = self._physical_sequence
-        payload["_hid_generation"] = generation
-        future = asyncio.run_coroutine_threadsafe(self.inject_physical(payload), loop)
-        future.add_done_callback(
-            lambda done, owner=getattr(self, "_hid_generation", 0) if generation is None else generation:
-                self._observe_physical_input_future(done, owner))
+        payload.update(type=event.type, _source="physical_hid", _sequence=sequence,
+                       _hid_generation=owner)
+        def completed(done):
+            with self._physical_ingress_lock:
+                self._physical_pending.pop(done, None)
+                self._physical_pending_count -= 1
+            self._observe_physical_input_future(done, owner)
+        def schedule():
+            if (self._closed or owner != self._hid_generation
+                    or (getattr(self, "_capture_hid_fault", None) is not None and not cleanup)):
+                with self._physical_ingress_lock:
+                    self._physical_pending_count -= 1
+                return
+            task = loop.create_task(self.inject_physical(payload), name="mishka-physical-input")
+            with self._physical_ingress_lock:
+                self._physical_pending[task] = cleanup
+            task.add_done_callback(completed)
+        try:
+            loop.call_soon_threadsafe(schedule)
+        except RuntimeError:
+            with self._physical_ingress_lock:
+                self._physical_pending_count -= 1
 
     def _observe_physical_input_future(self, future, generation=None, *, cleanup=False) -> None:
         if future.cancelled():
@@ -1920,12 +2085,28 @@ class HardwareIntegrationStand:
                 self.commands.append({"at":time.time(),"type":frame.type,"sequence":frame.sequence,"payload":payload})
             except ValueError as exc: self.errors.append({"at":time.time(),"stage":"device_command","error":str(exc)})
 
+    async def _flush_device_commands(self, timeout=1.0):
+        # The simulated UART peer is owned by this loop. Drain it while the
+        # writer flushes: waiting for all writes before reading can fill the
+        # PTY buffer and make both sides wait for each other under a burst.
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            self._drain_device_commands()
+            try:
+                self.adapter.flush(timeout=0)
+                break
+            except TimeoutError:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise
+                await asyncio.sleep(.001)
+        self._drain_device_commands()
+
     async def _publish_canonical_state_update(self, _session_id: str, _result: dict[str, Any]) -> None:
         # Canonical timers and browser audio callbacks enter the application
         # without going through inject().  Flush their UART effects here so a
         # timer-fired phrase is visible to the WebPanel immediately.
         async with self._transport_lock:
-            await self.adapter.flush_async(timeout=1.0)
+            await self._flush_device_commands(timeout=1.0)
             self._drain_device_commands()
         self._collect_events()
         await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
@@ -1993,7 +2174,7 @@ class HardwareIntegrationStand:
             else:
                 result={"error":{"type":type(exc).__name__,"code":"internal_error","message":"stand input processing failed"}}
         try:
-            await self.adapter.flush_async(timeout=1.0)
+            await self._flush_device_commands(timeout=1.0)
         except Exception as exc:
             self.errors.append({"at":time.time(),"stage":"uart_egress","error":type(exc).__name__,"detail":str(exc)[:200]})
             result={"error":{"type":type(exc).__name__,"code":"internal_error","message":"stand output processing failed"}}
@@ -2038,7 +2219,7 @@ class HardwareIntegrationStand:
             self.errors.append({"at":time.time(),"stage":"raw_uart","error":type(exc).__name__,"detail":str(exc)[:200]})
             result={"error":{"type":type(exc).__name__,"code":"internal_error","message":"stand raw input processing failed"}}
         try:
-            await self.adapter.flush_async(timeout=1.0)
+            await self._flush_device_commands(timeout=1.0)
         except Exception as exc:
             self.errors.append({"at":time.time(),"stage":"uart_egress","error":type(exc).__name__,"detail":str(exc)[:200]})
             result={"error":{"type":type(exc).__name__,"code":"internal_error","message":"stand output processing failed"}}
@@ -2772,59 +2953,96 @@ class HardwareIntegrationStand:
         }
 
     async def aclose(self, *, hardware_stopped: bool = False):
-        """Cancel loop-owned tasks on the loop; release blocking workers off it."""
+        """Revoke loop-owned work; attempt every independent resource cleanup."""
         if getattr(self, "_closed", False):
             return
-        identity_error = None
+        failures = []
+        self._hid_generation = getattr(self, "_hid_generation", 0) + 1
+        self._physical_loop = None
+        physical_tasks = self._cancel_pending_physical_inputs(include_cleanup=True)
+        if physical_tasks:
+            try:
+                await asyncio.gather(*physical_tasks, return_exceptions=True)
+            except BaseException as exc:
+                failures.append(exc)
         shutdown_identity = getattr(self.application, "shutdown_identity", None)
         try:
             if callable(shutdown_identity):
                 await shutdown_identity()
-        except BaseException as error:
-            identity_error = error
+        except BaseException as exc:
+            failures.append(exc)
+        led = getattr(getattr(self, "application", None), "led", None)
+        cancel_effects = getattr(led, "cancel_effects", None)
+        actions = [self._cancel_story_audio, self._cancel_response_audio]
+        if callable(cancel_effects) and not hardware_stopped:
+            actions.insert(0, lambda: cancel_effects(clear=True))
+        for action in actions:
+            try:
+                action()
+            except BaseException as exc:
+                failures.append(exc)
+        if not hardware_stopped:
+            try:
+                await self._stop_headless_audio_capture()
+            except BaseException as exc:
+                failures.append(exc)
         try:
-            led = getattr(getattr(self, "application", None), "led", None)
-            cancel_effects = getattr(led, "cancel_effects", None)
-            if callable(cancel_effects) and not hardware_stopped:
-                cancel_effects(clear=True)
-            self._cancel_story_audio()
-            self._cancel_response_audio()
-        finally:
+            await self.hub.aclose()
+        except BaseException as exc:
+            failures.append(exc)
+        try:
             await asyncio.to_thread(self.close, cancel_tasks=False, hardware_stopped=hardware_stopped)
-        if identity_error is not None:
-            raise identity_error
+        except BaseException as exc:
+            failures.append(exc)
+        if failures:
+            raise failures[0]
 
     def close(self, *, cancel_tasks: bool = True, hardware_stopped: bool = False):
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        failures = []
+        def attempt(operation, action):
+            try:
+                action()
+            except BaseException as exc:
+                failures.append(exc)
+                if hasattr(self, "errors"):
+                    self.errors.append({"at": time.time(), "stage": "shutdown",
+                                        "error_code": operation + "_close_failed"})
+        self._cancel_pending_physical_inputs(include_cleanup=True)
+        close_hub = getattr(getattr(self, "hub", None), "close", None)
+        if callable(close_hub):
+            attempt("hub", close_hub)
         cancel_identity = getattr(self.application, "cancel_identity_work", None)
         if callable(cancel_identity):
-            cancel_identity()
+            attempt("identity", cancel_identity)
         if cancel_tasks:
             led = getattr(getattr(self, "application", None), "led", None)
             cancel_effects = getattr(led, "cancel_effects", None)
             if callable(cancel_effects) and not hardware_stopped:
-                cancel_effects(clear=True)
-            self._cancel_story_audio(); self._cancel_response_audio()
+                attempt("led", lambda: cancel_effects(clear=True))
+            attempt("story", self._cancel_story_audio)
+            attempt("response", self._cancel_response_audio)
         self._hid_generation = getattr(self, "_hid_generation", 0) + 1
         self._physical_loop = None
-        if not hardware_stopped and getattr(self, "audio_input", None) is not None:
-            self.audio_input.stop()
+        if (not hardware_stopped and getattr(self, "audio_input", None) is not None
+                and getattr(self, "_capture_stop_task", None) is None):
+            attempt("capture", self.audio_input.stop)
         if self.input_adapter is not None:
-            self.input_adapter.close()
-        try:
-            if not hardware_stopped:
-                lighting_output_close = getattr(getattr(self, "lighting_output", None), "close", None)
-                if callable(lighting_output_close):
-                    lighting_output_close()
-        finally:
-            if self.lighting_serial is not None:
-                self.lighting_serial.close()
-            self.adapter.close()
-            self._uart_executor.shutdown(wait=True, cancel_futures=True)
-            self._audio_executor.shutdown(wait=True, cancel_futures=True)
-            self.pty.close()
+            attempt("hid", self.input_adapter.close)
+        if not hardware_stopped:
+            close_lighting = getattr(getattr(self, "lighting_output", None), "close", None)
+            if callable(close_lighting):
+                attempt("lighting", close_lighting)
+        if self.lighting_serial is not None:
+            attempt("serial", self.lighting_serial.close)
+        attempt("uart", self.adapter.close)
+        attempt("uart_executor", lambda: self._uart_executor.shutdown(wait=True, cancel_futures=True))
+        attempt("audio_executor", lambda: self._audio_executor.shutdown(wait=True, cancel_futures=True))
+        attempt("pty", self.pty.close)
+        if failures:
+            raise failures[0]
 
 
 def decode_wav(raw: bytes) -> tuple[tuple[float, ...], int]:
@@ -3226,6 +3444,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         # window in which barge-in frames accumulated in the socket and were
         # processed only after the old response finished.
         audio_tasks: set[asyncio.Task[Any]] = set()
+        max_pending_audio = 16  # includes both PCM frames and flush requests
 
         def forget_audio_task(task: asyncio.Task[Any]) -> None:
             audio_tasks.discard(task)
@@ -3274,9 +3493,17 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
                             continue
                     session_id = message.get("session_id")
                     if session_id:
+                        # Only the latest session is needed for cleanup diagnostics.
+                        session_ids.clear()
                         session_ids.add(str(session_id))
                     if kind in {"audio_pcm", "flush_audio", "handset", "button", "button_released", "button_hold", "button_long_hold", "text", "reset"} and not stand.hub.is_owner(websocket):
                         await websocket.send_json({"type":"error","error":{"code":"conflict","message":"stand input lease is owned by another client"}})
+                        continue
+                    # Reject before decoding/retaining PCM or creating a task.
+                    # Controls still use the receive loop independently of this backlog.
+                    if kind in {"audio_pcm", "flush_audio"} and len(audio_tasks) >= max_pending_audio:
+                        await websocket.send_json({"type": "error", "error": {
+                            "code": "audio_backpressure", "message": "audio input is busy; retry later"}})
                         continue
                     if kind=="audio_pcm":
                         sid = str(session_id or stand.active_session_id)

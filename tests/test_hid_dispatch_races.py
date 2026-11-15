@@ -3,6 +3,23 @@ import pytest
 from app.foundation.stand import HardwareIntegrationStand
 from app.foundation.config import Settings
 
+
+async def settle_physical_inputs(stand):
+    async def settled():
+        # Reservation precedes the loop callback that creates the owned task.
+        await asyncio.sleep(0)
+        while stand._physical_pending_count:
+            tasks = tuple(stand._physical_pending)
+            if tasks:
+                await asyncio.gather(*tasks)
+            await asyncio.sleep(0)
+        pending_loss = getattr(stand, '_hid_loss_future', None)
+        if pending_loss is not None:
+            await asyncio.wrap_future(pending_loss)
+    await asyncio.wait_for(settled(), 2)
+    assert not stand._physical_pending
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('cancel_cleanup',[False,True])
 async def test_capture_rejected_during_identity_hangup_cleanup(cancel_cleanup):
@@ -34,16 +51,12 @@ async def test_capture_rejected_during_identity_hangup_cleanup(cancel_cleanup):
         await h.close();stand.application=original_app;await stand.aclose()
 
 @pytest.mark.asyncio
-async def test_queued_lift_rechecks_hid_fault_before_dispatch(monkeypatch):
+async def test_queued_lift_rechecks_hid_fault_before_dispatch():
     from app.foundation.input_adapters import NormalizedInputEvent
     stand=HardwareIntegrationStand(Settings(profile='mock'),background_scheduler=False)
     stand._physical_loop=asyncio.get_running_loop();stand._hid_generation=1
     stand._admits_physical_users=lambda:True
-    called=[];futures=[]
-    original=asyncio.run_coroutine_threadsafe
-    def tracked(coro,loop):
-        future=original(coro,loop);futures.append(future);return future
-    monkeypatch.setattr(asyncio,'run_coroutine_threadsafe',tracked)
+    called=[]
     receive=stand.application.receive_async
     async def observed(event,*args,**kwargs):
         called.append(event.event_type);return await receive(event,*args,**kwargs)
@@ -51,28 +64,24 @@ async def test_queued_lift_rechecks_hid_fault_before_dispatch(monkeypatch):
     try:
         stand._on_physical_input(NormalizedInputEvent('SpaceReleased',{}),generation=1)
         stand._on_hid_error({'kind':'device_disconnected'},1)
-        await asyncio.gather(*(asyncio.wrap_future(f) for f in futures))
+        await settle_physical_inputs(stand)
         assert 'HandsetLifted' not in called
         assert 'HardwareDisconnected' in called
     finally: await stand.aclose()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('ordering',list(__import__('itertools').permutations([(57,0),(6,1),(8,1),(57,1)])))
-async def test_queued_simultaneous_edges_end_matching_physical_level(monkeypatch,ordering):
+async def test_queued_simultaneous_edges_end_matching_physical_level(ordering):
     from app.foundation.input_adapters import KeyboardHIDInputAdapter
     stand=HardwareIntegrationStand(Settings(profile='mock'),background_scheduler=False)
     stand._physical_loop=asyncio.get_running_loop();stand._hid_generation=1
     stand._admits_physical_users=lambda:True
-    futures=[];original=asyncio.run_coroutine_threadsafe
-    def tracked(coro,loop):
-        f=original(coro,loop);futures.append(f);return f
-    monkeypatch.setattr(asyncio,'run_coroutine_threadsafe',tracked)
     adapter=KeyboardHIDInputAdapter('/dev/null',lambda e:stand._on_physical_input(e,1))
     adapter._known_levels.add(57);adapter._pressed.add(57)
     try:
         # Every permutation in one reader batch, with the default 35ms debounce.
         for code,value in ordering: adapter.feed_key(code,value,timestamp=1.)
-        await asyncio.gather(*(asyncio.wrap_future(f) for f in futures))
+        await settle_physical_inputs(stand)
         record=stand.application.sessions.get(stand.active_session_id)
         actual_up=bool(record and record.handset_up)
         assert actual_up is (57 not in adapter._pressed)
@@ -80,19 +89,24 @@ async def test_queued_simultaneous_edges_end_matching_physical_level(monkeypatch
     finally: await stand.aclose()
 
 @pytest.mark.asyncio
-async def test_queued_old_reader_event_rejected_after_reconnect(monkeypatch):
+async def test_queued_old_reader_event_rejected_after_reconnect():
     from app.foundation.input_adapters import NormalizedInputEvent
     stand=HardwareIntegrationStand(Settings(profile='mock'),background_scheduler=False)
     stand._physical_loop=asyncio.get_running_loop();stand._hid_generation=1
     stand._admits_physical_users=lambda:True
-    futures=[];original=asyncio.run_coroutine_threadsafe
-    def tracked(coro,loop):
-        f=original(coro,loop);futures.append(f);return f
-    monkeypatch.setattr(asyncio,'run_coroutine_threadsafe',tracked)
+    dispatched=[];inject=stand.inject_physical
+    async def observed(payload):
+        dispatched.append(payload)
+        return await inject(payload)
+    stand.inject_physical=observed
     try:
         stand._on_physical_input(NormalizedInputEvent('SpaceReleased',{}),1)
         stand._hid_generation=2
-        result=await asyncio.wrap_future(futures[0])
+        await settle_physical_inputs(stand)
+        assert dispatched == []
+        # The callback rejects the old owner before creating a task; the
+        # coroutine boundary independently rejects a stale generation too.
+        result=await inject({'type':'SpaceReleased','_hid_generation':1})
         assert result['reason']=='stale_hid_generation'
         assert stand.application.sessions.get(stand.active_session_id) is None
     finally: await stand.aclose()

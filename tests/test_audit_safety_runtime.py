@@ -26,7 +26,7 @@ def event(kind, sequence, payload=None):
 
 class ConfirmedTestDelivery:
     """Explicit test double for receipt paths, never an implicit mock service."""
-    def request(self, payload):
+    async def request(self, payload):
         return {"acknowledged": True, "simulated": False}
 
 

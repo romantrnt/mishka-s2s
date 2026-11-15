@@ -111,7 +111,7 @@ def test_empty_nonblocking_uart_read_yields_until_stop():
     transport = Empty()
     adapter = SerialLightingAdapter('/isolated-fake',transport=transport)
     adapter._drain_stop = Stop()
-    adapter._drain_loop()
+    adapter._drain_loop(adapter._drain_stop, transport)
     assert adapter._drain_stop.waits == [0.02]
     assert transport.reads == 1
 

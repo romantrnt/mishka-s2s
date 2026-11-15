@@ -727,6 +727,8 @@ class SerialLightingAdapter:
         self.timeout_s = max(0.01, float(timeout_s))
         self.transport = transport
         self._lock = threading.Lock()
+        # RX fault observation must never wait behind a blocking TX syscall.
+        self._reader_state_lock = threading.Lock()
         self._ready = False
         self._closed = False
         self._sent = 0
@@ -737,6 +739,9 @@ class SerialLightingAdapter:
         self._drain_stop = threading.Event()
         self._drain_thread: threading.Thread | None = None
         self._drained_bytes = 0
+        self._read_failures = 0
+        self._last_read_failure: dict | None = None
+        self._on_read_fault = None
         self._line_boundary_pending = False
         self._line_boundary_recoveries = 0
 
@@ -757,43 +762,76 @@ class SerialLightingAdapter:
             self._closed = False
             self._last_error = None
             self._last_open_at = time.time()
-            self._drain_stop.clear()
+            self._start_reader_locked()
+
+    def _start_reader_locked(self) -> None:
+        # A timed-out old reader owns its old stop token forever. Reopening
+        # must never revive that reader against the replacement descriptor.
+        with self._reader_state_lock:
+            self._drain_stop.set()
+            stop = self._drain_stop = threading.Event()
+            self._ready = True
+            self._closed = False
+            self._last_error = None
             self._drain_thread = threading.Thread(
-                target=self._drain_loop,
-                name="mishka-lighting-rx-drain",
-                daemon=True,
+                target=self._drain_loop, args=(stop, self.transport),
+                name="mishka-lighting-rx-drain", daemon=True,
             )
             self._drain_thread.start()
 
-    def _drain_loop(self) -> None:
-        while not self._drain_stop.is_set():
+    def set_read_fault_handler(self, callback) -> None:
+        with self._reader_state_lock:
+            self._on_read_fault = callback
+            # open() starts RX before the output owner may be constructed.
+            # Replay only the currently active fault, never a recovered one.
+            error = (dict(self._last_error) if not self._ready and self._last_error
+                     and self._last_error.get("stage") == "serial_read" else None)
+        if error is not None and callable(callback):
+            callback(error)
+
+    def _drain_loop(self, stop, transport) -> None:
+        while not stop.is_set():
             try:
-                read_available = getattr(self.transport, "read_available", None)
+                read_available = getattr(transport, "read_available", None)
                 if callable(read_available):
                     received = read_available() or b""
+                    if stop.is_set():
+                        return
                     self._drained_bytes += len(received)
                     if not received:
-                        self._drain_stop.wait(0.02)
+                        stop.wait(0.02)
                 else:
-                    self._drain_stop.wait(0.02)
-            except Exception:
-                if self._drain_stop.is_set():
-                    return
-                self._drain_stop.wait(0.02)
+                    stop.wait(0.02)
+            except Exception as exc:
+                with self._reader_state_lock:
+                    if stop.is_set() or self._drain_stop is not stop:
+                        return
+                    error = _lighting_failure_evidence(exc, stage="serial_read")
+                    self._ready = False
+                    self._read_failures += 1
+                    self._last_read_failure = dict(error)
+                    self._last_error = dict(error)
+                    callback = self._on_read_fault
+                # Never invoke owner cleanup while holding the serial lock,
+                # and never reconnect from the reader being joined by close.
+                if callable(callback):
+                    callback(dict(error))
+                return
 
     def close(self) -> None:
         with self._lock:
-            self._ready = False
-            self._closed = True
-            self._drain_stop.set()
-            thread, self._drain_thread = self._drain_thread, None
-            if thread is not None and thread is not threading.current_thread():
-                thread.join(timeout=0.25)
+            with self._reader_state_lock:
+                self._ready = False
+                self._closed = True
+                self._drain_stop.set()
+                thread, self._drain_thread = self._drain_thread, None
             if self.transport is not None:
                 try:
                     self.transport.close()
                 except Exception:
                     pass
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.25)
 
     def is_ready(self) -> bool:
         return self._ready and not self._closed
@@ -872,11 +910,13 @@ class SerialLightingAdapter:
                 # batch once.  This keeps a single transient write failure
                 # from killing the canonical breathing/wave task.
                 try:
+                    self._drain_stop.set()
                     self.transport.close()
                     if callable(is_current) and not is_current():
                         return False
                     self.transport.open()
                     self._ready = True
+                    self._start_reader_locked()
                     for command in validated:
                         if callable(is_current) and not is_current():
                             return False
@@ -912,6 +952,8 @@ class SerialLightingAdapter:
             "last_write_failure": dict(self._last_write_failure) if self._last_write_failure else None,
             "last_open_at": self._last_open_at,
             "drained_bytes": self._drained_bytes,
+            "read_failures": self._read_failures,
+            "last_read_failure": dict(self._last_read_failure) if self._last_read_failure else None,
             "framing_recovery_pending": self._line_boundary_pending,
             "framing_recoveries": self._line_boundary_recoveries,
             "drain_alive": bool(self._drain_thread and self._drain_thread.is_alive()),
@@ -959,6 +1001,35 @@ class PhysicalLightingOutput:
         self._fault_latched = False
         self._dark_recovery_attempts = 0
         self._dark_recovery: dict[str, object] | None = None
+        self._pending_recovery: int | None = None
+        set_handler = getattr(adapter, "set_read_fault_handler", None)
+        if callable(set_handler):
+            set_handler(self._external_fault)
+
+    def _external_fault(self, evidence: dict) -> None:
+        """Fence a producer/RX failure before scheduling sole-writer cleanup."""
+        with self._condition:
+            if self._closed or self._closing or self._fault_latched:
+                return
+            error = {**evidence, "generation": self._generation}
+            self._last_async_error = error
+            if self._first_failure is None:
+                self._first_failure = dict(error)
+            self._failed_batches += 1
+            self._invalidate_locked()
+            self._generation_error = error
+            self._fault_latched = True
+            if self._auto_dark_recovery and not self._dark_recovery_attempts:
+                self._pending_recovery = self._generation
+                if not self._draining:
+                    self._draining = True
+                    self._writer.submit(self._drain_pending)
+            self._condition.notify_all()
+        if callable(self._on_fault):
+            try:
+                self._on_fault(self, dict(error))
+            except Exception:
+                pass  # owner remains fenced even when notification fails
 
     def _is_current(self, generation: int) -> bool:
         with self._lock:
@@ -1009,13 +1080,21 @@ class PhysicalLightingOutput:
     def _drain_pending(self) -> None:
         while True:
             with self._condition:
-                if not self._pending:
+                recovery = self._pending_recovery
+                if recovery is not None:
+                    self._pending_recovery = None
+                    generation, commands = recovery, ()
+                elif self._pending:
+                    generation, commands = self._pending.popleft()
+                else:
                     self._draining = False
                     self._condition.notify_all()
                     return
-                generation, commands = self._pending.popleft()
                 self._in_flight = True
             try:
+                if recovery is not None:
+                    self._recover_dark_once(generation)
+                    continue
                 written = self._write_batch(generation, commands)
                 with self._condition:
                     if written:
@@ -1084,10 +1163,14 @@ class PhysicalLightingOutput:
         )
         if len(validated) > len(LIGHTING_ELEMENT_IDS):
             raise ValueError("a lighting batch must contain at most eighteen commands")
-        with self._lock:
-            if self._closed or self._closing:
-                raise ConnectionError("lighting output is closed")
-            self._enqueue_locked(validated)
+        try:
+            with self._lock:
+                if self._closed or self._closing:
+                    raise ConnectionError("lighting output is closed")
+                self._enqueue_locked(validated)
+        except BufferError as exc:
+            self._external_fault(_lighting_failure_evidence(exc, stage="output_queue_overflow"))
+            raise
 
     def clear_all(self, transition_ms: int = 0) -> None:
         commands = tuple(

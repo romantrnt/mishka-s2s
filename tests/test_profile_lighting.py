@@ -11,6 +11,7 @@ from app.foundation.lighting import (
     ExhibitionLightingEngine,
     FakeLightingOutput,
     LightingCommand,
+    LightingFaultLatchedError,
     PhysicalLightingOutput,
     SerialLightingAdapter,
 )
@@ -183,11 +184,16 @@ def test_bounded_queue_reset_drops_stale_lines_then_writes_terminal_dark():
         output.set_elements((LightingCommand(0, 1), LightingCommand(1, 1)))
         assert transport.entered.wait(1.0)
         output.set_element(2, 1)
-        for _ in range(100):
-            with pytest.raises(BufferError):
+        with pytest.raises(BufferError):
+            output.set_element(3, 1)
+        for _ in range(99):
+            with pytest.raises(LightingFaultLatchedError):
                 output.set_element(3, 1)
-        assert output.diagnostics()["pending_batches"] == 1
-        assert output.diagnostics()["overflow_batches"] == 100
+        fault = output.diagnostics()
+        assert fault["pending_batches"] == 0  # overflow invalidates old targets
+        assert fault["overflow_batches"] == 1
+        assert fault["fault_latched"] and not fault["output_ready"]
+        assert fault["pending_batches"] + int(fault["in_flight"]) <= fault["max_pending_batches"]
         assert output.snapshot()["3"] == 0  # rejected writes are not desired
         output.clear_all()
         with pytest.raises(TimeoutError):
@@ -198,6 +204,8 @@ def test_bounded_queue_reset_drops_stale_lines_then_writes_terminal_dark():
         diagnostics = output.diagnostics()
         assert diagnostics["dropped_batches"] == 2
         assert diagnostics["written_batches"] == 1
+        assert set(output.snapshot().values()) == {0}
+        assert diagnostics["fault_latched"] and not diagnostics["output_ready"]
         assert diagnostics["state_kind"] == "desired_targets"
         assert diagnostics["firmware_acknowledged"] is False
     finally:

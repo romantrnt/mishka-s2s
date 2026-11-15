@@ -142,7 +142,7 @@ def test_authenticated_application_websocket_cannot_resolve_by_claimed_actor():
         mutation_auth_policy="token_required",
     ))
     class PendingHandoff:
-        def request(self, _request):
+        async def request(self, _request):
             return {"acknowledged": False}
 
     # Keep this ingress test focused on WebSocket authority. The mock
@@ -172,7 +172,7 @@ def test_handoff_request_carries_server_incident_id_without_resolving():
         def __init__(self):
             self.requests = []
 
-        def request(self, request):
+        async def request(self, request):
             self.requests.append(dict(request))
             return {"acknowledged": False}
 

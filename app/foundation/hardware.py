@@ -190,6 +190,13 @@ class PosixSerialTransport:
                 select.select([], [self.fd], [], min(0.05, max(0.0, deadline-time.monotonic())))
     def read_available(self) -> bytes:
         if self.fd is None: raise RuntimeError("serial transport is closed")
+        # Raw nonblocking TTY reads can return b"" both when idle and on
+        # disconnect. Poll the native descriptor to distinguish a dead peer.
+        poller = select.poll()
+        poller.register(self.fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+        if any(flags & (select.POLLHUP | select.POLLERR | select.POLLNVAL)
+               for _, flags in poller.poll(0)):
+            raise ConnectionError("serial peer disconnected")
         chunks=[]
         while True:
             try:
