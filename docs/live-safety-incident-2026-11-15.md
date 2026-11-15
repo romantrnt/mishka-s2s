@@ -116,3 +116,11 @@ A deployment candidate must not merely change the model name: alternating 14b
 context sizes 4096/1024 incurred 2.3–7.3 seconds per switch on this server. The
 larger-model input/output candidate should use a common context size and undergo
 full latency and output-safety tests. No live environment setting was changed here.
+
+
+### Integrated candidate follow-up
+
+The subsequent ordinary-dialogue, profile, menu and output-safety work, local-model
+latency observations, unresolved content and adult live checklist are documented in
+`live-acceptance-candidate-2026-11-15.md`. The investigation above describes the
+unchanged d57c99b server at incident-analysis time, not a future deployment claim.

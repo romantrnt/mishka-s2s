@@ -44,7 +44,7 @@ def test_ollama_and_vllm_streaming_payloads_are_configured():
     assert vllm._payload([],True)["stream"] is True and vllm._payload([],True)["max_tokens"]==55
 
 
-def test_ollama_validator_uses_resident_small_context(monkeypatch):
+def test_ollama_validator_uses_shared_resident_context(monkeypatch):
     monkeypatch.delenv("VALIDATION_KEEP_ALIVE", raising=False)
     validator = OllamaMiniLLMValidator(timeout_s=1.0)
     captured = {}
@@ -57,7 +57,8 @@ def test_ollama_validator_uses_resident_small_context(monkeypatch):
     decision = asyncio.run(validator.validate("Привет"))
     assert decision.allowed is True
     assert captured["keep_alive"] == -1
-    assert captured["options"]["num_ctx"] == 1024
+    assert captured["options"]["num_ctx"] == 4096
+    assert captured["model"] == "qwen3:14b"
 
 
 def test_silero_rvc_playback_order_preserves_pcm_through_queue():
@@ -212,3 +213,16 @@ def test_unknown_voice_mode_is_rejected(monkeypatch):
     monkeypatch.setenv("MISHKA_VOICE_CONVERSION", "mystery_voice")
     with pytest.raises(ValueError, match="unsupported MISHKA_VOICE_CONVERSION"):
         api_module._build_s2s(production_settings(profile="production_candidate"), Path(__file__).resolve().parents[1] / "content")
+
+
+
+def test_validation_defaults_match_evaluated_shared_gpu_model(monkeypatch):
+    for key in ("VALIDATION_MODEL", "VALIDATION_NUM_CTX", "LLM_MODEL", "LLM_NUM_CTX"):
+        monkeypatch.delenv(key, raising=False)
+    value = Settings.from_env()
+    assert value.validation_model == value.llm_model == "qwen3:14b"
+    assert value.validation_num_ctx == value.llm_num_ctx == 4096
+    monkeypatch.setenv("VALIDATION_MODEL", "operator-selected-model")
+    monkeypatch.setenv("VALIDATION_NUM_CTX", "2048")
+    assert Settings.from_env().validation_model == "operator-selected-model"
+    assert Settings.from_env().validation_num_ctx == 2048

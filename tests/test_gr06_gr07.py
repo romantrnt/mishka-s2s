@@ -68,7 +68,7 @@ def test_runtime_phrase_resolution_exposes_content_and_asset_diagnostics():
         app.monotonic_now = lambda: clock[0]
         app.canonical_runtime.monotonic_now = app.monotonic_now
         await app.receive_async(Event("HandsetLifted", "audio", 1, 0.0, "hid", {}, "lift", 0.0))
-        clock[0] = 4.0
+        clock[0] = 5.0
         result = await app.flush_welcome_timers()
         effect = next(item for item in result[0]["outputs"] if item.get("phrase_id") == "PHRASE_001")
         assert effect["content_id"] == "PHRASE_001"

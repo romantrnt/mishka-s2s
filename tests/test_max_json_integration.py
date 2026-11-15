@@ -132,6 +132,27 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Тестовый специалист", context.system_prompt)
         self.assertNotIn("patient_profile", self.app.last_canonical_event["payload"])
 
+    async def test_real_max_json_starts_menu_without_exhibition_identity_questions(self):
+        await self.scan("demo-1")
+        await self.send("HandsetLifted")
+        deadline = self.state().welcome_deadline_monotonic
+        async def accepted(kind, seq, payload=None):
+            return await self.app.receive_async(Event(kind, self.boundary.session_id, seq,
+                time.time(), "profile_onboarding", payload or {}, f"profile-onboarding-{seq}", deadline + .01))
+        await accepted("WelcomeTimerFired", 1)
+        lease = self.app._active_audio[self.boundary.session_id]
+        callback = {key: lease[key] for key in ("token", "generation", "playback_lease", "playback_id")}
+        callback["response_id"] = "PHRASE_001"
+        result = await accepted("AudioCompleted", 2, callback)
+        self.assertEqual(result["reason"], "authorized_profile_menu_started")
+        self.assertEqual(self.state().display_name, "Демо")
+        self.assertEqual(self.state().age_band_source, "data14_age_years")
+        self.assertEqual([x.get("phrase_id") for x in result["outputs"] if x.get("type") == "speak"], ["PHRASE_007"])
+        duplicate = await accepted("AudioCompleted", 3, callback)
+        self.assertNotEqual(duplicate["reason"], "exhibition_introduction_started")
+        self.assertEqual(self.state().mode, "exhibition_menu_tutorial_prompt")
+        self.assertNotIn("Демо", json.dumps(self.state().snapshot(), ensure_ascii=False))
+
     async def test_ready_lift_hangup_clears_both_sides(self):
         await self.scan("demo-1")
         await self.send("HandsetLifted")

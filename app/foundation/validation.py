@@ -41,6 +41,32 @@ class RegexSafetyFilter:
     """Fast deterministic filter; never generates or rewrites a response."""
 
     _rules = (
+        # Model speech cannot perform or attest external contact. Verified
+        # transport ACK recordings are dispatched outside this model gate.
+        ("unverified_external_contact", re.compile(
+            r"(?:^|[.!?]\s*|,\s*)(?:(?:хорошо|конечно|да)\s*,?\s*)?"
+            r"(?:(?:я|мы)\s+(?:(?:уже|сейчас|сразу)\s+)?|(?:сейчас|уже)\s+)"
+            r"(?:позвал[аи]?|позову|позов[её]м|вызвал[аи]?|вызову|сообщил[аи]?|сообщу|"
+            r"уведомил[аи]?|уведомлю|написал[аи]?|напишу|отправил[аи]?|отправлю|попросил[аи]?|попрошу)\b"
+            r"[^.!?]{0,60}\b(?:мам\w*|пап\w*|взросл\w*|родител\w*|врач\w*|медсестр\w*|помощь)\b"
+            r"|\b(?:твоя\s+мама|твой\s+папа|взрослый|родители)\s+(?:уже\s+)?"
+            r"(?:получил[аи]?|получили)\s+(?:мо[её]\s+)?(?:сообщение|просьбу|уведомление)\b"
+            r"|(?:^|[.!?]\s*)(?:мама|папа|взрослый|помощь)\s+(?:уже\s+|сейчас\s+|скоро\s+)"
+            r"(?:прид[её]т|ид[её]т|подойд[её]т|будет\s+здесь)\b", re.I)),
+        # Narrow child-facing concealment/isolation instructions, not the word
+        # "secret" itself. Semantic validation still covers other paraphrases.
+        ("secrecy_or_isolation", re.compile(
+            r"\bне\s+(?:рассказывай(?:те)?|говори(?:те)?|сообщай(?:те)?)\s+"
+            r"(?:никому|взрослым|родителям|маме|папе|воспитателю|учителю|врачу)\b"
+            r"(?!\s+(?:неправду|ложь|грубости)\b)"
+            r"|\bникому\s+(?:больше\s+)?не\s+(?:рассказывай(?:те)?|говори(?:те)?|сообщай(?:те)?)\b"
+            r"|\b(?:это\s+(?:останется|будет)|оставим\s+это)\s+(?:только\s+)?между\s+нами\b"
+            r"|\b(?:держи|храни|сохрани)\b[^.!?]{0,60}\bв\s+секрете\s+от\s+(?:взрослых|родителей|мамы|папы)\b"
+            r"|\bне\s+(?:зови|зовите|обращайся\s+к|обращайтесь\s+к)\s+(?:взросл\w*|родител\w*|мам\w*|пап\w*)\b"
+            r"|\b(?:разговаривай|общайся)\s+только\s+со\s+мной\b"
+            r"|\bдоверяй\s+только\s+мне\b"
+            r"|\b(?:do\s+not|don['’]t)\s+tell\s+(?:anyone|(?:your\s+)?(?:parents|adults|mom|dad))\b"
+            r"|\bkeep\s+(?:this|it)\s+(?:just\s+)?between\s+us\b", re.I)),
         ("medical_advice", re.compile(r"(\u0434\u0438\u0430\u0433\u043d\u043e\u0437|\u043b\u0435\u043a\u0430\u0440\u0441\u0442\u0432|\u0442\u0430\u0431\u043b\u0435\u0442|\u043b\u0435\u0447\u0438\u0442\u044c|\u043f\u0440\u0438\u043d\u0438\u043c\u0430\u0439.*\u043b\u0435\u043a\u0430\u0440\u0441\u0442\u0432|\u043a\u0430\u043a.*\u043b\u0435\u0447\u0438\u0442\u044c|\bdiagnos\w*\b|\bmedicin\w*\b|\bprescrib\w*\b|\btake.*pill\b)", re.I)),
         ("self_harm_or_violence", re.compile(r"(\u0441\u0443\u0438\u0446\u0438\u0434|\u0443\u0431\u0438\u0442\u044c|\u0437\u0430\u0440\u0435\u0437\u0430\u0442\u044c|\u043e\u0440\u0443\u0436\u0438\u0435|\u0432\u0437\u043e\u0440\u0432\u0430\u0442\u044c|\bkill\b|\bsuicide\b|\bweapon\b|\bshoot\b|\bbomb\b)", re.I)),
         ("sexual_content", re.compile(r"(\u043f\u043e\u0440\u043d\u043e|\u0441\u0435\u043a\u0441|\u043d\u0430\u0433\u043e\u0439|\bsex\b|\bporno\b|\bnude\b)", re.I)),
@@ -78,7 +104,7 @@ class MockMiniLLMValidator:
 class OllamaMiniLLMValidator:
     """Structured-only Ollama adapter. It cannot emit child-facing text."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:11434", model: str = "qwen3:0.6b", timeout_s: float = 0.12, fail_closed: bool = True, num_ctx: int = 1024, keep_alive: str = "-1"):
+    def __init__(self, base_url: str = "http://127.0.0.1:11434", model: str = "qwen3:14b", timeout_s: float = 10.0, fail_closed: bool = True, num_ctx: int = 4096, keep_alive: str = "-1"):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
@@ -98,7 +124,13 @@ class OllamaMiniLLMValidator:
                   "Use allow for ordinary harmless child-safe conversation such as greetings, stories, "
                   "games, weather, and questions. Block violence, sexual content, self-harm, medical instructions, "
                   "requests for personal data or photos, secrecy from caregivers, isolation, manipulation, "
-                  "and unsafe instructions. Use review when uncertain. Never rewrite the candidate.")
+                  "and unsafe instructions. Also block claims or promises that this assistant has called, "
+                  "will call, messaged, notified, or contacted real people, that a caregiver received "
+                  "a message/request, or that real help/adults are coming. The model has no external "
+                  "communication capability or delivery evidence; only a separate trusted protocol can "
+                  "confirm delivery. Ordinary advice to ask a nearby trusted adult is allowed, as is "
+                  "clearly fictional third-person storytelling without real-world contact claims. "
+                  "Use review when uncertain. Never rewrite the candidate.")
         keep_alive = self.keep_alive.strip()
         if keep_alive.lstrip("-").isdigit():
             keep_alive = int(keep_alive)

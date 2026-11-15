@@ -98,8 +98,20 @@ class SafetyClassifier:
         severity = deterministic if levels[deterministic] >= levels[semantic] else semantic
         return SafetyClassification(severity, "deterministic" if severity == deterministic else "semantic")
 
+# Only a direct command, not a parent mentioned in a story or an advice query.
+# Keep this an intent: severity and delivery acknowledgements belong elsewhere.
+_CAREGIVER_REQUEST = re.compile(r"""
+    (?:(?:мишка|пожалуйста)[,\s]+)*
+    (?:позови(?:те)?(?:\s+|,\s*пожалуйста[,\s]+)(?:пожалуйста[,\s]+)?(?:маму|папу)
+       |попроси(?:те)?(?:\s+|,\s*пожалуйста[,\s]+)(?:пожалуйста[,\s]+)?(?:маму|папу)\s+подойти)
+    (?:\s+(?:сюда|ко\s+мне))?
+    (?:[,\s]+пожалуйста)?[.!?]*
+""", re.I | re.X)
+
+
 def classify_intent(text: str) -> str:
     value = text.casefold().strip()
+    if _CAREGIVER_REQUEST.fullmatch(value): return "request_adult"
     # An explicit request for an adult outranks ordinary navigation/mood.
     if re.search(r"(позвать\s+взросл|позови(?:те)?\s+взросл|нужен\s+взросл)", value): return "request_adult"
     if re.search(r"(поставь|поставить|на)\s*пауз|пауза", value): return "pause_story"

@@ -24,6 +24,8 @@ def test_exhibition_menu_existing_use_cases_pass_application_and_graph():
             (5, "wellbeing_check", "HELP"),
             (2, "fixed_story_menu", "STORY_MENU"),
             (6, "bear_dialogue", "BEAR_DIALOGUE"),
+            (4, "personal_story_theme", "PERSONAL_STORY"),
+            (7, "schedule_weather", "SCHEDULE_WEATHER"),
         ):
             sid = f"menu-{button}"
             app.canonical_runtime.sessions[sid] = CanonicalState(
@@ -37,11 +39,6 @@ def test_exhibition_menu_existing_use_cases_pass_application_and_graph():
                        for effect in result["outputs"])
             assert any(effect.get("type") == "lighting_preset"
                        and effect.get("preset") == preset for effect in result["outputs"])
-        sid = "menu-four"
-        app.canonical_runtime.sessions[sid] = CanonicalState(sid, mode="menu_ready", handset="up")
-        fourth = await app.receive_async(_event("ButtonPressed", sid, 1, {"button_id": 4}))
-        assert fourth["canonical_state"]["mode"] == "menu_ready"
-        assert not any(effect.get("type") == "generate_personal_story" for effect in fourth["outputs"])
     asyncio.run(run())
 
 

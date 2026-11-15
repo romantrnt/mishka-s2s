@@ -46,19 +46,19 @@ def test_canonical_exhibition_timer_is_monotonic_exact_and_cancelable() -> None:
     assert lifted["reason"] == "exhibition_handset_lifted"
     assert lifted["state"]["mode"] == "voice_welcome"
     assert lifted["state"]["welcome_t0_monotonic"] == 10.0
-    assert lifted["state"]["welcome_deadline_monotonic"] == 14.0
+    assert lifted["state"]["welcome_deadline_monotonic"] == 15.0
     assert [effect["type"] for effect in lifted["effects"]] == ["lighting_wave_intent", "play_asset", "welcome_timer_scheduled"]
 
-    clock[0] = 13.999
-    early = runtime.handle(canonical_event("WelcomeTimerFired", 1, 1, 13.999, "timer"))
+    clock[0] = 14.999
+    early = runtime.handle(canonical_event("WelcomeTimerFired", 1, 1, 14.999, "timer"))
     assert early["reason"] == "welcome_not_due"
     assert early["effects"] == []
 
-    clock[0] = 14.0
-    due = runtime.handle(canonical_event("WelcomeTimerFired", 2, 1, 14.0, "timer"))
+    clock[0] = 15.0
+    due = runtime.handle(canonical_event("WelcomeTimerFired", 2, 1, 15.0, "timer"))
     assert due["reason"] == "welcome_started"
     assert [effect["phrase_id"] for effect in due["effects"]] == ["PHRASE_001"]
-    assert due["effects"][0]["scheduled_deadline_monotonic"] == 14.0
+    assert due["effects"][0]["scheduled_deadline_monotonic"] == 15.0
 
     cancelled = CanonicalRuntime(monotonic_now=lambda: clock[0], exhibition_mode=True)
     cancelled.handle(canonical_event("HandsetLifted", 1, 0, 10.0))
@@ -83,9 +83,9 @@ def test_application_headless_path_schedules_one_welcome_and_new_lift_gets_new_d
         assert not any(effect.get("type") == "speak" and effect.get("phrase_id") == "PHRASE_001" for effect in lifted["outputs"])
         assert app.last_canonical_event["source"] == "headless"
 
-        clock[0] = 23.999
+        clock[0] = 24.999
         assert await app.flush_welcome_timers() == []
-        clock[0] = 24.0
+        clock[0] = 25.0
         due = await app.flush_welcome_timers()
         assert len(due) == 1
         assert app.last_canonical_state["welcome_status"] == "started"
@@ -95,7 +95,7 @@ def test_application_headless_path_schedules_one_welcome_and_new_lift_gets_new_d
 
         clock[0] = 30.0
         lifted = await app.receive_async(Event("HandsetLifted", "app-gr01", 1, 110.0, "headless", {}, "lift-2", 30.0))
-        assert lifted["canonical_state"]["welcome_deadline_monotonic"] == 34.0
+        assert lifted["canonical_state"]["welcome_deadline_monotonic"] == 35.0
         down = await app.receive_async(Event("HandsetPlaced", "app-gr01", 2, 111.0, "headless", {}, "down-2", 30.1))
         assert down["reason"] == "exhibition_reset"
         assert await app.flush_welcome_timers() == []
@@ -189,12 +189,12 @@ def test_full_exhibition_trace_has_one_wave_one_timer_and_phrase_at_deadline() -
         assert lifted["reason"] == "exhibition_handset_lifted"
         assert [item["type"] for item in lifted["outputs"]] == ["lighting_wave_intent", "play_asset", "welcome_timer_scheduled"]
         assert lifted["canonical_state"]["welcome_t0_monotonic"] == 100.0
-        assert lifted["canonical_state"]["welcome_deadline_monotonic"] == 104.0
+        assert lifted["canonical_state"]["welcome_deadline_monotonic"] == 105.0
         assert not any(item.get("type") == "speak" and item.get("phrase_id") == "PHRASE_001" for item in lifted["outputs"])
 
-        clock[0] = 103.999
+        clock[0] = 104.999
         assert await app.flush_welcome_timers() == []
-        clock[0] = 104.0
+        clock[0] = 105.0
         fired = await app.flush_welcome_timers()
         assert len(fired) == 1
         assert [item.get("phrase_id") for item in fired[0]["outputs"] if item.get("type") == "speak"] == ["PHRASE_001"]
@@ -229,9 +229,9 @@ def test_timer_boundary_races_and_audio_failure_are_terminal() -> None:
 
         app.audio = FailingAudio()
         await app.receive_async(Event("HandsetLifted", "failure", 1, 0.0, "test", {}, "lift", 0.0))
-        clock[0] = 3.999
+        clock[0] = 4.999
         assert await app.flush_welcome_timers() == []
-        clock[0] = 4.0
+        clock[0] = 5.0
         due = await app.flush_welcome_timers()
         assert len(due) == 1
         assert [call[0] for call in calls] == ["RINGTONE", "PHRASE_001"]
@@ -244,7 +244,7 @@ def test_timer_boundary_races_and_audio_failure_are_terminal() -> None:
         race.monotonic_now = lambda: 0.0
         race.canonical_runtime.monotonic_now = race.monotonic_now
         await race.receive_async(Event("HandsetLifted", "race", 1, 0.0, "test", {}, "lift", 0.0))
-        down = await race.receive_async(Event("HandsetPlaced", "race", 2, 4.0, "test", {}, "down", 4.0))
+        down = await race.receive_async(Event("HandsetPlaced", "race", 2, 5.0, "test", {}, "down", 5.0))
         assert down["reason"] == "exhibition_reset"
         assert await race.flush_welcome_timers() == []
 
@@ -258,10 +258,10 @@ def test_timer_boundary_races_and_audio_failure_are_terminal() -> None:
         await cycle.receive_async(Event("HandsetPlaced", "cycle", 2, 1.0, "test", {}, "down-1", 11.0))
         clock2[0] = 20.0
         second = await cycle.receive_async(Event("HandsetLifted", "cycle", 3, 2.0, "test", {}, "lift-2", 20.0))
-        assert second["canonical_state"]["welcome_deadline_monotonic"] == 24.0
-        clock2[0] = 23.999
+        assert second["canonical_state"]["welcome_deadline_monotonic"] == 25.0
+        clock2[0] = 24.999
         assert await cycle.flush_welcome_timers() == []
-        clock2[0] = 24.0
+        clock2[0] = 25.0
         assert len(await cycle.flush_welcome_timers()) == 1
 
     asyncio.run(scenario())
@@ -310,7 +310,7 @@ def test_missing_phrase_asset_is_visual_only_and_diagnostic() -> None:
         app.canonical_runtime.monotonic_now = app.monotonic_now
         app.voice_manifest.resolve = lambda *_args: None
         await app.receive_async(Event("HandsetLifted", "missing", 1, 0.0, "test", {}, "lift", 0.0))
-        clock[0] = 4.0
+        clock[0] = 5.0
         fired = await app.flush_welcome_timers()
         speak = next(item for item in fired[0]["outputs"] if item.get("type") == "speak")
         assert speak["resolution"] == "recorded_phrase_unavailable_visual_only"
@@ -318,3 +318,17 @@ def test_missing_phrase_asset_is_visual_only_and_diagnostic() -> None:
         assert not app._active_audio, "failed welcome must also release the ringtone lease"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("elapsed, expected", [(0.0, "welcome_not_due"), (4.0, "welcome_not_due"), (4.999999, "welcome_not_due"), (5.0, "welcome_started"), (5.000001, "welcome_started")])
+def test_welcome_user_five_second_boundary_independent_of_constant(elapsed, expected):
+    """Literal user contract: no imported production delay can mask a regression."""
+    runtime = CanonicalRuntime(monotonic_now=lambda: 100.0)
+    lifted = runtime.handle(canonical_event("HandsetLifted", 1, 0, 100.0))
+    assert lifted["state"]["welcome_deadline_monotonic"] == 105.0
+    scheduled = next(item for item in lifted["effects"] if item["type"] == "welcome_timer_scheduled")
+    assert scheduled["delay_seconds"] == 5.0
+    result = runtime.handle(canonical_event("WelcomeTimerFired", 1, 1, 100.0 + elapsed, "timer"))
+    assert result["reason"] == expected
+    spoken = [item["phrase_id"] for item in result["effects"] if item["type"] == "speak"]
+    assert spoken == (["PHRASE_001"] if elapsed >= 5.0 else [])

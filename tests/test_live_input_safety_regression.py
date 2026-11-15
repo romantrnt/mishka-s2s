@@ -155,3 +155,40 @@ def test_explicit_adult_request_survives_classifier_failure(outcome, untrusted_s
             assert state.display_name is None
         finally: await app._cleanup_session_resources(SID)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("interruption", ["WelcomeTimerFired", "HandsetPlaced"])
+@pytest.mark.parametrize("verified", [True, False])
+def test_explicit_help_survives_ordinary_revision_but_not_session_end(interruption, verified):
+    async def run():
+        app, *_ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
+        entered, release = asyncio.Event(), asyncio.Event()
+        class Semantic:
+            async def classify(self, text):
+                entered.set()
+                await release.wait()
+                if not verified: raise OSError()
+                return "none", .99
+        app.safety_classifier = InputSafetyGate(Settings(profile="mock", validation_timeout_ms=1000), Semantic())
+        task = None
+        try:
+            await app.receive_async(event("HandsetLifted", 1))
+            task = asyncio.create_task(app.receive_async(event("SpeechReceived", 2), "Позови взрослого"))
+            await entered.wait()
+            deadline = app.canonical_runtime.sessions[SID].welcome_deadline_monotonic
+            await app.receive_async(Event(interruption, SID, 1, 5., "timer" if interruption == "WelcomeTimerFired" else "hid", {}, "interrupt", deadline + .01))
+            release.set()
+            result = await task
+            if interruption == "HandsetPlaced":
+                assert result["reason"] == "stale_session_generation"
+                assert not app.adult_handoff.outbox
+            else:
+                state = app.canonical_runtime.sessions[SID]
+                assert state.incident_id and state.mode == "safety_handoff"
+                assert len(app.adult_handoff.outbox) == 1
+                assert result["reason"] == "adult_handoff_delivery_failed"
+        finally:
+            release.set()
+            if task is not None: await asyncio.gather(task, return_exceptions=True)
+            await app._cleanup_session_resources(SID)
+    asyncio.run(run())

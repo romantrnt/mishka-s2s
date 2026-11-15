@@ -23,7 +23,7 @@ from .canonical_services import LED_PRESETS, BUTTON_ELEMENTS, RecordedPhraseReso
 from .config import settings_from_compat_env
 from .identity import IdentityDecision, IdentityValidationError, validate_identity_decision
 from .input_safety import InputSafetyGate
-from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest, validate_generated_story
+from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest
 from .system_prompt import build_system_prompt
 from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
 
@@ -1140,6 +1140,8 @@ class ScenarioApplication:
             if rejected:
                 return self._identity_result(event.session_id, rejected)
             text = transient_text or ""
+            parsed_intent = classify_intent(text)
+            explicit_adult_request = parsed_intent == "request_adult"
             admitted_handset = current.handset if current is not None else "down"
             epoch = self._session_epochs.get(event.session_id, 0)
             revision = self._session_revisions.get(event.session_id, 0)
@@ -1163,7 +1165,7 @@ class ScenarioApplication:
                 return self._identity_result(event.session_id, "stale_session_generation")
             if (self._session_revisions.get(event.session_id, 0) != revision
                     or current.last_sequence_by_source.get(event.source) != event.sequence):
-                if safety.severity == "none":
+                if safety.severity == "none" and not explicit_adult_request:
                     return self._identity_result(event.session_id, "stale_session_generation")
                 # A welcome timer or other ordinary transition must not erase
                 # a possible disclosure from the same physical session.
@@ -1172,8 +1174,6 @@ class ScenarioApplication:
             previous_state = copy.deepcopy(current)
             state_version = current.state_version
             uncertain_stt = payload.pop("_stt_untrusted", False)
-            parsed_intent = classify_intent(text)
-            explicit_adult_request = parsed_intent == "request_adult"
             if uncertain_stt and safety.severity == "none" and not explicit_adult_request:
                 return {**self._identity_result(event.session_id, "audio_retry"),
                         "outputs": [{"action": "audio_retry", "reason": "stt_low_confidence"}]}
@@ -1810,31 +1810,24 @@ class ScenarioApplication:
                         ),
                     }
                     deferred_effects.extend(fallback.get("outputs") or [])
-            elif kind == "generate_personal_story":
-                brief = effect.get("brief") if isinstance(effect.get("brief"), dict) else {}
-                age_band = brief.get("age_band", "3-5")
-                duration = {"1-3": 50, "3-5": 70, "5-7": 100}.get(str(age_band), 70)
-                candidate = {"title": "Маленькое доброе путешествие", "text": "Герой нашёл спокойную дорогу и вернулся домой.", "age_band": age_band, "estimated_duration_sec": duration, "safety_tags": ["safe_resolved"], "ending_state": "safe_resolved"}
-                valid, reason = validate_generated_story(candidate, brief)
-                effect["candidate"] = candidate
-                effect["validated"] = valid
-                effect["resolution"] = "validated_development_story" if valid else "story_validation_failed"
-                if reason:
-                    effect["validation_reason"] = reason
-                if valid:
-                    effect["pipeline_transition"] = await self._receive_canonical_event(Event("VoiceIntentReady", event.session_id, event.sequence, self.now(), "story_pipeline_generated", {"intent": "generated", "safety_severity": "none"}, f"{event.correlation_id or event.session_id}:story-generated"))
-                    effects.extend(effect["pipeline_transition"].get("outputs", []))
-                else:
-                    effect["fallback_phrase_id"] = "PHRASE_080"
-                    effect["pipeline_transition"] = await self._receive_canonical_event(Event("VoiceIntentReady", event.session_id, event.sequence, self.now(), "story_pipeline_validator", {"intent": "validation_failed", "safety_severity": "none"}, f"{event.correlation_id or event.session_id}:story-rejected"))
-                    effects.extend(effect["pipeline_transition"].get("outputs", []))
-            elif kind == "validate_personal_story":
-                effect["resolution"] = "validator_boundary_acknowledged"
-                effect["pipeline_transition"] = await self._receive_canonical_event(Event("VoiceIntentReady", event.session_id, event.sequence, self.now(), "story_pipeline_validated", {"intent": "validated", "safety_severity": "none"}, f"{event.correlation_id or event.session_id}:story-validated"))
-                effects.extend(effect["pipeline_transition"].get("outputs", []))
-            elif kind == "play_personal_story":
-                effect["resolution"] = "development_only_story_visual_placeholder"
-                effect["development_only"] = True
+            elif kind in {"generate_personal_story", "validate_personal_story", "play_personal_story"}:
+                # There is no production story generator/full-story validator/
+                # playback provider. A short canned candidate or a conversational
+                # TTS turn is not a validated age-appropriate generated story.
+                effect["resolution"] = "personal_story_provider_unavailable"
+                effect["fallback_phrase_id"] = "PHRASE_080"
+                fallback = await self._receive_canonical_event(Event(
+                    "DialogueFallback", event.session_id, event.sequence, self.now(),
+                    "personal_story_unavailable", {"reason": "personal_story_unavailable"},
+                    f"{event.correlation_id or event.session_id}:story-unavailable",
+                    self.monotonic_now(),
+                ), dialogue_fallback_authorized=True)
+                if not still_current():
+                    return stale_result()
+                effect["fallback"] = {"reason": fallback.get("reason"), "phrase_id": "PHRASE_080"}
+                deferred_effects.extend(fallback.get("outputs") or [])
+                decision["reason"] = fallback.get("reason", "personal_story_unavailable")
+                snapshot = state_owner.snapshot()
             elif kind in {"capture_open", "capture_close", "audio_stop"}:
                 effect["resolution"] = "application_boundary_acknowledged"
             elif kind == "game_retry":
@@ -2124,6 +2117,8 @@ class ScenarioApplication:
             current.node_id = fresh.node_id
             current.profile = fresh.profile
             current.system_prompt = fresh.system_prompt
+            current.allowed_topics = fresh.allowed_topics
+            current.forbidden_topics = fresh.forbidden_topics
             return current
         fresh._owner = owner
         self.conversation_contexts[session_id] = fresh
@@ -2168,7 +2163,14 @@ class ScenarioApplication:
                 age_band=selected_age["age_band"],
                 age_source=selected_age["age_band_source"],
             )
-        return ConversationContext(session_id, "canonical_product", str(state_snapshot.get("mode") or "bear_dialogue"), ("greetings", "clinic", "weather", "games", "stories", "feelings", "questions"), ("diagnosis", "medicine", "secret", "personal_data"), 5, 120, 2, profile=profile_context, system_prompt=prompt)
+        node_id = str(state_snapshot.get("mode") or "bear_dialogue")
+        # The dedicated conversation mode accepts ordinary replies and new
+        # harmless topics, not only seven lexical keywords. Canonical input
+        # safety, forbidden topics, output validation and budgets still apply.
+        # Other scenarios retain their existing topic allowlist.
+        allowed_topics = (("__all__",) if node_id == "bear_dialogue" else
+                          ("greetings", "clinic", "weather", "games", "stories", "feelings", "questions"))
+        return ConversationContext(session_id, "canonical_product", node_id, allowed_topics, ("diagnosis", "medicine", "secret", "personal_data"), 5, 120, 2, profile=profile_context, system_prompt=prompt)
 
     async def _complete_canonical_audio_turn(self, session_id: str, sequence: int, pending: asyncio.Task[Any], epoch: int, correlation_id: str) -> None:
         try:

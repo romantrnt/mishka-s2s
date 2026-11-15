@@ -57,6 +57,60 @@ HEADLESS_AUDIO_NODES = frozenset({
 })
 _AUTH_QUERY_KEYS = frozenset({"token", "access_token", "stand_token"})
 
+# Diagnostic codes are application-owned, never model prose or exception text.
+_DIALOGUE_FALLBACK_CODES = frozenset({
+    "provider_or_validation_failure", "provider_unavailable", "dialogue_exit",
+    "bounded_limit", "turn_timeout", "voice_generation_timeout", "tts_queue_overflow",
+    "oversized_input", "safety_signal", "blocked_input", "unknown_topic",
+    "stt_failure", "stt_low_confidence", "vad_failure", "audio_too_long",
+    "personal_story_unavailable",
+})
+_VALIDATION_SOURCES = frozenset({
+    "response_validation", "stream_parser", "regex", "regex_trusted",
+    "ollama_mini_llm", "mock_mini_llm", "validator_timeout", "validator_error",
+})
+_VALIDATION_REASONS = frozenset({
+    "empty_text", "medical_advice", "self_harm_or_violence", "sexual_content", "personal_data",
+    "secrecy_or_isolation", "unverified_external_contact",
+    "regex_allow", "trusted_application_text", "mini_llm_allow", "mini_llm_block",
+    "mini_llm_review", "mini_llm_suspicious", "mini_llm_uncertain_length",
+    "mini_llm_timeout", "validation_exception",
+})
+_VALIDATION_ERRORS = frozenset({
+    "TimeoutError", "ValueError", "TypeError", "JSONDecodeError", "KeyError",
+    "OSError", "URLError", "HTTPError", "ConnectionError", "RuntimeError",
+})
+_PARSER_REASON_CODES = {
+    "unknown or invalid model action": "invalid_model_action",
+    "unknown or unclosed tag": "invalid_model_tag", "unknown model tag": "invalid_model_tag",
+    "unclosed <say> tag": "unclosed_say_tag", "LLM stream exceeded limit": "model_stream_limit",
+    "total model speech exceeded limit": "model_speech_limit",
+    "unsafe or oversized model output": "unsafe_model_output",
+}
+_PIPELINE_EVENTS = frozenset({
+    "audio_cancelled", "audio_dropped", "audio_ready", "barge_in", "chunk_closed",
+    "first_audio_gate_entered", "first_audio_gate_released", "input_completed",
+    "playback_cancelled", "playback_finished", "playback_started", "rvc_v2_fallback",
+    "speech_end", "token_received", "tts_started", "turn_started", "vad_failure",
+    "validation_block", "validation_error", "validation_failure", "voice_conversion_bypassed",
+})
+
+
+def _diagnostic_number(value):
+    return type(value) in (int, float) and 0 <= value <= 2**53 - 1 and math.isfinite(value)
+
+
+def _validation_reason_code(value):
+    if not isinstance(value, str):
+        return "validation_detail_redacted"
+    if value in _VALIDATION_REASONS or value in _VALIDATION_ERRORS:
+        return value
+    if value in _PARSER_REASON_CODES:
+        return _PARSER_REASON_CODES[value]
+    if value.startswith("mini_llm_error:") and value.partition(":")[2] in _VALIDATION_ERRORS:
+        return value
+    return "validation_detail_redacted"
+
 
 def _hid_diagnostics(adapter: Any) -> dict[str, Any]:
     diagnostics = getattr(adapter, "diagnostics", None)
@@ -1949,23 +2003,107 @@ class HardwareIntegrationStand:
             "pattern", "state", "generation", "sequence", "source",
             "action", "type", "resolution", "targets", "pcm_bytes",
         }
-        return {key: item for key, item in value.items() if key in allowed}
+        result = {key: item for key, item in value.items() if key in allowed}
+        fallback = value.get("fallback_reason")
+        if isinstance(fallback, str) and fallback in _DIALOGUE_FALLBACK_CODES:
+            result["fallback_reason"] = fallback
+        return result
 
     @staticmethod
     def _panel_metrics(value: Any) -> dict[str, Any]:
         if not isinstance(value, dict):
             return {}
         result: dict[str, Any] = {}
-        for key, item in value.items():
-            if key == "events" and isinstance(item, list):
-                result[key] = [
-                    {field: event[field] for field in ("event", "at", "timestamp", "token_index", "chunk_index") if field in event}
-                    for event in item[-80:] if isinstance(event, dict)
-                ]
-            elif isinstance(item, dict):
-                result[key] = {field: item[field] for field in ("count", "last_ms", "max_ms", "avg_ms", "current_sample_count") if field in item}
-            elif isinstance(item, (str, int, float, bool)) or item is None:
-                result[key] = item
+        stages = {"llm", "stt", "queue", "silero_tts", "rvc_v2", "playback",
+                  "warmup_silero_vad", "warmup_faster_whisper", "warmup_llm",
+                  "warmup_silero", "warmup_rvc_v2"}
+        for key in stages:
+            item = value.get(key)
+            if isinstance(item, dict):
+                result[key] = {field: item[field] for field in (
+                    "count", "last_ms", "max_ms", "avg_ms", "current_sample_count",
+                    "failures", "evicted_sample_count", "limit",
+                ) if _diagnostic_number(item.get(field))}
+        for key in ("chunk_trace_evicted_count", "chunk_trace_limit"):
+            if _diagnostic_number(value.get(key)):
+                result[key] = value[key]
+        if isinstance(value.get("events"), list):
+            events = []
+            for event in value["events"][-80:]:
+                if not isinstance(event, dict):
+                    continue
+                name = event.get("event")
+                if not isinstance(name, str) or name not in _PIPELINE_EVENTS:
+                    continue
+                projected = {"event": name}
+                for field in ("at", "timestamp", "token_index", "chunk_index"):
+                    if _diagnostic_number(event.get(field)):
+                        projected[field] = event[field]
+                if name in {"validation_block", "validation_error", "validation_failure"}:
+                    projected["reason"] = _validation_reason_code(event.get("reason"))
+                    source = event.get("source")
+                    projected["source"] = source if isinstance(source, str) and source in _VALIDATION_SOURCES else "unknown"
+                    for field in ("latency_ms", "timeout_ms"):
+                        if _diagnostic_number(event.get(field)):
+                            projected[field] = event[field]
+                events.append(projected)
+            result["events"] = events
+        # Configuration references, voice-turn IDs and arbitrary scalar keys
+        # are intentionally not promoted to public diagnostics.
+        return result
+
+    @staticmethod
+    def _panel_fallback_effect(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        result = {}
+        for key in ("type", "action"):
+            if isinstance(value.get(key), str) and value[key] in {
+                "bounded_dialogue_turn", "speak", "audio_retry", "dialogue_fallback",
+            }:
+                result[key] = value[key]
+        if value.get("phrase_id") in ("PHRASE_095", "PHRASE_104"):
+            result["phrase_id"] = value["phrase_id"]
+        if value.get("resolution") in ("bounded_dialogue_completed", "bounded_dialogue_fallback",
+                                        "bounded_dialogue_unavailable_visual_only"):
+            result["resolution"] = value["resolution"]
+        fallback = value.get("fallback_reason")
+        if isinstance(fallback, str) and fallback in _DIALOGUE_FALLBACK_CODES:
+            result["fallback_reason"] = fallback
+        reason = value.get("reason")
+        if isinstance(reason, str) and reason in _DIALOGUE_FALLBACK_CODES:
+            result["reason"] = reason
+        return result
+
+    @classmethod
+    def _panel_result_item(cls, item: Any) -> dict[str, Any]:
+        if not isinstance(item, dict):
+            return {}
+        # inject/audio_completion store {at, input, result}; do not mistake
+        # the envelope for its actual result, or publish its raw nested value.
+        payload = item.get("result") if isinstance(item.get("result"), dict) else item
+        result = {}
+        operation = item.get("input")
+        if isinstance(operation, str) and operation in {
+            "audio_completion", "audio_pcm", "handset", "button", "button_released",
+            "button_hold", "button_long_hold", "text", "reset",
+        }:
+            result["input"] = operation
+        for key in ("at", "sequence"):
+            if _diagnostic_number(item.get(key)):
+                result[key] = item[key]
+        reason = payload.get("reason")
+        if isinstance(reason, str) and reason in _DIALOGUE_FALLBACK_CODES | {
+            "dialogue_turn", "dialogue_fallback", "dialogue_fallback_ignored",
+            "bounded_s2s_audio", "audio_retry", "audio_processing", "s2s_return",
+        }:
+            result["reason"] = reason
+        if payload.get("state") in tuple(state.value for state in Lifecycle):
+            result["state"] = payload["state"]
+        result.update(cls._panel_fallback_effect(payload))
+        if isinstance(payload.get("outputs"), list):
+            result["outputs"] = [projection for output in payload["outputs"][-20:]
+                                 if (projection := cls._panel_fallback_effect(output))]
         return result
 
     def panel_snapshot(self) -> dict[str, Any]:
@@ -2000,12 +2138,7 @@ class HardwareIntegrationStand:
             return result
 
         def result_item(item):
-            if not isinstance(item, dict):
-                return {}
-            result = {key: item[key] for key in ("input", "reason", "state", "at", "sequence", "correlation_id") if key in item}
-            if isinstance(item.get("outputs"), list):
-                result["outputs"] = [self._panel_payload(output) for output in item["outputs"][-20:] if isinstance(output, dict)]
-            return result
+            return self._panel_result_item(item)
 
         return {
             "identity": dict(source.get("identity") or {}),

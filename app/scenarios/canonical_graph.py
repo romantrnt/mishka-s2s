@@ -102,7 +102,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return current == "exhibition_onboarding_complete" and target == "exhibition_menu_tutorial_buttons"
     if event_type == "AudioCompleted":
         return (
-            (current == "voice_welcome" and target == "exhibition_introduction")
+            (current == "voice_welcome" and target in {"exhibition_introduction", "exhibition_menu_tutorial_prompt"})
             or (current == "exhibition_introduction" and target == "exhibition_name_question")
             or (current == "exhibition_name_question" and target == "exhibition_name_capture")
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
@@ -169,13 +169,16 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             or (current == "fixed_story_menu" and target in {"fixed_story_playing", "awaiting_handset", "root_menu"})
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_pause_announcement", "fixed_story_choice_wave", "root_menu"})
             or (current in {"story_pause_announcement", "story_resume_announcement", "story_paused"} and target in {"story_resume_announcement", "fixed_story_choice_wave", "root_menu"})
-            or (current in {"support_intake", "bear_dialogue"} and target == "root_menu")
+            or (current in {"support_intake", "bear_dialogue", "personal_story_generating",
+                            "personal_story_validating", "personal_story_playing"} and target == "root_menu")
             or (current in {"game_menu", "fixed_story_menu"} and target == "root_menu")
             or (current == "story_paused" and target in {"story_resume_announcement", "fixed_story_choice_wave", "root_menu"})
             or (current == "schedule_weather" and target == "root_menu")
         )
     if event_type == "DialogueFallback":
-        return current == "bear_dialogue" and target in {"bear_dialogue", "root_menu"}
+        return ((current == "bear_dialogue" and target in {"bear_dialogue", "root_menu"})
+                or (current in {"personal_story_generating", "personal_story_validating", "personal_story_playing"}
+                    and target == "fixed_story_menu"))
     if event_type == "VoiceIntentReady":
         return (
             target in {"safety_handoff", "support_intake"}

@@ -55,7 +55,9 @@ def test_short_model_speech_never_bypasses_semantic_gate(candidate, failure):
         gate = Gate()
         engine.response_validator = AsyncResponseValidator(gate, timeout_ms=10)
         result = await engine.run_text_turn("привет", context())
-        assert gate.calls and result.return_to_scenario
+        # Known deterministic hazards may be rejected before the semantic hop.
+        assert gate.calls or engine.response_validator.metrics.regex_blocks
+        assert result.return_to_scenario
         assert not playback.played
         assert not engine.active_queues and not engine.active_tasks
     asyncio.run(run())
@@ -166,7 +168,7 @@ def test_input_safety_survives_welcome_timer_or_classifier_timeout(timeout):
             await app.receive_async(event("HandsetLifted", 1))
             pending = asyncio.create_task(app.receive_async(event("SpeechReceived", 2), "пример"))
             await entered.wait()
-            clock[0] = 4.
+            clock[0] = 5.
             assert await app.flush_welcome_timers()
             if not timeout: release.set()
             result = await pending
@@ -239,7 +241,7 @@ def test_ringtone_failure_is_owned_and_does_not_cancel_welcome():
             assert result["reason"] == "ringtone_failed"
             assert calls[0].playback_lease and calls[0].session_id == "audit"
             assert app.canonical_runtime.sessions["audit"].welcome_status == "pending"
-            clock[0] = 4.
+            clock[0] = 5.
             due = await app.flush_welcome_timers()
             assert len(due) == 1 and calls[-1].response_id == "PHRASE_001"
         finally: await app._cleanup_session_resources("audit")

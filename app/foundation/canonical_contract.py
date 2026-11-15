@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 from .age_policy import age_details, policy_for, policy_for_band
 
 RAM_TTL_SECONDS = 300
-EXHIBITION_WELCOME_DELAY_SECONDS = 4.0
+EXHIBITION_WELCOME_DELAY_SECONDS = 5.0
 AGE_BANDS = ("1-3", "3-5", "5-7")
 BUTTON_MODES = {
     1: "game_menu", 2: "fixed_story_menu", 3: "support_intake",
@@ -248,6 +248,9 @@ class CanonicalState:
     menu_lit_buttons: list[int] = field(default_factory=list)
     menu_pressed_buttons: list[int] = field(default_factory=list)
     menu_repeat_attempts: int = 0
+    story_menu_hint_seen: bool = False
+    story_menu_hint_active: bool = False
+    story_menu_skip_button: int | None = None
     selected_menu_button: int | None = None
     selected_menu_action: str | None = None
     grammatical_gender: str = "neutral"
@@ -902,6 +905,8 @@ class CanonicalRuntime:
             "accessibility_policy", "schedule_ref", "onboarding_name_collected",
         ):
             setattr(state, name, getattr(fresh, name))
+        state.story_menu_hint_seen = state.story_menu_hint_active = False
+        state.story_menu_skip_button = None
         state.history_tail.clear()
         state.dialogue_memory.clear()
         state.pending_tool = None
@@ -917,6 +922,24 @@ class CanonicalRuntime:
 
     def _decision(self, state: CanonicalState, effects: list[dict[str, Any]], reason: str, *,
                   reset_session: bool = False, clear_audio: bool = False) -> dict[str, Any]:
+        if state.mode != "fixed_story_menu":
+            state.story_menu_hint_active = False
+        if (state.mode == "fixed_story_menu"
+                and reason in {"button_mode", "fixed_story_menu_opened"}):
+            # Current button 5 is help, not story 5. Both recordings promise
+            # five stories, so neither is truthful for this mapping. Keep the
+            # safety control; expose a bounded visual map and a neutral hint.
+            effects = [item for item in effects if item.get("phrase_id") not in {"PHRASE_054", "PHRASE_055"}]
+            effects.extend([
+                {"type": "visual", "view": "story_menu_available", "buttons": {
+                    "1": "fixed_aibolit_v1", "2": "fixed_squirrel_v1",
+                    "3": "fixed_lukomorye_v1", "4": "fixed_soft_paws_star_v1",
+                    "5": "help", "7": "back"}},
+                {"type": "content_blocked", "error_code": "story_menu_audio_mapping_conflict"},
+            ])
+            if state.handset == "up" and not state.story_menu_hint_seen:
+                state.story_menu_hint_seen = state.story_menu_hint_active = True
+                effects.append({"type": "speak", "phrase_id": "PHRASE_075"})
         # Physical release/hold and timer acknowledgements do not change the
         # pending game-exit choice. Other states keep their existing reason.
         if not (state.mode == "game_active"
@@ -1225,6 +1248,20 @@ class CanonicalRuntime:
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "clear_private_display"}], "ram_ttl_expired")
             return self._decision(state, [], "timeout_not_due")
         if event.event_type == "DialogueFallback":
+            if (event.payload.get("reason") == "personal_story_unavailable"
+                    and state.mode in {"personal_story_generating", "personal_story_validating", "personal_story_playing"}
+                    and state.handset == "up"):
+                # One owned failure recording, then a functioning fixed-story
+                # chooser. Do not claim a generated story exists or queue two
+                # prompts on the same playback lease.
+                state.mode = "fixed_story_menu"
+                state.expected_inputs = [f"button_{item}" for item in range(1, 6)] + ["button_7", "handset_down"]
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "audio_stop"},
+                    {"type": "lighting_preset", "preset": "STORY_MENU"},
+                    {"type": "speak", "phrase_id": "PHRASE_080"},
+                ], "personal_story_unavailable", clear_audio=True)
             if state.mode != "bear_dialogue" or state.handset != "up":
                 return self._decision(state, [], "dialogue_fallback_ignored")
             reason = str(event.payload.get("reason") or "provider_or_validation_failure")
@@ -1261,9 +1298,39 @@ class CanonicalRuntime:
                 state.audio_status = "finished"
                 state.state_version += 1
                 return self._decision(state, [], "handoff_audio_finished", clear_audio=True)
+        if (event.event_type == "AudioCompleted" and state.mode == "fixed_story_menu"
+                and response_id == "PHRASE_080" and state.active_audio_id == "PHRASE_080"):
+            if not event.payload.get("playback_lease") or event.payload["playback_lease"] != state.playback_lease:
+                return self._decision(state, [], "personal_story_failure_stale_audio")
+            state.state_version += 1
+            return self._decision(state, [], "personal_story_failure_finished", clear_audio=True)
+        if event.event_type == "AudioCompleted" and state.mode == "fixed_story_menu" and state.story_menu_hint_active:
+            if (response_id != "PHRASE_075" or not event.payload.get("playback_lease")
+                    or event.payload["playback_lease"] != state.playback_lease):
+                return self._decision(state, [], "story_menu_hint_stale_audio")
+            state.story_menu_hint_active = False
+            return self._decision(state, [], "story_menu_hint_finished", clear_audio=True)
         if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "voice_welcome":
             if str(event.payload.get("response_id") or "") != "PHRASE_001" or state.welcome_status != "started":
                 return self._decision(state, [], "exhibition_welcome_completion_ignored")
+            if (self.optional_identity and state.profile_status == "identified"
+                    and state.profile_ref and state.identity_request_id
+                    and "personalize" in state.identity_capabilities
+                    and state.identity_expires_monotonic is not None
+                    and state.identity_expires_monotonic > monotonic_now):
+                # The validated JSON card owns personalization. Do not replace
+                # its name/age with the exhibition interview, including when an
+                # optional field is missing: the existing unknown-age policy is
+                # a difficulty default, not a claim about this child's age.
+                state.mode, state.substate = "exhibition_menu_tutorial_prompt", "awaiting_menu_prompt_audio"
+                state.expected_inputs = ["audio_completed", "handset_down"]
+                state.welcome_status = "completed"
+                state.menu_prompt_after_wave = True
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "speak", "phrase_id": "PHRASE_007"},
+                    {"type": "exhibition_onboarding_step", "step": "authorized_profile_ready"},
+                ], "authorized_profile_menu_started", clear_audio=True)
             state.mode, state.substate = "exhibition_introduction", "awaiting_introduction_audio"
             state.expected_inputs = ["audio_completed", "handset_down"]
             state.welcome_status = "completed"
@@ -1571,6 +1638,9 @@ class CanonicalRuntime:
             state.mode = "voice_welcome"
             state.expected_inputs = ["button", "speech", "handset_down"]
             return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "voice_open")
+        if event.event_type == "ButtonReleased" and state.story_menu_skip_button == int(event.payload["button_id"]):
+            state.story_menu_skip_button = None
+            return self._decision(state, [], "story_menu_hint_skip_released")
         if event.event_type == "ButtonReleased" and self.exhibition_mode and state.mode == "menu_ready":
             button = int(event.payload["button_id"])
             if button not in state.menu_pressed_buttons:
@@ -1584,6 +1654,13 @@ class CanonicalRuntime:
                 return self._decision(state, [], "exhibition_age_not_ready")
             if state.mode == "safety_handoff":
                 return self._decision(state, [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "safety_handoff_active")
+            if state.story_menu_skip_button == button:
+                return self._decision(state, [], "story_menu_hint_skip_held")
+            if state.mode == "fixed_story_menu" and state.story_menu_hint_active and button != 5:
+                state.story_menu_hint_active = False
+                state.story_menu_skip_button = button
+                state.state_version += 1
+                return self._decision(state, [{"type": "audio_stop"}], "story_menu_hint_skipped", clear_audio=True)
             if self.exhibition_mode and state.mode in {"exhibition_name_capture", "exhibition_age_prompt", "exhibition_age_hint", "exhibition_onboarding_complete", "exhibition_age_complete"}:
                 return self._decision(state, [], "exhibition_onboarding_button_ignored")
             if self.exhibition_mode and state.mode in {
@@ -1627,7 +1704,7 @@ class CanonicalRuntime:
                     "source": "exhibition_menu", "target_state": "menu_ready",
                     "downstream_owner": "exhibition_menu_boundary",
                 }
-                if button in {1, 3, 5}:
+                if button in {1, 3, 4, 5, 7}:
                     mode = BUTTON_MODES[button]
                     state.menu_pressed_buttons = []
                     if button == 3 and state.handset != "up":
@@ -1648,7 +1725,8 @@ class CanonicalRuntime:
                     )
                     selection["target_state"] = mode
                     selection["downstream_owner"] = mode
-                    preset = {1: "GAME_MENU", 3: "SUPPORT", 5: "HELP"}[button]
+                    preset = {1: "GAME_MENU", 3: "SUPPORT", 4: "PERSONAL_STORY",
+                              5: "HELP", 7: "SCHEDULE_WEATHER"}[button]
                     return self._decision(state, [
                         selection, {"type": "lighting_preset", "preset": preset},
                     ], "button_mode")
@@ -1675,19 +1753,6 @@ class CanonicalRuntime:
                         {"type": "capture_open"},
                         {"type": "speak", "phrase_id": "PHRASE_094"},
                     ], "bear_dialogue_started", clear_audio=True)
-                effects = [selection]
-                if button == 7:
-                    # The current exhibition build has no live calendar/weather
-                    # provider in this anonymous flow. Keep the button semantic
-                    # and give the child a bounded, audible fallback instead of
-                    # emitting a selection with no downstream effect.
-                    effects.append({
-                        "type": "speak", "phrase_id": "PHRASE_099",
-                        "fallback_for": "day_and_plans",
-                        "resolution": "exhibition_day_plans_fallback",
-                    })
-                    selection["downstream_owner"] = "exhibition_day_plans_fallback"
-                return self._decision(state, effects, "exhibition_menu_selected")
             if state.mode == "session_closed":
                 return self._decision(state, [], "session_closed")
             if button == 5 and state.mode in {
@@ -1696,7 +1761,8 @@ class CanonicalRuntime:
                 "awaiting_handset", "wellbeing_check",
                 "game_active", "fixed_story_playing", "story_paused", "fixed_story_menu",
                 "game_menu", "support_intake", "personal_story_theme", "bear_dialogue",
-                "schedule_weather",
+                "schedule_weather", "personal_story_generating",
+                "personal_story_validating", "personal_story_playing",
             } and not (self.exhibition_mode and state.mode == "exhibition_age_selection"):
                 state.mode, state.expected_inputs, state.state_version = "wellbeing_check", ["button_1", "button_7", "speech"], state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "HELP"}, {"type": "support_question", "question": "pain_or_discomfort"}], "help_priority")
@@ -1752,7 +1818,8 @@ class CanonicalRuntime:
             if state.mode == "game_menu" and button == 7:
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "game_menu_back")
-            if state.mode in {"support_intake", "bear_dialogue"} and button == 7:
+            if state.mode in {"support_intake", "bear_dialogue", "personal_story_generating",
+                              "personal_story_validating", "personal_story_playing"} and button == 7:
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "activity_back")
             if state.mode == "wellbeing_check" and button == 5:
@@ -1989,7 +2056,7 @@ class CanonicalRuntime:
                 return self._decision(state, [{"type": "validate_personal_story"}], "personal_story_generated")
             if state.mode == "personal_story_generating" and intent == "validation_failed":
                 state.mode, state.state_version = "personal_story_theme", state.state_version + 1
-                return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_080"}, {"type": "speak", "phrase_id": "PHRASE_081"}], "personal_story_fallback")
+                return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_080"}], "personal_story_fallback")
             if state.mode == "personal_story_validating" and intent == "validated":
                 state.mode, state.state_version = "personal_story_playing", state.state_version + 1
                 return self._decision(state, [{"type": "play_personal_story", "development_only": True}], "personal_story_validated")
