@@ -2332,7 +2332,7 @@ class HardwareIntegrationStand:
             for key in ("output_ready", "generation_failed", "pending_batches", "in_flight",
                         "max_pending_batches", "submitted_batches", "written_batches",
                         "dropped_batches", "failed_batches", "overflow_batches", "generation",
-                        "last_failure", "dark_recovery_attempts", "dark_recovery", "fault_latched"):
+                        "last_failure", "first_failure", "dark_recovery_attempts", "dark_recovery", "fault_latched"):
                 if key in output:
                     runtime[key] = output[key]
         runtime["owner_fault_latched"] = getattr(self, "_lighting_fault", None) is not None

@@ -169,7 +169,10 @@ class PosixSerialTransport:
     def open(self):
         if self.baud not in self.BAUD: raise ValueError("unsupported UART baud")
         self.fd=os.open(self.path,os.O_RDWR|os.O_NOCTTY|os.O_NONBLOCK)
-        tty.setraw(self.fd); attrs=termios.tcgetattr(self.fd); speed=self.BAUD[self.baud]
+        # The old CDC output may be stalled: setraw's default TCSAFLUSH
+        # waits for it to drain before our explicit queue discard below.
+        tty.setraw(self.fd, when=termios.TCSANOW)
+        attrs=termios.tcgetattr(self.fd); speed=self.BAUD[self.baud]
         attrs[0] &= ~(termios.IXON | termios.IXOFF | termios.IXANY)
         attrs[1] &= ~termios.OPOST
         attrs[2] |= termios.CLOCAL | termios.CREAD

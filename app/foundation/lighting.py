@@ -947,6 +947,7 @@ class PhysicalLightingOutput:
         self._closing = False
         self._closed = False
         self._last_async_error: dict[str, object] | None = None
+        self._first_failure: dict[str, object] | None = None
         self._generation_error: dict[str, object] | None = None
         self._submitted_batches = 0
         self._written_batches = 0
@@ -1027,6 +1028,8 @@ class PhysicalLightingOutput:
                     error = {**_lighting_failure_evidence(exc, stage="output_batch_write"),
                              "generation": generation}
                     self._last_async_error = error
+                    if self._first_failure is None:
+                        self._first_failure = dict(error)
                     self._failed_batches += 1
                     if generation == self._generation:
                         self._generation_error = error
@@ -1156,6 +1159,7 @@ class PhysicalLightingOutput:
                 "overflow_batches": self._overflow_batches,
                 "async_error": dict(self._last_async_error) if self._last_async_error else None,
                 "last_failure": dict(self._last_async_error) if self._last_async_error else None,
+                "first_failure": dict(self._first_failure) if self._first_failure else None,
                 "dark_recovery_attempts": self._dark_recovery_attempts,
                 "dark_recovery": dict(self._dark_recovery) if self._dark_recovery else None,
                 "output_ready": not (self._closed or self._closing or self._fault_latched or self._generation_error is not None),
