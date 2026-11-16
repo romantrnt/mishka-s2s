@@ -744,6 +744,8 @@ class SerialLightingAdapter:
         self._lock = threading.Lock()
         # RX fault observation must never wait behind a blocking TX syscall.
         self._reader_state_lock = threading.Lock()
+        self._written_targets: dict[int, tuple[int, int]] = {}
+        self._written_targets_epoch = 0
         self._ready = False
         self._closed = False
         self._sent = 0
@@ -772,6 +774,7 @@ class SerialLightingAdapter:
                 return
             if self.transport is None:
                 self.transport = self._make_transport()
+            self._invalidate_written_targets()
             self.transport.open()
             self._ready = True
             self._closed = False
@@ -783,6 +786,8 @@ class SerialLightingAdapter:
         # A timed-out old reader owns its old stop token forever. Reopening
         # must never revive that reader against the replacement descriptor.
         with self._reader_state_lock:
+            self._written_targets.clear()
+            self._written_targets_epoch += 1
             self._drain_stop.set()
             stop = self._drain_stop = threading.Event()
             self._ready = True
@@ -823,6 +828,8 @@ class SerialLightingAdapter:
                         return
                     error = _lighting_failure_evidence(exc, stage="serial_read")
                     self._ready = False
+                    self._written_targets.clear()
+                    self._written_targets_epoch += 1
                     self._read_failures += 1
                     self._last_read_failure = dict(error)
                     self._last_error = dict(error)
@@ -838,6 +845,8 @@ class SerialLightingAdapter:
             with self._reader_state_lock:
                 self._ready = False
                 self._closed = True
+                self._written_targets.clear()
+                self._written_targets_epoch += 1
                 self._drain_stop.set()
                 thread, self._drain_thread = self._drain_thread, None
             if self.transport is not None:
@@ -855,6 +864,27 @@ class SerialLightingAdapter:
         if not isinstance(command, LightingCommand):
             command = LightingCommand(**command)
         self.send_batch((command,))
+
+    def _invalidate_written_targets(self) -> None:
+        with self._reader_state_lock:
+            self._written_targets.clear()
+            self._written_targets_epoch += 1
+
+    def _write_command(self, command: LightingCommand) -> None:
+        # The desired-output snapshot may include lines not yet sent or cancelled
+        # midway through a frame. Only this sole writer knows completed lines.
+        target = (command.state, command.transition_ms)
+        with self._reader_state_lock:
+            epoch = self._written_targets_epoch
+            if command.transition_ms > 0 and self._written_targets.get(command.element_id) == target:
+                return
+        self._write_line(command.to_wire())
+        self._sent += 1
+        with self._reader_state_lock:
+            # RX can revoke this owner while its native TX call is blocked.
+            # Never repopulate the cache from that old in-flight line.
+            if epoch == self._written_targets_epoch and self._ready and not self._closed:
+                self._written_targets[command.element_id] = target
 
     def _write_line(self, payload: bytes) -> None:
         # PosixSerialTransport already completes partial os.write calls. Also
@@ -874,6 +904,7 @@ class SerialLightingAdapter:
                     raise IOError("invalid lighting serial write count")
                 offset += written
         except Exception as exc:
+            self._invalidate_written_targets()
             # The production transport completes os.write calls internally,
             # but an exception does not expose how many bytes reached the
             # device. Treat that outcome as potentially partial as well.
@@ -905,8 +936,7 @@ class SerialLightingAdapter:
                 for command in validated:
                     if callable(is_current) and not is_current():
                         return False
-                    self._write_line(command.to_wire())
-                    self._sent += 1
+                    self._write_command(command)
                 return True
             except Exception as exc:
                 first_error = _lighting_failure_evidence(exc, stage="serial_batch_write")
@@ -935,8 +965,7 @@ class SerialLightingAdapter:
                     for command in validated:
                         if callable(is_current) and not is_current():
                             return False
-                        self._write_line(command.to_wire())
-                        self._sent += 1
+                        self._write_command(command)
                     self._last_error = None
                     return True
                 except Exception as retry_exc:
