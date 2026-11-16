@@ -70,7 +70,7 @@ def choice_codes(h):
         if d['kind']=='personal_welcome_choice']
 
 
-def test_ready_exact_deadline_waits_for_answer_not_completion():
+def test_ready_exact_deadline_opens_menu_without_a_fake_mood_question():
     async def run():
         h,r = setup()
         try:
@@ -80,13 +80,12 @@ def test_ready_exact_deadline_waits_for_answer_not_completion():
             result=await deadline(h)
             assert result['reason']=='personal_welcome_started', result
             assert len(h.pcm)==1 and h.state.mode=='voice_welcome'
-            assert r.texts==['Привет, Люси-Анна. Как твои дела?']
+            assert r.texts==['Привет, Люси-Анна. Я Мишка.']
             assert not h.app.bounded_s2s.tts.cache
-            assert (await h.complete())['reason']=='personal_welcome_listening'
-            assert 'PHRASE_007' not in h.played
-            result=await speech(h,'Хорошо')
-            assert result['reason']=='personal_welcome_answer_received',result
+            assert (await h.complete())['reason']=='personal_welcome_menu_started'
+            assert h.state.mode=='exhibition_menu_tutorial_prompt'
             assert h.played[-1]=='PHRASE_007'
+            assert h.state.mood_result is None
             public=json.dumps([h.app.last_canonical_effects,list(h.app.canonical_trace),list(h.app.audio_runtime_diagnostics),h.state.snapshot()],ensure_ascii=False)
             assert 'Люси-Анна' not in public and 'Как твои дела' not in public
         finally: await h.close()
@@ -196,7 +195,7 @@ def test_ringtone_callback_does_not_cancel_preparation():
 
 
 @pytest.mark.parametrize('badfield',['token','generation','playback_id','playback_lease'])
-def test_forged_callbacks_do_not_enter_listening(badfield):
+def test_forged_callbacks_do_not_open_menu(badfield):
     async def run():
         h,r=setup()
         try:
@@ -205,7 +204,7 @@ def test_forged_callbacks_do_not_enter_listening(badfield):
             await h.send('AudioCompleted',callback)
             assert h.state.mode=='voice_welcome'
             await h.complete()
-            assert h.state.mode=='personal_welcome_listen'
+            assert h.state.mode=='exhibition_menu_tutorial_prompt'
         finally:await h.close()
     asyncio.run(run())
 
@@ -224,31 +223,23 @@ def test_answer_admission_and_safety_priority(kind):
                 await h.app.receive_async(Event('VoiceIntentReady',h.boundary.session_id,h.sequence,1.,'test',{'intent':'free_speech','safety_severity':'none'},'forged',h.clock[0]),'Хорошо')
             else:
                 await speech(h, {'urgent':'Я не могу дышать','adult':'Позови взрослого','empty':''}.get(kind,'Хорошо'), {'_stt_untrusted':True} if kind=='low_stt' else None)
-            if kind in {'urgent','adult'}:assert h.state.mode=='safety_stop'
-            elif kind=='normal':assert h.state.mode=='exhibition_menu_tutorial_prompt'
-            else:assert h.state.mode=='personal_welcome_listen'
-            if kind!='normal':assert 'PHRASE_007' not in h.played
-            if kind=='outage':
-                assert h.played[-1]=='PHRASE_074'
-                async def healthy(text):return InputSafetyDecision('none','mock',True)
-                h.app.safety_classifier.classify=healthy
-                await speech(h,'Хорошо')
-                assert h.state.mode=='personal_welcome_listen'
-                await h.complete()
-                await speech(h,'Хорошо')
+            if kind in {'urgent','adult'}:
+                assert h.state.mode=='safety_stop'
+            else:
                 assert h.state.mode=='exhibition_menu_tutorial_prompt'
+            assert h.state.mood_result is None
         finally:await h.close()
     asyncio.run(run())
 
 
 @pytest.mark.parametrize('button',range(1,8))
-def test_listening_buttons_no_mood_inference(button):
+def test_menu_skip_buttons_no_mood_inference(button):
     async def run():
         h,r=setup()
         try:
             await start(h);await deadline(h);await h.complete()
             result=await h.send('ButtonPressed',{'button_id':button})
-            expected={5:'wellbeing_check',7:'exhibition_menu_tutorial_prompt'}.get(button,'personal_welcome_listen')
+            expected='menu_ready'
             assert h.state.mode==expected,result
             assert h.state.mood_result is None
         finally:await h.close()
@@ -327,7 +318,7 @@ def test_real_mock_pcm_and_resilient_primary_private_path():
             assert not h.app.bounded_s2s.tts.cache
             assert 'Анна Мария' not in repr(h.app.audio.commands)
             await h.complete()
-            assert h.state.mode=='personal_welcome_listen'
+            assert h.state.mode=='exhibition_menu_tutorial_prompt'
         finally:await h.close()
     asyncio.run(run())
 
@@ -358,22 +349,20 @@ def test_unsupported_private_pcm_uses_recording_without_preparation():
     asyncio.run(run())
 
 
-def test_failed_retry_cannot_reopen_menu_but_help_remains_available():
+def test_failed_menu_audio_does_not_repeat_greeting_and_help_remains_available():
     async def run():
         h,r=setup()
         try:
             await start(h);await deadline(h);await h.complete()
-            async def uncertain(text):return InputSafetyDecision('none','input_safety_timeout',False)
-            h.app.safety_classifier.classify=uncertain
-            await speech(h,'Хорошо')
             await h.send('AudioFailed',{**h.callback(),'error_code':'device_error'})
             assert h.state.audio_status=='failed'
-            async def healthy(text):return InputSafetyDecision('none','mock',True)
-            h.app.safety_classifier.classify=healthy
-            await speech(h,'Хорошо');await h.send('ButtonPressed',{'button_id':7})
-            assert h.state.mode=='personal_welcome_listen' and 'PHRASE_007' not in h.played
+            # First edge skips the tutorial; the next fresh help edge is live.
+            await h.send('ButtonPressed',{'button_id':5})
+            await h.send('ButtonReleased',{'button_id':5})
             await h.send('ButtonPressed',{'button_id':5})
             assert h.state.mode=='wellbeing_check'
+            assert len(h.pcm)==1
+            assert 'PHRASE_001' not in h.played
         finally:await h.close()
     asyncio.run(run())
 
@@ -481,8 +470,8 @@ def test_scope_change_clears_trusted_tts_during_private_voice(action):
                 for _ in range(4):await asyncio.sleep(0)
                 await deadline(h)
                 assert len(h.pcm)==1 and r.texts==[
-                    'Привет, Люси-Анна. Как твои дела?',
-                    'Привет, Синтетик. Как твои дела?']
+                    'Привет, Люси-Анна. Я Мишка.',
+                    'Привет, Синтетик. Я Мишка.']
             else:
                 await deadline(h)
                 assert not h.pcm

@@ -17,6 +17,35 @@ def event(kind, sequence, *, version, payload=None, timestamp=1.0):
     return CanonicalEvent(kind, "acceptance", sequence, version, "test",
                           payload or {}, f"c-{sequence}", timestamp)
 
+def start_free_light_game(runtime):
+    """Exercise the real menu interruption and owned instruction terminals."""
+    sequence = 0
+    result = {"state": {"state_version": 0}}
+
+    def send(kind, payload=None):
+        nonlocal sequence, result
+        sequence += 1
+        result = runtime.handle(event(kind, sequence,
+            version=result["state"]["state_version"], payload=payload), None)
+        return result
+
+    send("AnonymousStart")
+    send("HandsetLifted")
+    send("ButtonPressed", {"button_id": 1})
+    assert result["state"]["mode"] == "game_menu"
+    send("ButtonReleased", {"button_id": 1})
+    assert send("ButtonPressed", {"button_id": 1})["reason"] == "scene_menu_skipped"
+    send("ButtonReleased", {"button_id": 1})
+    send("ButtonPressed", {"button_id": 1})
+    assert result["state"]["active_game_id"] == "free_lights"
+    for expected_audio in ("PHRASE_020", "GAME_PROMPT"):
+        assert result["state"]["active_audio_id"] == expected_audio
+        send("AudioCompleted", {"response_id": expected_audio,
+             "playback_lease": result["state"]["playback_lease"]})
+    assert result["state"]["mode"] == "game_active"
+    return result, sequence
+
+
 def main() -> None:
     clock = [0.0]
     runtime = CanonicalRuntime(now=lambda: clock[0],
@@ -30,17 +59,11 @@ def main() -> None:
     assert lifted["state"]["pending_mode"] is None
     game_runtime = CanonicalRuntime(now=lambda: clock[0],
         stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
-    game_runtime.handle(event("AnonymousStart", 1, version=0), None)
-    game_runtime.handle(event("HandsetLifted", 2, version=1), None)
-    game = game_runtime.handle(event("ButtonPressed", 3, version=2, payload={"button_id": 1}), None)
-    assert game["state"]["mode"] == "game_menu"
-    released = game_runtime.handle(event("ButtonReleased", 4, version=game["state"]["state_version"], payload={"button_id": 1}), None)
-    game_start = game_runtime.handle(event("ButtonPressed", 5, version=released["state"]["state_version"], payload={"button_id": 1}), None)
-    assert game_start["state"]["mode"] == "game_active"
-    placed = game_runtime.handle(event("HandsetPlaced", 6, version=game_start["state"]["state_version"]), None)
+    game_start, sequence = start_free_light_game(game_runtime)
+    placed = game_runtime.handle(event("HandsetPlaced", sequence + 1, version=game_start["state"]["state_version"]), None)
     assert any(effect["type"] == "game_continue_visual" for effect in placed["effects"])
     clock[0] = 301.0
-    resumed = game_runtime.handle(event("HandsetLifted", 7, version=placed["state"]["state_version"], timestamp=301.0), None)
+    resumed = game_runtime.handle(event("HandsetLifted", sequence + 2, version=placed["state"]["state_version"], timestamp=301.0), None)
     assert resumed["state"]["dialogue_memory"]["status"] == "expired"
     help_runtime = CanonicalRuntime(stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
     help_runtime.handle(event("AnonymousStart", 1, version=0), None)
@@ -68,13 +91,9 @@ def main() -> None:
     graph_status = CanonicalLangGraphAuthorizer().status()
     assert graph_status["scenario_id"] == "canonical_product" and graph_status["topology"][0] == "ingress"
     game_resume = CanonicalRuntime(stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
-    game_resume.handle(event("AnonymousStart", 1, version=0), None)
-    game_resume.handle(event("HandsetLifted", 2, version=1), None)
-    game_resume.handle(event("ButtonPressed", 3, version=2, payload={"button_id": 1}), None)
-    released = game_resume.handle(event("ButtonReleased", 4, version=3, payload={"button_id": 1}), None)
-    playing = game_resume.handle(event("ButtonPressed", 5, version=released["state"]["state_version"], payload={"button_id": 1}), None)
-    onhook = game_resume.handle(event("HandsetPlaced", 6, version=playing["state"]["state_version"]), None)
-    resumed_game = game_resume.handle(event("HandsetLifted", 7, version=onhook["state"]["state_version"]), None)
+    playing, sequence = start_free_light_game(game_resume)
+    onhook = game_resume.handle(event("HandsetPlaced", sequence + 1, version=playing["state"]["state_version"]), None)
+    resumed_game = game_resume.handle(event("HandsetLifted", sequence + 2, version=onhook["state"]["state_version"]), None)
     assert resumed_game["state"]["mode"] == "game_active" and resumed_game["reason"] == "game_voice_join"
     help_guard = CanonicalRuntime(stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
     help_guard.handle(event("AnonymousStart", 1, version=0), None)

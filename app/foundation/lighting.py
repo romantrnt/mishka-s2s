@@ -501,6 +501,21 @@ class ExhibitionLightingEngine:
         self._schedule(generation)
         return self.snapshot()
 
+    def start_game_ripple(self, origin_button: int, *, now: float | None = None) -> dict[str, object]:
+        """A bounded two-front ripple in logical button order, never PWM."""
+        if type(origin_button) is not int or origin_button not in BUTTON_FILL_ELEMENTS:
+            raise ValueError("invalid ripple origin")
+        rings = tuple(tuple(BUTTON_FILL_ELEMENTS[button] for button in range(1, 8)
+                            if abs(button - origin_button) == distance)
+                      for distance in range(max(origin_button - 1, 7 - origin_button) + 1))
+        # The previous ring remains as a tail while the new front fades in.
+        groups = tuple(tuple(dict.fromkeys(ring + (rings[index - 1] if index else ())))
+                       for index, ring in enumerate(rings)) + (rings[-1], ())
+        self.start_wave(now=now, groups=groups, hold_on_complete=False,
+                                stage_duration_ms=140, preserve_current=True)
+        self.wave_phase = "game_ripple"
+        return self.snapshot()
+
     def start_profile_ready(self, *, now: float | None = None) -> dict[str, object]:
         """Own the acknowledgement wave and continuous breathing as one effect.
 

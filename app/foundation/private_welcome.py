@@ -111,7 +111,7 @@ class PrivateWelcomeMixin:
             try:
                 if cancelled():
                     return
-                phrase = f'Привет, {name}. Как твои дела?'
+                phrase = f'Привет, {name}. Я Мишка.'
                 decision = await engine.response_validator.validate_trusted(phrase)
                 if cancelled():
                     return

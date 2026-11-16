@@ -68,22 +68,23 @@ def test_actual_manifest_hash_failure_is_excluded(tmp_path):
     assert first not in [item.id for page in pages for item in page.items]
 
 
-def test_games_are_only_supplied_implemented_specs_and_paged():
+def test_games_are_only_supplied_implemented_specs_with_five_direct_slots():
     specs=(SimpleNamespace(game_id='catch_light',display_title='Поймай огонёк',available=True),
            SimpleNamespace(game_id='missing',display_title='Не готово',available=False),
            SimpleNamespace(game_id='visual_free_play',display_title='Свободный свет',available=True))
     first=build_menu_page('game_menu','1-3',game_specs=specs)
     second=build_menu_page('game_menu','1-3',1,game_specs=specs)
-    assert [first.items[0].id,second.items[0].id]==['catch_light','visual_free_play']
+    assert [item.id for item in first.items]==['catch_light','visual_free_play']
+    assert first.as_dict()==second.as_dict()
     assert 'Не готово' not in first.spoken_text+second.spoken_text
-    assert first.buttons==(1,5,6,7)
+    assert first.buttons==(1,2,7)
     page=build_menu_page('game_menu','6-7',game_specs=specs)
-    assert page.buttons==(1,2,5,7)
+    assert page.buttons==(1,2,7)
 
 
 def test_empty_capability_does_not_advertise_fake_game():
     page=build_menu_page('game_menu','3-5')
-    assert page.items==() and page.buttons==(5,7)
+    assert page.items==() and page.buttons==(7,)
     assert 'нет доступных вариантов' in page.spoken_text
     assert page.action_for(1) is None
     assert page.action_for(True) is None

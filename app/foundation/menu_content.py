@@ -11,7 +11,7 @@ from typing import Any, Iterable, Mapping
 from .age_policy import policy_for_band
 
 _BAND_ALIASES = {"4-5": "3-5", "6-7": "5-7"}
-_BUTTON_WORDS = {1: "один", 2: "два", 3: "три", 4: "четыре"}
+_BUTTON_WORDS = {1: "один", 2: "два", 3: "три", 4: "четыре", 5: "пять"}
 _SCENES = frozenset({"fixed_story_menu", "game_menu", "personal_story_theme", "schedule_weather"})
 # Exact existing canonical theme IDs, not a new generated-content whitelist.
 STORY_THEME_ITEMS = (
@@ -58,15 +58,16 @@ class MenuPage:
         """Resolve only controls advertised by this exact page."""
         if type(button) is not int or button not in self.buttons:
             return None
+        # The game chooser has five stable activities; its fifth slot is play.
+        for item in self.items:
+            if item.slot == button:
+                return "select", item.id
         if button == 5:
             return "help", None
         if button == 6:
             return "next_page", None
         if button == 7:
             return "back", None
-        for item in self.items:
-            if item.slot == button:
-                return "select", item.id
         return None
 
 
@@ -107,7 +108,7 @@ def _story_items(stories: Any, band: str) -> tuple[tuple[str, str], ...]:
 def build_menu_page(scene: str, band: str, page: int = 0, *,
                     stories: Any = None,
                     game_specs: Iterable[Any] = (), personal_story_available: bool = True, day_items: Iterable[tuple[str,str]] = ()) -> MenuPage:
-    """Build a bounded page; slots 5/6/7 never become catalogue choices.
+    """Build a bounded page; the game chooser owns slots 1..5.
 
     ``stories`` is the current FixedStoryManifest, ``game_specs`` comes from the
     actual implemented-game registry. Rendering callers still verify that owned
@@ -134,16 +135,19 @@ def build_menu_page(scene: str, band: str, page: int = 0, *,
         choices = STORY_THEME_ITEMS if personal_story_available else ()
     if len({item_id for item_id, _ in choices}) != len(choices):
         raise ValueError("menu_duplicate_item")
-    size = min(4, policy.max_choices)
+    size = 5 if scene == "game_menu" else min(4, policy.max_choices)
     count = max(1, (len(choices) + size - 1) // size)
     page %= count
     items = tuple(MenuItem(slot, item_id, title)
                   for slot, (item_id, title) in enumerate(choices[page * size:(page + 1) * size], 1))
-    buttons = tuple(item.slot for item in items) + (5,) + ((6,) if count > 1 else ()) + (7,)
+    buttons = tuple(item.slot for item in items) + (() if scene == "game_menu" else (5,)) + ((6,) if count > 1 else ()) + (7,)
     parts = [f"Кнопка {_BUTTON_WORDS[item.slot]}: {item.title}." for item in items]
     if not items:
         parts.append("Сейчас здесь нет доступных вариантов.")
-    parts.append("Пять — помощь.")
+    if scene != "game_menu":
+        parts.append("Пять — помощь.")
+    else:
+        parts.append("Можно сказать: не хочу играть.")
     if count > 1:
         parts.append("Шесть — следующие варианты.")
     parts.append("Семь — назад.")

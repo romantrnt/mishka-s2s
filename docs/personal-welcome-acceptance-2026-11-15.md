@@ -2,6 +2,8 @@
 
 # Personalized welcome acceptance candidate, 2026-11-15
 
+> 2026-11-16 game candidate update: the personal phrase is now `Привет, ИМЯ. Я Мишка.` and successful playback proceeds directly to the menu. The question/listener sequence below records the earlier implementation. Name validation, private PCM ownership, the five-second choice and clean-TTS fallback remain. See [the game candidate](immersive-games-2026-11-16.md).
+
 This is an isolated review candidate, not a deployment or production/clinical
 acceptance. The external Max client and its data are unchanged. Main is untouched.
 

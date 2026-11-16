@@ -31,6 +31,7 @@ from .private_welcome import PrivateWelcomeMixin
 from .owned_speech import OwnedSpeechMixin, TYPED_AUDIO_IDS, MENU_AUDIO_IDS
 from .personal_story import PersonalStoryMixin, STORY_MODES, STORY_ID, story_theme
 from .dialogue_memory import DialogueMemoryMixin
+from .game_presentation import GamePresentationMixin, game_light_commands
 from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
 
 logger = logging.getLogger("mishka.application")
@@ -82,7 +83,7 @@ def _set_audio_effect_status(effect: dict[str, Any], *, asset_status: str,
         effect["resolution"] = resolution
 
 
-class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMixin, DialogueMemoryMixin):
+class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMixin, DialogueMemoryMixin, GamePresentationMixin):
     """Use-case layer. It depends only on domain ports, never FastAPI/files/UART/LLM."""
     AUDIO_RECOVERABLE_FAILURES = frozenset({
         "vad_failure",
@@ -161,6 +162,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._private_welcomes: dict[str, Any] = {}
         self._private_welcome_tasks: set[asyncio.Task[Any]] = set()
         self._owned_text_jobs: set[asyncio.Task[Any]] = set()
+        self._game_prompt_cues = {}
+        self._game_cue_tasks = {}
+        self._game_cue_started = set()
         self._personal_stories = {}
         self._personal_story_jobs = set()
         self._welcome_timer_sequences: dict[str, int] = {}
@@ -370,7 +374,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         """
         runtime = self.canonical_runtime
         state = runtime.sessions.get(session_id) if runtime is not None else None
-        if state is None or state.mode != "bear_dialogue" or state.handset != "up":
+        word_game = bool(state and state.mode == "game_active" and state.active_game_id == "word_game"
+                         and state.game_audio_stage == "playing")
+        if state is None or (state.mode != "bear_dialogue" and not word_game) or state.handset != "up":
             return None
         if self.optional_identity and state.identity_request_id and not self._identity_scope_live(session_id):
             await self.expire_identity_leases()
@@ -495,7 +501,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         generation = payload.get("generation")
         if lease is None:
             return False
-        if lease.get("content_id") in TYPED_AUDIO_IDS | MENU_AUDIO_IDS | {"PERSONAL_WELCOME", "PERSONAL_STORY"} and not payload.get("playback_id"):
+        if lease.get("content_id") in TYPED_AUDIO_IDS | MENU_AUDIO_IDS | {"PERSONAL_WELCOME", "PERSONAL_STORY", "GAME_PROMPT", "GAME_HINT"} and not payload.get("playback_id"):
             return False
         try:
             token_matches = int(token) == int(lease["token"])
@@ -523,6 +529,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
 
     def _invalidate_audio_lease(self, session_id: str, status: str = "cancelled") -> None:
         self._cancel_audio_timeout(session_id)
+        self._cancel_game_cues(session_id)
         lease = self._active_audio.pop(session_id, None)
         if lease is not None:
             self.record_audio_diagnostic(
@@ -559,6 +566,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if (status not in allowed or not session_id or generation is None
                 or not playback_id or not playback_lease):
             return False
+        if status == "playing" and response_id in {"GAME_PROMPT", "GAME_HINT"}:
+            self._game_audio_started(session_id, playback_id, playback_lease, generation)
         for effect in self.last_canonical_effects:
             if (effect.get("session_id") != session_id
                     or effect.get("playback_id") != playback_id
@@ -1264,6 +1273,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             admitted_handset = current.handset if current is not None else "down"
             epoch = self._session_epochs.get(event.session_id, 0)
             revision = self._session_revisions.get(event.session_id, 0)
+            admitted_game_scope = self._game_voice_scope(event.session_id)
             safety_started = self.monotonic_now()
             safety = await self.safety_classifier.classify(text)
             # Retain fixed outcome codes, never a transcript, name, text hash,
@@ -1284,7 +1294,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if current is None or current.handset != admitted_handset:
                 return self._identity_result(event.session_id, "stale_session_generation")
             stale_speech_phase = (_speech_ingress_guard is not None and not _speech_ingress_guard())
-            if (self._session_revisions.get(event.session_id, 0) != revision
+            same_game_scope = (admitted_game_scope is not None
+                and self._game_voice_scope(event.session_id) == admitted_game_scope)
+            if ((self._session_revisions.get(event.session_id, 0) != revision and not same_game_scope)
                     or current.last_sequence_by_source.get(event.source) != event.sequence
                     or stale_speech_phase):
                 if safety.severity == "none" and not explicit_help_request:
@@ -1409,6 +1421,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._session_revisions[event.session_id] = revision
         if takes_ownership and not child_ack:
             self._cancel_owned_text(event.session_id)
+            self._cancel_game_cues(event.session_id)
         next_owner = self.canonical_runtime.sessions.get(event.session_id)
         identity_owner_changed = bool(self.optional_identity and previous_state is not None
             and previous_state.identity_request_id != getattr(next_owner, "identity_request_id", None))
@@ -1422,6 +1435,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
             self._paused_story_playback.pop(event.session_id, None)
             self._discard_private_welcome(event.session_id)
+        game_context = self.conversation_contexts.get(event.session_id)
+        if (getattr(game_context, "_game_id", None) == "word_game"
+                and (next_owner is None or next_owner.mode != "game_active"
+                     or next_owner.active_game_id != "word_game")):
+            self._drop_dialogue_context(event.session_id)
         self._transition_dialogue_memory(
             event.session_id, event.event_type, previous_state,
             self.canonical_runtime.sessions.get(event.session_id),
@@ -1869,6 +1887,34 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     audio_failure={"response_id":effect["content_id"],"playback_lease":effect["playback_lease"],
                         "error_code":"scene_menu_audio_unavailable"}
                     _set_audio_effect_status(effect,asset_status="unavailable",queued=False,resolution="scene_menu_audio_unavailable")
+            elif kind == "game_prompt":
+                def game_current():
+                    return bool(still_current() and state_owner.handset == "up"
+                        and state_owner.mode == "game_active"
+                        and state_owner.active_game_id == effect.get("game_id")
+                        and state_owner.playback_lease == effect.get("playback_lease"))
+                rendered = await self._render_game_prompt(event.session_id, effect, record.cancellation_token, game_current)
+                if not game_current(): return stale_result()
+                if rendered is None:
+                    audio_failure = {"response_id": effect["content_id"],
+                        "playback_lease": effect["playback_lease"], "error_code": "game_prompt_unavailable"}
+                    _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="game_prompt_unavailable")
+                else:
+                    try:
+                        self._play_game_prompt(event.session_id, rendered, effect, record.cancellation_token)
+                        _set_audio_effect_status(effect, asset_status="approved", queued=True, resolution="game_prompt_pcm_queued")
+                    except Exception:
+                        audio_failure = {"response_id": effect["content_id"],
+                            "playback_lease": effect["playback_lease"], "error_code": "game_prompt_dispatch_failed"}
+                        _set_audio_effect_status(effect, asset_status="approved", queued=False, resolution="game_prompt_dispatch_failed")
+            elif kind == "game_lighting":
+                ripple = getattr(self.led, "start_game_ripple", None)
+                if effect.get("animation") == "ripple" and callable(ripple):
+                    effect["lighting_effect"] = ripple(int(effect["origin_button"]), now=self.monotonic_now())
+                    effect["resolution"] = "game_ripple_started"
+            elif kind == "game_exit":
+                self._cancel_game_cues(event.session_id)
+                effect["resolution"] = "game_presentation_released"
             elif kind == "lighting_preset":
                 preset = str(effect.get("preset", ""))
                 if local_safety_batch and preset == "SAFE_STOP":
@@ -1910,15 +1956,14 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 else:
                     commands = LED_PRESETS.get(preset, ())
                 if preset == "GAME_OUTPUT":
-                    commands = tuple((element_id, 1) for button in effect.get("buttons", ())
-                                     if button in (1, 2, 3, 4) for element_id in BUTTON_ELEMENTS[button])
+                    commands = game_light_commands(effect.get("buttons", ()), effect.get("display", "digits"))
                 if preset == "TARGET":
                     commands = tuple((element_id, 1) for element_id in BUTTON_ELEMENTS.get(int(effect.get("target_button", 0)), ()))
                 desired = {element_id: 0 for element_id in LIGHTING_ELEMENT_IDS}
                 for element_id, state in commands:
                     desired[int(element_id)] = int(state)
                 self.led.set_elements(tuple(
-                    LightingCommand(element_id, state, 0)
+                    LightingCommand(element_id, state, 140 if preset == "GAME_OUTPUT" else 0)
                     for element_id, state in desired.items()
                 ))
             elif kind == "resume_fixed_story":
@@ -2100,7 +2145,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         await self.expire_identity_leases()
                         if not still_current():
                             return stale_result()
-                        turn_context = copy.deepcopy(self._bounded_dialogue_context(event.session_id))
+                        turn_context = copy.deepcopy(self._bounded_dialogue_context(event.session_id, game_id=effect.get("game_id")))
                         turn = await self.bounded_s2s.run_text_turn(str(transient_text), turn_context)
                         await self.expire_identity_leases()
                         if not still_current():
@@ -2455,7 +2500,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return result
         if event.event_type in {"AudioCompleted", "AudioFailed"}:
             state_after_audio = self.canonical_runtime.sessions.get(event.session_id)
-            if state_after_audio is not None and state_after_audio.mode == "bear_dialogue":
+            if state_after_audio is not None and (state_after_audio.mode == "bear_dialogue"
+                    or (state_after_audio.mode == "game_active" and state_after_audio.active_game_id == "word_game"
+                        and state_after_audio.game_audio_stage == "playing")):
                 await self._set_dialogue_lighting_phase(event.session_id, "listening")
         if event.event_type in {"AudioCompleted", "AudioFailed"} and callback_lease is not None:
             if self._active_audio.get(event.session_id) is callback_lease:
@@ -2499,7 +2546,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 "audio_status": "ignored", "audio_flow": "stale_input",
                 "barge_in": False, "pending": False}
 
-    def _bounded_dialogue_context(self, session_id: str):
+    def _bounded_dialogue_context(self, session_id: str, game_id=None):
         """Reuse committed RAM within the same authorized physical/profile owner."""
         self.expire_dialogue_memory()
         state = self.canonical_runtime.sessions.get(session_id)
@@ -2509,6 +2556,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         fresh = self._canonical_audio_context(session_id)
         owner = (self._session_epochs.get(session_id, 0),
                  state.profile_ref if state is not None else None)
+        if game_id:
+            owner += (game_id, getattr(getattr(state, "game_engine_state", None), "run_id", None))
+        if game_id == "word_game":
+            fresh._game_id = game_id
+            fresh.allowed_topics = ("__all__",)
+            fresh.system_prompt += self._word_game_instructions(fresh.profile.age_band)
         current = self.conversation_contexts.get(session_id)
         if current is not None and getattr(current, "_owner", None) == owner:
             self._resume_dialogue_context(session_id, current)
@@ -2636,7 +2689,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             else:
                 utterance_guard = _ingress_guard
                 pipeline._canonical_private_owner = (_ingress_guard
-                    if state is not None and state.mode == "personal_welcome_listen" else None)
+                    if state is not None and state.mode in {"personal_welcome_listen", "game_active"} else None)
         async def no_llm_turn(_text: str, _generation: int):
             return TurnResult((), (), False, None)
         audio_result = await self.s2s_audio.feed_audio(session_id, samples, context, wait_for_turn=wait_for_turn, turn_handler=no_llm_turn)
@@ -2705,10 +2758,14 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         state = self.canonical_runtime.sessions.get(session_id)
         version = state.state_version if state is not None else None
         private_phase = bool(state and state.mode == "personal_welcome_listen")
+        game_phase = bool(state and state.mode == "game_active")
+        game_scope = self._game_voice_scope(session_id)
         transport_guard = _ingress_guard
         phase_guard = lambda: (transport_guard()
             and (not private_phase or (self.canonical_runtime.sessions.get(session_id) is state
-                and state.state_version == version)))
+                and state.state_version == version))
+            and (not game_phase or (game_scope is not None
+                and self._game_voice_scope(session_id) == game_scope)))
         phase_guard.lifecycle_current = getattr(transport_guard, "lifecycle_current", transport_guard)
         return await self._receive_canonical_audio(session_id, samples, sequence, wait_for_turn=wait_for_turn, _ingress_guard=phase_guard)
 
@@ -3091,8 +3148,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 preset = str(effect.get("preset", ""))
                 commands = LED_PRESETS.get(preset, ())
                 if preset == "GAME_OUTPUT":
-                    commands = tuple((element_id, 1) for button in effect.get("buttons", ())
-                                     if button in (1, 2, 3, 4) for element_id in BUTTON_ELEMENTS[button])
+                    commands = game_light_commands(effect.get("buttons", ()), effect.get("display", "digits"))
                 if preset == "TARGET":
                     commands = tuple(
                         (element_id, 1)

@@ -1764,16 +1764,18 @@ class SoundDevicePlaybackController:
     async def play(self, audio):
         await self._play_guarded(audio)
 
-    async def play_owned_pcm(self, audio, owner_current, *, start_position_samples=None):
+    async def play_owned_pcm(self, audio, owner_current, *, start_position_samples=None, on_started=None):
         # A resumed RAM story binds its offset to this request, not a mutable
         # controller field set before waiting for another stream to close.
         if (start_position_samples is not None
                 and (type(start_position_samples) is not int or start_position_samples < 0)):
             raise ValueError("invalid playback offset")
-        return await self._play_guarded(audio, owner_current,
-                                        start_position_samples=start_position_samples)
+        options = {"start_position_samples": start_position_samples}
+        if on_started is not None:
+            options["on_started"] = on_started
+        return await self._play_guarded(audio, owner_current, **options)
 
-    async def _play_guarded(self, audio, owner_current=None, *, start_position_samples=None):
+    async def _play_guarded(self, audio, owner_current=None, *, start_position_samples=None, on_started=None):
         generation = self._generation
         task = asyncio.current_task()
         offset = int(start_position_samples or 0)
@@ -1815,6 +1817,10 @@ class SoundDevicePlaybackController:
                     stream.start()
                     return True
                 stream_started = bool(await self._run_io(guarded_start))
+                if not current():
+                    return outcome()
+                if stream_started and on_started is not None:
+                    on_started()
                 if not current():
                     return outcome()
                 samples = np.asarray(audio.samples, dtype=np.float32).reshape(-1, 1)

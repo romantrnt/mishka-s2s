@@ -6,10 +6,10 @@ SCENE_AUDIO = {mode: audio for audio, mode in MENU_PCM_MODES.items()}
 
 class SceneMenuMixin:
     def _menu_page(self, state):
-        from .canonical_contract import AVAILABLE_GAME_SPECS
+        from .canonical_contract import IMMERSIVE_GAME_SPECS
         return build_menu_page(state.mode, state.age_band,
             state.scene_menu_pages.get(state.mode, 0), stories=self.stories,
-            game_specs=AVAILABLE_GAME_SPECS,
+            game_specs=IMMERSIVE_GAME_SPECS,
             personal_story_available=getattr(self,'personal_story_capable',False),
             day_items=getattr(self,'day_menu_items',lambda sid:(('date','Дата'),))(state.session_id))
 
@@ -32,6 +32,10 @@ class SceneMenuMixin:
         entering = state.scene_menu_active != state.mode
         redraw = entering or reason == 'scene_menu_page'
         if entering:
+            if state.mode == 'game_menu':
+                # Randomness belongs to an entry, never descriptor rendering.
+                import uuid
+                state.game_entry_seed = uuid.uuid4().int & ((1 << 63) - 1)
             state.scene_menu_active = state.mode
             state.scene_menu_phase = 'ready'
             if state.selected_menu_button is not None and not state.scene_menu_held:
@@ -61,9 +65,13 @@ class SceneMenuMixin:
         if redraw:
             effects.append({'type':'scene_menu_page','descriptor':page.as_dict()})
         state.expected_inputs = ['button_'+str(b) for b in page.buttons] + ['handset_down']
-        if state.scene_menu_phase == 'repeat_listen' or (state.mode in {'personal_story_theme','schedule_weather'}
+        if (state.mode == 'game_menu' and state.scene_menu_phase == 'ready') or state.scene_menu_phase == 'repeat_listen' or (state.mode in {'personal_story_theme','schedule_weather'}
                 and state.scene_menu_phase=='ready' and page.items): state.expected_inputs.append('speech')
+        if entering and state.mode == 'game_menu' and state.handset == 'up':
+            state.scene_menu_phase = 'invite'
+            effects.extend([{'type':'capture_close'}, {'type':'speak','phrase_id':'PHRASE_019'}])
         if (state.handset == 'up' and getattr(self,'menu_voice_capable',False)
+                and state.scene_menu_phase != 'invite'
                 and (state.mode not in state.scene_menu_seen or reason in {'scene_menu_page','scene_menu_refresh'})
                 and (entering or changed or reason in {'voice_open_activity','typed_menu_after_handset','scene_menu_page','scene_menu_refresh','personal_story_failure_finished'})
                 and not any(e.get('type') == 'speak' for e in effects)):
@@ -79,8 +87,8 @@ class SceneMenuMixin:
             if button in state.scene_menu_held: state.scene_menu_held.remove(button)
             return None
         if state.mode not in SCENE_AUDIO: return None
-        if button == 5:
-            if event.event_type == 'ButtonPressed' and state.scene_menu_phase in {'narrating','repeat_prompt','repeat_listen'}:
+        if button == 5 and state.mode != 'game_menu':
+            if event.event_type == 'ButtonPressed' and state.scene_menu_phase in {'invite','narrating','repeat_prompt','repeat_listen'}:
                 state.scene_menu_answers[state.mode]='skipped'
                 state.scene_menu_phase='ready'
             return None
@@ -89,13 +97,14 @@ class SceneMenuMixin:
         if button in state.scene_menu_held:
             return self._decision(state, [], 'scene_menu_release_required')
         state.scene_menu_held.append(button)
-        if state.scene_menu_phase in {'narrating','repeat_prompt','repeat_listen'}:
+        if state.scene_menu_phase in {'invite','narrating','repeat_prompt','repeat_listen'}:
             state.scene_menu_phase='ready'
             state.scene_menu_answers[state.mode]='skipped'
             state.state_version+=1
-            return self._decision(state,[{'type':'audio_stop'},{'type':'capture_close'}],
+            return self._decision(state,[{'type':'audio_stop'},{'type':'capture_close'}] +
+                ([{'type':'capture_open'}] if state.mode=='game_menu' else []),
                 'scene_menu_skipped',clear_audio=True)
-        if state.scene_menu_refresh_required and button in (1,2,3,4):
+        if state.scene_menu_refresh_required and button in ((1,2,3,4,5) if state.mode == 'game_menu' else (1,2,3,4)):
             return self._decision(state,[{'type':'audio_stop'},{'type':'capture_close'}],
                                   'scene_menu_refresh',clear_audio=True)
         if button==6:
@@ -108,8 +117,9 @@ class SceneMenuMixin:
 
     def _scene_menu_audio(self,state,event,response_id):
         if state.mode not in SCENE_AUDIO:return None
-        if state.scene_menu_phase not in {'narrating','repeat_prompt'}:return None
-        expected=SCENE_AUDIO[state.mode] if state.scene_menu_phase=='narrating' else 'PHRASE_009'
+        if state.scene_menu_phase not in {'invite','narrating','repeat_prompt'}:return None
+        expected=('PHRASE_019' if state.scene_menu_phase=='invite' else
+                  SCENE_AUDIO[state.mode] if state.scene_menu_phase=='narrating' else 'PHRASE_009')
         if (response_id!=expected or not state.active_audio_id
                 or not event.payload.get('playback_lease')
                 or event.payload['playback_lease']!=state.playback_lease):
@@ -119,8 +129,15 @@ class SceneMenuMixin:
             state.scene_menu_phase='ready'
             state.scene_menu_answers[state.mode]='failed'
             state.audio_status='failed'
-            return self._decision(state,[{'type':'capture_close'}],'scene_menu_audio_failed',clear_audio=True)
+            capture = 'capture_open' if state.mode == 'game_menu' and state.handset == 'up' else 'capture_close'
+            return self._decision(state,[{'type':capture}],'scene_menu_audio_failed',clear_audio=True)
         state.audio_status='finished'
+        if state.scene_menu_phase=='invite':
+            state.scene_menu_phase='narrating'
+            if state.mode not in state.scene_menu_seen: state.scene_menu_seen.append(state.mode)
+            return self._decision(state,[{'type':'narrate_scene_menu',
+                'content_id':SCENE_AUDIO[state.mode], 'scene':state.mode}],
+                'game_menu_invitation_finished',clear_audio=True)
         if state.scene_menu_phase=='narrating':
             state.scene_menu_refresh_required=False
         if state.scene_menu_phase=='narrating' and state.mode not in state.scene_menu_answers:
@@ -130,7 +147,8 @@ class SceneMenuMixin:
             state.scene_menu_phase='repeat_listen'
             return self._decision(state,[{'type':'capture_open'}],'scene_menu_repeat_listen',clear_audio=True)
         state.scene_menu_phase='ready'
-        return self._decision(state,[],'scene_menu_finished',clear_audio=True)
+        return self._decision(state,[{'type':'capture_open'}] if state.mode=='game_menu' else [],
+                              'scene_menu_finished',clear_audio=True)
 
     def _scene_menu_answer(self,state,intent,text,verified):
         if state.mode not in SCENE_AUDIO:return None
@@ -148,4 +166,5 @@ class SceneMenuMixin:
         state.state_version+=1
         effects=[{'type':'capture_close'}]
         if answer=='yes':effects.append({'type':'narrate_scene_menu','content_id':SCENE_AUDIO[state.mode],'scene':state.mode})
+        elif state.mode=='game_menu':effects.append({'type':'capture_open'})
         return self._decision(state,effects,'scene_menu_repeat_'+answer,clear_audio=True)

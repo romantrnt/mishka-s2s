@@ -57,7 +57,7 @@ HEADLESS_AUDIO_NODES = frozenset({
     "exhibition_menu_repeat_listen",
     "exhibition_name_capture", "exhibition_age_selection", "bear_dialogue", "support_intake",
     "personal_story_theme", "wellbeing_check", "schedule_weather",
-    "fixed_story_playing", "story_paused", "story_speech_analysis",
+    "fixed_story_playing", "story_paused", "story_speech_analysis", "game_active",
 })
 _AUTH_QUERY_KEYS = frozenset({"token", "access_token", "stand_token"})
 
@@ -504,6 +504,9 @@ class UARTLEDController:
             base_elements=base_elements, stage_duration_ms=stage_duration_ms, preserve_current=preserve_current,
         )
 
+    def start_game_ripple(self, origin_button: int, *, now: float | None = None):
+        return self.exhibition_effects.start_game_ripple(origin_button, now=now)
+
     def start_profile_ready(self, *, now: float | None = None):
         return self.exhibition_effects.start_profile_ready(now=now)
 
@@ -621,11 +624,13 @@ class _HeadlessTurnTakingPlaybackController(SoundDevicePlaybackController):
         self._output_started = output_started
         self._output_finished = output_finished
 
-    async def _play_guarded(self, audio, owner_current=None, *, start_position_samples=None):
+    async def _play_guarded(self, audio, owner_current=None, *, start_position_samples=None, on_started=None):
         owner = self._output_started(audio.session_id)
         try:
-            return await super()._play_guarded(
-                audio, owner_current, start_position_samples=start_position_samples)
+            options = {"start_position_samples": start_position_samples}
+            if on_started is not None:
+                options["on_started"] = on_started
+            return await super()._play_guarded(audio, owner_current, **options)
         finally:
             self._output_finished(owner)
 
@@ -814,7 +819,7 @@ class HardwareIntegrationStand:
         record = self.application.sessions.get(self.active_session_id)
         return bool(getattr(self, "hardware_mode", None) == "physical"
                     and getattr(self.settings, "headless_turn_taking", False)
-                    and getattr(record, "current_node", None) == "bear_dialogue")
+                    and getattr(record, "current_node", None) in {"bear_dialogue", "game_active"})
 
     def _headless_output_started(self, sid: str | None):
         sid = sid or self.active_session_id
@@ -860,9 +865,12 @@ class HardwareIntegrationStand:
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
                  or (not self.application._active_audio.get(self.active_session_id)
                      and (getattr(state,"scene_menu_phase",None) == "repeat_listen"
-                          or (getattr(state,"mode",None) in {"personal_story_theme","schedule_weather"}
+                          or (getattr(state,"mode",None) in {"personal_story_theme","schedule_weather","game_menu"}
                               and getattr(state,"scene_menu_phase",None)=="ready"
                               and bool(getattr(state,"scene_menu_descriptor",{}).get("items"))))))
+            and (getattr(session, "current_node", None) != "game_active"
+                 or (getattr(state, "game_audio_stage", None) == "playing"
+                     and not self.application._active_audio.get(self.active_session_id)))
             and not (getattr(session, "current_node", None) == "personal_welcome_listen"
                      and (self.application._active_audio.get(self.active_session_id)
                           or getattr(state, "audio_status", None) == "failed"))
@@ -908,6 +916,8 @@ class HardwareIntegrationStand:
         lease = self.application._active_audio.get(sid)
         private_phase = (node in {"personal_welcome_listen","fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
                          or bool(lease and lease.get("content_id") == "PERSONAL_WELCOME"))
+        game_phase = node == "game_active"
+        game_scope = self.application._game_voice_scope(sid) if game_phase else None
 
         def phase_current():
             current = runtime.sessions.get(sid) if runtime is not None else None
@@ -916,7 +926,9 @@ class HardwareIntegrationStand:
                     and (not private_phase or (
                         getattr(record, "current_node", None) == node
                         and getattr(current, "state_version", None) == version
-                        and self.application._active_audio.get(sid) is lease)))
+                        and self.application._active_audio.get(sid) is lease))
+                    and (not game_phase or (game_scope is not None
+                        and self.application._game_voice_scope(sid) == game_scope)))
         # Distinguish a closed listening phase from a revoked physical owner.
         phase_current.lifecycle_current = owner_current
         return sid, phase_current
@@ -1199,6 +1211,8 @@ class HardwareIntegrationStand:
             return bool(identity_binding and all(identity_binding)
                 and (state.profile_ref,state.identity_request_id) == identity_binding
                 and self.application._identity_scope_live(handle.session_id,capability))
+        if handle.response_id in {"GAME_PROMPT", "GAME_HINT"}:
+            return state.mode == "game_active" and state.game_audio_stage == "prompt"
         from .scene_menus import MENU_PCM_MODES
         if handle.response_id in MENU_PCM_MODES:
             return state.mode == MENU_PCM_MODES[handle.response_id]
@@ -1300,7 +1314,14 @@ class HardwareIntegrationStand:
                             "offset_ms": int(result.position_samples * 1000 / audio.sample_rate)}
                 completed = result.completed
             else:
-                result = await play_owned(audio, current)
+                if handle.response_id in {"GAME_PROMPT", "GAME_HINT"}:
+                    def started():
+                        if current():
+                            self.application._game_audio_started(handle.session_id, handle.playback_id,
+                                handle.playback_lease, handle.generation)
+                    result = await play_owned(audio, current, on_started=started)
+                else:
+                    result = await play_owned(audio, current)
                 from .s2s import PCMPlaybackResult
                 completed = (result.completed if isinstance(result, PCMPlaybackResult)
                              else bool(getattr(self.playback, "last_playback_completed", False)))

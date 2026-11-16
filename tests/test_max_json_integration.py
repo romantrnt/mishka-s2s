@@ -155,7 +155,7 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state().mode, "exhibition_menu_tutorial_prompt")
         self.assertNotIn("Демо", json.dumps(self.state().snapshot(), ensure_ascii=False))
 
-    async def test_real_max_json_private_welcome_waits_for_child_answer(self):
+    async def test_real_max_json_private_welcome_opens_menu_without_mood_question(self):
         await self.scan("demo-1")
         await self.send("HandsetLifted")
         owner = self.app._private_welcomes[self.boundary.session_id]
@@ -171,10 +171,9 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         callback = {key: lease[key] for key in ("token", "generation", "playback_lease", "playback_id")}
         callback["response_id"] = "PERSONAL_WELCOME"
         result = await accepted("AudioCompleted", 2, callback)
-        self.assertEqual(result["reason"], "personal_welcome_listening")
-        self.assertFalse(any(x.get("phrase_id") == "PHRASE_007" for x in result["outputs"]))
-        result = await accepted("SpeechReceived", 3, text="Хорошо")
-        self.assertEqual(result["reason"], "personal_welcome_answer_received")
+        self.assertEqual(result["reason"], "personal_welcome_menu_started")
+        self.assertTrue(any(x.get("phrase_id") == "PHRASE_007" for x in result["outputs"]))
+        self.assertIsNone(self.state().mood_result)
         self.assertEqual(self.state().mode, "exhibition_menu_tutorial_prompt")
         self.assertFalse(self.app.bounded_s2s.tts.cache)
         self.assertNotIn("Демо", json.dumps(result, ensure_ascii=False))

@@ -99,6 +99,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
                 and target in {"idle", "session_closed"})
     if event_type == "PersonalStoryReady":
         return current == "personal_story_generating" and target == "personal_story_playing"
+    if event_type in {"AudioCompleted", "AudioFailed"} and current == "game_active" and target == "root_menu":
+        return True
     if event_type in {"AudioCompleted", "AudioFailed"} and current == "personal_story_playing":
         return target == "root_menu"
     if event_type == "AudioCompleted" and current == "story_resume_announcement" and target == "personal_story_playing":
@@ -155,7 +157,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             or (current not in {"game_active", "safety_stop"} and target == "dialogue_suspended_ram")
         )
     if event_type == "HandsetLifted":
-        return target in {"awaiting_handset", "voice_welcome", "automatic_mood_check", "story_paused", "game_menu", "fixed_story_menu", "fixed_story_playing", "support_intake", "personal_story_theme", "wellbeing_check", "bear_dialogue", "schedule_weather"}
+        return target in {"awaiting_handset", "voice_welcome", "automatic_mood_check", "root_menu", "story_paused", "game_menu", "fixed_story_menu", "fixed_story_playing", "support_intake", "personal_story_theme", "wellbeing_check", "bear_dialogue", "schedule_weather"}
     if event_type == "HardwareDisconnected":
         return target == "safety_stop"
     if event_type == "ButtonReleased":
@@ -190,12 +192,14 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             or (current == "schedule_weather" and target == "root_menu")
         )
     if event_type == "DialogueFallback":
-        return ((current == "bear_dialogue" and target in {"bear_dialogue", "root_menu"})
+        return ((current == "game_active" and target == "root_menu")
+                or (current == "bear_dialogue" and target in {"bear_dialogue", "root_menu"})
                 or (current in {"personal_story_generating", "personal_story_validating", "personal_story_playing"}
                     and target == "fixed_story_menu"))
     if event_type == "VoiceIntentReady":
         return (
-            (current in {"personal_welcome_listen", "exhibition_name_capture", "exhibition_age_selection"}
+            (current == "game_active" and target == "root_menu")
+            or (current in {"personal_welcome_listen", "exhibition_name_capture", "exhibition_age_selection"}
              and target == "exhibition_menu_tutorial_prompt")
             or (current == "wellbeing_check" and target == "root_menu")
             or

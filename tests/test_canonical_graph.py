@@ -132,12 +132,12 @@ def test_handset_lift_from_visual_welcome_opens_current_voice_state_and_blocks_m
         lifted = await app.receive_async(Event(
             "HandsetLifted", "handset-test", 2, 1.0, "test", {}, "handset-one",
         ))
-        assert lifted["reason"] == "automatic_mood_check"
-        assert lifted["state"] == "automatic_mood_check"
+        assert lifted["reason"] == "identified_menu_opened"
+        assert lifted["state"] == "root_menu"
         assert lifted["canonical_state"]["handset"] == "up"
         assert lifted["canonical_state"]["expected_inputs"] == ["button", "speech", "handset_down"]
-        speak = next(output for output in lifted["outputs"] if output.get("type") == "speak")
-        assert speak.get("resolution") in {None, "recorded_phrase_unavailable_visual_only"}
+        assert not any(output.get('phrase_id') == 'PHRASE_014' for output in lifted['outputs'])
+        assert lifted['canonical_state']['mood_result'] is None
 
     asyncio.run(scenario())
 
