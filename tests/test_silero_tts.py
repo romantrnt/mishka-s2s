@@ -6,6 +6,52 @@ from app.foundation.s2s import RVCV2Provider, SileroTTSProvider
 from app.foundation.tts_engine import SileroTTSEngine
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("samples", [
+    (.1, -.1, .05, 0.),
+    (1., -1., .5, 0.),
+    (1.0080755949020386, -1.0080755949020386, .5040377974510193, 0.),
+])
+async def test_silero_owned_synthesis_attenuates_only_finite_overload(samples):
+    import torch
+    tensor = torch.tensor(samples, dtype=torch.float32)
+    class Model:
+        def apply_tts(self, **kwargs):
+            assert "Голубая ленточка." in kwargs["text"]
+            return tensor
+    engine = SileroTTSEngine()
+    engine._model = Model()
+    provider = SileroTTSProvider(engine)
+    audio = await provider.synthesize("Голубая ленточка. Найди такой же цвет.", 7, lambda: False)
+    original = tuple(tensor.tolist())
+    peak = max(map(abs, original))
+    expected = tuple(value / peak for value in original) if peak > 1. else original
+    assert audio.token == 7 and audio.sample_rate == 48000
+    assert audio.samples[:7200] == (0.,) * 7200
+    assert audio.samples[7200:] == expected
+    assert max(map(abs, audio.samples)) <= 1.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("samples,reason", [
+    ((), "Silero audio is empty"),
+    ((float("nan"), .1), "Silero audio contains non-finite samples"),
+    ((.1, float("inf")), "Silero audio contains non-finite samples"),
+    ((float("-inf"), 1.01), "Silero audio contains non-finite samples"),
+])
+async def test_silero_owned_synthesis_still_rejects_invalid_model_audio(samples, reason):
+    import torch
+    class Model:
+        def apply_tts(self, **kwargs):
+            return torch.tensor(samples, dtype=torch.float32)
+    engine = SileroTTSEngine()
+    engine._model = Model()
+    with pytest.raises(RuntimeError, match="Silero TTS synthesis failed") as failure:
+        await SileroTTSProvider(engine).synthesize("Публичная игровая реплика.", 7, lambda: False)
+    assert isinstance(failure.value.__cause__, ValueError)
+    assert str(failure.value.__cause__) == reason
+
+
 def test_silero_normalization_and_contract():
     speech = ElementTree.fromstring(SileroTTSEngine.normalize("  Привет\n   мир  "))
     assert speech.tag == "speak" and speech.find("s") is not None
@@ -55,6 +101,7 @@ def test_silero_provider_has_bounded_worker_and_cancellation_contract():
     assert audio.sample_rate == 48000
     assert len(audio.samples) == 7202
     assert audio.samples[:7200] == (0.0,) * 7200
+    provider._worker._jobs.join()  # Delivery precedes the worker's final accounting.
     snapshot = provider.native_worker_snapshot()
     assert snapshot["active_jobs"] == 0
     assert snapshot["queued_jobs"] == 0

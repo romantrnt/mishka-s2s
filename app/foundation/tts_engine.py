@@ -7,8 +7,9 @@ load or synthesize, the caller receives a bounded, diagnosable failure.
 from __future__ import annotations
 
 import threading
+import math
 from pathlib import Path
-from app.foundation.voice_pipeline import plan_prosody, prepend_pre_roll, validate_audio
+from app.foundation.voice_pipeline import peak_normalize, plan_prosody, prepend_pre_roll, validate_audio
 
 SILERO_MODEL_URL = "https://models.silero.ai/models/tts/ru/v5_5_ru.pt"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -111,11 +112,13 @@ class SileroTTSEngine:
         with self._synthesis_lock, torch.inference_mode():
             audio = model.apply_tts(text=self.normalize(text), speaker=self.speaker,
                                      sample_rate=self.sample_rate, put_accent=True, put_yo=True)
-            # Keep Silero dynamics intact.  Independent peak normalization at
-            # this stage makes every short block equally loud and gives RVC a
-            # synthetic input envelope.  The only loudness normalization is
-            # performed once after the complete RVC block.
-            values = validate_audio(audio.detach().to("cpu").float().reshape(-1).tolist(), name="Silero audio")
+            # Preserve normal dynamics; attenuate only finite model overloads
+            # so a slight Silero overshoot cannot invalidate otherwise usable PCM.
+            values = tuple(audio.detach().to("cpu").float().reshape(-1).tolist())
+            if (values and all(math.isfinite(value) for value in values)
+                    and max(map(abs, values)) > 1.):
+                values = peak_normalize(values, safe_peak=1.)
+            values = validate_audio(values, name="Silero audio")
         if not values:
             raise RuntimeError("Silero produced no audio")
         leading_ms = int(leading_silence_ms)
