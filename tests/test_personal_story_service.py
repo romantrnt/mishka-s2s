@@ -102,9 +102,11 @@ async def test_sentence_budget_keeps_full_content_and_measured_story_duration(wo
     e.response_validator.validate_story=observe
     audio=await PersonalStoryService(e).render('лес','3-5',(),1,lambda:True)
     if allowed:
+        assert len(e.llm.calls)==1
         assert semantic and audio and audio.duration_ms==60000
         assert ' '.join(e.tts.calls)==text, 'accepted words remain whole and in order'
     else:
+        assert len(e.llm.calls)==2, 'a second over-limit draft is rejected after the single repair'
         assert audio is None and not semantic and not e.tts.calls
 
 @pytest.mark.asyncio

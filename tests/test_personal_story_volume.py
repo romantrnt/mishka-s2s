@@ -33,6 +33,65 @@ def wire(parts,band='4-5'):
         'safety_tags':['safe'],'ending_state':'safe_resolved'},ensure_ascii=False)
 
 
+def long_sentence_parts(*,short=False,words=12):
+    parts=[' '.join(part[:2 if short else 5]) for part in PLOT_SENTENCES]
+    sentence='Зайчик нашёл под большим зелёным листом маленькое семечко и позвал соседку белочку.'
+    if words==9:sentence='Зайчик нашёл под зелёным листом семечко и позвал белочку.'
+    if words==16:sentence=sentence[:-1]+' возле знакомой лесной тропинки.'
+    if words==19:sentence=sentence[:-1]+' чтобы вместе посадить его на солнечной поляне.'
+    assert len(sentence.split())==words
+    parts[0]=parts[0].replace(PLOT_SENTENCES[0][0],sentence)
+    return parts
+
+
+def old_volume_parts(expanded=False):
+    counts=(7,5,4,7) if expanded else (7,4,4,5)
+    parts=[' '.join(part[:count]) for part,count in zip(PLOT_SENTENCES,counts)]
+    if expanded:parts[3]=parts[3].replace('его нежными ','')
+    else:parts[0]=parts[0].replace('старого ','')
+    assert len(' '.join(re.findall(r'[а-яё]+',' '.join(parts),re.I)))==(1051 if expanded else 909)
+    return parts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('also_short',[False,True])
+async def test_young_twelve_word_sentence_and_volume_share_one_complete_repair(caplog,also_short):
+    e=engine('1-3');calls=[];original=e.llm.stream_story
+    async def generate(messages,request_id,cancelled):
+        calls.append(messages)
+        if len(calls)==1:yield wire(long_sentence_parts(short=also_short),'1-3')
+        else:
+            feedback=json.loads(messages[-1]['content'])
+            assert feedback['max_sentence_words']==12 and feedback['allowed_sentence_words']==8
+            assert feedback['desired_sentence_words']==4
+            assert (feedback['measured_russian_characters']<feedback['required_minimum']) is also_short
+            assert bool(sum(feedback['additional_sentences_per_part'].values())) is also_short
+            async for value in original(messages,request_id,cancelled):yield value
+    e.llm.stream_story=generate
+    audio=await PersonalStoryService(e).render('лес','1-3',(),1,lambda:True)
+    assert audio and audio.duration_ms==45000 and len(calls)==2
+    assert ' '.join(e.tts.calls)==story_text('1-3')
+    logs=[json.loads(r.getMessage().removeprefix('personal_story ')) for r in caplog.records
+          if r.name=='mishka.personal_story']
+    repair=next(v for v in logs if v['reason']=='sentence_long')
+    assert repair['max_sentence_words']==12
+    assert long_sentence_parts(short=also_short)[0] not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('remaining',['sentence','volume'])
+async def test_second_sentence_or_volume_violation_cannot_start_another_repair(remaining):
+    e=engine('1-3');calls=[]
+    async def generate(*args):
+        calls.append(True)
+        parts=(long_sentence_parts(short=len(calls)==1) if len(calls)==1 or remaining=='sentence'
+               else [' '.join(part[:2]) for part in PLOT_SENTENCES])
+        yield wire(parts,'1-3')
+    e.llm.stream_story=generate
+    assert await PersonalStoryService(e).render('лес','1-3',(),1,lambda:True) is None
+    assert len(calls)==2 and not e.tts.calls
+
+
 @pytest.mark.asyncio
 async def test_balanced_1045_character_draft_reaches_measured_pcm_without_repair():
     parts=[' '.join(part[:count]) for part,count in zip(PLOT_SENTENCES,(6,6,6,4))]
@@ -49,33 +108,57 @@ async def test_balanced_1045_character_draft_reaches_measured_pcm_without_repair
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('expanded',[False,True])
-async def test_actual_ollama_http_transmits_measured_repair_feedback_without_replacing_messages(monkeypatch,expanded):
+@pytest.mark.parametrize('issue',['volume','sentence9','sentence16','old_volume'])
+async def test_actual_ollama_http_transmits_measured_repair_feedback_without_replacing_messages(monkeypatch,expanded,issue):
     import httpx
     from app.foundation.s2s import OllamaLLMProvider
     from test_story_backend_context import URL,MODEL,contract
     sent=[];client=httpx.AsyncClient
+    style=issue.startswith('sentence')
+    words=int(issue.removeprefix('sentence')) if style else None
+    band='1-3' if style else '4-5' if issue=='volume' else '6-7'
+    first=long_sentence_parts(words=words) if style else SHORT_PLOT if issue=='volume' else old_volume_parts()
     class Body(httpx.AsyncByteStream):
         def __init__(self,raw):self.raw=raw
         async def __aiter__(self):yield self.raw
     def reply(request):
         sent.append(json.loads(request.content))
-        parts=[' '.join(part[:7]) for part in PLOT_SENTENCES] if expanded and len(sent)==2 else SHORT_PLOT
-        raw='\n'.join(map(json.dumps,[{'message':{'content':wire(parts)}},
+        count=5 if style else 7 if issue=='volume' else 10
+        parts=[' '.join(part[:count]) for part in PLOT_SENTENCES] if expanded and len(sent)==2 else first
+        if issue=='old_volume' and not expanded and len(sent)==2:parts=old_volume_parts(expanded=True)
+        raw='\n'.join(map(json.dumps,[{'message':{'content':wire(parts,band)}},
                                     {'done':True,'done_reason':'stop'}])).encode()
         return httpx.Response(200,stream=Body(raw))
     monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:client(transport=httpx.MockTransport(reply),**kw))
-    c=await contract();e=engine('4-5')
+    c=await contract();e=engine(band)
     e.llm=OllamaLLMProvider(URL,MODEL,1,num_ctx=16384,story_backend_contract=c)
-    audio=await PersonalStoryService(e).render('лес','4-5',(),1,lambda:True)
+    audio=await PersonalStoryService(e).render('лес',band,(),1,lambda:True)
     assert (audio is not None) is expanded
     assert len(sent)==2 and len(sent[0]['messages'])==1 and len(sent[1]['messages'])==2
     assert sent[0]['messages'][0]==sent[1]['messages'][0]
     message=sent[1]['messages'][-1]
     assert message['role']=='user'
     feedback=json.loads(message['content'])
-    assert feedback['draft']==json.loads(wire(SHORT_PLOT)) and 'text' not in feedback['draft']
-    assert feedback['required_minimum']==840 and feedback['desired_volume']==[1120,1260]
-    assert feedback['measured_russian_characters']<840
+    assert feedback['draft']==json.loads(wire(first,band)) and 'text' not in feedback['draft']
+    minimum=14*DURATION_BOUNDS[band][0];target=7*sum(DURATION_BOUNDS[band])
+    assert feedback['required_minimum']==minimum and feedback['desired_volume']==[target,target+target//8]
+    assert (feedback['measured_russian_characters']<minimum) is (not style)
+    assert feedback['max_sentence_words']==(words if style else 16 if issue=='volume' else 7)
+    assert feedback['allowed_sentence_words']==(8 if style else 18 if issue=='volume' else 30)
+    assert feedback['desired_sentence_words']==(4 if style else 9 if issue=='volume' else 15)
+    additional=feedback['additional_sentences_per_part']
+    assert set(additional)=={'setting','problem','attempt','resolution'}
+    if issue=='old_volume':
+        assert additional=={'setting':5,'problem':4,'attempt':4,'resolution':4}
+    elif style:assert not any(additional.values())
+    else:assert 4<=sum(additional.values())<=32 and all(0<=v<=8 for v in additional.values())
+    if style:
+        assert feedback['sentence_splits']=={'setting':[{'sentence_index':1,'observed_words':words,
+                                                       'required_sentences':3 if words==9 else 4}]}
+        assert isinstance(feedback['sentence_split_instruction'],str)
+    else:
+        assert 'sentence_splits' not in feedback and 'sentence_split_instruction' not in feedback
+        assert feedback['revision_request']=='Revise the full draft within allowed_sentence_words and required_minimum, aiming for desired_sentence_words and desired_volume. Split long sentences into complete simple short sentences. Preserve the full plot and add additional_sentences_per_part distinct meaningful sentences/events in the named parts; zero means only split or rebalance existing text. Return revised full JSON, never an unchanged draft; keep age/theme/schema, no repetition, padding or fragments.'
     assert isinstance(feedback['revision_request'],str) and 0<len(feedback['revision_request'])<500
     assert all(item['shift'] is False and item['truncate'] is False
                and item['options']['num_ctx']==16384 and item['format']==e.llm.STORY_RESPONSE_SCHEMA for item in sent)
@@ -159,12 +242,11 @@ async def test_second_small_or_unbalanced_draft_fails_without_semantic_tts_or_pr
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('invalid',['schema','unsafe','long_sentence'])
+@pytest.mark.parametrize('invalid',['schema','unsafe'])
 async def test_invalid_first_draft_is_not_repaired(invalid):
     e=engine();calls=[];candidate=json.loads(wire(SHORT_PLOT,'3-5'))
     if invalid=='schema':del candidate['title']
     if invalid=='unsafe':candidate['plot']['attempt']='Принимай таблетки.'
-    if invalid=='long_sentence':candidate['plot']['attempt']=' '.join(['Слово']*19)+'.'
     async def generate(*args):calls.append(True);yield json.dumps(candidate,ensure_ascii=False)
     e.llm.stream_story=generate
     assert await PersonalStoryService(e).render('лес','3-5',(),1,lambda:True) is None
@@ -201,13 +283,14 @@ async def test_repair_still_uses_actual_provider_context_budget_before_second_mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stop',['cancel','deadline'])
-async def test_actual_application_cancel_or_original_deadline_revokes_repair(stop):
+@pytest.mark.parametrize('issue',['volume','sentence'])
+async def test_actual_application_cancel_or_original_deadline_revokes_repair(stop,issue):
     from test_personal_story_app import start_app,enter,send
     app=await start_app();entered=asyncio.Event();pending=None;calls=[];deadline=[]
     clock=[app.monotonic_now()];app.monotonic_now=lambda:clock[0]
     async def generate(*args):
         calls.append(True)
-        if len(calls)==1:yield wire(SHORT_PLOT,'3-5')
+        if len(calls)==1:yield wire(SHORT_PLOT if issue=='volume' else long_sentence_parts(words=19),'3-5')
         else:
             owner=app._personal_stories['story-test'];deadline.append(owner.deadline)
             entered.set()

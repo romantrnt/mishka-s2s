@@ -8,6 +8,14 @@ The clean baseline is faster-whisper `large-v3-turbo` (CUDA float16), Ollama
 Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
+Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
+`16069`, runtime source checkpoint `2704632` on
+`codex/remote-device-simulator`. Open
+`https://fihihgl91rnwu4-8000.proxy.runpod.net/console` and use the protected
+credentials described below. Real browser cancellation, repeated personal
+generation, pause/resume and active exit have passed; mixed and remaining age
+acceptance are still in progress. Earlier PIDs below are historical evidence.
+
 ## Runtime and server boundary
 
 Use only the new separately authorized Community server. Never start or change
@@ -342,9 +350,40 @@ with exact `personal_story.py` SHA-256
 `229c12f3bc82d76a3fe439034c05b93f660dc18649e0532bbe4174eaba569384`.
 Manifest, backups, deployment metadata and the native result are under
 `/workspace/mishka-artifacts/story-volume-floor-20261118`.
-Real browser cancel/reentry, PCM pause/resume and active exit on this version
-remain pending. Other ages have not gained actual duration evidence from this
-single native control.
+Real browser cancel/reentry, PCM pause/resume and active exit passed on this
+version: cancellation returned in 2.483 seconds without private PCM; the next
+request in the same visit produced 69.075 seconds of real PCM. Pause checkpoint
+returned 200, resume used a new private lease, and button 7 while playback was
+still active returned to root and stopped the source. The artifact records
+`playing=true` immediately before active exit and `playing=false` afterward,
+with no JavaScript errors:
+`runtime/local-integration-20261117/runpod-floor-16069.json`.
+Mixed continuation and the remaining completed visits are in progress. Other
+ages have not gained actual duration evidence from this single native control.
+
+Three guest and three permitted profile visits have now completed with clean
+handset-down endpoints. Entry and game source remained unchanged between the
+recorded PIDs. The exact ordered game → successful story → conversation →
+recovery chain remains incomplete: its youngest story was rejected before TTS.
+
+Further native age controls were isolated from the live application. A bounded
+shared revision can now address both long sentences and insufficient plot
+volume. The older 6–7 control passed on candidate `ef1b3d48`: 25 real Silero
+chunks, 5,495,400 samples at 48,000 Hz (114.4875 seconds), completed in 37.846
+seconds after one revision, with whole semantic allow and cleanup complete.
+The youngest 1–3 control still failed the unchanged eight-word limit: the first
+revision left one nine-word sentence. A subsequent addressed-feedback candidate
+`1d92c2b5` also failed with two nine-word sentences. Neither produced TTS audio
+or was deployed. Their exact source, checks and numeric-only native evidence
+are preserved under `/workspace/mishka-artifacts/story-age-sentence-20261118`
+and `/workspace/mishka-artifacts/story-sentence-target-20261118`.
+The addressed extension leaves the successful older volume-only HTTP payload
+unchanged, as checked by regression. Final targeted checks passed (29 cases),
+but young model compliance remains a real failure. Pinned-runtime schema
+constraint support is being investigated; another wording-only retry is not
+acceptance. Live PID 16069 still uses `229c12f3`, with its accepted middle-age
+browser controls. Physical microphone/hearing and final whole-demo acceptance
+remain unverified.
 
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input
