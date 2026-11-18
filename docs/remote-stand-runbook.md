@@ -9,17 +9,141 @@ Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
 Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
-`19481`, runtime source commit `6fcc7ca6fe5892b5eac236b4c511fdbdde07cbda` on
-`codex/remote-device-simulator`. Open
-`https://fihihgl91rnwu4-8000.proxy.runpod.net/console` and use the protected
-credentials described below. The independently reviewed V6 conversational
-gateway is deployed; its linked browser acceptance is in progress. Browser passes
-below are source-bound baseline evidence. Physical hearing and Roman's
-personal file access remain unobserved. Earlier PIDs are historical evidence.
+`22776`, source `209c3f81034673d5a37bcff551f75fe0ac7c52e7` on
+`codex/remote-device-simulator`, instance `e64ad25fc72cf3d9`.
+Open `https://fihihgl91rnwu4-8000.proxy.runpod.net/console` with the protected
+credentials below. V12 passed strict **READY**, real PCM/VAD/STT/LLM/mandatory
+validation/Silero/queue/silent playback, all27 runtime hashes and the served
+console, phone and phone-model clients. Initial state: no browser owner, handset down, no held buttons, all
+18 channels dark. Actual browser/provider acceptance is in progress;
+software readiness is not whole-product, human-hearing or physical acceptance.
+
+Historical V11 native model quality was on HOLD: both actual youngest-profile generator
+probes returned formally valid eight-word JSON with unnatural glued words.
+The mandatory semantic call allowed malformed spelling at confidence1.0.
+Two rubric-only candidates still allowed one observed adjective/noun glue;
+neither was deployed. The reviewed source correction instead requires a closed
+quality-first verdict in the same Mini request: literal speech must be valid
+AND the existing safety decision must allow it at the unchanged threshold.
+No dictionary, candidate repair, extra inference or relaxed limit was added.
+All three source-built prototype requests were byte-identical to the actual
+tested requests: two adjective/noun corruptions blocked, the newly generated
+natural eight-word persona answer allowed. Eight other source-built controls
+also passed actual qwen3:14b inference: two preposition/pronoun corruptions
+blocked; persona, hyphen/name, word-game, final-turn, normal solid spelling
+and inflection controls allowed. Those eight calls took315.5–519.8ms each.
+These bounded synthetic model checks and298 local affected tests passed
+independent review. The exact209c3f8 source then passed a standalone real
+public-WAV eight-stage probe, with one generation and one semantic request,
+quality=valid/allow1.0/clean terminal, in6.613s in a separate cold process.
+The V12 launcher startup also passed all8 stages on the actual app. Youngest
+natural conversational quality and linked browser acceptance remain pending;
+these bounded checks do not establish universal language quality.
+
+Guarded V12 helper `22771` ran once, gracefully replacing PID22134 and six
+reviewed runtime files. Its111,891-byte archive SHA-256 is
+`95303178b3cdff27212379a44207f273f768cb48f61744ae4b18acffbe8a5b25`.
+The strict preflight required the exact ready V11 baseline, full27 hashes,
+listener ownership, no browser client, handset down and all18 lights dark.
+New startup correlation `a901903c-3062-4ed8-9274-34bcf7e8d8bb` passed all8
+actual stages: STT344.18ms, LLM428.91ms, semantic852.06ms, Silero55.29ms and
+bounded queue1356.11ms. The same monotonic trace measured LLM request to
+first PCM1354.65ms and ingress to turn completion1762.85ms. Final startup
+playback is silent; these measurements are not browser/acoustic latency. Fresh independent readback confirmed
+READY, instance/revision, full27, all three served client hashes, Silero and
+disabled voice conversion. No rollback, Pod/Ollama/Max changes or user-asset
+writes occurred. Receipts:
+`/workspace/mishka-artifacts/product-integrity-20261118-v12-integrated/`.
+Chief received the clean serialized browser/provider slot for the next native
+pass; no other role may launch actual inference concurrently.
+
+Guarded V11 helper `22129` ran once, replacing only the 15 reviewed runtime
+files. Source combines the constrained JSON response, sentence-aware grammar,
+hold-seven/UI, catalogue hot-path and weather-scope corrections. Archive:
+260,349 bytes, SHA-256
+`a21b0a6daeabf0604da7b897f042a47d171337fad3890435bdf6037c3b4fc8af`.
+Receipt directory: `/workspace/mishka-artifacts/product-integrity-20261118-v11-sentence/`.
+The V11 E2E correlation was `b62ccf09-b758-4263-8395-bec3ebe4b384`.
+Startup measured LLM 408.26 ms, validation 672.31 ms and Silero 104.48 ms;
+LLM request to first PCM was 1,204 ms and ingress to completed probe 1,614 ms.
+The final playback is deliberately silent in the startup probe, so these are
+server measurements, not browser/acoustic latency. Contexts remain 16384,
+Silero is active and voice conversion disabled. Pod/Ollama, credentials,
+private state, original story WAVs and the story receipt were preserved.
+No rollback occurred in V11.
+
+Prior failed deployments are retained as historical evidence. V8 candidate
+`20640` and V9 candidate `21166` did not pass their old 90-second rollout
+gates. Their candidate readiness bodies were not retained before rollback;
+their exact failures are unknown. Old-source rollback failures with
+`unknown model tag` do not establish either candidate's cause. V10 helper
+`21647` ran once with the same V9 source, a 360-second monotonic deadline,
+strict readiness and a private append-only response timeline. Candidate
+`21653` completed with HTTP503/DEGRADED, correlation
+`75ad7bb4-e540-450b-b1d4-7220089331b2`: PCM/VAD/STT passed, JSON completed with
+a clean terminal, then `age_word_budget_exceeded` blocked speech before
+semantic validation/TTS/queue/playback. Prerequisites and listener ownership
+passed. Full candidate stage/body history was captured before rollback under
+`/workspace/mishka-artifacts/product-integrity-20261118-v10-diagnostic/`;
+raw model text was not captured. A reproduced source mismatch allowed three
+short sentences in the older schema, while the bridge allowed at most two.
+The reviewed correction preserves the global 8/18/30-word limits and younger
+pattern, constraining older responses to one or two sentences before inference.
+Its standalone actual public-WAV probe passed all eight stages in 6.368 s,
+with one generator and one real semantic request, before the successful V11
+rollout. It is a new synthetic response, not the lost candidate21653 output.
+V10's rollback PID `21747` remained degraded until V11 replaced it.
 
 ## Stage 1 product integrity — 2026-11-18
 
-The application-only rollout retained the existing environment, model assets,
+V11 browser controls, source `db0a744` / PID22134: a recognized early hold
+restored the same young quiz question, lights and owned prompt. Button7 was
+enabled even though that question had no answer7. READY remained latched for
+another3.9seconds; a genuine owner release exited. A real mixed-pointer order
+(touch owner down, foreign mouse down/up, then owner touch up) preserved READY
+until the owner's release. Hold→hangup→late release/old deadline left all18
+channels dark, no held keys, no hold state and no pending PCM. A two-touch
+helper did not deliver its foreign release before the owner's and remains
+NOT_PROVEN; older-quiz short7 scoring still needs the separate native case.
+Aibolit and Squirrel playback each received successful immediate Source.stop
+on a running AudioContext; these are cancellation receipts, not natural-end
+proof. Human microphone/hearing and physical HID/optics remain unverified.
+
+The same pass found held3D caps occluded by their base; the one-float local
+pressed-travel correction is reviewed with real local WebGL before/after and
+all-seven geometry/reduced-motion checks, and is now deployed in V12; native rendered verification is pending. Early
+catalogue speech did not select a story within20seconds despite one actual
+STT completion; its cause is under investigation. A47.6second browser/server
+comparison was withdrawn: a paired receipt measured server clock ahead by
+45.107–46.432seconds. Same-server STT completed in141.6ms. Full local actual
+WS ingress with five real WAVs and fake STT took0.291s for136frames, with no
+WAV reads or get_verified calls. That local result neither proves real ASR
+selection nor establishes a remaining hashing/backlog defect.
+
+
+The reviewed V12 catalogue correction passed26 dedicated and92 existing
+local checks through actual Application→Graph. Verified concern, urgent and
+explicit-help routes now preempt both catalogues; the exact matching activity
+remains the only ordinary catalogue launch target. Rejection restores the
+published snapshot from the authoritative rolled-back owner. Unverified/forged
+input, late classification after hangup and late menu audio cannot grant a
+transition or create owner/audio/light/caller effects. The native early-story
+failure already had a transition_rejected receipt, but its exact recognized
+input is unknown; this related source defect does not prove that browser case
+fixed.
+
+The V12 warmup audio correction uses an immutable task-local stack of
+engine/sink bindings instead of globally replacing engine.playback. The entire
+probe, including its cancellation cleanup, stays silent while preadmitted user
+tasks retain their actual playback controller. Four reproduced run_now/recover
+races, cleanup failure, timeout/late children, nested engines and the next user
+turn are covered by88 local checks plus3 mock-wire terminal controls. This is
+audio isolation only: manual maintenance admission/provider/VAD concurrency
+remains a separate open boundary. No actual physical/audio acceptance follows
+from these local checks.
+
+
+The historical successful V7 application-only rollout retained the existing environment, model assets,
 private state, original story WAV files, Max fixture and story-backend receipt.
 The pod and loopback Ollama server were not restarted. Both model context
 settings remain `16384`; the current voice is Silero without voice conversion.
@@ -28,8 +152,20 @@ served `console.js` SHA-256
 `2fce8160a985afb57e50095be6c3d788556064bf65b20fcbeae04a8dacc284d5`.
 Readiness returned `READY`; the initial handset was down with no browser owner.
 Prior files, the manifest and rollout/readiness receipts are retained under
-`/workspace/mishka-artifacts/product-integrity-20261118-v6/`. The 261,084-byte
-archive has SHA-256 `bf2f6950448e18eebad6b844cdcb49d057046731f3ce131931f3fd1bae8159a1`.
+`/workspace/mishka-artifacts/product-integrity-20261118-v7/`. The 52,240-byte
+archive has SHA-256 `b865d16a18b8f1a69d100a9eae4b180ef40a229456e2018f66d64e69b23ff54b`.
+After Chief's explicit clean browser release, guarded helper `20027` ran once,
+verified all 23 baseline hashes and no browser owner/pressed keys, and replaced
+only three prompt files from committed Git blobs. PID `19481` shut down
+gracefully; PID `20029` reached `READY`, instance `e17f1515cd2bd668`, initial
+revision 1, handset down and all 18 channels dark. Final 23 runtime hashes,
+served client, unchanged model contexts, story receipt and Silero/disabled
+conversion were verified. No rollback was needed. In-progress local hold-seven
+and weather-scope edits were excluded from this archive.
+
+The preceding V6 archive was 261,084 bytes,
+retained under `/workspace/mishka-artifacts/product-integrity-20261118-v6/`, and
+has SHA-256 `bf2f6950448e18eebad6b844cdcb49d057046731f3ce131931f3fd1bae8159a1`.
 The guarded helper ran once, checked all 23 preceding and candidate hashes,
 and replaced 19 runtime files from the exact committed source. PID `18670`
 shut down gracefully; PID `19481` reached `READY` with instance
@@ -164,7 +300,7 @@ not renew the 120-second lease, exact expiry cleared facts, and old queued PCM
 and callbacks stayed inert. This is real client logic, not real RFID or a
 clinical API/data pass.
 
-Current hosted acceptance is owned by Chief against PID `19481`: actual model
+Current hosted acceptance is owned by Chief against V7 PID `20029`: actual model
 proposal/confirmation/game/caller, scoped word turns and natural PCM drain,
 all five games/recordings, early browser capture, short/held exit, clarification,
 interruptions, sourced information, repaired root/day/help paths and a clean
@@ -183,16 +319,82 @@ request → owned offer → spoken consent chain. Capture remained healthy;
 dialogue recovered through the bounded retry without a UI error. Read-only
 effective-prompt inspection confirmed the age/profile and eight-word boundary,
 and found competing speech-only and catalogue-action format instructions.
-Their correction and actual-model replay remain open; the strict parser,
-age limit and safety checks are retained. Evidence:
+The prompt correction is independently cleared and deployed in V7; actual-model
+replay remains open. The strict parser, age limit and safety checks are retained. Evidence:
 `runtime/local-integration-20261117/runpod-stage1-v6-games-capture-19481.json`.
 That pass ended handset down, all 18 channels dark, no pressed keys and
 280 sources / 280 ended, with no browser errors; explicit cancellations mean
 these are not 280 natural completions. Fake browser capture is software
 evidence, not a human microphone or hearing check.
 
-Roman's subsequent immersion addition preserves the active work. A follow-up
-hold-seven design must retain a short press as an answer where applicable,
+The V7 correction removes competing output instructions: bear dialogue uses
+either speech with its existing permitted accompaniment or one catalogue
+control action alone. Other modes keep catalogue actions forbidden. The final
+trusted format follows profile/history data; ages one to three receive a
+single-thought/single-sentence target of three to six words, with the unchanged
+eight-word hard limit and word-game final-turn priority. The exact commit
+passed 66 focused cases plus independent source/mock boundary replay. Actual
+model compliance remains a separate hosted gate. The first V7 actual-model
+replays remained negative: the age-two persona question again produced
+`age_word_budget_exceeded`, and an actual fake-microphone quiz request reached
+Whisper then produced `game_offer_mixed_or_out_of_context`, with no pending
+offer. No second consent clip was delivered after that failed offer wait.
+The prompt-only change therefore has not closed either behavioral defect.
+A subsequent immutable-source wire audit confirmed the complete final system
+instructions reach Ollama unchanged. One serialized actual-model synthetic
+probe returned both a five-word speech block and a quiz offer, confirming the
+mixed-output class without reproducing a captured private failed turn. There
+were no literal escaped quotes or escaped newlines in that response; the early
+escaping hypothesis was withdrawn. A bounded structured-output capability
+check is the next step; parser, age and semantic limits stay.
+V6's later named-word-game
+and named-Lukomorye requests repeated the mixed-action failure. Early browser
+story selection sent voiced frames during narration but did not establish
+selection/STT completion; that boundary remains under separate investigation.
+V7's app restart is not claimed to fix it. Aibolit's typed selection, pause at
+3.957 seconds, actual source offset on resume and return to the same caller
+were observed on V6. On V7 all five recordings were played and matched their
+verified assets: four hashes came from actual browser response bodies; the
+large Aibolit body was evicted, so its hash came from a separate authenticated
+same-app readback alongside observed playback duration. Lukomorye naturally
+finished after 105.069 seconds and returned to its catalogue. The final visit
+ended down, with no pressed keys and all 18 channels dark. Two cancelled long
+sources lacked observed ended callbacks (234 created, 232 observed ended,
+229 natural); stop/callback instrumentation remains a separate acceptance
+check, rather than proof of either complete drain or an orphan defect.
+
+Independent frozen-source ingress replay found a concrete catalogue bottleneck:
+`_catalogue_voice_scope` rebuilt the story catalogue and reread/hashed all five
+141,376,322-byte WAV assets on every capture guard evaluation. Ten 341-sample
+frames (213 ms of audio) took 20.45 seconds with 205 integrity checks; twenty
+frames took 45.29 seconds with 405 checks. An already-verified RAM isolation
+control sustained the same local stream across three owners, distinguishing
+this cost from a demonstrated permanent capture-owner lockout. That control
+is not a proposed permanent cache or an actual native-provider pass. Reusing
+the current owned committed descriptor in the hot scope must preserve entry,
+epoch, page/receipt and selected-file integrity verification before playback.
+Correction `3c03497` uses the current committed owned descriptor for the hot
+scope; selected-file integrity checks before playback remain. Independent
+causal replay with all five real files reduced twenty frames to 0.03 seconds
+and 100 frames to 0.17 seconds, with zero repeated catalogue verification. A
+full 119-frame local route reached the selected Aibolit in 1.897 seconds,
+including 1.541 seconds for the retained selected-file checks. Invalidation,
+rights revocation and changed/missing assets were checked. This is local
+software evidence with a fake STT boundary; actual early browser voice and
+Whisper acceptance after deployment remain open.
+
+Roman's subsequent immersion addition preserves the active work. Local
+implementation `990d394` and its independent core/UI review are complete; it
+is included in V11; actual browser acceptance is pending. Quiz seven remains a short-release answer. A recognized
+hold shows a calm cumulative binary wave, speaks readiness once, and stays
+ready until an owned non-cancelled release. Early release restores the current
+question without scoring; pointer/key ownership, cancel/blur, late audio and
+stale timers are guarded. Independent replay covered six core causal groups
+and actual 2D/3D/workbench JavaScript handlers, including focus moving into an
+input before key release. The final local focused run passed 64 Python cases
+and six Node suites; these are not rendered-browser, hearing or physical-board
+acceptance. The following continuing criteria apply: the hold must retain a
+short press as an answer where applicable,
 show calm progress using the actual lighting protocol, latch readiness until
 release, and restore game state after an early release or interruption.
 Instructions must also explain the gesture without relying on sight. Timing
@@ -342,13 +544,35 @@ missing-configuration/typed-information tests and four additional in-memory
 day/conversation cases passed: missing configuration made no fetch, a
 configured fetch failure produced truthful `PHRASE_100`, and contextual return
 was preserved. These are local provider-stub checks, not HTTP/API acceptance.
-One location boundary remains open: an explicit named-city request currently
-reduces to `weather`, losing that qualifier while the provider always uses its
-fixed configured point. The next scoped executor change must retain that
-request distinction and state an unavailable location honestly; ordinary
+The investigation reproduced an explicit named-city request reducing to
+`weather`, losing its qualifier while the provider used its fixed configured
+point. The scoped executor correction retains that request distinction and
+states an unavailable location honestly; ordinary
 weather requests must not gain a mandatory city question. No geocoder,
 invented city or claim that configured coordinates equal the phone's location
 has been added.
+The related temporal probe also reproduced tomorrow, yesterday and weekend
+queries receiving the identical current-observation answer through the actual
+local typed route. This is provider-stub evidence, not real API acceptance.
+The local request-scope correction carries a closed, private, request-local
+scope only after admitted verified input, or from the currently accepted DAY
+button. Named/unknown places, source-city questions and unsupported periods
+receive honest limitations before an unrelated fetch. Current/bare/today and
+ordinary clothes questions keep the configured-point path. The intermediate module passed 115 cases, but independent review reproduced
+unresolved place and time qualifiers still defaulting to current observations
+(for example a bare city or «к вечеру»). That intermediate candidate remained on HOLD and was
+excluded from the attempted hot-path/hold rollout. The final positive admission correction requires coverage of the entire
+supported current request and passed independent review of 28 actual local
+application routes. Commit `d48bc15` preserves that exact seven-file scope;
+it is included in V11. The adjacent rain/snow/degrees aliases were corrected in commit `557c7d6`: final
+208 local weather cases and 28 independent application-route cases passed.
+These aliases are also included in V11; actual external API data remains unavailable. No new scope/location
+field is added to events, history, model input, public state or logs. Existing
+authorization and late-owner fences remain, including rechecking origin after
+identity expiry awaits. Young DAY voice uses all current validated capabilities
+without broadening current-page numeric buttons. A missing weather source is
+explained in DAY narration. This correction is included in V11; real API and
+city data remain unavailable.
 
 ## Runtime and server boundary
 

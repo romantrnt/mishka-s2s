@@ -93,13 +93,105 @@ word progress and a full hosted causal deadline crossing are not claimed.
 
 ### Conversational access addition — deployed in V6, integrated acceptance active
 
-Current source `6fcc7ca6fe5892b5eac236b4c511fdbdde07cbda` is deployed as
+V6 source `6fcc7ca6fe5892b5eac236b4c511fdbdde07cbda` was deployed as
 application PID `19481`, instance `5f755e980e04bc02`. All 23 runtime hashes and
 the served client `2fce8160…` matched the committed candidate. The one guarded
 app-only rollout preserved the pod, Ollama, environment/context settings,
 Silero without voice conversion, protected access and private assets. Initial
 readback was `READY`, handset down, no pressed keys or browser owner. Chief
 owns the linked browser/provider pass; deployment does not complete Stage 1.
+
+The last successful V7 checkpoint was source `0bdd692d1453d0cde8e6d62a9719804199c9b51a`,
+application PID `20029`, instance `e17f1515cd2bd668`. One guarded app-only rollout
+after Chief's clean release replaced only three independently reviewed prompt
+files, verified all 23 hashes and served client, and preserved environment,
+Silero/disabled conversion, pod, Ollama and private assets. The mutually exclusive
+speech/action format and young single-thought instructions passed 66 focused
+cases and independent boundary review; actual model replay is active. Local
+hold-seven and weather-scope work is not deployed in this checkpoint.
+The first V7 native persona and fake-microphone quiz request repeated the
+age-budget and mixed-action failures. These remain open despite source/mock
+review. Immutable-source delivery inspection confirmed the final instructions reach
+Ollama. A serialized actual-model synthetic probe confirmed mixed speech plus
+action, without literal escaping defects. Bounded structured-output support
+checks precede further model changes; parser, age and semantic limits stay.
+Separately, frozen local ingress reproduced full-catalogue WAV hashing on each
+capture guard evaluation: 213 ms of audio took 20.45 seconds. A scoped committed
+descriptor correction `3c03497` is independently reviewed and pushed, with
+selected asset verification and invalidation retained. Local causal replay
+reduced twenty frames to 0.03 seconds with zero repeated verification; actual
+early browser voice/Whisper acceptance after deployment remains open.
+
+Current recovery state: V11 PID `22134`/instance `57242870c1ddf223` runs
+source `db0a744` with strict READY and all eight real startup stages passed,
+correlation `b62ccf09-b758-4263-8395-bec3ebe4b384`. All27 runtime hashes and
+served console/phone clients match the reviewed Git source. Helper `22129`
+ran once; no rollback or Pod/Ollama restart occurred. Chief owns the active
+native browser/provider pass; the actual slot is explicitly serialized. Human hearing,
+physical board and real external data remain separate open acceptance.
+
+Current V12 checkpoint: source209c3f81034673d5a37bcff551f75fe0ac7c52e7,
+PID22776, instancee64ad25fc72cf3d9. Guarded helper22771 ran once with the
+strict-ready V11 baseline, six reviewed runtime replacements/full27, archive
+111891B/SHA95303178b3cdff27212379a44207f273f768cb48f61744ae4b18acffbe8a5b25.
+Independent fresh readback passed strictREADY/listener/full27/served console,
+phone and3D modelff03, Silero/VCoff, no clients/down/keys[]/18dark. No rollback.
+Startup E2Ea901903c-3062-4ed8-9274-34bcf7e8d8bb all8PASS, server bounded queue
+1356.11ms, LLM→firstPCM1354.65ms and ingress→complete1762.85ms; final playback
+silent, not browser/acoustic latency. The separate
+cold public-WAV core probe93b8ec10 also passed8/8 in6.613s with the exact new
+quality parser. Chief owns the native slot; PM actual/browser/provider0.
+
+Historical V8/V9 timeouts have no retained candidate body and no exact cause.
+The instrumented V10 candidate `21653` captured a clean JSON terminal followed
+by the bridge's `age_word_budget_exceeded`, before semantic/TTS. Its proven
+source mismatch was older-schema permission for three sentences that the
+bridge rejected. The final11-line grammar correction keeps 8/18/30 global
+word caps, younger bytes and mandatory semantic checks. It passed93 focused
+cases,4 independent causal groups and one actual public-WAV core probe8/8
+before V11 deployment. Raw21653 output was lost; no later probe is presented
+as that response. Full deployment/failed history and measured boundaries are
+in the existing runbook.
+
+The JSON/warmup correction and positive weather scope passed295 combined
+local cases and independent source review. Weather `d48bc15` has scoped
+independent CLEAR; `557c7d6` adds common rain/snow/degrees aliases with final208
+local and28 independent route cases. Both are included in V11. Real weather
+API data is unavailable; Max provisional fixtures are not clinical acceptance.
+Broader linked browser acceptance remains open until Chief records it.
+V11 actual youngest-profile quality is on HOLD: two generator responses glued
+words and the real mandatory Mini allowed the malformed example at1.0.
+A scoped literal-orthography rubric is being repaired without weakening safety,
+word limits or replacing the single semantic call. It requires actual negative
+and natural-positive model evidence, not another mock acceptance claim.
+Subsequent actual V1/V2 rubrics blocked several corruptions and preserved
+natural controls, but both still allowed the observed adjective/noun glue;
+quality remains HOLD. A Russian producer instruction yielded a natural eight-
+word persona response; the overlong verbatim request still glued words and
+must be rejected, not repaired. The final structured source is now included in V12; its native limits remain below.
+The final structured quality-first source passed independent review and298
+affected local checks. Its three request bodies exactly match actual tested
+prototype bytes (two adjective/noun negatives blocked, actual new natural
+persona allowed). Eight additional actual source-built controls all passed,
+including word-game final turn, names/hyphenation, normal solid spelling and
+inflection; no retry, extra model pass or changed safety threshold. This is
+bounded synthetic model evidence. V12 actual startup passed; native acceptance remains pending.
+
+Catalogue safety/projection P1 passed26 new +92 existing local cases and
+independent actual Application→Graph review. Only trusted classification grants
+support/safety; ordinary launches stay in their own catalogue. Rejected state
+publication now matches authoritative rollback. Native early-choice failure
+remains open until replay with actual updated source and causal receipts.
+
+Task-local warmup playback isolation passed independent review and is deployed in V12:88 local
+checks plus3 mock-wire terminal controls. It prevents preadmitted user queues
+or empty probe cleanup from capturing/stopping the wrong audio sink. Full
+manual maintenance provider/admission/VAD concurrency remains OPEN separately.
+V11 native hold early restore/latched owner-release/mixed-pointer/hangup cleanup
+and two long-source stop receipts passed. Older short7, V12 native3D rendered fix,
+linked catalogue capture/ASR choice and full new conversation/game flow remain
+open. The cross-clock47.6second latency claim was withdrawn with paired clock
+bounds; same-server STT was141.6ms. Root investigates actual transition reasons.
 
 Roman's next addition extends the same investigation. The preceding inventory:
 all five immersive games accepted model offers, but no generic owned voice
@@ -122,13 +214,13 @@ credential stores. V6 binds actual weather settings and checks observation
 freshness; current readiness reports `yandex` with no configured key or
 coordinates. A real positive weather-provider response remains unverified.
 
-Current V6 native negatives remain open: the actual age-two persona question
+Historical V6 native negatives await verification against V11: the actual age-two persona question
 exceeded the applied eight-word cap; real browser fake microphone capture and
 STT succeeded, but the first quiz request failed the strict mixed-action
 parser and the later consent opened a generic catalogue. This does not pass
 the desired owned offer/confirmation chain. Effective-prompt inspection found
-competing format instructions; one local prompt correction and independent
-review are in progress while the hosted pass continues unchanged. Evidence:
+competing format instructions; the independently reviewed prompt correction is
+now deployed in V7, with actual efficacy awaiting replay. Evidence:
 `runpod-stage1-v6-games-capture-19481.json`. No safety or age boundary is relaxed.
 
 Roman's next immersion addition does not interrupt active checks. After the
@@ -143,14 +235,18 @@ existing contract without changing Max code/database or inventing real facts.
 The weather key and coordinates are explicitly absent. Prepare configured API,
 missing/fault and sourced city-name handling; no unconditional Saint Petersburg
 or mandatory manual city input, and no real-API claim before actual access.
+Local provider-stub routes additionally confirmed that tomorrow/yesterday/weekend
+requests lose their temporal scope and receive current observations. The same
+bounded weather correction must explain unsupported periods before an unrelated
+fetch; it must preserve ordinary/current requests and existing safety/ownership.
 
 | Work | Observable result / current boundary | Ownership / independent check |
 | --- | --- | --- |
 | T037 Catalogue gateway | All five games and verified story assets reachable by precise or general conversation requests; early voice/button choice launches once; ambiguous/unknown names clarify. Restore a valid caller across chooser, playback, pause, finish and cancellation. Include actual capture/VAD/STT admission, not only text routing. | contextual_game_flow after reviewed audio freeze / Chief |
 | T038 Sourced day information | Section 7 and conversation use actual scoped facts and honest missing-data responses. Explicit accepted factual requests reach the typed executor before model generation. Add bounded private card doctor names/date with the existing personalize grant only; describe a source-qualified card list, never a next appointment or invented room/time. Reject invalid DTOs, stale identity and late results; check source date before saying today. Character/location questions stay ordinary conversation. Context-sensitive 7 remains intact. | contextual_game_flow: coupled routes/rendering; console_recovery_fix: max_json.py/identity.py DTO; Chief independent privacy/date/expiry review |
-| T039 Weather configuration, location and freshness | Bind existing canonical/legacy weather settings without replacing explicit voice/private configuration. Current/no-key/error/stale observations are distinguished; no paid calls or fake facts. Missing/fault local checks pass; actual API/city naming remain unverified. Preserve an explicit requested-location scope so fixed configured coordinates cannot silently stand for a named other city. | console_recovery_fix: completed adapter/config audit; location executor follow-up after application.py ownership clears / Chief |
+| T039 Weather configuration, location and freshness | Bind existing canonical/legacy weather settings without replacing explicit voice/private configuration. Current/no-key/error/stale observations are distinguished; no paid calls or fake facts. Missing/fault local checks pass; actual API/city naming remain unverified. Preserve an explicit requested-location scope so fixed configured coordinates cannot silently stand for a named other city. | console_recovery_fix: request-local scope, DAY availability and aliases independently reviewed and deployed in V11; real API/city data remains unavailable / Chief native |
 | T040 Natural safe dialogue | Establish precise native fallback reasons; align actual age caps and final-word instructions; remove reproduced harmless-noun/persona false refusals while preserving real privacy, medical and safety checks. Validation 82cb42f4 and final prompts/core are independently cleared and deployed in V6; actual persona/model behavior remains a native gate. | contextual_game_flow: prompts/coupled routes; menu_guidance_design_review: validation.py and dedicated tests; Chief / independent review |
-| T041 Hold-seven feedback | Distinguish short answer from intentional hold; show protocol-supported progress, latch readiness until a valid release and restore the current game on early release/cancel. Reject stale timers/PCM, pointer-cancel exits and double scoring; explain the gesture without relying on sight. Preserve other contextual 7 roles and the existing inactivity policy. | menu_guidance_design_review: game state/timers, owned presentation, input cancel schema and client guide; Chief / independent review and actual browser |
+| T041 Hold-seven feedback | Implementation `990d394` and independent core/UI review passed; included in V11, actual browser acceptance remains open. Distinguish short answer from intentional hold; show protocol-supported progress, latch readiness until a valid release and restore the current game on early release/cancel. Reject stale timers/PCM, pointer-cancel exits and double scoring; explain the gesture without relying on sight. Preserve other contextual 7 roles and the existing inactivity policy. | menu_guidance_design_review: game state/timers, owned presentation, input cancel schema and client guide; Chief / independent review and actual browser |
 
 The new matrix is another investigation aid. Native coverage must include
 different actual games, exact story assets and interruptions, source failure
