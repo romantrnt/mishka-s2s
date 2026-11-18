@@ -142,7 +142,7 @@ silent, not browser/acoustic latency. The separate
 cold public-WAV core probe93b8ec10 also passed8/8 in6.613s with the exact new
 quality parser. Chief owns the native slot; PM actual/browser/provider0.
 
-Current live V13: source45bb465db25395697b08a868743dfbf1ac2a0172/PID23547/
+Preceding V13: source45bb465db25395697b08a868743dfbf1ac2a0172/PID23547/
 instance42d641725b792ede. Helper23542 ran once; archive143578B/SHA45e5808c68e415f093bccfd02935646e5f1ffb0ca75a8089c09196d54655a338,
 six runtime replacements/full30 verified before and after launch. StrictREADY
 and actual E2E82337612-82c0-4576-abb3-d43413dadfc7 passed8/8; silent startup
@@ -150,6 +150,19 @@ queue2064.37ms is not browser latency. Silero/VCoff, served3JS, owner0/down/
 keys[]/18dark were independently checked, then actual slot released to Chief.
 No rollback or Pod/Ollama restart. Pagination/auth/nonvoice candidates remain
 local work; they are not in V13.
+
+Current live V14: source `263cac19c6b9dee6e485d39b16ef10a26738bf62`,
+PID `23949`, instance `67b2f42553e4f8fd`. Guarded helper `23944` ran once;
+six runtime replacements and all 31 hashes matched the reviewed Git package.
+Strict READY and actual startup E2E `41602a17-07a2-4e53-91f4-cd893da32a87`
+passed 8/8 with silent final playback. Paging, truthful dialogue hints and
+fresh authorization replacement are included. Final auth focused tests passed
+96 cases and independent counterexamples became GREEN. External unchanged Max
+integration had 32 passes/two subtests and one separately reproduced baseline
+failure: route/time requests are remapped to a doctor list; this remains open.
+Explicit screen Start/End, panel route and full four-way auth/hook acceptance
+remain active work. Chief owns the bounded native follow-up; PM has no live
+writer or model job. No Pod/Ollama restart or physical/human acceptance claim.
 
 First V12 native follow-up remains HOLD: early known synthetic microphone
 input yielded catalogue clarification rather than Aibolit (no longer
@@ -277,8 +290,8 @@ fetch; it must preserve ordinary/current requests and existing safety/ownership.
 | T038 Sourced day information | Section 7 and conversation use actual scoped facts and honest missing-data responses. Explicit accepted factual requests reach the typed executor before model generation. Add bounded private card doctor names/date with the existing personalize grant only; describe a source-qualified card list, never a next appointment or invented room/time. Reject invalid DTOs, stale identity and late results; check source date before saying today. Character/location questions stay ordinary conversation. Context-sensitive 7 remains intact. | contextual_game_flow: coupled routes/rendering; console_recovery_fix: max_json.py/identity.py DTO; Chief independent privacy/date/expiry review |
 | T039 Weather configuration, location and freshness | Bind existing canonical/legacy weather settings without replacing explicit voice/private configuration. Current/no-key/error/stale observations are distinguished; no paid calls or fake facts. Missing/fault local checks pass; actual API/city naming remain unverified. Preserve an explicit requested-location scope so fixed configured coordinates cannot silently stand for a named other city. | console_recovery_fix: request-local scope, DAY availability and aliases independently reviewed and deployed in V11; real API/city data remains unavailable / Chief native |
 | T040 Natural safe dialogue | Establish precise native fallback reasons; align actual age caps and final-word instructions; remove reproduced harmless-noun/persona false refusals while preserving real privacy, medical and safety checks. Validation 82cb42f4 and final prompts/core are independently cleared and deployed in V6; actual persona/model behavior remains a native gate. | contextual_game_flow: prompts/coupled routes; menu_guidance_design_review: validation.py and dedicated tests; Chief / independent review |
-| T041 Hold-seven feedback | Implementation `990d394` and independent core/UI review passed; included in V11, actual browser acceptance remains open. Distinguish short answer from intentional hold; show protocol-supported progress, latch readiness until a valid release and restore the current game on early release/cancel. Reject stale timers/PCM, pointer-cancel exits and double scoring; explain the gesture without relying on sight. Preserve other contextual 7 roles and the existing inactivity policy. | menu_guidance_design_review: game state/timers, owned presentation, input cancel schema and client guide; Chief / independent review and actual browser |
-| T042 Nonvoice paths and independent auth/hook | Preserve real hook state while accepting verified fresh authorization, fencing all previous private RAM/work. Cover guest/auth × down/up, both orders, reauthorization, expiry/end/next visit. Fix descriptor-to-button pagination and supported DAY labels. Provide explicit panel/button start, skip, contextual choice and exit; explain unavailable microphone honestly. No autolift, fake authorization, new Max data or unverified physical audio claims. | PM integration; story_idle_review: identity boundary; contextual_game_flow: Stand projection; menu_guidance_design_review: nonvoice design; independent review and Chief native acceptance |
+| T041 Hold-seven feedback | Implementation `990d394` and independent core/UI review passed; included in V11, with scoped browser feedback evidence. A new immutable-ed27eba controlled-delay RED shows a 100 ms web tap becoming a long exit because release waits in the HTTP response FIFO. Preserve actual short answers, supported progress, latched READY, early/cancel restoration and current inactivity rules; fix paired web delivery without fabricating hardware timing. | PM queues one coupled writer after panel freeze; menu_guidance_design_review supplied the concrete RED and scoped fix design; Chief independently reviews and verifies |
+| T042 Nonvoice paths and independent auth/hook | V14 includes fresh authorization fencing, actual-hook preservation, current menu paging and truthful hints. Hosted auth/paging acceptance is active. Explicit panel Start/End/skip and logical interaction route are being implemented locally; cover guest/auth × down/up, both orders, reauthorization, expiry/end/next visit, contextual choice and exit. No autolift, fake authorization, new Max data or unverified physical audio claims. | PM integration; contextual_game_flow: coupled backend route; console_recovery_fix: frontend; Chief independent review and native acceptance. story_idle_review completed the reviewed identity boundary and diagnosed the separate doctor-list remap. |
 
 The new matrix is another investigation aid. Native coverage must include
 different actual games, exact story assets and interruptions, source failure

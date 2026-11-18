@@ -9,16 +9,30 @@ Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
 Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
-`23547`, source `45bb465db25395697b08a868743dfbf1ac2a0172` on
-`codex/remote-device-simulator`, instance `42d641725b792ede`.
+`23949`, source `263cac19c6b9dee6e485d39b16ef10a26738bf62` on
+`codex/remote-device-simulator`, instance `67b2f42553e4f8fd`.
 Open `https://fihihgl91rnwu4-8000.proxy.runpod.net/console` with the protected
-credentials below. V13 passed strict **READY**, real PCM/VAD/STT/LLM/mandatory
-validation/Silero/queue/silent playback, all30 runtime hashes and the served
+credentials below. V14 passed strict **READY**, real PCM/VAD/STT/LLM/mandatory
+validation/Silero/queue/silent playback, all 31 runtime hashes and the served
 console, phone and phone-model clients. Initial state: no browser owner, handset down, no held buttons, all
 18 channels dark. Actual browser/provider acceptance is in progress;
 software readiness is not whole-product, human-hearing or physical acceptance.
 
-V13 helper23542 ran once, replacing the application only. The143578-byte
+V14 helper `23944` ran once after independent source and exact package review.
+Six runtime files changed; all 31 baseline and candidate hashes were checked.
+The 176444-byte archive SHA-256 is
+`fd1d718fdc2949808cb39c4b4730c470ca20d0a028700e2f92dc29bd4a7733bd`.
+E2E `41602a17-07a2-4e53-91f4-cd893da32a87` passed all eight stages;
+bounded queue time was 1889.6 ms, with silent final playback. This is a server
+startup observation, not browser or acoustic latency. No rollback or Pod/Ollama
+restart occurred. Silero, disabled conversion, both 16384 model contexts, Max
+fixture and private story receipt were preserved. Remote receipts are under
+`/workspace/mishka-artifacts/product-integrity-20261118-v14-product-controls`;
+verified local copies are retained in the corresponding PM recovery directory.
+Chief owns the bounded native follow-up. Explicit screen Start/End and panel
+route changes remain local work and are excluded from this Git-built package.
+
+Preceding V13 helper23542 ran once, replacing the application only. The143578-byte
 archive SHA-256 is45e5808c68e415f093bccfd02935646e5f1ffb0ca75a8089c09196d54655a338;
 all30 baseline files, including the three newly tracked maintenance paths,
 were checked before launch. New E2E82337612-82c0-4576-abb3-d43413dadfc7
@@ -27,7 +41,19 @@ bounded queue2064.37ms. Final playback is silent; these are server startup
 timings. No rollback, Pod/Ollama restart, Max or user-asset change occurred.
 Remote receipts: /workspace/mishka-artifacts/product-integrity-20261118-v13-maintenance;
 local copies are in the corresponding PM recovery directory/remote-receipts.
-Pagination, auth/hook and new nonvoice controls are not included in this source.
+Pagination, auth/hook and new nonvoice controls were not included in V13.
+
+One subsequent V13 native youngest-profile text turn completed through actual
+LLM/Mini/Silero with 38 PCM frames and 38 browser Source.start calls, without
+fallback. The QA harness observed approximately 3 seconds: 2982 ms between Node
+request/PCM observer callbacks. The separate Source.start timestamp was recorded
+in the page; observer latency was not isolated or calibrated. These are not
+precise browser, speech-input or acoustic latency measurements. It returned to the same dialogue; 7 then returned
+to root and hangup cleared the session. Two separate source-built reconstructed
+generator/Mini calls also allowed a natural eight-word answer. These are new
+bounded positives, not the lost V12 candidate, STT, human microphone or hearing
+acceptance. Older quiz short-7 scoring was not reached in two actual questions;
+no random retry loop or fabricated game state was used.
 
 Historical V11 native model quality was on HOLD: both actual youngest-profile generator
 probes returned formally valid eight-word JSON with unnatural glued words.
@@ -191,20 +217,40 @@ game. The server had already returned to dialogue: QA's next7 produced
 activity_back, and the queued bear frame arrived before the QA-induced root
 frame. A pinned-source local Application→Stand→Hub replay confirmed the
 committed state and projection were bear while delivery waited. QA must await
-that returned owner before the next input; live delivery latency remains
-unexplained, and no product state patch was justified by this evidence.
+that returned owner before the next input. The 4229 ms Node response→WS observer
+interval does not measure UI rendering: page and Node callbacks observed root
+through different paths, with no page-onmessage/refresh provenance. Actual
+delivery/render latency remains unmeasured, and no product state patch was
+justified by this evidence.
 
 The next local inventory found real nonvoice gaps: Stand disables the next-page
 button offered by story and DAY descriptors, and DAY omits the supported
 card_doctors action title. Source389751b fixes both via the current committed
-descriptor and a fixed public action label:58 local checks, independent review,
-16 independent boundary controls and two targeted tests passed. It is not yet
-deployed. Separately, auth-before-lift works but auth-after-lift is rejected,
-and a guest's private name/history can survive scan_started; its candidate
-is in progress. All four auth/hook combinations, visual
-on-hook use, new-identity fencing and no-microphone guidance remain acceptance
-work, not completed features. Max data remain provisional; no Max source or
-database changes are authorized by these findings.
+descriptor and a fixed public action label: 58 local checks, independent review,
+16 independent boundary controls and two targeted tests passed. V14 includes it
+and the hint-only dialogue exit/microphone guidance from ed27eba.
+
+V14 also includes fresh verified profile replacement, with old private context
+and jobs fenced before cleanup. Real lift during cleanup preserves pending
+authorization and immediately reports the real UP state without guest welcome.
+Final focused verification passed 96 cases; independent review reproduced both
+the original lift race and postgrant source-revocation counterexamples as GREEN.
+The unchanged external Max loopback HTTPS/temporary SQLite suite passed 32 cases
+and two subtests, with one remaining failed schedule assertion also reproduced
+on immutable pre-auth ed27eba. It is not a passing suite: the older broad
+where_now/what_next-to-card_doctors remap is a separate product logic defect.
+Do not weaken its no-schedule assertion or invent missing time/room data.
+All four auth/hook combinations and visual on-hook use still await the explicit
+panel-route implementation and hosted acceptance. Max data remain provisional;
+the external Max source and clinical database were not changed.
+
+A separate controlled-delay counterexample on immutable ed27eba established
+that the real browser post FIFO can hold a short-7 release behind a delayed
+press response. A 100 ms local tap then reached the server as a 5.1 s hold and
+exited the quiz instead of answering. This is a local transport defect, not a
+measured hosted delay or physical-board result. A scoped gesture/delivery fix
+is queued after the active panel writers; existing hold-feedback passes do not
+close this boundary. The archived extra menu button remains excluded.
 
 
 The historical successful V7 application-only rollout retained the existing environment, model assets,
