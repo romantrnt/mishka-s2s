@@ -22,7 +22,7 @@ from .observability import Metrics, StructuredEventPublisher
 from .repositories import HistoryProviderError, InMemoryHistoryRepository, InMemorySessionRepository, SQLiteRepository
 from .runtime import S2SRuntimeManager
 from .tts_engine import SileroTTSEngine
-from .lifecycle import StartupLifecycle
+from .lifecycle import RuntimeBusyError, StartupLifecycle
 from .s2s import (BoundedConversationEngine, CachedTTSProvider, EnergyVADAdapter,
                   FasterWhisperRecognizer, LocalS2SPipeline,
                   OllamaLLMProvider, SileroTTSProvider,
@@ -221,7 +221,8 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
         # {"external": true} even though the stand had validated content.
         scenarios = getattr(application, "scenarios", None)
         metrics = getattr(application, "metrics", None) or Metrics()
-    lifecycle = StartupLifecycle(admission_guard=admission_guard)
+    lifecycle = StartupLifecycle(admission_guard=admission_guard,
+                                 maintenance_acquire=getattr(application, "acquire_runtime_maintenance", None))
     manager = getattr(application, "runtime_manager", None)
     content_report_task = None
     async def prepared_content_report():
@@ -519,7 +520,10 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
     async def warmup():
         manager=getattr(application,"runtime_manager",None)
         if manager is None: raise HTTPException(status_code=503,detail="S2S runtime manager unavailable")
-        result=await lifecycle.run_now(manager.warmup)
+        try:
+            result=await lifecycle.run_now(manager.warmup)
+        except RuntimeBusyError:
+            raise HTTPException(status_code=409, detail={"code": "runtime_busy"})
         if not result.get("ok"): raise HTTPException(status_code=503,detail=result)
         return result
     if include_test_routes:

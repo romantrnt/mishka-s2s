@@ -800,6 +800,22 @@ class MockSpeechRecognizer:
 class FasterWhisperRecognizer:
     def __init__(self, model_loader: Callable[[], Any], config:S2SConfig, model_name: str = ""):
         self.loader=model_loader; self.config=config; self.model_name=model_name; self._model: Any=None
+        self._native_tasks: set[asyncio.Task] = set()
+
+    async def _run_native(self, call):
+        task = asyncio.create_task(asyncio.to_thread(call), name="mishka-whisper-native")
+        self._native_tasks.add(task)
+
+        def finished(done):
+            self._native_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+        # Cancelling the request cannot cancel or hide its still-running thread.
+        return await asyncio.shield(task)
+
+    def native_worker_snapshot(self):
+        return {"active_jobs": sum(not task.done() for task in self._native_tasks), "queued_jobs": 0}
 
     def readiness(self) -> dict[str, Any]:
         package = importlib.util.find_spec("faster_whisper") is not None
@@ -814,7 +830,7 @@ class FasterWhisperRecognizer:
         started = time.perf_counter()
         try:
             if self._model is None:
-                self._model = await asyncio.to_thread(self.loader)
+                self._model = await self._run_native(self.loader)
             return {"ok": True, "latency_ms": round((time.perf_counter()-started)*1000, 2)}
         except Exception as exc:
             return {"ok": False, "latency_ms": round((time.perf_counter()-started)*1000, 2),
@@ -822,7 +838,7 @@ class FasterWhisperRecognizer:
     async def transcribe(self, audio, cancelled):
         if cancelled(): raise asyncio.CancelledError
         try:
-            if self._model is None: self._model=await asyncio.to_thread(self.loader)
+            if self._model is None: self._model=await self._run_native(self.loader)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -872,7 +888,7 @@ class FasterWhisperRecognizer:
                     confidence=min(1.0-sum(no_speech)/len(values), math.exp(sum(logprobs)/len(values)))
             return text, confidence
         try:
-            text,confidence=await asyncio.wait_for(asyncio.to_thread(run), self.config.stt_timeout_s)
+            text,confidence=await asyncio.wait_for(self._run_native(run), self.config.stt_timeout_s)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

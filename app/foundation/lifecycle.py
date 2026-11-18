@@ -17,10 +17,15 @@ class RuntimeState(str, Enum):
 Warmup = Callable[[], Awaitable[dict[str, Any]]]
 
 
+class RuntimeBusyError(RuntimeError):
+    pass
+
+
 class StartupLifecycle:
     """Single lifecycle owner shared by health, readiness and WebSocket gates."""
 
-    def __init__(self, *, admission_guard: Callable[[], bool] | None = None) -> None:
+    def __init__(self, *, admission_guard: Callable[[], bool] | None = None,
+                 maintenance_acquire: Callable[[], Callable[[], None]] | None = None) -> None:
         self._admission_guard = admission_guard
         self._stopping = False
         self._state = RuntimeState.BOOTING
@@ -34,6 +39,44 @@ class StartupLifecycle:
         self._recovery_state = "idle"
         self._last_observation: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
+        self._maintenance_acquire = maintenance_acquire
+        self._maintenance_token: object | None = None
+        self._maintenance_release: Callable[[], None] | None = None
+        self._maintenance_task: asyncio.Task | None = None
+        self._recovery_token: object | None = None
+        self._warmup_generation = 0
+
+    def _claim_maintenance(self):
+        if self._maintenance_token is not None:
+            raise RuntimeBusyError("runtime_busy")
+        release = self._maintenance_acquire() if self._maintenance_acquire is not None else None
+        token = object()
+        self._maintenance_token, self._maintenance_release = token, release
+        return token
+
+    def _own_maintenance(self, token, task, *, warmup_generation=None):
+        self._maintenance_task = task
+        # Also release a task cancelled before its coroutine's first step.
+        def finished(done):
+            if (done.cancelled() and warmup_generation == self._generation
+                    and not self._stopping and self._state is RuntimeState.WARMING_UP):
+                self._record_degraded("warmup_cancelled", {"source": "warmup", "cancelled": True})
+                self._changed_at = time.monotonic()
+            self._release_maintenance(token)
+        task.add_done_callback(finished)
+
+    def _release_maintenance(self, token):
+        if token is None or self._maintenance_token is not token:
+            return
+        release = self._maintenance_release
+        self._maintenance_token = self._maintenance_release = self._maintenance_task = None
+        if release is not None:
+            release()
+
+    def _cancel_maintenance(self):
+        for task in {self._warmup, self._maintenance_task} - {None}:
+            if not task.done() and not task.cancelling():
+                task.cancel()
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -85,6 +128,7 @@ class StartupLifecycle:
         async with self._lock:
             if self._stopping:
                 return -1
+            token = self._claim_maintenance()
             self._generation += 1
             self._recovery_generation = self._generation
             self._recovery_correlation_id = correlation_id
@@ -92,9 +136,18 @@ class StartupLifecycle:
             self._state = RuntimeState.WARMING_UP
             self._reason = f"recovery:{reason}"
             self._changed_at = time.monotonic()
+            self._recovery_token = token
+            self._own_maintenance(token, asyncio.current_task())
             return self._recovery_generation
 
     def finish_recovery(self, generation: int, result: dict[str, Any]) -> bool:
+        try:
+            return self._finish_recovery(generation, result)
+        finally:
+            if generation == self._recovery_generation:
+                self._release_maintenance(self._recovery_token)
+
+    def _finish_recovery(self, generation: int, result: dict[str, Any]) -> bool:
         if self._stopping or generation != self._generation or generation != self._recovery_generation:
             return False
         self._recovery_state = "ready" if result.get("ok") else "degraded"
@@ -112,12 +165,21 @@ class StartupLifecycle:
             if self._stopping:
                 raise RuntimeError("lifecycle_stopping")
             if self._warmup and not self._warmup.done():
-                return
-            self._state = RuntimeState.WARMING_UP
-            self._reason = "warmup_in_progress"
-            self._changed_at = time.monotonic()
-            self._generation += 1
-            self._warmup = asyncio.create_task(self._run(warmup, self._generation), name="mishka-startup-warmup")
+                if self._warmup_generation == self._generation:
+                    return
+                raise RuntimeBusyError("runtime_busy")
+            token = self._claim_maintenance()
+            try:
+                self._state = RuntimeState.WARMING_UP
+                self._reason = "warmup_in_progress"
+                self._changed_at = time.monotonic()
+                self._generation += 1
+                self._warmup_generation = self._generation
+                self._warmup = asyncio.create_task(self._run(warmup, self._generation, token), name="mishka-startup-warmup")
+                self._own_maintenance(token, self._warmup, warmup_generation=self._generation)
+            except BaseException:
+                self._release_maintenance(token)
+                raise
 
     async def run_now(self, warmup: Warmup) -> dict[str, Any]:
         await self.start(warmup)
@@ -126,7 +188,13 @@ class StartupLifecycle:
             raise RuntimeError("startup warmup task was not created")
         return await asyncio.shield(task)
 
-    async def _run(self, warmup: Warmup, generation: int) -> dict[str, Any]:
+    async def _run(self, warmup: Warmup, generation: int, token) -> dict[str, Any]:
+        try:
+            return await self._run_warmup(warmup, generation)
+        finally:
+            self._release_maintenance(token)
+
+    async def _run_warmup(self, warmup: Warmup, generation: int) -> dict[str, Any]:
         try:
             result = await warmup()
         except asyncio.CancelledError:
@@ -159,26 +227,22 @@ class StartupLifecycle:
         self._reason = "shutdown_in_progress"
         self._changed_at = time.monotonic()
         self._generation += 1
-        if self._warmup and not self._warmup.done():
-            self._warmup.cancel()
+        self._cancel_maintenance()
 
     async def stop(self) -> None:
         """Cancel lifecycle-owned warmup work before its dependencies close."""
+        tasks = {self._warmup, self._maintenance_task} - {None, asyncio.current_task()}
         self.begin_shutdown()
-        task = self._warmup
         self._generation += 1
-        if task is None or task.done():
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     def dependency_failed(self, dependency: str, reason: str) -> None:
         self._generation += 1
-        if self._warmup and not self._warmup.done():
-            self._warmup.cancel()
+        self._cancel_maintenance()
         self._record_degraded(f"{dependency}:{reason}", {"source": "dependency", "dependency": dependency})
         self._changed_at = time.monotonic()
 

@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .config import Settings, public_model_reference
+from .lifecycle import RuntimeBusyError
 from .s2s import AudioChunk, BoundedConversationEngine
 
 
@@ -206,10 +207,13 @@ class S2SRuntimeManager:
             self._recovery_running = True
         correlation_id = str(uuid.uuid4())
         started = time.perf_counter()
-        generation = await lifecycle.begin_recovery(trigger, correlation_id)
-        self.recovery_generation = generation
+        generation = None
         cleanup: dict[str, Any] = {}
         try:
+            generation = await lifecycle.begin_recovery(trigger, correlation_id)
+            if generation < 0:
+                return {"ok": False, "reason": "lifecycle_stopping"}
+            self.recovery_generation = generation
             if self.settings.profile == "mock":
                 result = {"ok": False, "reason": "mock_recovery_forbidden", "diagnostic": {"stage": "profile"}}
             else:
@@ -258,14 +262,20 @@ class S2SRuntimeManager:
             lifecycle.finish_recovery(generation, result)
             self.last_recovery = result
             return result
+        except RuntimeBusyError:
+            if generation is not None:
+                lifecycle.finish_recovery(generation, {"ok": False, "reason": "runtime_busy"})
+            return {"ok": False, "reason": "runtime_busy"}
         except asyncio.CancelledError:
             result = {"ok": False, "reason": "recovery_cancelled", "correlation_id": correlation_id, "recovery_generation": generation, "cleanup": cleanup, "duration_ms": round((time.perf_counter() - started) * 1000, 2)}
-            lifecycle.finish_recovery(generation, result)
+            if generation is not None:
+                lifecycle.finish_recovery(generation, result)
             self.last_recovery = result
             raise
         except Exception as exc:
             result = {"ok": False, "reason": "recovery_exception", "correlation_id": correlation_id, "recovery_generation": generation, "cleanup": cleanup, "error": type(exc).__name__, "duration_ms": round((time.perf_counter() - started) * 1000, 2)}
-            lifecycle.finish_recovery(generation, result)
+            if generation is not None:
+                lifecycle.finish_recovery(generation, result)
             self.last_recovery = result
             return result
         finally:

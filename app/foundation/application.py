@@ -12,6 +12,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import replace
+from functools import wraps
 from typing import Any, Callable
 from weakref import WeakSet
 
@@ -25,6 +26,7 @@ from .canonical_services import LED_PRESETS, DIALOGUE_FILL_ELEMENTS, DIALOGUE_AN
 from .config import settings_from_compat_env
 from .identity import IdentityDecision, IdentityValidationError, validate_identity_decision
 from .input_safety import InputSafetyGate
+from .lifecycle import RuntimeBusyError
 from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest
 from .system_prompt import build_system_prompt
 from .private_welcome import PrivateWelcomeMixin
@@ -81,6 +83,26 @@ def _set_audio_effect_status(effect: dict[str, Any], *, asset_status: str,
     effect["played"] = False
     if resolution:
         effect["resolution"] = resolution
+
+
+_MAINTENANCE_CLEANUP_EVENTS = frozenset({
+    "HandsetPlaced", "SessionCancel", "SessionReset", "HardwareDisconnected",
+    "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired",
+    "InteractionIdleExpired", "TimeoutFired", "AudioStarted", "AudioCompleted", "AudioFailed",
+    "StoryPositionUpdated",
+})
+
+
+def _runtime_ingress_guard(method):
+    @wraps(method)
+    async def guarded(self, *args, **kwargs):
+        first = args[0] if args else kwargs.get("event", kwargs.get("session_id"))
+        event = first if isinstance(first, Event) else None
+        with self._runtime_work(cleanup=bool(event and event.event_type in _MAINTENANCE_CLEANUP_EVENTS)) as admitted:
+            if not admitted:
+                return self._identity_result(event.session_id if event else first, "runtime_unavailable")
+            return await method(self, *args, **kwargs)
+    return guarded
 
 
 class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechMixin, PersonalStoryMixin, DialogueMemoryMixin, GamePresentationMixin):
@@ -145,6 +167,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._init_engagement_idle()
         self._session_epochs: dict[str, int] = {}
         self._session_revisions: dict[str, int] = {}
+        self._runtime_ingress: dict[asyncio.Task[Any], object] = {}
+        self._runtime_maintenance: object | None = None
         # A physical reset owns cleanup until it has finished publishing.
         # New ingress for that session waits without holding a global lock.
         self._session_reset_waiters: dict[str, tuple[asyncio.Task[Any], asyncio.Future[None]]] = {}
@@ -708,6 +732,68 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return tuple(iterator())
         items = getattr(self.sessions, "items", {})
         return tuple(items.values()) if isinstance(items, dict) else ()
+
+    @contextlib.contextmanager
+    def _runtime_work(self, *, cleanup=False):
+        if self._runtime_maintenance is not None and not cleanup:
+            yield False
+            return
+        task = asyncio.current_task()
+        if task in self._runtime_ingress:
+            yield True
+            return
+        # Reentrance belongs to this live task, never an inherited child context.
+        token = object()
+        self._runtime_ingress[task] = token
+        try:
+            yield True
+        finally:
+            if self._runtime_ingress.get(task) is token:
+                self._runtime_ingress.pop(task, None)
+
+    def maintenance_busy(self) -> bool:
+        if (self._runtime_maintenance is not None or self._runtime_ingress
+                or any(self._engagement_ingress.values()) or self._session_reset_waiters
+                or self._active_audio):
+            return True
+        states = getattr(self.canonical_runtime, "sessions", {}).values()
+        if any(state.handset == "up" or state.mode != "idle" or state.identity_request_id for state in states):
+            return True
+        jobs = (*self._owned_text_jobs, *self._private_welcome_tasks, *self._personal_story_jobs,
+                *(task for tasks in self._audio_completions.values() for task in tasks))
+        if any(not task.done() for task in jobs):
+            return True
+        for owner in (self.bounded_s2s, self.s2s_audio):
+            for name in ("active_tasks", "pending_tasks"):
+                if any(not task.done() for task in getattr(owner, name, {}).values()):
+                    return True
+            if getattr(owner, "active_queues", {}):
+                return True
+            if any(getattr(ingress, "active", False) for ingress in getattr(owner, "ingress", {}).values()):
+                return True
+        manager = self.runtime_manager
+        for provider in (getattr(self.s2s_audio, "recognizer", None), getattr(manager, "stt", None),
+                         getattr(manager, "tts", None), getattr(manager, "voice", None)):
+            snapshot = getattr(provider, "native_worker_snapshot", None)
+            if callable(snapshot):
+                try:
+                    state = snapshot()
+                    if state.get("active_jobs") or state.get("queued_jobs"):
+                        return True
+                except Exception:
+                    return True
+        return False
+
+    def acquire_runtime_maintenance(self):
+        if self.maintenance_busy():
+            raise RuntimeBusyError("runtime_busy")
+        token = object()
+        self._runtime_maintenance = token
+
+        def release():
+            if self._runtime_maintenance is token:
+                self._runtime_maintenance = None
+        return release
 
     def _session_has_active_work(self, session_id: str) -> bool:
         for owner in (self.bounded_s2s, self.s2s_audio):
@@ -1357,6 +1443,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     due.append(result)
         return due
 
+    @_runtime_ingress_guard
     async def _receive_canonical_event(self, event: Event, transient_text: str | None = None,
                                        *, dialogue_fallback_authorized: bool = False,
                                        personal_story_authorized: bool = False,
@@ -2812,6 +2899,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 "pipeline": ["ingress", "normalize_event", "session_guard", "safety_precheck", "route_mode", "policy_validate", "emit_effects", "persist_snapshot", "await_event"],
                 "guards": decision.get("guards", {})}
         """Start an anonymous visual session from a pre-auth physical button."""
+    @_runtime_ingress_guard
     async def receive_async(self, event: Event, transient_text: str | None = None, *,
                             _story_checkpoint_guard=None) -> dict[str, Any]:
         """Ingress for the single canonical runtime and LangGraph boundary."""
@@ -3003,7 +3091,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 remaining = current.max_turns - current.turns
                 current.system_prompt += (f" В партии осталось ходов ребёнка: {remaining}."
                     + (" ПОСЛЕДНИЙ ХОД: это правило заменяет просьбу назвать ещё слово из правил игры. Заверши кратко, без нового слова или вопроса."
-                       + (" Скажи, что мы вернулись к разговору и ты слушаешь." if state.game_return_mode == "bear_dialogue"
+                       + (" Скажи, что мы вернулись к разговору." if state.game_return_mode == "bear_dialogue"
                           else " Скажи, что теперь можно выбрать другое занятие кнопкой.")
                        if remaining == 1 else ""))
             return current
@@ -3191,6 +3279,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self.sessions.save(session)
             return {**self._result(session, barge_outputs, audio_result.ingress_status), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
 
+    @_runtime_ingress_guard
     async def receive_audio_async(self, session_id: str, samples: tuple[float, ...], sequence: int, *, wait_for_turn: bool = True, _ingress_guard=None) -> dict[str, Any]:
         if _ingress_guard is None:
             record = self.sessions.get(session_id)
