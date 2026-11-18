@@ -173,6 +173,8 @@ def day_information_intent(text: str) -> str | None:
         return "date"
     if re.search(r"что\s+(?:будет\s+)?(?:потом|дальше)|следующ|после\s+этого", value):
         return "what_next"
+    if re.search(r'\bградус(?:ов|а|ы)?\b', value):
+        return None  # An unrecognized unit question is not a clinical destination.
     if re.search(r"куда|где|сейчас|текуще", value):
         return "where_now"
     return None
@@ -181,6 +183,41 @@ def day_information_intent(text: str) -> str | None:
 def _weather_source_place_question(value: str) -> bool:
     return bool(re.search(r'\bкако\w+\s+(?:город|мест|точк|регион)\w*\b|'
                           r'\bгде\s+(?:именно\s+)?(?:сейчас\s+)?(?:эта|такая)\s+погода\b', value))
+
+
+_WEATHER_CURRENT = r'(?:сейчас|сегодня|на сегодня|на сейчас|в данный момент|в настоящее время)'
+_WEATHER_PREFIX = (r'(?:(?:мишка|пожалуйста|а|ну|(?:скажи|расскажи|подскажи|покажи)(?: мне)?|узнай|'
+    r'можно(?: мне)? узнать|хочу узнать|(?:я )?не (?:знаю|помню|могу вспомнить))[, :]+)*')
+_WEATHER_SUFFIX = r'(?:[, ]+(?:мишка|пожалуйста|спасибо))*'
+
+
+def _weather_observation_scope(value: str) -> str | None:
+    """Closed current aliases; recognizing a subject never grants its qualifiers."""
+    value = value.strip(' .!?…')
+    context = rf'(?:{_WEATHER_CURRENT}|на улице)'
+    precipitation = r'(?:дождь|снег)'
+    present = (rf'(?:ид[её]т(?: ли)?(?: {context})? {precipitation}|'
+        rf'{precipitation}(?: {context})? ид[её]т(?: ли)?)')
+    degrees = rf'сколько(?: {context})? градусов'
+    current = rf'(?:{context} ){{0,2}}(?:{present}|{precipitation}|{degrees})(?: {context}){{0,2}}'
+    query = rf'{_WEATHER_PREFIX}{current}'
+    if re.search(rf'\b(?:ид[её]т|{context})\b', value):
+        if re.fullmatch(rf'{query}{_WEATHER_SUFFIX}', value):
+            return 'configured_point'
+        if re.match(rf'{query}(?=[, ]|$)', value):
+            return 'unresolved_request'
+    # Extra place/time words cannot become current-observation authority.
+    verb = r'(?:ид[её]т|пойд[её]т|ш[её]л|будет|был)'
+    if re.search(rf'\b{verb}(?:\s+[^\W\d_]+)*\s+{precipitation}\b|'
+                 rf'\b{precipitation}(?:\s+[^\W\d_]+)*\s+{verb}\b', value):
+        return 'unresolved_request'
+    period = rf'(?:{context}|завтра|вчера|послезавтра|позавчера|будет|было)'
+    if re.match(rf'{_WEATHER_PREFIX}(?:{precipitation}|{period} {precipitation})(?=[, ]|$)', value):
+        return 'unresolved_request'
+    if (re.search(rf'\bсколько(?: {period})? градусов\b', value)
+            and re.search(rf'\b{period}\b', value)):
+        return 'unresolved_request'
+    return None
 
 
 def conversational_information_intent(text: str) -> str | None:
@@ -198,6 +235,8 @@ def conversational_information_intent(text: str) -> str | None:
         return None
     if re.search(r'\b(?:почему|зачем|что такое|как (?:образуется|меняется|устроен[ао]?))\b', value):
         return None
+    if _weather_observation_scope(value) is not None:
+        return 'weather'
     if re.search(r'погод|температур[ауы]|(?:нужно|надо|что|как)\s+(?:мне\s+)?(?:надеть|одеться)|на улице (?:дождь|снег|холодно|тепло)', value):
         return 'weather'
     if re.search(r'какое?\s+(?:сегодня\s+)?число|какая\s+(?:сегодня\s+)?дата|какой\s+(?:сегодня\s+)?день|день\s+недел', value):
@@ -231,13 +270,15 @@ def weather_request_scope(text: str | None) -> str | None:
     value = ' '.join(text.casefold().split()).strip(' .!?…')
     if _weather_source_place_question(value):
         return 'source_place_question'
-    current = r'(?:сейчас|сегодня|на сегодня|на сейчас|в данный момент|в настоящее время)'
+    observation = _weather_observation_scope(value)
+    if observation is not None:
+        return observation
+    current = _WEATHER_CURRENT
     context = rf'(?:{current}|на улице|на улицу|на прогулку|для прогулки|для улицы)'
     clothes_context = (rf'(?:{context}|'
         r'в (?:дождь|снег|жару|холод|мороз)|для (?:дождя|снега|жары|холода|мороза)|'
         r'в (?:такую|эту|прохладную|холодную|т[её]плую|жаркую|дождливую|снежную|ветреную|пасмурную) погоду)')
-    prefix = (r'(?:(?:мишка|пожалуйста|а|ну|(?:скажи|расскажи|подскажи|покажи)(?: мне)?|узнай|'
-        r'можно(?: мне)? узнать|хочу узнать|(?:я )?не (?:знаю|помню|могу вспомнить))[, :]+)*')
+    prefix = _WEATHER_PREFIX
     fact = (rf'(?:(?:какая|какую) )?(?:{current} )?(?:погод[ау]|температур[ау](?: воздуха)?)'
         r'(?: и (?:погода|температура(?: воздуха)?))?')
     body = rf'(?:{fact}|(?:про погоду|о погоде)|как(?: {current})? погода|что(?: {current})? с погодой)'
@@ -246,7 +287,10 @@ def weather_request_scope(text: str | None) -> str | None:
     # place/time qualifiers are not evidence for the configured observation.
     fact_request = rf'(?:{context} ){{0,2}}{body}(?: {context}){{0,2}}'
     clothes_request = rf'(?:{clothes_context} ){{0,2}}{clothes}(?: {clothes_context}){{0,2}}'
-    pattern = rf'{prefix}(?:{fact_request}|{clothes_request})(?:[, ]+(?:мишка|пожалуйста|спасибо))*'
+    pattern = rf'{prefix}(?:{fact_request}|{clothes_request}){_WEATHER_SUFFIX}'
+    if (re.search(r'\bтемператур[ау]\b', value)
+            and not re.search(r'\b(?:погод[ау]|воздуха|на улице|на прогулку|для прогулки)\b', value)):
+        return 'unresolved_request'
     return 'configured_point' if re.fullmatch(pattern, value) else 'unresolved_request'
 
 

@@ -244,7 +244,9 @@ async def test_actual_clothes_context_uses_current_facts_without_forced_city(cur
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('text', ['Мишка, где ты живёшь?', 'Какая погода в твоём волшебном лесу?',
-    'Почему меняется погода?', 'Не рассказывай про погоду'])
+    'Почему меняется погода?', 'Не рассказывай про погоду', 'Почему идёт дождь?',
+    'Как образуется снег?', 'Мишка, у тебя идёт снег?', 'Расскажи сказку про дождь',
+    'Не рассказывай, идёт ли дождь'])
 async def test_model_cannot_borrow_prior_weather_request_for_nonfactual_input(current_weather, text):
     service, calls = current_weather
     h, render = await weather_app('bear', service)
@@ -289,7 +291,7 @@ async def test_weather_scope_never_bypasses_input_safety(current_weather, case):
                 return InputSafetyDecision('none', 'synthetic_unavailable', False)
             h.app.safety_classifier.classify = classify
         await h.send('SpeechReceived', {'_stt_untrusted': True} if case == 'untrusted' else {},
-            text='Меня бьют, какая погода?' if case == 'danger' else 'Какая погода в Москве?')
+            text='Меня бьют, идёт ли дождь?' if case == 'danger' else 'Сейчас идёт дождь?')
         assert not calls and not h.model.calls
         assert h.state.active_audio_id != 'TYPED_WEATHER'
         if case == 'danger':
@@ -314,7 +316,7 @@ async def test_late_provider_cannot_outlive_the_request_owner(current_weather, a
         return await original(*args, **kwargs)
     service.weather = blocked
     try:
-        task = asyncio.create_task(h.send('SpeechReceived', text='Какая сейчас погода?'))
+        task = asyncio.create_task(h.send('SpeechReceived', text='Сейчас идёт дождь?'))
         await asyncio.wait_for(entered.wait(), 2)
         if action == 'back':
             await h.key(7)
@@ -359,7 +361,7 @@ async def test_actual_max_identity_expiry_fences_pending_public_weather(current_
         epoch = h.app._session_epochs.get(h.boundary.session_id, 0)
         h.sequence += 1
         task = asyncio.create_task(h.app.receive_async(Event('SpeechReceived', h.boundary.session_id,
-            h.sequence, 1., 'test', {}, 'weather-expiry', h.clock[0]), 'Какая сейчас погода?'))
+            h.sequence, 1., 'test', {}, 'weather-expiry', h.clock[0]), 'Сколько сейчас градусов?'))
         await asyncio.wait_for(entered.wait(), 2)
         h.clock[0] = h.state.identity_expires_monotonic
         await h.app.expire_identity_leases()
@@ -499,3 +501,121 @@ async def test_complete_supported_current_requests_retain_natural_forms(current_
     result = await canonical_services.TypedInfoRenderer(service, None, None).render(
         'weather', weather_scope=canonical_services.weather_request_scope(text))
     assert len(calls) == 1 and '+3 °C' in result['text']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('route', ['bear', 'day'])
+@pytest.mark.parametrize('text', ['Сейчас идёт дождь?', 'Идёт сейчас снег?',
+    'Сколько сейчас градусов?', 'Дождь идёт сейчас?', 'Сколько градусов на улице?',
+    'На улице сколько градусов?', 'Мишка, идёт ли сейчас снег?',
+    'Сегодня сколько градусов на улице?', 'На улице снег?'])
+async def test_current_observation_aliases_share_actual_typed_route(current_weather, route, text):
+    service, calls = current_weather
+    h, render = await weather_app(route, service)
+    try:
+        result = await h.send('SpeechReceived', text=text)
+        assert result['reason'] == 'typed_info_requested'
+        assert h.state.active_audio_id == 'TYPED_WEATHER' and len(calls) == 1
+        assert len(render.texts) == 1 and '+3 °C' in render.texts[0]
+        assert not h.model.calls
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('route', ['bear', 'day'])
+@pytest.mark.parametrize('text', ['Пойдёт дождь?', 'Будет ли снег?',
+    'Завтра пойдёт снег?', 'Шёл ли вчера дождь?', 'Идёт дождь в Москве?',
+    'Сейчас идёт дождь через пять часов?', 'Сколько завтра градусов на улице?',
+    'Сколько сейчас градусов в Москве?', 'Завтра снег?', 'Дождь завтра?', 'Сейчас снег в Москве?',
+    'Сколько сейчас градусов после обеда?'])
+async def test_observation_alias_qualifiers_never_become_current_facts(current_weather, route, text):
+    service, calls = current_weather
+    h, render = await weather_app(route, service)
+    try:
+        assert canonical_services.conversational_information_intent(text) == 'weather'
+        assert canonical_services.day_information_intent(text) == 'weather'
+        assert canonical_services.weather_request_scope(text) == 'unresolved_request'
+        await h.send('SpeechReceived', text=text)
+        assert not calls and not h.model.calls
+        assert h.state.active_audio_id == 'TYPED_WEATHER'
+        assert render.texts == ['На этот вопрос о погоде ответить не могу.']
+    finally:
+        await h.close()
+
+
+@pytest.mark.parametrize('text', ['Сколько градусов в треугольнике?',
+    'На сколько градусов повернуть квадрат?', 'До скольких градусов нагреть воду?',
+    'У меня 38 градусов', 'Почему идёт дождь?', 'Как образуется снег?',
+    'Мишка, у тебя идёт снег?', 'Расскажи сказку про дождь', 'Не рассказывай про дождь'])
+def test_units_and_nonfactual_weather_mentions_are_not_outdoor_requests(text):
+    assert canonical_services.conversational_information_intent(text) is None
+    assert canonical_services.weather_request_scope(text) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('route', ['bear', 'day'])
+async def test_geometric_degrees_keep_ordinary_route_instead_of_clinical_or_weather(current_weather, route):
+    service, calls = current_weather
+    h, render = await weather_app(route, service)
+    try:
+        text = 'Сколько сейчас градусов в этом треугольнике?'
+        # A qualifier after the current-query core remains unverified, never a fact.
+        await h.send('SpeechReceived', text=text)
+        assert not calls and not any('+3' in value for value in render.texts)
+        await h.done()
+        render.texts.clear()
+        h.model.calls.clear()
+        text = 'Сколько градусов в треугольнике?'
+        assert canonical_services.day_information_intent(text) is None
+        result = await h.send('SpeechReceived', text=text)
+        assert result['reason'] == ('dialogue_turn' if route == 'bear' else 'info_request_ignored')
+        assert not calls and h.state.active_audio_id != 'TYPED_WEATHER'
+        assert len(h.model.calls) == (1 if route == 'bear' else 0)
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('route', ['bear', 'day'])
+@pytest.mark.parametrize('text', ['Сколько сейчас градусов в духовке?',
+    'Сколько сейчас градусов у меня?', 'Какая температура тела?', 'Какая сейчас температура?'])
+async def test_ambiguous_or_nonoutdoor_units_never_fetch_weather(current_weather, route, text):
+    service, calls = current_weather
+    h, render = await weather_app(route, service)
+    try:
+        assert canonical_services.weather_request_scope(text) != 'configured_point'
+        await h.send('SpeechReceived', text=text)
+        assert not calls and not any('+3' in value for value in render.texts)
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('route', ['bear', 'day'])
+async def test_observation_alias_missing_configuration_is_honestly_unavailable(current_weather, route):
+    service, calls = current_weather
+    service.weather_provider.api_key = None
+    h, render = await weather_app(route, service)
+    try:
+        await h.send('SpeechReceived', text='Сейчас идёт дождь?')
+        assert not calls and not h.model.calls and not render.texts
+        assert h.state.active_audio_id == 'PHRASE_100'
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('route', ['bear', 'day'])
+async def test_weather_aliases_leave_child_clinical_destination_request_intact(current_weather, route):
+    service, calls = current_weather
+    h, render = await weather_app(route, service)
+    try:
+        text = 'Куда мне сейчас идти?'
+        assert canonical_services.conversational_information_intent(text) == 'where_now'
+        assert canonical_services.day_information_intent(text) == 'where_now'
+        await h.send('SpeechReceived', text=text)
+        assert not calls and not h.model.calls and not render.texts
+        assert h.state.active_audio_id == 'PHRASE_101'
+    finally:
+        await h.close()
