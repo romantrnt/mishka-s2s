@@ -292,7 +292,8 @@ async def test_native_closed_first_sentence_plays_before_second_tag_and_later_ga
         await asyncio.wait_for(playback.first.wait(), .5)
         assert not release.is_set() and not task.done()
         assert tts.texts == ["Привет, друг."]
-        assert "emit only complete <say>...</say> blocks" in llm.messages[0]["content"]
+        assert "SPEECH_FORM: complete <say>...</say> blocks" in llm.messages[0]["content"]
+        assert "Never emit JSON" in llm.messages[0]["content"]
         release.set()
         result = await asyncio.wait_for(task, .5)
     finally:

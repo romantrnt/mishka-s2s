@@ -545,6 +545,93 @@ class ConversationContext:
     history: list[tuple[str, str]] = field(default_factory=list)
     started_at: float = field(default_factory=time.monotonic)
     turns: int = 0
+    # Application-owned verified catalogue snapshot, never extracted from model data.
+    verified_story_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DialogueResponseContract:
+    """Immutable request scope; the JSON schema constrains syntax, not authority."""
+    max_words: int
+    young: bool
+    catalogue: bool
+    story_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def from_context(cls, context):
+        from .age_policy import POLICIES
+        from .menu_content import STORY_TITLES
+        policy = POLICIES.get(context.profile.age_band, POLICIES["3-5"])
+        catalogue = context.node_id == "bear_dialogue"
+        return cls(policy.max_words, policy.band == "1-3", catalogue,
+                   tuple(key for key in context.verified_story_ids if key in STORY_TITLES) if catalogue else ())
+
+    @property
+    def text_pattern(self):
+        word = r"[А-Яа-яЁё]+(?:-[А-Яа-яЁё]+)*"
+        punctuation = r"[,;:]?" if self.young else r"[,;:.!?]?"
+        return rf"^{word}(?:{punctuation} {word}){{0,{self.max_words - 1}}}[.!?]$"
+
+    def schema(self):
+        from .game_engine import IMMERSIVE_GAME_SPECS
+        def enum(values):
+            return {"type":"string", "enum":list(values)}
+        def branch(type_name, **fields):
+            properties = {"type":enum((type_name,)), **fields}
+            return {"type":"object", "properties":properties,
+                    "required":list(properties), "additionalProperties":False}
+        text = {"type":"string", "pattern":self.text_pattern}
+        branches = [branch("say", text=text),
+                    branch("say_led", text=dict(text), pattern=enum(("calm","attention","off"))),
+                    branch("say_return", text=dict(text), target=enum(("root_menu","fixed_story_menu","menu_ready")))]
+        if self.catalogue:
+            branches += [branch("offer_game", game_id=enum(spec.game_id for spec in IMMERSIVE_GAME_SPECS)),
+                         branch("open_catalog", catalog=enum(("games","stories"))),
+                         branch("request_information", kind=enum(("date","weather","what_next","where_now","card_doctors")))]
+            if self.story_ids:
+                branches.append(branch("play_story", story_id=enum(self.story_ids)))
+        return {"oneOf":branches}
+
+    def to_xml(self, raw):
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("dialogue_json_duplicate_key")
+                value[key] = item
+            return value
+        def invalid_constant(_):
+            raise ValueError("dialogue_json_constant")
+        try:
+            value = json.loads(raw, object_pairs_hook=unique,
+                               parse_constant=invalid_constant)
+        except (json.JSONDecodeError, TypeError, RecursionError) as exc:
+            raise ValueError("dialogue_json_invalid") from exc
+        if not isinstance(value, dict):
+            raise ValueError("dialogue_json_object_required")
+        branch = next((item for item in self.schema()["oneOf"]
+                       if value.get("type") == item["properties"]["type"]["enum"][0]), None)
+        if branch is None or set(value) != set(branch["required"]):
+            raise ValueError("dialogue_json_fields")
+        for key, rule in branch["properties"].items():
+            item = value[key]
+            if not isinstance(item, str) or ("enum" in rule and item not in rule["enum"]):
+                raise ValueError("dialogue_json_enum_or_type")
+            if "pattern" in rule and not re.fullmatch(rule["pattern"], item):
+                raise ValueError("dialogue_json_speech_shape")
+        kind = value["type"]
+        if kind in {"say", "say_led", "say_return"}:
+            text = value["text"]
+            if len(text.split()) > self.max_words or len(re.findall(r"[.!?]", text)) > (1 if self.young else 2):
+                raise ValueError("age_word_budget_exceeded")
+            xml = "<say>" + text + "</say>"
+            if kind == "say_led":
+                xml += '<action type="led" pattern="' + value["pattern"] + '"/>'
+            elif kind == "say_return":
+                xml += '<action type="return_to_scenario" target="' + value["target"] + '"/>'
+            return xml
+        field = {"offer_game":"game_id", "open_catalog":"catalog", "play_story":"story_id", "request_information":"kind"}[kind]
+        return '<action type="' + kind + '" ' + field + '="' + value[field] + '"/>'
 
 
 class VADAdapter(Protocol):
@@ -894,6 +981,53 @@ class _LLMGenerationBudget:
                 await close()
 
 
+@dataclass(frozen=True)
+class _DialogueLLMRequest:
+    provider: Any
+    contract: DialogueResponseContract
+
+    def stream(self, messages, request_id, cancelled):
+        return self.provider.stream_dialogue(messages, request_id, cancelled,
+                                             response_schema=self.contract.schema())
+
+
+class _DialogueJSONBridge:
+    """Buffer after raw retry/deadline accounting, before the unchanged parser."""
+    def __init__(self, provider, contract, max_chars, on_token, on_boundary):
+        self.provider = provider
+        self.contract = contract
+        self.max_chars = max_chars
+        self.on_token = on_token
+        self.on_boundary = on_boundary
+
+    async def stream(self, messages, request_id, cancelled):
+        parts, size, complete = [], 0, False
+        async for token in self.provider.stream(messages, request_id, cancelled):
+            if cancelled():
+                raise asyncio.CancelledError
+            self.on_token(token)
+            size += len(token)
+            if size > self.max_chars:
+                raise ValueError("LLM stream exceeded limit")
+            parts.append(token)
+            if not complete:
+                try:
+                    json.JSONDecoder().raw_decode("".join(parts).lstrip())
+                except json.JSONDecodeError:
+                    pass
+                except RecursionError as exc:
+                    raise ValueError("dialogue_json_invalid") from exc
+                else:
+                    complete = True
+                    self.on_boundary("json_complete")
+        if cancelled():
+            raise asyncio.CancelledError
+        self.on_boundary("llm_clean_terminal")
+        xml = self.contract.to_xml("".join(parts))
+        self.on_boundary("json_validated")
+        yield xml
+
+
 class StreamingTokenConsumer:
     def __init__(self, max_chars=2048): self.max_chars=max_chars
     async def consume(self, provider, messages, request_id, cancelled):
@@ -1057,6 +1191,7 @@ class MockLLMProvider:
 
 class OllamaLLMProvider:
     """Ollama `/api/chat` NDJSON adapter with exact model readiness checks."""
+    supports_dialogue_json = True
 
     STORY_RESPONSE_SCHEMA = {
         "type": "object",
@@ -1119,6 +1254,11 @@ class OllamaLLMProvider:
         async for part in self._stream_bounded(messages,request_id,cancelled):
             yield part
 
+    async def stream_dialogue(self, messages, request_id, cancelled, *, response_schema):
+        async for part in self._stream_bounded(messages, request_id, cancelled,
+                                              dialogue_schema=response_schema):
+            yield part
+
     @property
     def supports_full_story(self):
         contract=self.story_backend_contract
@@ -1158,13 +1298,15 @@ class OllamaLLMProvider:
             yield part
         await contract.refresh()
 
-    async def _stream_bounded(self,messages,request_id,cancelled,*,max_tokens=None,num_ctx=None,story=False,story_schema=None):
+    async def _stream_bounded(self,messages,request_id,cancelled,*,max_tokens=None,num_ctx=None,story=False,story_schema=None,dialogue_schema=None):
         try:
             import httpx
             timeout=httpx.Timeout(self.timeout_s)
             payload=self._payload(messages,True,max_tokens)
             if num_ctx is not None:payload['options']['num_ctx']=num_ctx
             if story:payload.update(truncate=False,shift=False,format=story_schema if story_schema is not None else self.STORY_RESPONSE_SCHEMA)
+            if dialogue_schema is not None:
+                payload['format'] = dialogue_schema
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("POST",f"{self.base_url}/api/chat",json=payload,headers={"x-request-id":request_id}) as response:
                     response.raise_for_status()
@@ -1173,18 +1315,36 @@ class OllamaLLMProvider:
                         if cancelled(): raise asyncio.CancelledError
                         if not line: continue
                         data=json.loads(line)
+                        if dialogue_schema is not None:
+                            if not isinstance(data, dict):
+                                raise ValueError("dialogue_invalid_provider_frame")
+                            message = data.get("message", {})
+                            token = message.get("content", "") if isinstance(message, dict) else None
+                            if not isinstance(token, str):
+                                raise ValueError("dialogue_invalid_provider_content")
+                            if token:
+                                yield token
                         if data.get("done"):
                             if story and (data.get("done") is not True or data.get("done_reason") != "stop"):
                                 raise RuntimeError("story_incomplete_terminal")
+                            if dialogue_schema is not None and (data.get("done") is not True or data.get("done_reason") != "stop"):
+                                raise ValueError("dialogue_incomplete_terminal")
                             clean_terminal = True
                             self.last_stats={key:data.get(key) for key in ("total_duration","load_duration","prompt_eval_count","prompt_eval_duration","eval_count","eval_duration")}
                             break
-                        token=str(data.get("message",{}).get("content",""))
-                        if token: yield token
+                        if dialogue_schema is None:
+                            token=str(data.get("message",{}).get("content",""))
+                            if token: yield token
                     if story and not clean_terminal:
                         raise RuntimeError("story_incomplete_terminal")
+                    if dialogue_schema is not None and not clean_terminal:
+                        raise ValueError("dialogue_incomplete_terminal")
         except asyncio.CancelledError:
             raise
+        except ValueError:
+            if dialogue_schema is not None:
+                raise
+            raise RuntimeError("local Ollama provider unavailable")
         except Exception as exc:
             raise RuntimeError("local Ollama provider unavailable") from exc
 
@@ -1227,10 +1387,23 @@ class RetryingLLMProvider:
         self.delay_s = max(0.0, float(delay_s))
 
     async def stream(self, messages, request_id, cancelled):
+        async for token in self._retry(self.delegate.stream, messages, request_id, cancelled):
+            yield token
+
+    @property
+    def supports_dialogue_json(self):
+        return getattr(self.delegate, "supports_dialogue_json", False) is True
+
+    async def stream_dialogue(self, messages, request_id, cancelled, *, response_schema):
+        async for token in self._retry(self.delegate.stream_dialogue, messages, request_id, cancelled,
+                                       response_schema=response_schema):
+            yield token
+
+    async def _retry(self, method, messages, request_id, cancelled, **options):
         for attempt in range(self.retries + 1):
             yielded = False
             try:
-                async for token in self.delegate.stream(messages, request_id, cancelled):
+                async for token in method(messages, request_id, cancelled, **options):
                     yielded = True
                     yield token
                 return
@@ -3099,10 +3272,15 @@ class BoundedConversationEngine:
         self.active_queues[context.session_id] = queue
         from .age_policy import POLICIES
         age_words = POLICIES.get(context.profile.age_band, POLICIES["3-5"]).max_words
+        structured = getattr(self.llm, "supports_dialogue_json", False) is True
+        response_contract = DialogueResponseContract.from_context(context)
         topic_instruction = ("Open developer dialogue: accept any topic unless it violates the safety rules. "
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
         policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + '.'
+        if not structured:
+            from .system_prompt import JSON_WIRE_INSTRUCTION, LEGACY_XML_WIRE_INSTRUCTION
+            policy = policy.replace(JSON_WIRE_INSTRUCTION, LEGACY_XML_WIRE_INSTRUCTION)
         speech_form = 'SPEECH_FORM: complete <say>...</say> blocks, optionally followed by one <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/> when required by the current scenario. '
         if context.node_id == "bear_dialogue":
             output_format = ('Choose exactly ONE output form. ' + speech_form
@@ -3114,6 +3292,15 @@ class BoundedConversationEngine:
             output_format += 'YOUNG_SPEECH: one complete thought in one Russian sentence and one say block; aim for 3-6 words, strict maximum 8. Do not add a follow-up question unless the current scenario requires it. '
         else:
             output_format += 'Use one or two short Russian spoken sentences. '
+        if structured:
+            output_format = (
+                'Exactly one closed JSON object matching the supplied schema; no tags, markdown, analysis, extra fields or surrounding text. '
+                'SPEECH_FORM: type=say with text, or type=say_led with text/pattern, or type=say_return with text/target only when the scenario requires it. '
+                + ('CATALOGUE_FORM: exactly one offer_game/game_id, open_catalog/catalog, play_story/story_id or request_information/kind without text or other actions, only for a meaningful child request. Ordinary conversation uses SPEECH_FORM. '
+                   if response_contract.catalogue else 'Catalogue control actions are forbidden in this mode. ')
+                + f'Spoken text must use at most {age_words} words total. Express a shorter complete thought with normal separate words; never glue words or invent abbreviations to fit. '
+                + ('YOUNG_SPEECH: one complete thought in one Russian sentence; aim for 3-6 words, strict maximum 8. Do not add a follow-up question unless the current scenario requires it. '
+                   if response_contract.young else 'Use one or two short Russian sentences. '))
         native_streaming = _native_audio_stream_method(self.tts) is not None
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
@@ -3121,7 +3308,11 @@ class BoundedConversationEngine:
         llm_started=time.perf_counter(); llm_completed=False
         # Canonical runtime owns intent routing; no demo quick-reply
         # table is allowed to bypass the bounded provider contract.
-        provider = _LLMGenerationBudget(self.llm, self.config.llm_timeout_s)
+        provider = _LLMGenerationBudget(_DialogueLLMRequest(self.llm, response_contract) if structured else self.llm,
+                                        self.config.llm_timeout_s)
+        from .validation import SpokenResponseRequirement
+        spoken_requirement = SpokenResponseRequirement(context.profile.age_band, context.node_id,
+            getattr(context, "_game_id", None) == "word_game" and context.turns + 1 >= context.max_turns) if structured else None
         try:
             chunks=[]; actions=[]; spoken_chars=0; raw_spoken=""
             chunker=SentenceChunker(self.config.max_chunk_chars, self.config.first_chunk_chars,
@@ -3144,7 +3335,13 @@ class BoundedConversationEngine:
                         candidate = " ".join((*chunks, chunk))
                         if len(candidate.split()) > age_words:
                             raise ValueError("age_word_budget_exceeded")
-                        validation_started=time.perf_counter(); decision=await self.response_validator.validate(candidate, context=context.history[-4:], generation_id=token)
+                        validation_started=time.perf_counter()
+                        options = {"spoken_requirement":spoken_requirement} if structured else {}
+                        if structured:
+                            self.metrics.event("spoken_semantic_started", chunk_index=len(chunks))
+                        decision=await self.response_validator.validate(candidate, context=context.history[-4:], generation_id=token, **options)
+                        if structured:
+                            self.metrics.event("spoken_semantic_finished", chunk_index=len(chunks), allowed=not decision.blocked)
                         self.metrics.observe_voice_stage(context.session_id, "validation", validation_started, generation_id=trace_generation_id)
                     except asyncio.CancelledError:
                         raise
@@ -3206,7 +3403,9 @@ class BoundedConversationEngine:
                     if any(action.value in {"offer_game", "open_catalog", "play_story", "request_information"} for action in actions):
                         raise ValueError("game_offer_mixed_actions")
                     actions.append(item)
-            consume_task=asyncio.create_task(self.consumer.consume_parsed(provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,token_received,flush_closed_say), name=f"s2s-llm-{context.session_id}-{token}")
+            consume_provider = (_DialogueJSONBridge(provider, response_contract, self.consumer.max_chars,
+                                token_received, self.metrics.event) if structured else provider)
+            consume_task=asyncio.create_task(self.consumer.consume_parsed(consume_provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,None if structured else token_received,flush_closed_say), name=f"s2s-llm-{context.session_id}-{token}")
             failure_task=asyncio.create_task(queue.failure_event.wait(), name=f"s2s-queue-failure-{{context.session_id}}-{{token}}") if queue.failure_event is not None else None
             try:
                 if failure_task is None:

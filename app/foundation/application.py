@@ -2974,8 +2974,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if fresh.node_id == 'bear_dialogue':
             from .menu_content import catalogue_items
             import json
-            fresh.system_prompt += '\nAVAILABLE_FIXED_RECORDINGS_DATA=' + json.dumps(dict(catalogue_items(
-                'fixed_story_menu', state.age_band, stories=self.canonical_runtime.stories)), ensure_ascii=False)
+            recordings = tuple(catalogue_items('fixed_story_menu', state.age_band,
+                                               stories=self.canonical_runtime.stories))
+            fresh.verified_story_ids = tuple(story_id for story_id, _ in recordings)
+            fresh.system_prompt += '\nAVAILABLE_FIXED_RECORDINGS_DATA=' + json.dumps(dict(recordings), ensure_ascii=False)
         owner = (self._session_epochs.get(session_id, 0),
                  state.profile_ref if state is not None else None)
         if game_id:
@@ -2990,6 +2992,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             current.node_id = fresh.node_id
             current.profile = fresh.profile
             current.system_prompt = fresh.system_prompt
+            current.verified_story_ids = fresh.verified_story_ids
             current.allowed_topics = fresh.allowed_topics
             current.forbidden_topics = fresh.forbidden_topics
             if game_id == "word_game":
