@@ -1145,10 +1145,6 @@ class CanonicalRuntime(SceneMenuMixin):
         return self._decision(state, effects, reason, clear_audio=True)
 
     def _information_effect(self, state, kind):
-        available = {item[0] for item in getattr(self, 'day_menu_items', lambda sid: ())(state.session_id)}
-        if kind in {'what_next', 'where_now'} and kind not in available and 'card_doctors' in available:
-            # The assigned names are useful partial card facts, not a timed plan.
-            kind = 'card_doctors'
         if state.mode == 'bear_dialogue':
             state.dialogue_information_kind = kind
         return {'type':'typed_info_request', 'kind':kind}
