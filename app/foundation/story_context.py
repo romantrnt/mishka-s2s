@@ -35,6 +35,7 @@ class StoryBackendContract:
             raise StoryContextError("story_backend_timeout")
         self.timeout_s=timeout_s
         self._observed=None
+        self._refresh_generation=0
         self._http_slots=asyncio.Semaphore(2)
 
     def matches(self, base_url, model):
@@ -88,15 +89,20 @@ class StoryBackendContract:
         return json.loads(raw)
 
     async def refresh(self):
-        self._observed=None
         r=self.receipt
-        if not self.matches(r.base_url,r.model):raise StoryContextError('story_backend_unverified')
+        self._refresh_generation+=1
+        generation=self._refresh_generation
+        if not self.matches(r.base_url,r.model):
+            self._observed=None
+            raise StoryContextError('story_backend_unverified')
         try:
             # Queueing and both metadata calls share one cancellable deadline.
             async with asyncio.timeout(self.timeout_s):
                 async with self._http_slots:
                     version=await self._metadata('/api/version')
                     running=await self._metadata('/api/ps')
+            if self.receipt is not r:
+                raise StoryContextError('story_backend_changed')
             row=next((m for m in running.get('models',[]) if m.get('name')==r.model or m.get('model')==r.model),None)
             if (version.get('version')!=r.server_version or row is None
                     or row.get('digest')!=r.model_digest
@@ -105,10 +111,20 @@ class StoryBackendContract:
                     or not 0<row['context_length']<=r.context_ceiling):
                 raise StoryContextError('story_backend_changed')
             if not self.matches(r.base_url,r.model):raise StoryContextError('story_backend_unverified')
-            self._observed=(r.model_digest,r.server_version)
-        except asyncio.CancelledError:raise
-        except StoryContextError:raise
-        except Exception:raise StoryContextError('story_backend_metadata') from None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Any observed failure revokes availability and all in-flight
+            # successes; an older successful check cannot restore it later.
+            self._observed=None
+            self._refresh_generation+=1
+            if isinstance(exc,StoryContextError):raise
+            raise StoryContextError('story_backend_metadata') from None
+        if generation!=self._refresh_generation:
+            raise StoryContextError('story_backend_changed')
+        # Publish a complete verification atomically. Cancellation is not
+        # a new observation; providers still refresh before every request.
+        self._observed=(r.model_digest,r.server_version)
 
 
 def load_story_contracts(path, *, base_url, generator_model, validator_model):

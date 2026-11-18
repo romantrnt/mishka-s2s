@@ -196,8 +196,19 @@ The exact five-file bundle is deployed in application PID 12428, with readiness
 `READY` and served console SHA `4b3c30aeac2fdc29990b0793650a0f304a16d84e4ac2ac1f8fec687648f90e49`.
 Hashes, prior files and deployment metadata are in
 `/workspace/mishka-artifacts/personal-pcm-pause-20261118`. Pod/providers were not
-restarted. Actual browser personal generation/play/pause/resume/cancel is assigned
-to Chief and remains pending; no second live WS or restart during that check.
+restarted. Actual browser cancellation passed: button 7 returned to the root in
+2.463 seconds through the proxy, both held keys were released, and no private
+PCM remained. The next generation in the same visit failed after about 300 ms;
+a clean visit also lost the generation choices. Chief reproduced a capability
+deadlock: cancelling metadata refresh clears verification, while subsequent
+entry requires verification before it can refresh. The live source matches
+that reproduction and the receipt is unexpired; the precise live rejection
+stage was not logged. Recovery after cancellation is being fixed with fresh
+verification before any model request, preserving fail-closed model, receipt
+and context checks. Whole personal browser playback/pause/resume remains open.
+Evidence: `runtime/local-integration-20261117/runpod-personal-12428.json` and
+`story-contract-cancel-deadlock-probe.json` in the same directory. Chief closed
+the browser and released the live audio/GPU slot after this failed acceptance.
 
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input
