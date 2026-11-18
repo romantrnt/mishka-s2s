@@ -928,6 +928,7 @@ class HardwareIntegrationStand:
         session = self.application.sessions.get(self.active_session_id)
         runtime = getattr(self.application, "canonical_runtime", None)
         state = runtime.sessions.get(self.active_session_id) if runtime is not None else None
+        catalogue = self.application._catalogue_voice_scope(self.active_session_id) is not None
         return bool(
             session is not None
             and getattr(self, "_capture_hid_fault", None) is None
@@ -940,6 +941,7 @@ class HardwareIntegrationStand:
             and not getattr(state, "interaction_idle", False)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
+                 or catalogue
                  or (not self.application._active_audio.get(self.active_session_id)
                      and (getattr(state,"scene_menu_phase",None) == "repeat_listen"
                           or (getattr(state,"mode",None) in {"personal_story_theme","schedule_weather","game_menu"}
@@ -991,6 +993,7 @@ class HardwareIntegrationStand:
         state = runtime.sessions.get(sid) if runtime is not None else None
         version = getattr(state, "state_version", None)
         lease = self.application._active_audio.get(sid)
+        catalogue_scope = self.application._catalogue_voice_scope(sid)
         private_phase = (node in {"personal_welcome_listen","fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
                          or bool(lease and lease.get("content_id") == "PERSONAL_WELCOME"))
         game_phase = node == "game_active"
@@ -1000,7 +1003,8 @@ class HardwareIntegrationStand:
             current = runtime.sessions.get(sid) if runtime is not None else None
             return (accepting and owner_current() and self._headless_audio_accepting()
                     and (not turn_taking or getattr(self, "_headless_output_epoch", 0) == output_epoch)
-                    and (not private_phase or (
+                    and (catalogue_scope is None or self.application._catalogue_voice_scope(sid) == catalogue_scope)
+                    and (not private_phase or catalogue_scope is not None or (
                         getattr(record, "current_node", None) == node
                         and getattr(current, "state_version", None) == version
                         and self.application._active_audio.get(sid) is lease))
@@ -1008,6 +1012,9 @@ class HardwareIntegrationStand:
                         and self.application._game_voice_scope(sid) == game_scope)))
         # Distinguish a closed listening phase from a revoked physical owner.
         phase_current.lifecycle_current = owner_current
+        if catalogue_scope is not None:
+            import copy
+            phase_current.catalogue_descriptor = copy.deepcopy(state.scene_menu_descriptor)
         return sid, phase_current
 
     def _enqueue_headless_audio_frame(self, values: Any, owner=None) -> None:
@@ -1284,9 +1291,10 @@ class HardwareIntegrationStand:
             owner = self.application._personal_stories.get(handle.session_id)
             return self.application._personal_story_scope(handle.session_id, owner, playback=True)
         if handle.response_id == "PERSONAL_WELCOME" or handle.response_id in PRIVATE_TYPED_AUDIO_IDS:
-            if handle.response_id in PRIVATE_TYPED_AUDIO_IDS and state.mode != "schedule_weather":
+            if (handle.response_id in PRIVATE_TYPED_AUDIO_IDS and state.mode != "schedule_weather"
+                    and not (state.mode == 'bear_dialogue' and handle.response_id == 'TYPED_'+str(state.dialogue_information_kind).upper())):
                 return False
-            capability = "personalize" if handle.response_id == "PERSONAL_WELCOME" else "schedule"
+            capability = "personalize" if handle.response_id in {"PERSONAL_WELCOME", 'TYPED_CARD_DOCTORS'} else "schedule"
             return bool(identity_binding and all(identity_binding)
                 and (state.profile_ref,state.identity_request_id) == identity_binding
                 and self.application._identity_scope_live(handle.session_id,capability))
@@ -1302,7 +1310,8 @@ class HardwareIntegrationStand:
         from .scene_menus import MENU_PCM_MODES
         if handle.response_id in MENU_PCM_MODES:
             return state.mode == MENU_PCM_MODES[handle.response_id]
-        return state.mode == "schedule_weather"
+        return (state.mode == "schedule_weather" or (state.mode == 'bear_dialogue'
+            and handle.response_id == 'TYPED_'+str(state.dialogue_information_kind).upper()))
 
     def _personal_story_checkpoint_current(self, handle, story_owner, hid_generation) -> bool:
         # A paused lease grants one position update, never renewed PCM authority.

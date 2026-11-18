@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from typing import Any, Mapping
 
@@ -69,7 +70,7 @@ class SafetyClassification:
     reason: str
 
 def wellbeing_reassurance(text: str, question: str | None) -> bool:
-    patterns = {"pain_or_discomfort": r"нет,?\s+ничего\s+не\s+болит",
+    patterns = {"pain_or_discomfort": r"(?:нет,?\s+ничего\s+не\s+болит|вс[её]\s+хорошо,\s+у\s+меня\s+ничего\s+не\s+болит)",
                 "fear": r"нет,?\s+мне\s+не\s+страшно"}
     pattern = patterns.get(question)
     return bool(pattern and re.fullmatch(r"\s*" + pattern + r"\s*[.!]*\s*", text, re.I))
@@ -129,7 +130,7 @@ def classify_intent(text: str) -> str:
     if re.search(r"(позвать\s+взросл|позови(?:те)?\s+взросл|нужен\s+взросл)", value): return "help_request"
     if re.search(r"(поставь|поставить|на)\s*пауз|пауза", value): return "pause_story"
     if re.search(r"(продолжи|продолжить|дальше|возобнови)", value): return "resume_story"
-    if re.search(r"\b(стоп|хватит|закончить сказку|выключи сказку)\b", value): return "stop_story"
+    if re.search(r"\b(стоп|хватит|закончить сказку|выключи сказку|останови сказку)\b", value): return "stop_story"
     if re.search(r"(вау|класс|здорово|смешно|ха-ха|ура|ух ты)", value): return "emotional_reaction"
     if re.search(r"(настроени|груст|рад|весел)", value): return "mood"
     if re.search(r"(куда|маршрут|идти)", value): return "where_now"
@@ -163,6 +164,9 @@ def game_confirmation_intent(text: str) -> str:
 def day_information_intent(text: str) -> str | None:
     """Context-only requests; facts always come from the typed provider."""
     value = text.casefold()
+    explicit = conversational_information_intent(text)
+    if explicit:
+        return explicit
     if re.search(r"погод|температур|на улице|дожд|снег", value):
         return "weather"
     if re.search(r"какое?\s+(?:сегодня\s+)?число|дат[ауы]|день\s+недел|какой\s+(?:сегодня\s+)?день", value):
@@ -171,6 +175,36 @@ def day_information_intent(text: str) -> str | None:
         return "what_next"
     if re.search(r"куда|где|сейчас|текуще", value):
         return "where_now"
+    return None
+
+
+def conversational_information_intent(text: str) -> str | None:
+    """Explicit factual subject; character/location talk is ordinary dialogue."""
+    value = ' '.join(text.casefold().split())
+    value = re.sub(r'^(?:(?:мишка|пожалуйста)[, ]+)*(?:я )?не (?:знаю|помню|могу вспомнить)[,:]?\s+', '', value)
+    if re.search(r'\b(?:не|нет)\b', value):
+        return None
+    # A factual noun inside play, a story or Mishka's fictional world is
+    # not a request for the child's local provider facts.
+    if re.search(r'\b(?:игр\w*|поигра\w*|сыгра\w*|квиз\w*|викторин\w*|сказк\w*|истори\w*|волшебн\w*|сказочн\w*)\b', value):
+        return None
+    if re.search(r'\b(?:тво\w*|у тебя)\b', value):
+        return None
+    if re.search(r'\b(?:почему|зачем|что такое|как (?:образуется|меняется|устроен[ао]?))\b', value):
+        return None
+    if re.search(r'погод|температур[ауы]|(?:нужно|надо|что|как)\s+(?:мне\s+)?(?:надеть|одеться)|на улице (?:дождь|снег|холодно|тепло)', value):
+        return 'weather'
+    if re.search(r'какое?\s+(?:сегодня\s+)?число|какая\s+(?:сегодня\s+)?дата|какой\s+(?:сегодня\s+)?день|день\s+недел', value):
+        return 'date'
+    child = bool(re.search(r'\b(?:мне|меня|мной|мой|моя|мое|моё|мои|моим|моего|моей|моему|моими|моих|мы|нам|нас|я)\b', value))
+    appointment = bool(re.search(r'заняти[еяюй]|расписани|кабинет|врач|прием|приём|доктор|процедур', value))
+    if child and re.search(r'куда\s+(?:мне|нам)\s+(?:сейчас\s+)?идти', value):
+        return 'where_now'
+    request = bool(re.search(r'\b(?:кто|кого|кому|кем|какой|какие|какая|какому|каким|какого|какую|каких|когда|куда|где|как|сколько|что|чего|чему|чем|покажи|скажи|расскажи|узнать)\b', value))
+    if child and appointment and request:
+        if re.search(r'\b(?:кто|какой|какие)\b', value) and re.search(r'врач|доктор', value):
+            return 'card_doctors'
+        return 'what_next' if re.search(r'следующ|потом|дальше|после|расписани|когда', value) else 'where_now'
     return None
 
 def lint_persona(text: str) -> tuple[bool, str | None]:
@@ -241,6 +275,38 @@ class TypedInfoRenderer:
                 text += f", {item['floor']} этаж"
         return text
 
+    def _card_doctors_text(self):
+        profile = self.profile or {}
+        names, visit = profile.get('card_doctor_names'), profile.get('card_visit_date')
+        if (profile.get('card_doctors_source') != 'data14.v1' or not isinstance(names, list)
+                or not 1 <= len(names) <= 32 or not all(isinstance(name, str) and 1 <= len(name) <= 160 for name in names)
+                or not isinstance(visit, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', visit)):
+            raise ScheduleWeatherProviderError('card_doctors_unavailable')
+        try:
+            visit_date = date.fromisoformat(visit)
+        except ValueError:
+            raise ScheduleWeatherProviderError('card_doctors_unavailable') from None
+        current = self.now().astimezone(ZoneInfo('Europe/Moscow')).date()
+        label = 'сегодня' if visit_date == current else visit_date.strftime('%d.%m.%Y')
+        preview = ', '.join(names[:2])
+        partial = ' Это часть списка.' if len(names) > 2 else ''
+        return f'В твоей карточке на {label} указаны: {preview}.{partial} Точного плана, времени и кабинета у меня нет.'
+
+    @staticmethod
+    def _weather_text(weather):
+        text = str(weather['summary']).strip().rstrip('.!') + '.'
+        temperature = weather.get('temperature_c')
+        if type(temperature) not in (int, float) or not math.isfinite(temperature) or not -100 <= temperature <= 70:
+            return text
+        clothes = ('Для прогулки пригодятся тёплая куртка и шапка.' if temperature <= 5 else
+                   'На прогулку можно взять куртку.' if temperature <= 15 else
+                   'Для прогулки подойдёт лёгкая одежда.')
+        condition = weather.get('condition')
+        rain = ' Если пойдёшь гулять, пригодится дождевик.' if condition in {
+            'drizzle','light-rain','rain','moderate-rain','heavy-rain','continuous-heavy-rain',
+            'showers','wet-snow','thunderstorm-with-rain','thunderstorm-with-hail'} else ''
+        return text + ' ' + clothes + rain
+
     async def render(self, kind: str, *, allow_demo: bool = False) -> dict[str, Any]:
         if kind == "menu":
             return {"kind": "menu", "text": "Один — дата. Два — погода. Три — планы. Четыре — куда идти. Семь — назад."}
@@ -252,6 +318,8 @@ class TypedInfoRenderer:
             current = self.now().astimezone(timezone)
             months = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
             return {"kind": "date", "text": f"Сегодня {current.day} {months[current.month - 1]} {current.year} года."}
+        if kind == 'card_doctors':
+            return {'kind':kind, 'text':self._card_doctors_text()}
         if kind not in {"weather", "what_next", "where_now"}:
             raise ValueError("unknown typed information kind")
         if self.service is None or (kind != "weather" and not isinstance(self.profile, Mapping)):
@@ -260,7 +328,7 @@ class TypedInfoRenderer:
         # outage does not make the child's schedule unavailable, and vice versa.
         if kind == "weather" and callable(getattr(self.service, "weather", None)):
             weather = await self.service.weather(dict(self.profile or {}), self.schedule_ref or "", allow_demo=allow_demo)
-            return {"kind": kind, "text": weather["summary"], "source": weather["source"]}
+            return {"kind": kind, "text": self._weather_text(weather), "source": weather["source"]}
         if kind in {"what_next", "where_now"} and callable(getattr(self.service, "schedule", None)):
             schedule = await self.service.schedule(dict(self.profile), self.schedule_ref or "")
             item = self._select_schedule_item(schedule, kind)
@@ -268,7 +336,7 @@ class TypedInfoRenderer:
         report = await self.service.build(dict(self.profile or {}), self.schedule_ref or "")
         report = validate_report(report, allow_demo=allow_demo)
         if kind == "weather":
-            return {"kind": kind, "text": report["weather"]["summary"], "source": report["source"]}
+            return {"kind": kind, "text": self._weather_text(report["weather"]), "source": report["source"]}
         item = self._select_schedule_item(report["schedule"], kind)
         return {"kind": kind, "text": self._schedule_text(item, include_location=kind == "where_now"), "source": report["source"]}
 

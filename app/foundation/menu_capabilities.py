@@ -34,13 +34,26 @@ def day_menu_items(app, sid):
                         for value, lower, upper in ((weather.latitude, -90, 90),
                                                     (weather.longitude, -180, 180)))):
         items.append(('weather', 'Погода'))
-    if not (production or demo):
-        return tuple(items)
     runtime = getattr(app, 'canonical_runtime', None)
     state = runtime.sessions.get(sid) if runtime is not None else None
-    if state is None or state.profile_status != 'identified' or not app._identity_scope_live(sid, 'schedule'):
+    if state is None or state.profile_status != 'identified':
+        return tuple(items)
+    personalize = app._identity_scope_live(sid, 'personalize')
+    schedule_scope = app._identity_scope_live(sid, 'schedule')
+    if not (personalize or schedule_scope):
         return tuple(items)
     profile = app._canonical_profiles.get(sid)
+    if personalize and isinstance(profile, Mapping):
+        try:
+            TypedInfoRenderer(None, profile, None)._card_doctors_text()
+        except (ScheduleWeatherProviderError, ValueError, TypeError, OverflowError, KeyError):
+            pass
+        else:
+            items.append(('card_doctors', 'Врачи в моей карточке'))
+    if not (production or demo):
+        return tuple(items)
+    if not schedule_scope:
+        return tuple(items)
     if not isinstance(profile, Mapping):
         return tuple(items)
     try:

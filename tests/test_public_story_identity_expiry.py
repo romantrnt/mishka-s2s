@@ -472,7 +472,7 @@ async def test_transferred_playing_story_completion_starts_normal_120_second_wai
 async def test_current_story_lifecycle_survives_real_release_ack_without_accepting_old_lease():
     h = await Harness().start()
     try:
-        # Follow actual root → story menu → skip narration → select story.
+        # A current advertised choice selects directly during narration.
         from test_scene_menu_runtime import Render
         class Writer:
             async def send_json(self, _): pass
@@ -483,9 +483,8 @@ async def test_current_story_lifecycle_survives_real_release_ack_without_accepti
         h.state.mode, h.state.active_story_id = 'root_menu', None
         h.state.scene_menu_active, h.state.scene_menu_phase = None, 'idle'
         h.state.expected_inputs = ['button_' + str(i) for i in range(1, 8)] + ['handset_down']
-        for button in (2, 1):
-            await h.send('ButtonPressed', {'button_id': button})
-            await h.send('ButtonReleased', {'button_id': button})
+        await h.send('ButtonPressed', {'button_id': 2})
+        await h.send('ButtonReleased', {'button_id': 2})
         assert (await h.send('ButtonPressed', {'button_id': 1}))['reason'] == 'fixed_story_started'
         owner = dict(h.app._active_audio[h.sid])
         callback = {**owner, 'session_id': h.sid, 'response_id': h.story, 'status': 'playing'}

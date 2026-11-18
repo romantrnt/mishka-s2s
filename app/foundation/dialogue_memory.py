@@ -60,15 +60,18 @@ class DialogueMemoryMixin:
                 or state.safety_severity != "none" or (caller and caller["owner"] != owner)):
             self._game_callers.pop(session_id, None)
         elif (takes_ownership and previous_state is not None and previous_state.mode == "bear_dialogue"
-                and state.mode == "game_active" and state.game_return_mode == "bear_dialogue"):
+                and state.mode != "bear_dialogue" and (state.game_return_mode == "bear_dialogue"
+                    or state.activity_return_mode == "bear_dialogue")):
             context = self.conversation_contexts.pop(session_id, None)
             if context is not None:
                 self._game_callers[session_id] = {"context": copy.deepcopy(context), "owner": owner,
                     "suspended_at": self.monotonic_now()}
-        elif (takes_ownership and caller and previous_state is not None and previous_state.mode == "game_active"
-                and state.mode != "game_active"):
+        elif (takes_ownership and caller and previous_state is not None
+                and state.mode not in {"game_menu", "game_active", "fixed_story_menu", "fixed_story_playing",
+                    "story_speech_analysis", "story_pause_announcement", "story_paused", "story_resume_announcement", "fixed_story_choice_wave"}):
             self._game_callers.pop(session_id, None)
-            if state.mode == "bear_dialogue" and previous_state.game_return_mode == "bear_dialogue":
+            if state.mode == "bear_dialogue" and (previous_state.game_return_mode == "bear_dialogue"
+                    or previous_state.activity_return_mode == "bear_dialogue"):
                 context = caller["context"]
                 context.started_at += max(0., self.monotonic_now() - caller["suspended_at"])
                 self.conversation_contexts[session_id] = context

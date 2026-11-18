@@ -5,9 +5,9 @@ from dataclasses import replace
 from .domain import PlaybackHandle
 from .private_welcome import valid_pcm
 
-TYPED_AUDIO_IDS = frozenset({'TYPED_MENU','TYPED_DATE','TYPED_WEATHER','TYPED_WHAT_NEXT','TYPED_WHERE_NOW',
+TYPED_AUDIO_IDS = frozenset({'TYPED_MENU','TYPED_DATE','TYPED_WEATHER','TYPED_WHAT_NEXT','TYPED_WHERE_NOW', 'TYPED_CARD_DOCTORS',
     'DIALOGUE_OFFER', 'DIALOGUE_RETURN', 'DIALOGUE_FINISH'})
-PRIVATE_TYPED_AUDIO_IDS = frozenset({'TYPED_WHAT_NEXT','TYPED_WHERE_NOW'})
+PRIVATE_TYPED_AUDIO_IDS = frozenset({'TYPED_WHAT_NEXT','TYPED_WHERE_NOW', 'TYPED_CARD_DOCTORS'})
 from .scene_menus import MENU_PCM_MODES
 MENU_AUDIO_IDS = frozenset(MENU_PCM_MODES)
 OWNED_PCM_IDS = TYPED_AUDIO_IDS | MENU_AUDIO_IDS | {'PERSONAL_WELCOME', 'PERSONAL_STORY', 'GAME_PROMPT', 'GAME_HINT'}
@@ -95,6 +95,22 @@ class OwnedSpeechMixin:
                 if isinstance(candidate, PublicMenuAudioCache):
                     cache = candidate
                     key = cache.key(self, page, text)
+            elif effect.get('content_id') == 'TYPED_CARD_DOCTORS':
+                # This exact application template contains private source names.
+                # Validate its current atomic DTO and rendering receipt locally;
+                # never send those names to the semantic/model-output gate.
+                from .identity import _card_doctor_facts
+                from .canonical_services import TypedInfoRenderer
+                if cancelled() or not self._identity_scope_live(session_id, 'personalize'):
+                    return None
+                try:
+                    facts = _card_doctor_facts(self._canonical_profiles.get(session_id) or {})
+                    expected = TypedInfoRenderer(None, facts, None)._card_doctors_text()
+                except (ValueError, TypeError, KeyError, RuntimeError):
+                    return None
+                if engine.normalizer.normalize(expected) != text:
+                    return None
+                validation = await engine.response_validator.validate_trusted(text)
             else:
                 validation = await engine.response_validator.validate(text)
             if cancelled() or not validation.allowed:return None

@@ -482,6 +482,16 @@ def test_initial_word_rules_match_age_specific_voice_game(band, required):
     assert effect['exit_hint'] == 'Чтобы выйти, нажми семь.'
 
 
+def test_first_quiz_prompt_explains_hold_exit_even_when_first_answer_has_no_seven():
+    from app.foundation.canonical_contract import CanonicalRuntime
+    from app.foundation.game_engine import start
+    engine = start('quiz', sequence=0, now=1., selection_button=0, age_band='1-3', immersive=True)
+    state = CanonicalState('quiz-exit', mode='game_active', handset='up', age_band='1-3',
+        active_game_id='quiz', game_engine_state=engine)
+    assert 7 not in game_answer_buttons(engine)
+    assert CanonicalRuntime()._game_prompt(state)['exit_hint'] == 'Чтобы выйти, удержи семь пять секунд и отпусти.'
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('band,limit', [('1-3', 4), ('4-5', 5), ('6-7', 6)])
 async def test_control_only_offer_preserves_last_spoken_caller_turn_without_resetting_budget(band, limit):
@@ -516,15 +526,15 @@ async def test_control_only_offer_preserves_last_spoken_caller_turn_without_rese
 
 
 @pytest.mark.asyncio
-async def test_actual_bear_prompt_limits_action_only_exception_to_requests_for_play():
+async def test_actual_bear_prompt_limits_action_only_exception_to_meaningful_capability_requests():
     h = Harness('<say>Облака состоят из капелек воды.</say>')
     try:
         result = await h.send('SpeechReceived', text='Почему облака белые?')
         prompt = h.model.calls[0][0]['content']
-        assert 'ONLY when the child meaningfully requests to play' in prompt
-        assert 'Otherwise answer normally in <say> and do not offer a game.' in prompt
-        assert 'quiz is an example, never the default' in prompt
-        assert 'кроме описанного выше предложения игры по просьбе ребёнка' in prompt
+        assert 'only for a meaningful request to use an available activity or sourced information' in prompt
+        assert 'Ordinary conversation, including fictional Mishka home, uses say only.' in prompt
+        assert 'quiz здесь только пример' in prompt
+        assert 'кроме одного описанного выше действия по просьбе ребёнка' in prompt
         assert result['reason'] == 'dialogue_turn'
         assert h.state.mode == 'bear_dialogue' and h.state.pending_game_offer is None
         assert h.app.conversation_contexts[h.state.session_id].turns == 1

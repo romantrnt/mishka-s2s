@@ -37,6 +37,7 @@ class SceneMenuMixin:
         entering = state.scene_menu_active != state.mode
         redraw = entering or reason == 'scene_menu_page'
         if entering:
+            state.scene_menu_generation += 1
             if state.mode == 'game_menu':
                 # Randomness belongs to an entry, never descriptor rendering.
                 import uuid
@@ -70,11 +71,11 @@ class SceneMenuMixin:
         if redraw:
             effects.append({'type':'scene_menu_page','descriptor':page.as_dict()})
         state.expected_inputs = ['button_'+str(b) for b in page.buttons] + ['handset_down']
-        if (state.mode == 'game_menu' and state.scene_menu_phase == 'ready') or state.scene_menu_phase == 'repeat_listen' or (state.mode in {'personal_story_theme','schedule_weather'}
+        if (state.mode in {'game_menu','fixed_story_menu'} and page.items) or state.scene_menu_phase == 'repeat_listen' or (state.mode in {'personal_story_theme','schedule_weather'}
                 and state.scene_menu_phase=='ready' and page.items): state.expected_inputs.append('speech')
         if entering and state.mode == 'game_menu' and state.handset == 'up':
             state.scene_menu_phase = 'invite'
-            effects.extend([{'type':'capture_close'}, {'type':'speak','phrase_id':'PHRASE_019'}])
+            effects.extend([{'type':'capture_open'}, {'type':'speak','phrase_id':'PHRASE_019'}])
         if (state.handset == 'up' and getattr(self,'menu_voice_capable',False)
                 and state.scene_menu_phase != 'invite'
                 and (state.mode not in state.scene_menu_seen or reason in {'scene_menu_page','scene_menu_refresh'})
@@ -82,7 +83,7 @@ class SceneMenuMixin:
                 and not any(e.get('type') == 'speak' for e in effects)):
             state.scene_menu_seen.append(state.mode) if state.mode not in state.scene_menu_seen else None
             state.scene_menu_phase = 'narrating'
-            effects.extend([{'type':'capture_close'}, {'type':'narrate_scene_menu',
+            effects.extend([{'type':'capture_open' if state.mode in {'game_menu','fixed_story_menu'} else 'capture_close'}, {'type':'narrate_scene_menu',
                 'content_id':SCENE_AUDIO[state.mode], 'scene':state.mode}])
         return effects
 
@@ -167,8 +168,27 @@ class SceneMenuMixin:
         return self._decision(state,[{'type':'capture_open'}] if state.mode=='game_menu' else [],
                               'scene_menu_finished',clear_audio=True)
 
-    def _scene_menu_answer(self,state,intent,text,verified):
+    def _scene_menu_answer(self,state,intent,text,verified,admitted_descriptor=None):
         if state.mode not in SCENE_AUDIO:return None
+        if state.mode in {'game_menu','fixed_story_menu'} and verified and not state.scene_menu_refresh_required:
+            from .menu_content import catalogue_choice
+            from .game_engine import IMMERSIVE_GAME_SPECS
+            named = catalogue_choice(text, state.mode, state.age_band, stories=self.stories, game_specs=IMMERSIVE_GAME_SPECS)
+            selected = named
+            if (named is None and admitted_descriptor != state.scene_menu_descriptor
+                    and catalogue_choice(text, state.mode, state.age_band, stories=self.stories,
+                        game_specs=IMMERSIVE_GAME_SPECS, descriptor=admitted_descriptor)):
+                return self._decision(state, [], 'scene_menu_choice_stale')
+            if selected is None and admitted_descriptor == state.scene_menu_descriptor:
+                selected = catalogue_choice(text, state.mode, state.age_band, stories=self.stories,
+                    game_specs=IMMERSIVE_GAME_SPECS, descriptor=admitted_descriptor)
+            if selected:
+                state.scene_menu_answers[state.mode] = 'skipped'
+                state.scene_menu_phase = 'ready'
+                return (self._start_game(state, selected, self.monotonic_now()) if state.mode == 'game_menu'
+                        else self._start_fixed_story(state, selected))
+            if str(text or '').casefold().strip(' .!?') in {'назад','отмена','вернись назад','выйти'}:
+                return self._activity_back(state, 'scene_menu_back_by_voice')
         if state.scene_menu_phase in {'narrating','repeat_prompt'}:
             return self._decision(state,[],'scene_menu_not_listening')
         if state.scene_menu_refresh_required:

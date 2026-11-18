@@ -145,6 +145,18 @@ async function microphoneWireFlow(){
  assert(sent.length>count,'intake resumes without another permission request');
  const resumed=Buffer.from(sent[count].data_b64,'base64');
  assert.strictEqual(resumed.readFloatLE(0),.75,'old resampler tail is discarded at the pause boundary');
+ context.activeSources.add({});
+ for(const node of ['game_menu','fixed_story_menu']){
+  context.current.session.node=node;context.mic.resampler.reset();context.micInputGain=1;
+  const before=sent.length;
+  for(let i=0;i<6;i++)process({inputBuffer:{getChannelData:()=>new Float32Array(1024).fill(.25)}});
+  assert.strictEqual(Buffer.from(sent[before].data_b64,'base64').readFloatLE(0),.25,'owned catalogue narration keeps the real microphone signal');
+ }
+ context.current.session.node='bear_dialogue';context.mic.resampler.reset();
+ for(let i=0;i<20;i++)process({inputBuffer:{getChannelData:()=>new Float32Array(1024).fill(.25)}});
+ const ordinaryPCM=Buffer.from(sent.at(-1).data_b64,'base64').readFloatLE(0);
+ assert(ordinaryPCM>.015 && ordinaryPCM<.018,'ordinary playback retains echo ducking; catalogue permission is scoped');
+ context.activeSources.clear();
  const beforeStop=sent.length;context.stopMic();assert.strictEqual(stopped,1);
  assert.strictEqual(sent.at(-1).type,'flush_audio','explicit stop terminates the current capture');
  assert(sent.length>beforeStop+1,'explicit stop flushes the remaining PCM first');

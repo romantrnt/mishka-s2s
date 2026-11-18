@@ -50,12 +50,16 @@ TOOL_CAPABILITY_POLICY: dict[str, dict[str, Any]] = {
     "date": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": False},
     "weather": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": False},
     "schedule": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": True},
+    'card_doctors': {'states':frozenset({'schedule_weather','bear_dialogue'}), 'profile_required':True},
 }
 MODEL_ACTION_POLICY: dict[str, Any] = {
     "led": {"patterns": frozenset({"calm", "attention", "off"}), "states": frozenset(STATE_NAMES - {"safety_stop"})},
     "return_to_scenario": {"targets": frozenset({"root_menu", "fixed_story_menu", "menu_ready"})},
     "offer_game": {"targets": frozenset(spec.game_id for spec in IMMERSIVE_GAME_SPECS),
                    "states": frozenset({"bear_dialogue"})},
+    "open_catalog": {"targets": frozenset({"games","stories"}), "states": frozenset({"bear_dialogue"})},
+    "play_story": {"targets": frozenset({"fixed_aibolit_v1","fixed_squirrel_v1","fixed_lukomorye_v1","fixed_soft_paws_star_v1","fixed_neznayka_v1"}), "states": frozenset({"bear_dialogue"})},
+    "request_information": {"targets": frozenset({"date","weather","what_next","where_now",'card_doctors'}), "states": frozenset({"bear_dialogue"})},
 }
 SAFETY_POLICY = {
     "levels": frozenset({"none", "concern", "urgent"}),
@@ -97,6 +101,14 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return False
     if current == target:
         return True
+    activity_modes = {"game_menu","game_active","fixed_story_menu","fixed_story_playing","story_speech_analysis",
+                      "story_pause_announcement","story_paused","story_resume_announcement","fixed_story_choice_wave"}
+    if target == 'bear_dialogue' and current in activity_modes:
+        return event_type in {'ButtonPressed','ButtonReleased','ButtonLongHeld','VoiceIntentReady','DialogueFallback','AudioCompleted','AudioFailed'}
+    if current == 'bear_dialogue' and event_type == 'DialogueFallback' and target in {'game_menu','fixed_story_menu','fixed_story_playing'}:
+        return True
+    if current in {'game_menu','fixed_story_menu'} and event_type == 'VoiceIntentReady':
+        return target in {'game_active','fixed_story_playing','root_menu'}
     if current == "bear_dialogue" and target == "game_active":
         return event_type in {"ButtonPressed", "VoiceIntentReady"}
     if current == "game_active" and target == "bear_dialogue":
@@ -224,7 +236,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
             target in {"safety_stop", "support_intake"}
             or (current in {"fixed_story_playing", "story_speech_analysis"}
                 and target in {"story_pause_announcement", "fixed_story_choice_wave"})
-            or (current == "story_paused" and target == "story_resume_announcement")
+            or (current == "story_paused" and target in {"story_resume_announcement", "root_menu"})
             or (current == "exhibition_name_capture" and target == "exhibition_age_prompt")
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
             or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
@@ -390,7 +402,7 @@ class CanonicalLangGraphAuthorizer:
             allowed = current in MODEL_ACTION_POLICY["led"]["states"] and target in MODEL_ACTION_POLICY["led"]["patterns"]
         elif action == "return_to_scenario":
             allowed = current != "safety_stop" and target in MODEL_ACTION_POLICY["return_to_scenario"]["targets"]
-        elif action == "offer_game":
+        elif action in {"offer_game", "open_catalog", "play_story", "request_information"}:
             allowed = current in MODEL_ACTION_POLICY[action]["states"] and target in MODEL_ACTION_POLICY[action]["targets"]
         else:
             allowed = False

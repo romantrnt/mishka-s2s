@@ -1147,6 +1147,18 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return None
         return (session_id, id(state), self._session_epochs.get(session_id, 0), engine.run_id, engine.round_generation)
 
+    def _catalogue_voice_scope(self, session_id):
+        state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
+        if (state is None or state.mode not in {'game_menu','fixed_story_menu'} or state.handset != 'up'
+                or state.safety_severity != 'none' or state.scene_menu_refresh_required
+                or not state.scene_menu_descriptor.get('items')):
+            return None
+        from .menu_content import catalogue_items
+        from .game_engine import IMMERSIVE_GAME_SPECS
+        items = catalogue_items(state.mode, state.age_band, stories=self.canonical_runtime.stories, game_specs=IMMERSIVE_GAME_SPECS)
+        return (id(state), self._session_epochs.get(session_id, 0), state.mode, state.scene_menu_generation, state.profile_ref,
+                state.identity_request_id, tuple(items))
+
     def _finish_game_audio_wait(self, wait) -> None:
         if wait is not None and self._game_audio_waits.pop(wait["token"], None) is wait:
             if getattr(wait["pipeline"], "_canonical_game_audio_wait", None) is wait:
@@ -1477,6 +1489,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         voice_admission = None
         personal_welcome_answer_verified = False
         game_confirmation_authorized = False
+        catalogue_descriptor = None
         if event.event_type == "SpeechReceived":
             if _speech_lifecycle_guard is not None and not _speech_lifecycle_guard():
                 return self._identity_result(event.session_id, "stale_session_generation")
@@ -1495,6 +1508,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             epoch = self._session_epochs.get(event.session_id, 0)
             revision = self._session_revisions.get(event.session_id, 0)
             admitted_game_scope = self._game_voice_scope(event.session_id)
+            admitted_catalogue_scope = self._catalogue_voice_scope(event.session_id)
+            catalogue_descriptor = copy.deepcopy(getattr(_speech_ingress_guard, 'catalogue_descriptor',
+                current.scene_menu_descriptor if current is not None else None))
             game_check_owner = self._game_speech_check_owner(event.session_id)
             if game_check_owner is not None:
                 # Automatic hints cannot replace a child's admitted speech
@@ -1527,7 +1543,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             stale_speech_phase = (_speech_ingress_guard is not None and not _speech_ingress_guard())
             same_game_scope = (admitted_game_scope is not None
                 and self._game_voice_scope(event.session_id) == admitted_game_scope)
-            if ((self._session_revisions.get(event.session_id, 0) != revision and not same_game_scope)
+            same_catalogue_scope = (admitted_catalogue_scope is not None
+                and self._catalogue_voice_scope(event.session_id) == admitted_catalogue_scope)
+            if ((self._session_revisions.get(event.session_id, 0) != revision and not (same_game_scope or same_catalogue_scope))
                     or current.last_sequence_by_source.get(event.source) != event.sequence
                     or stale_speech_phase):
                 if safety.severity == "none" and not explicit_help_request:
@@ -1614,6 +1632,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
            private_welcome_ready=private_welcome_ready,
            personal_welcome_answer_verified=personal_welcome_answer_verified,
            game_confirmation_authorized=game_confirmation_authorized,
+           catalogue_descriptor=catalogue_descriptor,
            dialogue_fallback_authorized=dialogue_fallback_authorized,
            personal_story_authorized=personal_story_authorized,
            identity_event_authorized=identity_event_authorized,
@@ -2473,6 +2492,29 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         effect["fallback_reason"] = fallback_reason
                         effect["chunks"] = list(turn.chunks)
                         offers = [item for item in turn.actions if item.value == "offer_game"]
+                        requests = [item for item in turn.actions if item.value in {'open_catalog','play_story','request_information'}]
+                        if fallback_reason is None and snapshot.get('mode') == 'bear_dialogue' and len(requests) == 1 and not turn.chunks:
+                            request = requests[0]
+                            field = {'open_catalog':'catalog','play_story':'story_id','request_information':'kind'}[request.value]
+                            target = request.params[field]
+                            if self.transition_authorizer.authorize_model_action('bear_dialogue', request.value, target)['ok']:
+                                action = request.value
+                                if action == 'play_story':
+                                    from .menu_content import catalogue_choice
+                                    chosen = catalogue_choice(transient_text, 'fixed_story_menu', state_owner.age_band,
+                                        stories=self.canonical_runtime.stories)
+                                    if chosen != target:
+                                        action, target = 'open_catalog', 'stories'
+                                if action == 'request_information':
+                                    from .canonical_services import conversational_information_intent
+                                    if conversational_information_intent(transient_text or '') != target:
+                                        fallback_reason = 'model_action_rejected'
+                                if fallback_reason is None:
+                                    followup = await self._receive_canonical_event(self._internal_followup(event,
+                                        'DialogueFallback', 'bounded_catalogue', {'reason':'catalogue_request',
+                                            'action':action, 'target':target}, 'catalogue-request'),
+                                        dialogue_fallback_authorized=True)
+                                    return {**followup, 'outputs':[effect, *(followup.get('outputs') or [])]}
                         if (fallback_reason is None and snapshot.get("mode") == "bear_dialogue" and len(offers) == 1
                                 and not turn.chunks and self.transition_authorizer.authorize_model_action(
                                     "bear_dialogue", "offer_game", offers[0].params.get("game_id", ""))["ok"]):
@@ -2606,7 +2648,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     effect["resolution"] = "audio_deferred_handset_down"
                     continue
                 tool_kind = str(effect.get("kind") or "")
-                tool_name = "date" if tool_kind in {"date", "menu"} else "weather" if tool_kind == "weather" else "schedule"
+                tool_name = ("date" if tool_kind in {"date", "menu"} else "weather" if tool_kind == "weather"
+                             else 'card_doctors' if tool_kind == 'card_doctors' else "schedule")
+                private_capability = 'personalize' if tool_name == 'card_doctors' else 'schedule' if tool_name == 'schedule' else None
                 unavailable_reason = None
                 try:
                     await self.expire_identity_leases()
@@ -2618,7 +2662,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     effect["tool_authorization"] = dict(tool_auth)
                     if not tool_auth.get("ok"):
                         unavailable_reason = "typed_information_blocked_by_policy"
-                    elif tool_name == "schedule" and not self._identity_scope_live(event.session_id, "schedule"):
+                    elif private_capability and not self._identity_scope_live(event.session_id, private_capability):
                         unavailable_reason = "typed_information_blocked_by_identity"
                     if unavailable_reason is not None:
                         raise ScheduleWeatherProviderError(unavailable_reason)
@@ -2630,9 +2674,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         tool_kind, allow_demo=getattr(self.settings, "profile", "") == "mock")
                     def audio_current():
                         return bool(still_current() and state_owner.handset == "up"
-                            and state_owner.mode == "schedule_weather"
+                            and (state_owner.mode == "schedule_weather" or (state_owner.mode == 'bear_dialogue'
+                                and state_owner.dialogue_information_kind == tool_kind))
                             and state_owner.playback_lease == effect.get("playback_lease")
-                            and (tool_name != "schedule" or self._identity_scope_live(event.session_id,"schedule")))
+                            and (not private_capability or self._identity_scope_live(event.session_id,private_capability)))
                     if not audio_current():
                         return stale_result()
                     audio = await self._render_typed_audio(event.session_id, info["text"], effect,
@@ -2898,6 +2943,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 and not self._identity_scope_live(session_id, "personalize")):
             self._drop_dialogue_context(session_id)
         fresh = self._canonical_audio_context(session_id)
+        if fresh.node_id == 'bear_dialogue':
+            from .menu_content import catalogue_items
+            import json
+            fresh.system_prompt += '\nAVAILABLE_FIXED_RECORDINGS_DATA=' + json.dumps(dict(catalogue_items(
+                'fixed_story_menu', state.age_band, stories=self.canonical_runtime.stories)), ensure_ascii=False)
         owner = (self._session_epochs.get(session_id, 0),
                  state.profile_ref if state is not None else None)
         if game_id:
@@ -2920,7 +2970,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 current.started_at = time.monotonic()
                 remaining = current.max_turns - current.turns
                 current.system_prompt += (f" В партии осталось ходов ребёнка: {remaining}."
-                    + (" Это последний ход: закончи игру доброй короткой репликой, не задавай новый вопрос."
+                    + (" ПОСЛЕДНИЙ ХОД: это правило заменяет просьбу назвать ещё слово из правил игры. Заверши кратко, без нового слова или вопроса."
                        + (" Скажи, что мы вернулись к разговору и ты слушаешь." if state.game_return_mode == "bear_dialogue"
                           else " Скажи, что теперь можно выбрать другое занятие кнопкой.")
                        if remaining == 1 else ""))
@@ -3050,7 +3100,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             else:
                 utterance_guard = _ingress_guard
                 pipeline._canonical_private_owner = (_ingress_guard
-                    if state is not None and state.mode in {"personal_welcome_listen", "game_active"} else None)
+                    if state is not None and state.mode in {"personal_welcome_listen", "game_active", 'game_menu', 'fixed_story_menu'} else None)
         async def no_llm_turn(_text: str, _generation: int):
             return TurnResult((), (), False, None)
         with self._game_audio_wait(session_id, pipeline, utterance_guard) as audio_wait:
@@ -3126,14 +3176,22 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         game_phase = bool(state and state.mode == "game_active")
         game_scope = self._game_voice_scope(session_id)
         game_owner = self._game_speech_check_owner(session_id)
+        catalogue_scope = self._catalogue_voice_scope(session_id)
+        conversation_scene = ((id(state), state.mode) if state is not None and state.mode in
+                              {'bear_dialogue','support_intake','schedule_weather'} else None)
         transport_guard = _ingress_guard
         phase_guard = lambda: (transport_guard()
+            and (conversation_scene is None or ((id(self.canonical_runtime.sessions.get(session_id)),
+                getattr(self.canonical_runtime.sessions.get(session_id), 'mode', None)) == conversation_scene))
+            and (catalogue_scope is None or self._catalogue_voice_scope(session_id) == catalogue_scope)
             and (not private_phase or (self.canonical_runtime.sessions.get(session_id) is state
                 and state.state_version == version))
             and (not game_phase or (game_scope is not None
                 and self._game_speech_check_owner(session_id) == game_owner
                 and self._game_voice_scope(session_id) == game_scope)))
         phase_guard.lifecycle_current = getattr(transport_guard, "lifecycle_current", transport_guard)
+        if catalogue_scope is not None:
+            phase_guard.catalogue_descriptor = copy.deepcopy(getattr(transport_guard, 'catalogue_descriptor', state.scene_menu_descriptor))
         return await self._receive_canonical_audio(session_id, samples, sequence, wait_for_turn=wait_for_turn, _ingress_guard=phase_guard)
 
     @staticmethod

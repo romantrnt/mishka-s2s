@@ -1567,7 +1567,7 @@ function interactionGuide(state, media) {
     if ((page.buttons || []).includes(5) && !(page.items || []).some(item => item.slot === 5)) choices.push('5 — помощь');
     if ((page.buttons || []).includes(6)) choices.push('6 — следующие варианты');
     if ((page.buttons || []).includes(7)) choices.push('7 — назад');
-    return [{game_menu: 'Игры', fixed_story_menu: 'Сказки', personal_story_theme: 'Новая сказка', schedule_weather: 'День и планы'}[node], choices.join('; ') + '.'];
+    return [{game_menu: 'Игры', fixed_story_menu: 'Сказки', personal_story_theme: 'Новая сказка', schedule_weather: 'Мой день и погода'}[node], choices.join('; ') + '.'];
   }
   if (node === 'game_active') {
     const game = state.canonical_state || {};
@@ -1660,7 +1660,7 @@ function updateGuide(state, contract = validateButtonContract(state.button_contr
     personal_story_theme: ['4 · Новая сказка', 'Выберите безопасную тему.'],
     wellbeing_check: ['5 · Помощь', '1 — нет, 7 — да.'],
     bear_dialogue: ['6 · Ограниченный разговор', 'Короткий разговор по безопасным темам.'],
-    schedule_weather: ['7 · День и планы', 'Варианты загружаются из текущего меню.'],
+    schedule_weather: ['7 · Мой день и погода', 'Варианты загружаются из текущего меню.'],
     safety_stop: ['Разговор остановлен', 'Позови взрослого рядом. Положи трубку, чтобы завершить разговор.'],
     root_menu: ['Главное меню', 'Выберите действие кнопкой 1–7.'],
     exhibition_menu_tutorial_intro: ['Меню', skipHint],
@@ -2030,7 +2030,7 @@ function createMicResampler(sourceRate, sendFrame) {
 function microphoneEligible() {
   if (authBlocked) return false;
   if (current?.simulator) return Boolean(current.simulator.microphone?.eligible);
-  const micCapableNodes = new Set(['bear_dialogue', 'support_intake', 'voice_welcome', 'exhibition_name_capture', 'exhibition_age_selection', 'personal_story_theme', 'wellbeing_check', 'schedule_weather']);
+  const micCapableNodes = new Set(['bear_dialogue', 'support_intake', 'voice_welcome', 'exhibition_name_capture', 'exhibition_age_selection', 'personal_story_theme', 'wellbeing_check', 'schedule_weather', 'game_menu', 'fixed_story_menu']);
   return Boolean(current && micCapableNodes.has(String(current.session?.node || '')));
 }
 function microphoneOwnerIsCurrent(owner = micOwner) {
@@ -2083,7 +2083,8 @@ async function startMic() {
       if (!microphoneEligible()) { resampler.reset(); micInputGain = 1; return; }
       const input = event.inputBuffer.getChannelData(0);
       const playbackActive = activeSources.size > 0;
-      const targetGain = playbackActive ? MIC_DUCK_GAIN : 1;
+      const catalogueInput = ['game_menu', 'fixed_story_menu'].includes(String(current?.session?.node || '')) && microphoneEligible();
+      const targetGain = playbackActive && !catalogueInput ? MIC_DUCK_GAIN : 1;
       const alpha = playbackActive ? MIC_DUCK_ATTACK : MIC_DUCK_RELEASE;
       micInputGain += (targetGain - micInputGain) * alpha;
       const ducked = new Float32Array(input.length);

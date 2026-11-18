@@ -6,6 +6,7 @@ changes session state, or treats a model's claims as a capability declaration.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Iterable, Mapping
 
 from .age_policy import policy_for_band
@@ -21,6 +22,60 @@ STORY_THEME_ITEMS = (
     ("дружелюбные машины", "Дружелюбные машины"),
     ("море", "Море"),
 )
+
+STORY_TITLES = {
+    'fixed_aibolit_v1': ('Айболит', ('айболит', 'айболита', 'доктор айболит', 'доктора айболита')),
+    'fixed_squirrel_v1': ('Как бельчонок страх преодолел', ('бельчонок', 'бельчонка', 'про бельчонка', 'о бельчонке')),
+    'fixed_lukomorye_v1': ('У Лукоморья дуб зелёный', ('лукоморье', 'лукоморья', 'у лукоморья')),
+    'fixed_soft_paws_star_v1': ('Кролик Мягкие Лапки и Звезда', ('кролик мягкие лапки', 'кролика мягкие лапки', 'мягкие лапки')),
+    'fixed_neznayka_v1': ('Телефон', ('телефон',)),
+}
+GAME_ALIASES = {
+    'free_lights': ('живой свет', 'свободный свет', 'огоньки'),
+    'quiz': ('вопросы мишки', 'квиз', 'квизы', 'викторина', 'викторину'),
+    'repeat_pattern': ('повтори огоньки', 'повторять огоньки', 'повторение огоньков'),
+    'odd_one_out': ('выбери лишнее', 'найди лишнее', 'лишнее'),
+    'word_game': ('игра в слова', 'игру в слова', 'в слова', 'слова'),
+}
+
+def _choice_text(text):
+    value = ' '.join(str(text or '').casefold().replace('ё', 'е').split()).strip(' .!?…,«»"')
+    return value
+
+
+def catalogue_items(scene, band, *, stories=None, game_specs=()):
+    if scene == 'fixed_story_menu':
+        return _story_items(stories, normalized_age_band(band))
+    if scene == 'game_menu':
+        return tuple((spec.game_id, spec.display_title) for spec in game_specs if spec.available)
+    return ()
+
+
+def catalogue_choice(text, scene, band, *, stories=None, game_specs=(), descriptor=None):
+    """Resolve a complete current catalogue choice, never a negated/title substring."""
+    value = _choice_text(text)
+    if re.search(r'\b(?:не|нет|или|вместо|наверное|может|передумал|передумала)\b', value):
+        return None
+    slots = {'один':1, 'первый':1, 'первую':1, 'два':2, 'второй':2, 'вторую':2,
+             'три':3, 'третий':3, 'третью':3, 'четыре':4, 'четвертый':4, 'четвертую':4,
+             'пять':5, 'пятый':5, 'пятую':5}
+    prefix = r'(?:(?:мишка|пожалуйста)[, ]+)*(?:(?:я )?(?:хочу|бы хотел[а]?|хотел[а]? бы|хотелось бы) )?(?:можно (?:мне )?)?(?:(?:послушать|послушаем|слушать|включи|включить|поставь|расскажи|запусти|давай(?: сыграем| поиграем| послушаем)?|сыграем|поиграем|поиграть) )?(?:мне )?(?:сказку |историю )?'
+    slot = re.fullmatch(prefix+r'(?:кнопк[ау]|вариант|номер)?\s*([1-5]|'+'|'.join(slots)+r')(?:,? пожалуйста)?', value)
+    if slot and descriptor:
+        number = int(slot[1]) if slot[1].isdigit() else slots[slot[1]]
+        return next((item['id'] for item in descriptor.get('items', ()) if item.get('slot') == number), None)
+    matches = []
+    for item_id, title in catalogue_items(scene, band, stories=stories, game_specs=game_specs):
+        aliases = [title]
+        if scene == 'game_menu':
+            aliases.extend(GAME_ALIASES.get(item_id, ()))
+        else:
+            curated = STORY_TITLES.get(item_id)
+            if curated and _choice_text(curated[0]) == _choice_text(title):
+                aliases.extend(curated[1])
+        if any(re.fullmatch(prefix+r'[«"]?'+re.escape(_choice_text(alias))+r'[»"]?(?:,? пожалуйста)?', value) for alias in aliases):
+            matches.append(item_id)
+    return matches[0] if len(matches) == 1 else None
 
 
 def normalized_age_band(band: str) -> str:
@@ -128,7 +183,7 @@ def build_menu_page(scene: str, band: str, page: int = 0, *,
         if any(not isinstance(item_id, str) or not item_id for item_id, _ in choices):
             raise ValueError("menu_item_invalid")
     elif scene == "schedule_weather":
-        approved = {'date':'Дата','weather':'Погода','what_next':'Следующее занятие','where_now':'Текущее занятие'}
+        approved = {'date':'Дата','weather':'Погода','what_next':'Следующее занятие','where_now':'Текущее занятие', 'card_doctors':'Врачи в моей карточке'}
         choices = tuple((item_id, title) for item_id,title in day_items
                         if approved.get(item_id) == title)
     else:
@@ -152,6 +207,10 @@ def build_menu_page(scene: str, band: str, page: int = 0, *,
         parts.append("Шесть — следующие варианты.")
     parts.append("Семь — назад.")
     spoken_text = " ".join(parts)
+    if scene == 'schedule_weather':
+        available = {item_id for item_id, _ in choices}
+        prefix = ('Расписания сейчас не вижу. ' if not {'what_next','where_now'}.intersection(available) else '')
+        spoken_text = prefix + spoken_text
     if len(spoken_text) > 320:
         # Never truncate a title or omit a control while routing still offers it.
         raise ValueError("menu_narration_too_long")
