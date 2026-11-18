@@ -74,7 +74,7 @@ ALLOWED_EVENTS = frozenset({
     "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
     "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
     "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected", "HardwareReconnected",
-    "SessionCancel", "SessionReset", "InteractionIdleExpired",
+    "SessionStarted", "InterviewSkipped", "SessionCancel", "SessionReset", "InteractionIdleExpired",
     "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep",
 })
 # Buttons 5 (help) and 7 (exit) preempt game scoring.
@@ -284,6 +284,8 @@ class CanonicalState:
     accessibility_policy: dict[str, Any] = field(default_factory=dict)
     schedule_ref: str | None = None
     handset: str = "down"
+    # None is an explicit ended visit, even if the physical hook remains up.
+    interaction_route: str | None = "handset"
     expected_inputs: list[str] = field(default_factory=list)
     welcome_t0_monotonic: float | None = None
     welcome_deadline_monotonic: float | None = None
@@ -313,8 +315,14 @@ class CanonicalState:
     seen_correlations: set[str] = field(default_factory=set, repr=False)
     last_sequence_by_source: dict[str, int] = field(default_factory=dict, repr=False)
 
+    @property
+    def interaction_open(self) -> bool:
+        return (self.mode not in {"session_closed", "soft_end"}
+                and (self.interaction_route == "panel" or (self.interaction_route == "handset" and self.handset == "up")))
+
     def snapshot(self) -> dict[str, Any]:
         value = asdict(self)
+        value["interaction_active"] = self.interaction_open
         value.pop("seen_correlations", None)
         value.pop("last_sequence_by_source", None)
         for private_key in ("identity_request_id", "identity_capabilities", "identity_expires_monotonic", "identity_ready_deadline"):
@@ -1047,6 +1055,7 @@ class CanonicalRuntime(SceneMenuMixin):
         prior_deadline = state.welcome_deadline_monotonic
         fresh = self._new_state(state.session_id, None)
         fresh.handset = "down" if event.event_type == "HandsetPlaced" else state.handset
+        fresh.interaction_route = None
         fresh.mode = "idle" if fresh.handset == "down" else "session_closed"
         fresh.expected_inputs = ["handset_up"] if fresh.handset == "down" else ["handset_down"]
         fresh.state_version = state.state_version + 1
@@ -1095,7 +1104,7 @@ class CanonicalRuntime(SceneMenuMixin):
         if engine is not None:
             state.game_progress[engine.game_id] = max(
                 state.game_progress.get(engine.game_id, 0), getattr(engine, 'level', 0))
-        returning = (state.game_return_mode == "bear_dialogue" or state.activity_return_mode == "bear_dialogue") and state.handset == "up"
+        returning = (state.game_return_mode == "bear_dialogue" or state.activity_return_mode == "bear_dialogue") and state.interaction_open
         state.mode, state.active_game_id = "bear_dialogue" if returning else "root_menu", None
         state.game_return_mode = None
         state.activity_return_mode = None
@@ -1118,7 +1127,7 @@ class CanonicalRuntime(SceneMenuMixin):
         return {"type": "dialogue_prompt", "content_id": content_id, "text": text}
 
     def _activity_back(self, state, reason):
-        returning = state.activity_return_mode == "bear_dialogue" and state.handset == "up"
+        returning = state.activity_return_mode == "bear_dialogue" and state.interaction_open
         state.mode = "bear_dialogue" if returning else "root_menu"
         state.activity_return_mode = None
         state.active_story_id = None
@@ -1153,7 +1162,7 @@ class CanonicalRuntime(SceneMenuMixin):
         state.story_checkpoint_confirmed = False
         state.dialogue_memory.story_checkpoint = None
         state.state_version += 1
-        if state.handset != 'up':
+        if not state.interaction_open:
             state.pending_mode, state.mode = 'fixed_story_playing', 'awaiting_handset'
             return self._decision(state, [{"type":"visual", "view":"lift_handset"}], 'story_handset_required')
         state.mode = 'fixed_story_playing'
@@ -1175,11 +1184,11 @@ class CanonicalRuntime(SceneMenuMixin):
             response_window_s=policy.game_response_window_ms / 1000., first_hint_s=policy.first_hint_after_seconds,
             hint_limit=policy.repeat_count, age_band=state.age_band,
             level=state.game_progress.get(selected.game_id, 0), seed=state.game_entry_seed, immersive=True)
-        if selected.mechanic == "sequence" and state.handset != "up":
+        if selected.mechanic == "sequence" and not state.interaction_open:
             engine = begin_demonstration(engine, now)
         state.game_engine_state = engine
-        state.game_audio_stage = "starting" if state.handset == "up" else "playing"
-        if state.handset != "up":
+        state.game_audio_stage = "starting" if state.interaction_open else "playing"
+        if not state.interaction_open:
             state.game_engine_state = finish_prompt(engine, now).state
         state.game_return_mode = "bear_dialogue" if from_dialogue else None
         state.activity_return_mode = "bear_dialogue" if from_dialogue else None
@@ -1194,7 +1203,7 @@ class CanonicalRuntime(SceneMenuMixin):
         state.state_version += 1
         effects = [{"type": "audio_stop"}, {"type": "capture_close"}, self._game_lighting(engine),
                    {"type": "game_started", "game_id": selected.game_id}]
-        if state.handset == "up":
+        if state.interaction_open:
             effects.append({"type": "speak", "phrase_id": "PHRASE_020"})
         return self._decision(state, effects, "game_started", clear_audio=True)
 
@@ -1245,7 +1254,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.game_engine_state = replace(pause_game(outcome.state), phase='awaiting_prompt')
             state.state_version += 1
             effects = [{'type':'audio_stop'}, {'type':'capture_close'}, self._game_lighting(state.game_engine_state)]
-            if state.handset == 'up':
+            if state.interaction_open:
                 prompt = self._game_prompt(state)
                 prompt.update(prompt='Продолжаем игру. ' + prompt['prompt'], phrase_id=None, exit_hint=None)
                 effects.append(prompt)
@@ -1255,7 +1264,7 @@ class CanonicalRuntime(SceneMenuMixin):
             return self._decision(state, effects, 'game_exit_aborted', clear_audio=True)
         if outcome.state.seven_exit_phase != 'idle':
             return self._decision(state, [], 'game_exit_gesture_held')
-        if (immersive and state.handset != "up" and outcome.speech_text
+        if (immersive and not state.interaction_open and outcome.speech_text
                 and outcome.state.phase == "awaiting_prompt"):
             outcome = replace(outcome, state=finish_prompt(outcome.state, now).state)
             state.game_engine_state = outcome.state
@@ -1280,22 +1289,22 @@ class CanonicalRuntime(SceneMenuMixin):
                 effects.append({"type":"game_lighting", "animation":"ripple", "origin_button":outcome.wave_origin})
             elif engine.game_id != 'free_lights':
                 effects.append(self._game_lighting(outcome.state))
-            if outcome.speech_text and state.handset == 'up':
+            if outcome.speech_text and state.interaction_open:
                 effects = [{"type":"audio_stop"}, {"type":"capture_close"},
                            self._game_prompt(state, outcome.speech_text, outcome.feedback_id)]
-            elif outcome.feedback_id and state.handset == 'up':
+            elif outcome.feedback_id and state.interaction_open:
                 effects.append({"type":"speak", "phrase_id":outcome.feedback_id})
             return self._decision(state, effects, "game_" + outcome.status)
         effects = [self._game_lighting(outcome.state)]
         if (engine.game_id == "repeat_pattern" and event.event_type == "ButtonPressed"
                 and outcome.status in {"sequence_partial", "sequence_retry", "progress", "completed"}):
             effects.insert(0, {"type": "audio_stop"})
-        if outcome.feedback_id and not outcome.completed and state.handset == "up":
+        if outcome.feedback_id and not outcome.completed and state.interaction_open:
             effects.append({"type": "speak", "phrase_id": outcome.feedback_id})
         if outcome.completed:
             state.mode = "root_menu"
             effects.append({"type": "lighting_preset", "preset": "ROOT_MENU"})
-            if state.handset == "up":
+            if state.interaction_open:
                 effects.append({"type": "speak", "phrase_id": "PHRASE_028"})
         return self._decision(state, effects, "game_" + outcome.status)
 
@@ -1323,7 +1332,7 @@ class CanonicalRuntime(SceneMenuMixin):
                   reset_session: bool = False, clear_audio: bool = False) -> dict[str, Any]:
         if (state.mode not in {"game_menu", "game_active", "fixed_story_menu", "fixed_story_playing",
                 "story_speech_analysis", "story_pause_announcement", "story_paused", "story_resume_announcement",
-                "fixed_story_choice_wave"} or state.handset != "up" or state.safety_severity != "none"):
+                "fixed_story_choice_wave"} or not state.interaction_open or state.safety_severity != "none"):
             state.activity_return_mode = None
         if state.mode != "bear_dialogue" or state.safety_severity != "none":
             state.dialogue_information_kind = None
@@ -1335,10 +1344,10 @@ class CanonicalRuntime(SceneMenuMixin):
             if isinstance(checkpoint, dict) and checkpoint.get("story_id") == "PERSONAL_STORY":
                 state.dialogue_memory.story_checkpoint = None
                 state.story_checkpoint_confirmed = False
-        if state.mode != "bear_dialogue" or state.handset != "up" or state.safety_severity != "none":
+        if state.mode != "bear_dialogue" or not state.interaction_open or state.safety_severity != "none":
             state.pending_game_offer = state.game_offer_id = None
             state.game_offer_ready = False
-        if state.mode != "game_active" or state.handset != "up" or state.safety_severity != "none":
+        if state.mode != "game_active" or not state.interaction_open or state.safety_severity != "none":
             state.game_return_mode = None
             if (state.game_engine_state is not None and state.game_engine_state.seven_exit_phase != 'idle'
                     and (state.mode != 'game_active' or state.safety_severity != 'none')):
@@ -1380,14 +1389,14 @@ class CanonicalRuntime(SceneMenuMixin):
                     audio_effect["phrase_asset_id"] = audio_effect.pop("phrase_id", None)
                 content_id = str(audio_effect.get("phrase_id") or audio_effect.get("story_id")
                                  or audio_effect.get("content_id") or "dynamic")
-                if state.handset != "up":
+                if not state.interaction_open:
                     audio_effect["deferred_until_handset"] = True
                     continue
                 audio_effect["playback_lease"] = f"{state.session_id}:{uuid.uuid4().hex}"
                 state.active_audio_id = content_id
                 state.playback_lease = audio_effect["playback_lease"]
-            state.audio_status = "queued" if state.handset == "up" else "idle"
-            if state.handset != "up":
+            state.audio_status = "queued" if state.interaction_open else "idle"
+            if not state.interaction_open:
                 state.active_audio_id = state.playback_lease = None
             state.audio_failure_code = None
         elif clear_audio or any(item.get("type") == "audio_stop" for item in effects):
@@ -1434,6 +1443,7 @@ class CanonicalRuntime(SceneMenuMixin):
                dialogue_fallback_authorized: bool = False,
                personal_story_authorized: bool = False,
                identity_event_authorized: bool = False,
+               session_action_authorized: bool = False,
                identity_context_present: bool = False,
                public_story_expiry: dict | None = None,
                public_story_checkpoint_authorized: bool = False,
@@ -1454,6 +1464,8 @@ class CanonicalRuntime(SceneMenuMixin):
             self.sessions[event.session_id] = state
         # Authority is an out-of-band server argument, never event.source or
         # client-controlled payload. Untrusted resolve does not consume sequence.
+        if event.event_type in {"SessionStarted", "InterviewSkipped"} and not session_action_authorized:
+            return self._decision(state, [], "session_action_untrusted")
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired"} and not identity_event_authorized:
             return self._decision(state, [], "identity_outcome_untrusted")
         if event.event_type == "InteractionIdleExpired" and not interaction_idle_authorized:
@@ -1588,7 +1600,7 @@ class CanonicalRuntime(SceneMenuMixin):
 
             state.mode, state.expected_inputs = "profile_ready", ["handset_up"]
             state.state_version += 1
-            if state.handset == "up":
+            if state.interaction_open:
                 state.identity_ready_deadline = None
                 return self._start_exhibition_welcome(state, monotonic_now, reason="profile_ready")
             return self._decision(state, [{"type": "profile_ready_lighting"}], "profile_ready")
@@ -1627,11 +1639,30 @@ class CanonicalRuntime(SceneMenuMixin):
             return self._decision(state, [{"type": "lighting_dark"}], "closed_handset_placed")
         if event.event_type in {"SessionCancel", "SessionReset"}:
             self.clear_identity(state)
+            state.interaction_route = None
             state.mode = ("session_closed" if state.handset == "up" else "idle") if self.optional_identity else ("soft_end" if event.event_type == "SessionCancel" else "session_closed")
+            if session_action_authorized and event.event_type == "SessionCancel":
+                state.mode = "session_closed"
             state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
             state.state_version += 1
             lighting = {"type": "lighting_dark"} if self.optional_identity else {"type": "lighting_preset", "preset": "READY"}
             return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}, lighting], "soft_end" if event.event_type == "SessionCancel" else "session_closed")
+        if event.event_type == "SessionStarted":
+            if state.substate == "profile_cleanup_failed":
+                return self._decision(state, [], "session_start_cleanup_failed")
+            if state.interaction_open and state.mode not in {"idle", "profile_ready", "soft_end", "session_closed"}:
+                return self._decision(state, [], "interaction_already_started")
+            state.interaction_route = "panel"
+            state.interaction_idle = False
+            state.identity_ready_deadline = None
+            state.state_version += 1
+            return self._start_exhibition_welcome(state, monotonic_now, reason="panel_session_started")
+        if event.event_type == "InterviewSkipped":
+            if (not state.interaction_open or state.profile_status == "identified"
+                    or state.mode not in {"exhibition_introduction", "exhibition_name_question",
+                        "exhibition_name_capture", "exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"}):
+                return self._decision(state, [], "interview_skip_unavailable")
+            return self._personal_welcome_menu(state, "exhibition_interview_skipped")
         # A closed/soft-ended session is inert until an authorized profile or explicit
         # anonymous start creates a fresh scenario context. Stray handset,
         # audio and button events must not resurrect it.
@@ -1758,27 +1789,27 @@ class CanonicalRuntime(SceneMenuMixin):
                     or event.payload.get("deadline") != next_deadline(engine)):
                 return self._decision(state, [], "game_timer_stale")
             outcome = timer_step(engine, monotonic_now)
-            if (state.handset != "up" and outcome.speech_text and outcome.state.phase == "awaiting_prompt"):
+            if (not state.interaction_open and outcome.speech_text and outcome.state.phase == "awaiting_prompt"):
                 outcome = replace(outcome, state=finish_prompt(outcome.state, monotonic_now).state)
-            if (outcome.feedback_id == "PHRASE_041" and state.handset == "up" and not state.active_audio_id):
+            if (outcome.feedback_id == "PHRASE_041" and state.interaction_open and not state.active_audio_id):
                 outcome = replace(outcome, state=replace(outcome.state, phase="instruction", demonstration_deadline=None))
             state.game_engine_state = outcome.state
             state.state_version += 1
             if outcome.status in {'exit_progress','exit_ready'}:
                 effects = [{'type':'lighting_preset','preset':'GAME_EXIT_HOLD','step':outcome.state.seven_exit_step}]
-                if outcome.status == 'exit_ready' and state.handset == 'up':
+                if outcome.status == 'exit_ready' and state.interaction_open:
                     effects.append({'type':'speak','phrase_id':'PHRASE_036'})
                 return self._decision(state, effects, 'game_' + outcome.status)
             effects = [{"type": "game_wait", "reason": outcome.status,
                         "hints_emitted": outcome.state.hints_emitted}]
-            if getattr(engine, 'immersive', False) and outcome.speech_text and state.handset == 'up':
+            if getattr(engine, 'immersive', False) and outcome.speech_text and state.interaction_open:
                 return self._decision(state, [{'type':'audio_stop'}, {'type':'capture_close'},
                     self._game_prompt(state, outcome.speech_text, outcome.feedback_id)], 'game_' + outcome.status)
             if outcome.status in {"sequence_demonstration", "sequence_input"}:
                 effects.append(self._game_lighting(outcome.state))
             # Do not replace an instruction still playing or fabricate audio
             # on the silent clinical on-hook visual path.
-            if outcome.feedback_id and state.handset == "up" and not state.active_audio_id:
+            if outcome.feedback_id and state.interaction_open and not state.active_audio_id:
                 effects.append({"type": "speak", "phrase_id": outcome.feedback_id})
             return self._decision(state, effects, "game_" + outcome.status)
         if event.event_type == "TimeoutFired":
@@ -1794,7 +1825,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "clear_private_display"}], "ram_ttl_expired")
             return self._decision(state, [], "timeout_not_due")
         if event.event_type == "PersonalStoryReady":
-            if state.mode != "personal_story_generating" or state.handset != "up":
+            if state.mode != "personal_story_generating" or not state.interaction_open:
                 return self._decision(state, [], "personal_story_result_stale")
             state.mode = "personal_story_playing"
             state.active_story_id = "PERSONAL_STORY"
@@ -1804,7 +1835,7 @@ class CanonicalRuntime(SceneMenuMixin):
             return self._decision(state, [story_wave, {"type":"play_personal_story", "content_id":"PERSONAL_STORY"}], "personal_story_ready")
         if event.event_type == "DialogueFallback":
             if event.payload.get('reason') == 'catalogue_request':
-                if state.mode != 'bear_dialogue' or state.handset != 'up' or state.safety_severity != 'none':
+                if state.mode != 'bear_dialogue' or not state.interaction_open or state.safety_severity != 'none':
                     return self._decision(state, [], 'catalogue_request_stale')
                 action, target = event.payload.get('action'), event.payload.get('target')
                 if action == 'open_catalog' and target in {'games','stories'}:
@@ -1823,7 +1854,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if event.payload.get("reason") == "game_offer":
                 game_id = event.payload.get("game_id")
                 selected = next((spec for spec in IMMERSIVE_GAME_SPECS if spec.game_id == game_id), None)
-                if state.mode != "bear_dialogue" or state.handset != "up" or selected is None or state.safety_severity != "none":
+                if state.mode != "bear_dialogue" or not state.interaction_open or selected is None or state.safety_severity != "none":
                     return self._decision(state, [], "game_offer_stale")
                 state.pending_game_offer = selected.game_id
                 state.game_offer_id = uuid.uuid4().hex
@@ -1846,7 +1877,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.state_version += 1
                 return self._decision(state, [], "word_game_turn_finished")
             if (state.mode == "game_active" and state.active_game_id == "word_game"
-                    and state.handset == "up"):
+                    and state.interaction_open):
                 reason = str(event.payload.get('reason') or 'provider_or_validation_failure')
                 if reason in {'bounded_limit', 'dialogue_exit'}:
                     return self._game_exit(state, 'word_game_finished')
@@ -1854,14 +1885,14 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [{'type':'speak','phrase_id':'PHRASE_104'}],
                                       'word_game_retry', clear_audio=True)
             if (event.payload.get("reason") == "typed_information_unavailable"
-                    and state.mode in {"schedule_weather", "bear_dialogue"} and state.handset == "up"):
+                    and state.mode in {"schedule_weather", "bear_dialogue"} and state.interaction_open):
                 state.state_version += 1
                 phrase = "PHRASE_101" if event.payload.get("kind") in {"what_next", "where_now", 'card_doctors'} else "PHRASE_100"
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "speak", "phrase_id": phrase}],
                                       "typed_information_unavailable", clear_audio=True)
             if (event.payload.get("reason") == "personal_story_unavailable"
                     and state.mode in {"personal_story_generating", "personal_story_validating", "personal_story_playing"}
-                    and state.handset == "up"):
+                    and state.interaction_open):
                 # One owned failure recording, then a functioning fixed-story
                 # chooser. Do not claim a generated story exists or queue two
                 # prompts on the same playback lease.
@@ -1873,7 +1904,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     {"type": "lighting_preset", "preset": "STORY_MENU"},
                     {"type": "speak", "phrase_id": "PHRASE_080"},
                 ], "personal_story_unavailable", clear_audio=True)
-            if state.mode not in {"bear_dialogue", "support_intake"} or state.handset != "up":
+            if state.mode not in {"bear_dialogue", "support_intake"} or not state.interaction_open:
                 return self._decision(state, [], "dialogue_fallback_ignored")
             reason = str(event.payload.get("reason") or "provider_or_validation_failure")
             leaving = reason in {"bounded_limit", "dialogue_exit"}
@@ -1980,7 +2011,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.state_version += 1
                 effects = ([{"type": "content_blocked", "error_code": "game_instruction_audio_unavailable"}]
                            if failed else [])
-                if (state.mode == "game_active" and state.handset == "up" and response_id == "PHRASE_035"
+                if (state.mode == "game_active" and state.interaction_open and response_id == "PHRASE_035"
                         and state.game_engine_state is not None and state.game_engine_state.hold_ready
                         and state.game_engine_state.target in state.game_engine_state.held):
                     effects.append({"type": "speak", "phrase_id": "PHRASE_036"})
@@ -2319,6 +2350,11 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.identity_ready_deadline = None
 
                 state.mode = "idle"
+            if state.interaction_route == "panel":
+                state.handset = "up"
+                return {"reason": "panel_handset_lifted", "state": state.snapshot(), "effects": [],
+                        "guards": {"expected_state_version": state.state_version}, "reset_session": False}
+            state.interaction_route = "handset"
             state.handset = "up"; state.state_version += 1
             if state.mode == "idle":
                 return self._start_exhibition_welcome(state, monotonic_now,
@@ -2472,7 +2508,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 if button in {1, 3, 4, 5, 7}:
                     mode = BUTTON_MODES[button]
                     state.menu_pressed_buttons = []
-                    if button == 3 and state.handset != "up":
+                    if button == 3 and not state.interaction_open:
                         state.pending_mode = mode
                         state.mode = "awaiting_handset"
                         selection["target_state"] = "awaiting_handset"
@@ -2485,7 +2521,7 @@ class CanonicalRuntime(SceneMenuMixin):
                         ], "handset_required")
                     state.mode = mode
                     state.expected_inputs = (
-                        ["button", "speech", "handset_down"] if state.handset == "up"
+                        ["button", "speech", "handset_down"] if state.interaction_open
                         else ["button", "handset_down"]
                     )
                     selection["target_state"] = mode
@@ -2542,7 +2578,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.support_question_kind = question or "pain_or_discomfort"
                 state.mode, state.expected_inputs, state.state_version = "wellbeing_check", ["button_1", "button_5", "button_7", "speech", "handset_down"], state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "HELP"}, {"type": "support_question", "question": state.support_question_kind}], "help_priority")
-            if state.mode == "wellbeing_check" and state.handset != "up":
+            if state.mode == "wellbeing_check" and not state.interaction_open:
                 state.expected_inputs = ["handset_up", "button_5"]
                 return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "support_handset_required")
             if state.mode == "personal_welcome_listen":
@@ -2633,14 +2669,14 @@ class CanonicalRuntime(SceneMenuMixin):
                 mode = BUTTON_MODES[button]
                 if mode in {"game_menu", "fixed_story_menu", "personal_story_theme", "schedule_weather"}:
                     state.scene_menu_held = [button]
-                if button in {3, 6} and state.handset != "up":
+                if button in {3, 6} and not state.interaction_open:
                     state.pending_mode = mode
                     state.mode, state.state_version = "awaiting_handset", state.state_version + 1
                     return self._decision(state, [{"type": "lighting", "elements": [14], "state": 1}, {"type": "visual", "view": "lift_handset"}], "handset_required")
                 state.mode, state.state_version = mode, state.state_version + 1
                 state.expected_inputs = (["speech", "button_7", "handset_down"]
-                                         if mode == "bear_dialogue" and state.handset == "up"
-                                         else ["button", "speech"] if state.handset == "up" else ["button"])
+                                         if mode == "bear_dialogue" and state.interaction_open
+                                         else ["button", "speech"] if state.interaction_open else ["button"])
                 preset = {
                     "game_menu": "GAME_MENU", "fixed_story_menu": "STORY_MENU",
                     "support_intake": "SUPPORT", "personal_story_theme": "PERSONAL_STORY",
@@ -2650,7 +2686,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 effects = [{"type": "lighting_preset", "preset": preset}]
                 if mode == "schedule_weather":
                     effects.append({"type": "typed_info_request", "kind": "menu"})
-                if mode == "bear_dialogue" and state.handset == "up":
+                if mode == "bear_dialogue" and state.interaction_open:
                     state.substate = "dialogue_started"
                     state.dialogue_memory.touch(now)
                     effects.extend([
@@ -2702,7 +2738,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 effects = [{"type": "audio_stop"},
                            {"type": "lighting_preset", "preset": "PAUSED"},
                            {"type": "game_exit_confirmation", "requires_explicit_choice": True}]
-                if state.handset == "up":
+                if state.interaction_open:
                     effects.append({"type": "speak", "phrase_id": "PHRASE_062"})
                 return self._decision(state, effects, "game_exit_confirmation", clear_audio=True)
             if state.mode == "game_active":
@@ -2718,7 +2754,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 if verified is None and placeholder is None:
                     return self._decision(state, [{"type": "content_blocked", "story_id": story_id}, {"type": "lighting_preset", "preset": "ERROR_RECOVERABLE"}], "fixed_story_blocked")
                 state.active_story_id, state.state_version = story_id, state.state_version + 1
-                if state.handset != "up":
+                if not state.interaction_open:
                     state.pending_mode = "fixed_story_playing"
                     state.mode = "awaiting_handset"
                     return self._decision(state, [{"type": "lighting", "elements": [14], "state": 1}, {"type": "visual", "view": "lift_handset"}], "story_handset_required")
@@ -2758,7 +2794,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     "wellbeing_check", "personal_story_theme", "automatic_mood_check", "personal_welcome_listen",
                 }
                 retry_effects = ([{"type": "speak", "phrase_id": "PHRASE_074"}]
-                    if state.handset == "up" and state.mode in retry_modes else [])
+                    if state.interaction_open and state.mode in retry_modes else [])
                 prior_substate = state.substate
                 result = self._decision(state, retry_effects, "input_safety_retry")
                 state.substate = prior_substate
@@ -2781,7 +2817,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.welcome_status = "cancelled"
                 state.welcome_t0_monotonic = state.welcome_deadline_monotonic = None
                 state.expected_inputs = (["speech", "button_5", "button_7", "handset_down"]
-                                         if state.handset == "up" else ["handset_up", "button_5"])
+                                         if state.interaction_open else ["handset_up", "button_5"])
                 state.state_version += 1
                 return self._decision(state, [
                     {"type": "audio_stop"},
@@ -2794,9 +2830,9 @@ class CanonicalRuntime(SceneMenuMixin):
                     and onboarding_declined(transient_text or "")):
                 # No fabricated slot, no repeated interrogation, no new identity.
                 return self._personal_welcome_menu(state, "exhibition_onboarding_declined")
-            if state.handset != "up":
+            if not state.interaction_open:
                 return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "voice_requires_handset")
-            if state.mode == "wellbeing_check" and state.handset != "up":
+            if state.mode == "wellbeing_check" and not state.interaction_open:
                 state.expected_inputs = ["handset_up", "button_5"]
                 return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "support_handset_required")
             if state.mode == "bear_dialogue" and state.pending_game_offer:

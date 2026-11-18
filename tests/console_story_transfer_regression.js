@@ -45,6 +45,7 @@ const context = vm.createContext({console, AbortController, Map, Set, Date: {now
 });
 context.window.setTimeout = context.setTimeout; context.window.clearTimeout = context.clearTimeout;
 const run = (start, end) => vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))), context);
+run('function interactionActive(', 'function personalStoryCancelAvailable(');
 run('function simulatorSnapshotIsCurrent(', 'function normalizeLightingState(');
 run('function handleAudioStop(', 'function interactionGuide(');
 run('function interactionGuide(', 'function enqueuePCM(');

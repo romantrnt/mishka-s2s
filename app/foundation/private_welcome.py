@@ -67,7 +67,7 @@ class PrivateWelcomeMixin:
         state = self.canonical_runtime.sessions.get(session_id)
         return bool(not owner.closed and not self._identity_shutdown
             and self._private_welcomes.get(session_id) is owner
-            and state is owner.state_owner and state.handset == 'up'
+            and state is owner.state_owner and state.interaction_open
             and state.mode == 'voice_welcome'
             and self._session_epochs.get(session_id, 0) == owner.epoch
             and state.profile_status == 'identified'

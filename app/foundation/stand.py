@@ -925,6 +925,12 @@ class HardwareIntegrationStand:
         self._headless_output_resume_at = time.monotonic() + HEADLESS_OUTPUT_TAIL_S
 
     def _headless_audio_accepting(self) -> bool:
+        record = self.application.sessions.get(self.active_session_id)
+        state = self.application.canonical_runtime.sessions.get(self.active_session_id)
+        return bool(record and record.handset_up and state and state.handset == "up"
+                    and self._interaction_audio_accepting())
+
+    def _interaction_audio_accepting(self) -> bool:
         session = self.application.sessions.get(self.active_session_id)
         runtime = getattr(self.application, "canonical_runtime", None)
         state = runtime.sessions.get(self.active_session_id) if runtime is not None else None
@@ -936,8 +942,7 @@ class HardwareIntegrationStand:
             and (not self._headless_turn_taking_enabled()
                  or (not self._headless_output_owners
                      and time.monotonic() >= self._headless_output_resume_at))
-            and getattr(session, "handset_up", False)
-            and getattr(state, "handset", None) == "up"
+            and bool(state and state.interaction_open)
             and not getattr(state, "interaction_idle", False)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
@@ -959,6 +964,8 @@ class HardwareIntegrationStand:
         record = self.application.sessions.get(sid)
         # A callback/upload admitted while the handset was down must not
         # become owned by the next lift of this same mutable session record.
+        state = self.application.canonical_runtime.sessions.get(sid)
+        interaction_open = bool(state and state.interaction_open)
         handset_up = bool(record and record.handset_up)
         epoch = self.application._session_epochs.get(sid, 0)
         hid_generation = getattr(self, "_hid_generation", 0)
@@ -967,7 +974,8 @@ class HardwareIntegrationStand:
 
         def current():
             return (self.application.sessions.get(sid) is record
-                    and bool(record and record.handset_up) == handset_up
+                    and bool(getattr(self.application.canonical_runtime.sessions.get(sid), "interaction_open", False)) == interaction_open
+                    and (not physical or bool(record and record.handset_up) == handset_up)
                     and self.application._session_epochs.get(sid, 0) == epoch
                     and (not physical or (
                         self.active_session_id == sid
@@ -1279,7 +1287,7 @@ class HardwareIntegrationStand:
         from .owned_speech import OWNED_PCM_IDS, PRIVATE_TYPED_AUDIO_IDS
         lease = self.application._active_audio.get(handle.session_id)
         state = self.application.canonical_runtime.sessions.get(handle.session_id)
-        if not (state is not None and state.handset == "up" and handle.response_id in OWNED_PCM_IDS
+        if not (state is not None and state.interaction_open and handle.response_id in OWNED_PCM_IDS
                 and state.active_audio_id == handle.response_id and state.playback_lease == handle.playback_lease
                 and lease and self.active_session_id == handle.session_id
                 and self.application._session_epochs.get(handle.session_id,0) == handle.generation
@@ -1617,7 +1625,7 @@ class HardwareIntegrationStand:
                 return False
             lease = self.application._active_audio.get(session_id)
             state = self.application.canonical_runtime.sessions.get(session_id)
-            return bool(lease and state and state.handset == "up"
+            return bool(lease and state and state.interaction_open
                 and self.application._session_epochs.get(session_id, 0) == handle.generation
                 and state.active_audio_id == response_id and state.playback_lease == handle.playback_lease
                 and all(lease.get(key) == value for key, value in {
@@ -1630,7 +1638,7 @@ class HardwareIntegrationStand:
                 return current()
             state = self.application.canonical_runtime.sessions.get(session_id)
             paused = self.application._paused_story_playback.get(session_id)
-            return bool(handle and paused and state and state.handset == "up"
+            return bool(handle and paused and state and state.interaction_open
                 and state.mode in {"story_pause_announcement", "story_paused"}
                 and state.active_story_id == response_id
                 and self.active_session_id == session_id
@@ -2380,6 +2388,15 @@ class HardwareIntegrationStand:
                     chunk_index=payload.get("chunk_index"), token=payload.get("token"),
                 )
 
+    async def session_action(self, action, *, ownership_guard, state_version=None):
+        result = await self.application.session_action(self.active_session_id, action,
+            ownership_guard=ownership_guard, state_version=state_version)
+        await self._flush_device_commands(timeout=1.0)
+        self._drain_device_commands()
+        self._collect_events()
+        await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
+        return result
+
     async def inject(self, message_type: str, payload: dict[str,Any], session_id: str | None = None, *, wait_for_audio: bool = True, _ingress_guard=None):
         sid = session_id or self.active_session_id
         if message_type == "audio_pcm":
@@ -3059,7 +3076,7 @@ class HardwareIntegrationStand:
         if isinstance(state, dict):
             result["canonical_state"] = {
                 key: state[key] for key in (
-                    "mode", "state_version", "handset", "audio_status",
+                    "mode", "state_version", "handset", "interaction_active", "interaction_route", "audio_status",
                     "safety_severity",
                 ) if key in state
             }

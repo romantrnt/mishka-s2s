@@ -15,7 +15,7 @@ function harness({microphone=false,pending=false,accepting=false}={}){
  const context=vm.createContext({audioQueueTail:Promise.resolve(),audioGeneration:0,storySpeechGeneration:0,
   failedPCMOwner:null,pcmPlaybackError:null,pcmTextAttempt:0,pendingPCM:[],audioContext:contextAudio,nextAudioTime:0,activeSources:new Set(),
   audioReady:true,micInputGain:1,activeStoryPlayback:null,publicStoryBuffer:null,personalStoryPlayback:null,
-  mic:microphone?{}:null,micStarting:pending,microphoneAccepting:()=>accepting,
+  mic:microphone?{}:null,micStarting:pending,microphoneAccepting:()=>accepting,clearMic:()=>{},
   unlockAudio:async()=>{if(permission)await permission;return contextAudio;},
   atob:value=>Buffer.from(value,'base64').toString('binary'),
   $:id=>fields[id]||(fields[id]={textContent:'',dataset:{},classList:{remove:()=>{},add:()=>{},toggle:()=>{}}}),
@@ -23,6 +23,7 @@ function harness({microphone=false,pending=false,accepting=false}={}){
   discardStoppedStoryCheckpoint:()=>{},discardPersonalStoryPlayback:()=>{},freezePersonalStoryPosition:()=>{},
   freezeStoryCheckpoint:()=>{},checkpointPublicStoryTransfer:()=>{},minimumPCMGeneration:0,lastSpokenCommand:0,
  });
+ vm.runInContext(source.slice(source.indexOf('function interactionActive('),source.indexOf('function sessionActionIsCurrent(')),context);
  vm.runInContext(source.slice(source.indexOf('function enqueuePCM('),source.indexOf('function initDiagnostics(')),context);
  const errorStart=source.indexOf('function showError(');
  vm.runInContext(source.slice(errorStart,source.indexOf('\nfunction ',errorStart+1)),context);

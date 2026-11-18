@@ -76,10 +76,10 @@ class SceneMenuMixin:
         state.expected_inputs = ['button_'+str(b) for b in page.buttons] + ['handset_down']
         if (state.mode in {'game_menu','fixed_story_menu'} and page.items) or state.scene_menu_phase == 'repeat_listen' or (state.mode in {'personal_story_theme','schedule_weather'}
                 and state.scene_menu_phase=='ready' and page.items): state.expected_inputs.append('speech')
-        if entering and state.mode == 'game_menu' and state.handset == 'up':
+        if entering and state.mode == 'game_menu' and state.interaction_open:
             state.scene_menu_phase = 'invite'
             effects.extend([{'type':'capture_open'}, {'type':'speak','phrase_id':'PHRASE_019'}])
-        if (state.handset == 'up' and getattr(self,'menu_voice_capable',False)
+        if (state.interaction_open and getattr(self,'menu_voice_capable',False)
                 and state.scene_menu_phase != 'invite'
                 and (state.mode not in state.scene_menu_seen or reason in {'scene_menu_page','scene_menu_refresh'})
                 and (entering or changed or reason in {'voice_open_activity','typed_menu_after_handset','scene_menu_page','scene_menu_refresh','personal_story_failure_finished'})
@@ -159,7 +159,7 @@ class SceneMenuMixin:
             state.scene_menu_phase='ready'
             state.scene_menu_answers[state.mode]='failed'
             state.audio_status='failed'
-            capture = 'capture_open' if state.mode == 'game_menu' and state.handset == 'up' else 'capture_close'
+            capture = 'capture_open' if state.mode == 'game_menu' and state.interaction_open else 'capture_close'
             return self._decision(state,[{'type':capture}],'scene_menu_audio_failed',clear_audio=True)
         state.audio_status='finished'
         if state.scene_menu_phase=='invite':

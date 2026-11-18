@@ -288,6 +288,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         fresh = runtime._new_state(sid, None)
         if old is not None:
             fresh.handset = old.handset
+            fresh.interaction_route = (old.interaction_route if old.interaction_route != "panel" or old.interaction_open else None)
             fresh.state_version = old.state_version + 1
             fresh.last_sequence_by_source = dict(old.last_sequence_by_source)
             fresh.seen_correlations = set(old.seen_correlations)
@@ -501,7 +502,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 or not state.profile_ref or not request
                 or request["request_id"] != state.identity_request_id
                 or event.payload.get("request_id") != state.identity_request_id
-                or state.handset != "up" or state.safety_severity == "urgent"
+                or not state.interaction_open or state.safety_severity == "urgent"
                 or state.mode not in {"fixed_story_playing", "story_paused",
                                       "story_pause_announcement", "story_resume_announcement"}):
             return None
@@ -547,7 +548,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 or self._session_epochs.get(sid, 0) != transfer["epoch"]
                 or self._session_revisions.get(sid, 0) != transfer["revision"]
                 or state is not transfer["state"] or not state.public_story_checkpoint_pending
-                or state.handset != "up" or state.profile_ref or state.active_story_id != transfer["story_id"]):
+                or not state.interaction_open or state.profile_ref or state.active_story_id != transfer["story_id"]):
             self._drop_public_story_transfer(sid)
             return None
         return transfer
@@ -601,7 +602,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         state = runtime.sessions.get(session_id) if runtime is not None else None
         word_game = bool(state and state.mode == "game_active" and state.active_game_id == "word_game"
                          and state.game_audio_stage == "playing")
-        if state is None or (state.mode != "bear_dialogue" and not word_game) or state.handset != "up":
+        if state is None or (state.mode != "bear_dialogue" and not word_game) or not state.interaction_open:
             return None
         if self.optional_identity and state.identity_request_id and not self._identity_scope_live(session_id):
             await self.expire_identity_leases()
@@ -793,7 +794,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return False
         owner = self._active_audio.get(session_id)
         state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
-        if (not owner or state is None or state.handset != "up"
+        if (not owner or state is None or not state.interaction_open
                 or self._session_epochs.get(session_id, 0) != generation
                 or state.active_audio_id != response_id or state.playback_lease != playback_lease
                 or any(owner.get(key) != value for key, value in {
@@ -1338,14 +1339,14 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
     def _game_speech_check_owner(self, session_id: str) -> tuple | None:
         state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
         engine = state.game_engine_state if state is not None else None
-        if state is None or state.mode != "game_active" or state.handset != "up" or engine is None:
+        if state is None or state.mode != "game_active" or not state.interaction_open or engine is None:
             return None
         return (session_id, id(state), self._session_epochs.get(session_id, 0), engine.run_id, engine.round_generation)
 
     def _catalogue_voice_scope(self, session_id):
         state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
         descriptor = state.scene_menu_descriptor if state is not None else {}
-        if (state is None or state.mode not in {'game_menu','fixed_story_menu'} or state.handset != 'up'
+        if (state is None or state.mode not in {'game_menu','fixed_story_menu'} or not state.interaction_open
                 or state.safety_severity != 'none' or state.scene_menu_refresh_required
                 or state.scene_menu_active != state.mode or descriptor.get('scene') != state.mode
                 or not descriptor.get('items')):
@@ -1554,6 +1555,26 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     due.append(result)
         return due
 
+    async def session_action(self, session_id: str, action: str, *, ownership_guard, state_version=None):
+        """Trusted screen controls, scoped by Stand before and after awaited barriers."""
+        with self._runtime_work(cleanup=action == "end") as admitted:
+            if not admitted:
+                return self._identity_result(session_id, "runtime_unavailable")
+            if action != "end":
+                replacement = self._identity_replacements.get(session_id)
+                if replacement and replacement[1] is not None and replacement[1] is not asyncio.current_task():
+                    await asyncio.shield(replacement[1])
+            if not ownership_guard():
+                return self._identity_result(session_id, "stale_session_generation")
+            kind = {"start": "SessionStarted", "end": "SessionCancel", "skip_interview": "InterviewSkipped"}[action]
+            state = self.canonical_runtime.sessions.get(session_id)
+            sequence = state.last_sequence_by_source.get("panel_session", 0) + 1 if state else 1
+            payload = {"state_version": state_version} if state_version is not None else {}
+            event = Event(kind, session_id, sequence, self.now(), "panel_session", payload,
+                          "panel:" + uuid.uuid4().hex, self.monotonic_now())
+            return await self._receive_canonical_event(event, session_action_authorized=True,
+                                                        _action_guard=ownership_guard)
+
     @_runtime_ingress_guard
     async def _receive_canonical_event(self, event: Event, transient_text: str | None = None,
                                        *, dialogue_fallback_authorized: bool = False,
@@ -1568,7 +1589,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        identity_current=None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None,
                                        _weather_scope: str | None = None, _weather_origin_current=None,
-                                       _story_checkpoint_guard=None) -> dict[str, Any]:
+                                       _story_checkpoint_guard=None,
+                                       session_action_authorized: bool = False, _action_guard=None) -> dict[str, Any]:
         if event.event_type == "InteractionIdleExpired" and not interaction_idle_authorized:
             return self._identity_result(event.session_id, "interaction_idle_untrusted")
         speech_work = event.event_type == "SpeechReceived"
@@ -1592,6 +1614,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     or event.event_type != 'DialogueFallback' or _weather_origin_current is None
                     or not _weather_origin_current()):
                 return self._identity_result(event.session_id, 'stale_session_generation')
+            if _action_guard is not None and not _action_guard():
+                return self._identity_result(event.session_id, "stale_session_generation")
             return await self._receive_canonical_event_inner(
                 event, transient_text,
                 dialogue_fallback_authorized=dialogue_fallback_authorized,
@@ -1607,6 +1631,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 _weather_scope=_weather_scope,
                 _story_checkpoint_guard=_story_checkpoint_guard,
                 _safety_guidance=safety_guidance,
+                session_action_authorized=session_action_authorized, _action_guard=_action_guard,
             )
         except (asyncio.CancelledError, Exception) as exc:
             if safety_guidance:
@@ -1643,7 +1668,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
                                              _weather_scope: str | None = None,
                                              _story_checkpoint_guard=None,
-                                             _safety_guidance: dict) -> dict[str, Any]:
+                                             _safety_guidance: dict,
+                                             session_action_authorized: bool = False, _action_guard=None) -> dict[str, Any]:
         """Bridge canonical decisions to application-owned effects.
 
         The contract engine never touches audio, capture, LEDs or providers.
@@ -1678,6 +1704,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if not rejected and event.event_type == 'HandsetLifted':
                 # The real hook changes during cleanup without replacing its
                 # owner. Verified ready starts the welcome after the barrier.
+                if current.handset != 'up' and current.interaction_route != 'panel':
+                    current.interaction_route = 'handset'
                 current.handset = 'up'
                 record = self.sessions.get(event.session_id)
                 if record is None:
@@ -1717,7 +1745,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if self._identity_shutdown:
                 return self._identity_result(event.session_id, "identity_shutdown")
             for other_id, other in tuple(self.canonical_runtime.sessions.items()):
-                if other_id != event.session_id and (other.handset == "up"
+                if other_id != event.session_id and (other.interaction_open
                         or other.mode == "profile_ready"
                         or other.safety_severity == "urgent"):
                     return self._identity_result(event.session_id, "installation_busy")
@@ -1732,7 +1760,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     return self._identity_result(event.session_id, "stale_client_generation")
                 if current is not None and (current.mode == 'safety_stop' or current.safety_severity == 'urgent'
                         or (current.mode in {'soft_end', 'session_closed'}
-                            and self._identity_replacements.get(event.session_id, (None,))[0] is not current)):
+                            and self._identity_replacements.get(event.session_id, (None,))[0] is not current
+                            and not (current.interaction_route is None and current.substate == 'soft_end'))):
                     return self._identity_result(event.session_id, "profile_active_session_ignored")
                 checked = validate_identity_decision(IdentityDecision("authorized", identity_profile,
                     frozenset({"personalize"}), event.payload.get("expires_monotonic", 0)), self.monotonic_now())
@@ -1792,7 +1821,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                               if current is not None and current.pending_game_offer else None)
             parsed_intent = classify_intent(text)
             explicit_help_request = parsed_intent == "help_request"
-            admitted_handset = current.handset if current is not None else "down"
+            admitted_handset = current.interaction_open if current is not None else False
             epoch = self._session_epochs.get(event.session_id, 0)
             revision = self._session_revisions.get(event.session_id, 0)
             admitted_game_scope = self._game_voice_scope(event.session_id)
@@ -1826,7 +1855,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     or (_speech_lifecycle_guard is not None and not _speech_lifecycle_guard())):
                 return self._identity_result(event.session_id, "stale_session_generation")
             current = self.canonical_runtime.sessions.get(event.session_id)
-            if current is None or current.handset != admitted_handset:
+            if current is None or current.interaction_open != admitted_handset:
                 return self._identity_result(event.session_id, "stale_session_generation")
             stale_speech_phase = (_speech_ingress_guard is not None and not _speech_ingress_guard())
             same_game_scope = (admitted_game_scope is not None
@@ -1917,6 +1946,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self.canonical_runtime.personal_story_capable = self.personal_story_available()
         from .menu_capabilities import day_menu_items
         self.canonical_runtime.day_menu_items = lambda sid: day_menu_items(self,sid)
+        if _action_guard is not None and not _action_guard():
+            return self._identity_result(event.session_id, "stale_session_generation")
         decision = self.canonical_runtime.handle(CanonicalEvent(
             event_type=event_type, session_id=event.session_id, sequence=event.sequence,
             state_version=state_version, source=event.source, payload=payload,
@@ -1930,6 +1961,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
            dialogue_fallback_authorized=dialogue_fallback_authorized,
            personal_story_authorized=personal_story_authorized,
            identity_event_authorized=identity_event_authorized,
+           session_action_authorized=session_action_authorized,
            identity_context_present=self._has_private_identity_context(event.session_id),
            public_story_expiry=public_story,
            public_story_checkpoint_authorized=public_story_checkpoint_authorized,
@@ -1943,10 +1975,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         prelift_expired = bool(event.event_type == "IdentityReadyExpired" and decision["reason"] == "identity_expired"
                               and previous_state is not None and previous_state.mode == "profile_ready")
         interaction_stopped = decision["reason"] == "interaction_idle"
-        sync_stop = exhibition_reset or prelift_expired or interaction_stopped
+        sync_stop = (exhibition_reset or prelift_expired or interaction_stopped
+                     or (session_action_authorized and event.event_type == "SessionCancel"))
         self.last_canonical_state = dict(snapshot)
         self.last_canonical_event = {"type": event_type, "source": event.source, "sequence": event.sequence, "session_id": event.session_id, "timestamp": event.timestamp, "monotonic_timestamp": accepted_monotonic, "correlation_id": event.correlation_id, "payload": dict(payload)}
-        voice_open = snapshot.get("handset") == "up"
+        voice_open = bool(snapshot.get("interaction_active"))
         authorization = self.transition_authorizer.authorize(
             previous_state.mode if previous_state is not None else "idle",
             str(snapshot.get("mode") or "idle"),
@@ -2018,7 +2051,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 and self._max_client_boundary is not None
                 and self._max_client_boundary.session_id == event.session_id):
             self._max_client_boundary.clear_client()
-        if (takes_ownership and event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart", "HardwareDisconnected", "InteractionIdleExpired"}) or exhibition_reset or identity_cleanup:
+        if (takes_ownership and event.event_type in {"SessionStarted", "HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart", "HardwareDisconnected", "InteractionIdleExpired"}) or exhibition_reset or identity_cleanup:
             self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
             self._paused_story_playback.pop(event.session_id, None)
             self._discard_private_welcome(event.session_id)
@@ -2032,7 +2065,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self.canonical_runtime.sessions.get(event.session_id),
             takes_ownership=takes_ownership, exhibition_reset=exhibition_reset,
         )
-        if exhibition_reset:
+        if exhibition_reset or (session_action_authorized and event.event_type == "SessionCancel"):
             self._session_reset_waiters[event.session_id] = (
                 asyncio.current_task(), asyncio.get_running_loop().create_future()
             )
@@ -2049,7 +2082,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 if self._public_story_checkpoint_transfers.get(event.session_id) is transfer else None)
             self._public_story_checkpoint_transfers[event.session_id] = transfer
         story_owner = self._personal_stories.get(event.session_id)
-        if story_owner and (not state_owner or state_owner.mode not in STORY_MODES or state_owner.handset != "up"
+        if story_owner and (not state_owner or state_owner.mode not in STORY_MODES or not state_owner.interaction_open
                 or self._session_epochs.get(event.session_id,0) != story_owner.epoch
                 or (state_owner.profile_ref,state_owner.identity_request_id) != story_owner.identity
                 or (story_owner.identity[0] and not self._identity_scope_live(event.session_id,"personalize"))):
@@ -2090,10 +2123,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             closing_record = self.sessions.get(event.session_id)
             if closing_record is None and local_safety_batch:
                 closing_record = SessionRecord(event.session_id, self.installation_id,
-                    event.correlation_id or str(uuid.uuid4()), handset_up=voice_open)
+                    event.correlation_id or str(uuid.uuid4()), handset_up=snapshot.get("handset") == "up")
             if closing_record is not None:
                 if not interaction_stopped and not local_safety_batch:
-                    closing_record.handset_up = False
+                    closing_record.handset_up = snapshot.get("handset") == "up"
                 closing_record.cancellation_token += 1
                 self.sessions.save(closing_record)
                 reset_sync_step("audio", lambda: self.audio.cancel(closing_record.cancellation_token))
@@ -2215,7 +2248,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self._canonical_profiles[event.session_id] = dict(profile or {})
             self._canonical_schedule_refs[event.session_id] = (profile or {}).get("schedule_ref")
         if decision["reason"] == "exhibition_handset_lifted" or (fresh_profile_prepared
-                and decision['reason'] == 'profile_ready' and snapshot.get('handset') == 'up'):
+                and decision['reason'] == 'profile_ready' and voice_open) or decision['reason'] == 'panel_session_started':
             self._prepare_private_welcome(event.session_id)
         if snapshot.get("mode") != "voice_welcome":
             self._discard_private_welcome(event.session_id)
@@ -2481,7 +2514,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             elif kind == "narrate_scene_menu":
                 from .scene_menus import MENU_PCM_MODES
                 def menu_current():
-                    return bool(still_current() and state_owner.handset=="up"
+                    return bool(still_current() and state_owner.interaction_open
                         and state_owner.mode==MENU_PCM_MODES.get(effect.get("content_id"))
                         and state_owner.scene_menu_phase=="narrating"
                         and state_owner.playback_lease==effect.get("playback_lease"))
@@ -2500,7 +2533,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     _set_audio_effect_status(effect,asset_status="unavailable",queued=False,resolution="scene_menu_audio_unavailable")
             elif kind == "game_prompt":
                 def game_current():
-                    return bool(still_current() and state_owner.handset == "up"
+                    return bool(still_current() and state_owner.interaction_open
                         and state_owner.mode == "game_active"
                         and state_owner.active_game_id == effect.get("game_id")
                         and state_owner.playback_lease == effect.get("playback_lease"))
@@ -2520,7 +2553,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         _set_audio_effect_status(effect, asset_status="approved", queued=False, resolution="game_prompt_dispatch_failed")
             elif kind == "dialogue_prompt":
                 def prompt_current():
-                    return bool(still_current() and state_owner.handset == "up"
+                    return bool(still_current() and state_owner.interaction_open
                         and state_owner.active_audio_id == effect.get("content_id")
                         and state_owner.playback_lease == effect.get("playback_lease"))
                 rendered = await self._render_typed_audio(event.session_id, effect["text"], effect,
@@ -2680,7 +2713,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     if local_safety_cleanup_tasks:
                         _, pending = await asyncio.wait(local_safety_cleanup_tasks,
                             timeout=self.audio_cleanup_timeout_seconds)
-                    if (not still_current() or state_owner.handset != "up"
+                    if (not still_current() or not state_owner.interaction_open
                             or state_owner.mode != "safety_stop"):
                         return stale_result()
                     failed = any(item.get("status") == "failed" for item in reset_sync_results.values())
@@ -2988,7 +3021,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         tool_kind, allow_demo=getattr(self.settings, "profile", "") == "mock",
                         weather_scope=request_scope)
                     def audio_current():
-                        return bool(still_current() and state_owner.handset == "up"
+                        return bool(still_current() and state_owner.interaction_open
                             and (state_owner.mode == "schedule_weather" or (state_owner.mode == 'bear_dialogue'
                                 and state_owner.dialogue_information_kind == tool_kind))
                             and state_owner.playback_lease == effect.get("playback_lease")
@@ -3107,6 +3140,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return self._identity_result(event.session_id, "unsupported_event")
         if event.event_type == "InteractionIdleExpired":
             return self._identity_result(event.session_id, "interaction_idle_untrusted")
+        if event.event_type in {"SessionStarted", "InterviewSkipped"}:
+            return self._identity_result(event.session_id, "session_action_untrusted")
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared"}:
             return self._identity_result(event.session_id, "max_json_requires_private_client_boundary")
         waiter = self._session_reset_waiters.get(event.session_id)
@@ -3129,7 +3164,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             authorized_ready = bool(self.optional_identity and active is not None
                 and active.handset == "down" and active.identity_request_id
                 and (active.mode == "profile_ready" or active.interaction_idle))
-            if active is None or (active.handset != "up" and not authorized_ready):
+            if active is None or (not active.interaction_open and not authorized_ready):
                 return {"session_id": event.session_id, "state": "idle",
                         "reason": "exhibition_age_not_ready", "outputs": [],
                         "canonical_state": {"mode": "idle", "handset": "down"}}
@@ -3401,7 +3436,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return {**self._result(session, [], "audio_unavailable"), "audio_status": "ignored", "barge_in": False, "pending": False}
         if session.state == Lifecycle.ENDED or sequence <= session.last_sequence:
             return {**self._result(session, [], "late_or_duplicate_audio"), "pending": False}
-        if session.handset_up is not True:
+        active = self.canonical_runtime.sessions.get(session_id)
+        if active is None or not active.interaction_open:
             return {**self._result(session, [], "audio_not_listening"), "audio_status": "handset_required", "pending": False, "barge_in": False}
         epoch = self._session_epochs.get(session_id, 0)
         session.last_sequence, session.last_activity_at = sequence, self.now()
@@ -3451,7 +3487,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             await self.expire_identity_leases()
             current = self.sessions.get(session_id)
             if (current is not session or session.state == Lifecycle.ENDED
-                    or not session.handset_up or self._session_epochs.get(session_id, 0) != epoch
+                    or not bool(getattr(self.canonical_runtime.sessions.get(session_id), "interaction_open", False))
+                    or self._session_epochs.get(session_id, 0) != epoch
                     or (_ingress_guard is not None and not getattr(_ingress_guard, "lifecycle_current", _ingress_guard)())):
                 return {"session_id": session_id, "state": "idle", "outputs": [],
                         "reason": "stale_session_generation", "audio_status": "ignored",
@@ -3487,9 +3524,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if _ingress_guard is None:
             record = self.sessions.get(session_id)
             epoch = self._session_epochs.get(session_id, 0)
-            handset_up = bool(record and record.handset_up)
+            active = self.canonical_runtime.sessions.get(session_id)
+            interaction_open = bool(active and active.interaction_open)
             _ingress_guard = lambda: (self.sessions.get(session_id) is record
-                                     and bool(record and record.handset_up) == handset_up
+                                     and bool(getattr(self.canonical_runtime.sessions.get(session_id), "interaction_open", False)) == interaction_open
                                      and self._session_epochs.get(session_id, 0) == epoch)
         # Ordinary phase authority is narrower than physical/session ownership:
         # a completed retry closes the old private-listener answer, but must not

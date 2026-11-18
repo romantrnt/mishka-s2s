@@ -179,6 +179,11 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
                     and target in {"story_paused", "fixed_story_playing"}))
     if event_type == "AnonymousStart":
         return target in {"anonymous_visual", "idle", "session_closed"}
+    if event_type == "SessionStarted":
+        return target == "voice_welcome"
+    if event_type == "InterviewSkipped":
+        return current in {"exhibition_introduction", "exhibition_name_question", "exhibition_name_capture",
+            "exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"} and target == "exhibition_menu_tutorial_prompt"
     if event_type == "SessionCancel":
         return target in {"soft_end", "idle", "session_closed"}
     if event_type == "SessionReset":
@@ -292,7 +297,7 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
         "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
         "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected",
-        "HardwareReconnected", "SessionCancel", "SessionReset", "InteractionIdleExpired",
+        "HardwareReconnected", "SessionStarted", "InterviewSkipped", "SessionCancel", "SessionReset", "InteractionIdleExpired",
         "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
         "StoryChoiceWaveComplete", "MenuTutorialStep",
     }

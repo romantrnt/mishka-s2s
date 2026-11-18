@@ -83,8 +83,13 @@ class RemoteDeviceSimulator:
 
     async def before_input(self, message_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         cleanup = is_cleanup(message_type, payload)
+        state = self.stand.application.canonical_runtime.sessions.get(self.stand.active_session_id)
+        duplicate_down = (state is not None and state.handset == "down"
+            and (message_type in {"handset_down", "HandsetPlaced", "SpacePressed"}
+                 or (message_type == "handset" and payload.get("state") == "down")))
         if cleanup:
-            self.invalidate("cleanup_input")
+            if not duplicate_down:
+                self.invalidate("cleanup_input")
             return None
         if message_type in {"HardwareReconnected", "heartbeat", "capabilities"}:
             return None
@@ -122,7 +127,10 @@ class RemoteDeviceSimulator:
             "synthetic_profile": bool(app.max_json), "identity": dict(source.get("identity") or {}),
             "session": {"session_id": sid, "state": session.get("state"), "scenario": session.get("scenario"),
                         "node": session.get("node"), "state_version": getattr(state, "state_version", 0),
-                        "profile_status": getattr(state, "profile_status", "anonymous")},
+                        "profile_status": getattr(state, "profile_status", "anonymous"),
+                        "interaction_route": getattr(state, "interaction_route", None) if state and state.interaction_open else None,
+                        "interaction_active": bool(state and state.interaction_open),
+                        "session_actions": self.session_actions(state)},
             "admission": {"input_ready": bool(self.admits_users()), "connected": self.connected},
             "devices": {
                 "handset": {"state": "up" if session.get("handset_up") else "down", "space_level": "released" if session.get("handset_up") else "pressed"},
@@ -135,12 +143,70 @@ class RemoteDeviceSimulator:
                 "audio": {"status": getattr(state, "audio_status", "idle"), "active_playback": active,
                           "browser_generation": self.stand.playback._generation},
             },
-            "microphone": {"eligible": bool(self.connected and self.admits_users() and self.stand._headless_audio_accepting()),
+            "microphone": {"eligible": bool(self.connected and self.admits_users() and self.stand._interaction_audio_accepting()),
                            "explicit_enable_required": True},
             "prompt": {"phrase_id": lease.get("content_id"), "text": phrase.get("transcript") if phrase else None},
             "fault": {"input_connected": self.connected, "delay_ms": self.delay_ms, "pending_inputs": self.pending_inputs,
                       "max_pending_inputs": self.MAX_PENDING_INPUTS},
         }
+
+    def session_actions(self, state):
+        active = bool(state and state.interaction_open)
+        identified = bool(state and state.identity_request_id and state.profile_ref
+                          and self.stand.application._identity_scope_live(state.session_id, "personalize"))
+        actions = ["end"] if active or identified else []
+        ready = (self.connected and self.admits_users() and not self.stand._closed
+                 and self.stand.application._runtime_maintenance is None
+                 and getattr(self.stand, "_capture_hid_fault", None) is None
+                 and not self.stand._physical_output_faulted()
+                 and (state is None or (state.safety_severity == "none" and state.mode != "safety_stop"
+                     and state.substate != "profile_cleanup_failed")))
+        if ready and not active:
+            actions.append("start")
+        if (ready and active and state.profile_status != "identified" and state.mode in {
+                "exhibition_introduction", "exhibition_name_question", "exhibition_name_capture",
+                "exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"}):
+            actions.append("skip_interview")
+        return actions
+
+    async def _session_action(self, payload):
+        action = payload["action"]
+        fields = {"action", "instance_id", "epoch", "session_id"}
+        if action == "skip_interview":
+            fields.add("state_version")
+        if (set(payload) != fields or type(payload.get("epoch")) is not int or payload["epoch"] < 0
+                or not isinstance(payload.get("session_id"), str)
+                or not isinstance(payload.get("instance_id"), str)
+                or (action == "skip_interview" and (type(payload["state_version"]) is not int
+                    or not 0 <= payload["state_version"] <= 2**63 - 1))):
+            return _error("validation_error", "session action requires its exact current owner scope")
+        def current():
+            return (not self.stand._closed and self.epoch == payload["epoch"]
+                    and self.stand.active_session_id == payload["session_id"]
+                    and self.stand._panel_instance_id == payload["instance_id"])
+        if not current():
+            return _error("stale_simulator_epoch", "session action belongs to an expired owner")
+        if action != "end":
+            if not self.admits_users():
+                return _error("runtime_unavailable", "stand runtime is not ready")
+            blocked = await self.before_input("panel_session", {})
+            if blocked is not None:
+                return blocked
+            if not current():
+                return _error("stale_simulator_epoch", "session action belongs to an expired owner")
+            state = self.stand.application.canonical_runtime.sessions.get(payload["session_id"])
+            if (getattr(self.stand, "_capture_hid_fault", None) is not None or self.stand._physical_output_faulted()):
+                return _error("runtime_unavailable", "session input is faulted")
+        else:
+            # Revoke an in-flight Start before cleanup can yield. Stale End
+            # never reaches this point and cannot invalidate a newer visit.
+            self.invalidate("panel_session_end")
+        epoch = self.epoch
+        guard = lambda: (self.epoch == epoch and not self.stand._closed
+                         and self.stand.active_session_id == payload["session_id"]
+                         and self.stand._panel_instance_id == payload["instance_id"])
+        return await self.stand.session_action(action, ownership_guard=guard,
+                                               state_version=payload.get("state_version"))
 
     async def _run_scan(self, code: str, epoch: int) -> dict[str, Any]:
         async with self._scan_lock:
@@ -202,6 +268,8 @@ class RemoteDeviceSimulator:
 
     async def action(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = payload.get("action")
+        if action in {"start", "end", "skip_interview"}:
+            return await self._session_action(payload)
         cleanup = action == "reset" or (action == "handset" and payload.get("state") == "down")
         if payload.get("epoch") is not None:
             if type(payload["epoch"]) is not int or payload["epoch"] < 0:
