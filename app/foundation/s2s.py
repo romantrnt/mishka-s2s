@@ -3268,7 +3268,7 @@ class BoundedConversationEngine:
         token=self.cancel.start(context.session_id)
         if trace_generation_id is None:
             trace_generation_id = token
-        self.metrics.begin_voice_turn(context.session_id, generation_id=trace_generation_id)
+        trace_correlation_id = self.metrics.begin_voice_turn(context.session_id, generation_id=trace_generation_id).correlation_id
         self.metrics.mark_voice(context.session_id, "llm_request", generation_id=trace_generation_id)
         queue=AudioSynthesisQueue(self.tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"), lifecycle_hook=self.lifecycle_hook,retire_hook=self._retire_queue)
         queue_started=time.perf_counter(); await queue.start(context.session_id,token)
@@ -3360,6 +3360,7 @@ class BoundedConversationEngine:
                     if decision.blocked:
                         self.metrics.event(
                             "validation_block",
+                            correlation_id=trace_correlation_id,
                             reason=decision.reason,
                             source=decision.source,
                             latency_ms=round(decision.latency_ms, 2),
@@ -3458,6 +3459,7 @@ class BoundedConversationEngine:
         except ResponseValidationError as exc:
             self.metrics.event(
                 "validation_failure",
+                correlation_id=trace_correlation_id,
                 reason=exc.reason,
                 source=exc.source,
                 latency_ms=round(exc.latency_ms, 2),
@@ -3467,7 +3469,8 @@ class BoundedConversationEngine:
             self.metrics.finish_voice_turn(context.session_id, "provider_or_validation_failure", generation_id=trace_generation_id)
             return TurnResult((),(),True,"provider_or_validation_failure")
         except ValueError as exc:
-            self.metrics.event("validation_failure", reason=str(exc)[:120], source="stream_parser")
+            self.metrics.event("validation_failure", correlation_id=trace_correlation_id,
+                               reason=str(exc)[:120], source="stream_parser")
             await queue.abort(context.session_id, invalidate=False)
             self.metrics.finish_voice_turn(context.session_id, "provider_or_validation_failure", generation_id=trace_generation_id)
             return TurnResult((),(),True,"provider_or_validation_failure")

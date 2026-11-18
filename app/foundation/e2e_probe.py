@@ -150,7 +150,8 @@ class ProductionE2EWarmupProbe:
 
             report = next((item for item in reversed(self.manager.engine.metrics.completed_voice_turns) if item.get("correlation_id") == correlation_id), trace.report())
             metric_snapshot = self._metric_snapshot()
-            report["events"] = metric_snapshot.get("events", [])[-40:]
+            report["events"] = [event for event in metric_snapshot.get("events", [])
+                                if event.get("correlation_id") == correlation_id][-40:]
             report["cleanup"] = {"session_id": session_id, "cancel_requested": True}
             durations = report.get("stage_durations_ms", {})
             specs = (
@@ -164,9 +165,11 @@ class ProductionE2EWarmupProbe:
             for name, success, failure_reason in specs:
                 stages.append(self._stage(name, durations.get({"silero_tts": "tts", "bounded_tts_queue": "queue"}.get(name, name)), success, None if success else failure_reason))
             failed = next((item for item in stages if not item["success"]), None)
-            validation_failure = next((event for event in reversed(report.get("events", []))
-                                       if event.get("event") in {"validation_failure", "validation_block"}), None)
-            if failed is not None and validation_failure is not None:
+            validation_failure = None
+            if failed is not None and failed["stage"] in {"llm", "validation"}:
+                validation_failure = next((event for event in reversed(report["events"])
+                                           if event.get("event") in {"validation_failure", "validation_block"}), None)
+            if validation_failure is not None:
                 failed["reason"] = validation_failure.get("reason", failed.get("reason", "stage_failed"))
                 failed["diagnostic"] = validation_failure
             return {"ok": failed is None, "correlation_id": correlation_id, "stages": stages, "trace": report,
