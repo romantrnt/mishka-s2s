@@ -13,8 +13,9 @@ defect. Do not invent missing implementation from an unchecked verification task
 
 **Organization**: Setup → existing foundation → five independently testable
 stories → full acceptance. All five stories are required, even though US1 is
-the first useful slice. All boxes are initially open; this baseline has not run
-the product implementation/acceptance workflow.
+the first useful slice. The original task boxes are the decomposition; the
+dated outcome ledger below records actual/reused/blocked evidence. An open
+composite task does not imply that its supplied implementation is missing.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -30,6 +31,33 @@ prerequisites; it does not authorize simultaneous product writers.
 All paths are repository-relative. In this file, `feature/` means
 `specs/001-reliable-runpod-demo/`. Existing `docs/remote-stand-runbook.md` is
 the operator outcome record. Do not add a parallel daily-report system.
+
+## Observed outcomes — 2026-11-18
+
+Candidate: application PID `16858`, source `9fe4f90`, branch
+`codex/remote-device-simulator`; authenticated HTTP serves client SHA-256
+`c28ed3fc6e63e95897b82c71e7ecb685e6726095bca9ffc7c3715cc45e82377a`.
+The existing runbook identifies exact earlier PIDs and source transfers.
+Current proof is software/browser acceptance, not physical hearing or clinical
+acceptance. No further software blocker was established in the final controls.
+
+| Tasks | Observed status and limits |
+| --- | --- |
+| T001–T005 | Current source/runtime/access readbacks passed. Protected HTTP/WS, private projection, Max ownership/expiry and unchanged external-fixture evidence are reused where their source is unchanged. No authorization scope was widened. |
+| T006–T008 | Three guest and three permitted synthetic profile visits passed, including known-fact entry and clean endpoints. Entry-source evidence transfers across the isolated story/client changes; this does not establish physical RFID. |
+| T009–T012 | All five games, seven root destinations, age samples, direct/contextual choices and exits have actual browser evidence. Real positive weather/schedule data was not exercised: missing provider/scope remains truthful unavailability, not a positive provider pass. |
+| T013–T016 | Actual personal PCM passed for young/middle/older ages: 53.625/69.075/104.150 seconds. Young grammar has actual converter plus 44 boundary checks; whole validation, real Silero, pause/checkpoint/new lease/active exit passed. Final older control proved received/rendered wave movement after full resumed PCM. Earlier public-story active/pause-idle and independent Max-expiry controls are reused; no timer was extended. |
+| T017–T020 | Software S2S and two earlier synthetic microphone/STT turns passed. Final client fault → same-visit useful answer → explicit microphone capture/accepting → clean hangup passed. T020/SC-004 physical microphone and two heard answers remain NOT OBSERVED; Roman has been asked to check. |
+| T021–T026 | Existing desktop/390px, keyboard/flat view, overlapping input, reconnect/reload, actual app restart and next-visit evidence is retained with unchanged-source limits. Final client error/retry was inspected in the real browser. Protected Jupyter agent login/reopening passed; Roman's personal opening/reopening remains NOT OBSERVED for T025/SC-007. |
+| T027–T029 | Chief independently reviewed each integrated source change, reproduced the phone-text race, and reviewed the corrected exact client. Relevant checks passed: 114 Python cases, canonical acceptance, four scheduler cases, eight affected Node suites and final diff checks. Steward's 07:40 and Chief's 07:43 final documentation/source consistency reviews passed; no broad unchanged suite is claimed rerun. |
+| T030 | Ordered young game → successful story pause/resume → conversation → fault/retry plus clean recovery/new visit is recorded. Older browser and final client recovery artifacts close the remaining software controls. Whole mission remains open for the explicit hearing/personal-access observations; neither version 0.1.0 nor these software passes declare completion. |
+
+Final artifacts: `runpod-young-mixed-16858.json`,
+`runpod-young-mixed-recovery-16858.json`, `runpod-old-final-16858.json`, and
+`runpod-final-guest-retry-16858.json` under ignored
+`runtime/local-integration-20261117/`. Detailed outcomes and earlier source-bound
+evidence remain in `docs/remote-stand-runbook.md`; raw personal text/PCM and
+original WAV assets are not added to Git.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
@@ -133,9 +161,9 @@ restart/reload → another visit → reopen protected workspace.
 refactor, publish, deployment, new dependency or speculative security checklist
 is created by this phase.
 
-- [ ] T027 Chief / independent final review: inspect the final integrated product diff and relevant affected checks for correctness, privacy, security, accessibility and shared ownership/lifecycle/cancellation/resource/error-recovery causes, actively investigating unnamed defects and missing interaction coverage beyond the example symptoms; bind findings/results to candidate identity in feature/tasks.md and docs/remote-stand-runbook.md. Keep mocked/live/physical evidence separate. Maps FR-019, FR-020, FR-023, FR-024, SC-008.
-- [ ] T028 PM / causal repair and final checks: resolve validated systemic findings across affected callers through assigned sole writers, extend tasks and regression/real-flow coverage for newly found interactions, restore intended behavior rather than relying on weaker fallback alone, rerun changed-path checks and scripts/verify_canonical_contract.py if canonical runtime changed, then inspect the final diff for unrelated files/secrets; update exact outcomes in feature/tasks.md. Maps FR-023, FR-024, SC-008.
-- [ ] T029 [P] Steward / source-and-evidence consistency: read-only compare feature/spec.md, plan.md and tasks.md to the final source decisions/evidence; report remaining gaps without claiming implementation or running converge before its prerequisites. This writes no product/runtime file and can overlap T027 review. Maps FR-023, SC-008.
+- [x] T027 Chief / independent final review: inspect the final integrated product diff and relevant affected checks for correctness, privacy, security, accessibility and shared ownership/lifecycle/cancellation/resource/error-recovery causes, actively investigating unnamed defects and missing interaction coverage beyond the example symptoms; bind findings/results to candidate identity in feature/tasks.md and docs/remote-stand-runbook.md. Keep mocked/live/physical evidence separate. Maps FR-019, FR-020, FR-023, FR-024, SC-008.
+- [x] T028 PM / causal repair and final checks: resolve validated systemic findings across affected callers through assigned sole writers, extend tasks and regression/real-flow coverage for newly found interactions, restore intended behavior rather than relying on weaker fallback alone, rerun changed-path checks and scripts/verify_canonical_contract.py if canonical runtime changed, then inspect the final diff for unrelated files/secrets; update exact outcomes in feature/tasks.md. Maps FR-023, FR-024, SC-008.
+- [x] T029 [P] Steward / source-and-evidence consistency: read-only compare feature/spec.md, plan.md and tasks.md to the final source decisions/evidence; report remaining gaps without claiming implementation or running converge before its prerequisites. This writes no product/runtime file and can overlap T027 review. Maps FR-023, SC-008.
 - [ ] T030 PM with Chief / whole-demo acceptance and handoff: execute feature/quickstart.md, including three guest plus three profile visits and a mixed menu → game → story pause/resume → conversation → recovery/new-session chain; confirm protected files, usable entry/recovery instructions and honest remaining limits in docs/remote-stand-runbook.md. Mark only observed passes; any blocking missing voice/access/function keeps the demo incomplete. PM tracks product versions starting at 0.1.0 with exact commit/branch/push and real verification in the existing runbook; Chief verifies each candidate and Steward checks scope/evidence. Version 0.1.0 and its publication do not finish the mission: continue substantive implementation and independent verification until the original full reliable MISHKA outcome is achieved, independently of version numbers. Intermediate work may be committed without declaring a release. Preserve explicit failed/not-run/hardware limits, all required functions, GitHub branches and the running Runpod pod. Maps FR-001, FR-003, FR-005, FR-008, FR-011, FR-015, FR-017, FR-021, FR-022, FR-023, FR-025, SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007, SC-008.
 
 ## Dependencies & Execution Order

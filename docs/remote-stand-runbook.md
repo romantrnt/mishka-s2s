@@ -9,12 +9,13 @@ Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
 Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
-`16858`, runtime source checkpoint `1f9bc6c` on
+`16858`, runtime source checkpoint `9fe4f90` on
 `codex/remote-device-simulator`. Open
 `https://fihihgl91rnwu4-8000.proxy.runpod.net/console` and use the protected
-credentials described below. Real browser cancellation, repeated personal
-generation, pause/resume and active exit have passed; mixed and remaining age
-acceptance are still in progress. Earlier PIDs below are historical evidence.
+credentials described below. Real browser cancellation, all three story ages,
+pause/resume, visible lighting, active exit, mixed continuation and client
+fault/retry passed. Physical hearing and Roman's personal file access remain
+unobserved. Earlier PIDs below are historical evidence.
 
 ## Runtime and server boundary
 
@@ -100,7 +101,7 @@ The subsequent browser-capture cancellation, dialogue/story guidance and
 input-classifier prompt fixes were deployed with backups and exact hashes in
 `/workspace/mishka-artifacts/capture-ui-safety-20261117T230642Z`
 (application PID 6678 after a graceful restart). Application readiness and
-exact served JavaScript hashes passed; affected live acceptance is in progress.
+exact served JavaScript hashes passed; subsequent live outcomes are recorded below.
 This is not whole-product or physical-device acceptance.
 
 On PID 6678, actual Chromium accepted a cold first game entry and returned to
@@ -284,10 +285,10 @@ story still failed its final measured duration gate: 2,757,000 samples at
 48,000 Hz gave 57.4375 seconds, below the 60-second minimum for this age band.
 The joined body was 794 characters. Evidence:
 `runtime/local-integration-20261117/runpod-input-classifier-15307.json`.
-A bounded drafting-volume correction is being implemented; padding, slowed
+A bounded drafting-volume correction was subsequently implemented; padding, slowed
 playback and weaker PCM limits are not accepted substitutes. This failure does
 not invalidate the earlier 64.85-second browser pause/resume control, but full
-repeated personal-story acceptance remains incomplete.
+repeated personal-story acceptance was not yet complete at that checkpoint.
 
 Two further guest visits completed on PID 15307 with no JavaScript errors.
 Age 2 selected the 1–3 policy, heard the offered date, received truthful
@@ -325,7 +326,7 @@ independently reviewed the frozen source and ran the 15 new cases. Deployment
 backups and manifest are under
 `/workspace/mishka-artifacts/story-draft-volume-20261118`.
 Actual repeated-generation, full PCM, pause/resume and active-exit acceptance
-on PID 15780 is pending; drafting character counts do not establish seconds.
+on PID 15780 was pending at deployment; drafting character counts do not establish seconds.
 
 The PID 15780 browser run exposed an overly strict drafting guard: both draft
 outputs measured 1,045 Russian-word characters, below the 1,120-character
@@ -358,13 +359,13 @@ still active returned to root and stopped the source. The artifact records
 `playing=true` immediately before active exit and `playing=false` afterward,
 with no JavaScript errors:
 `runtime/local-integration-20261117/runpod-floor-16069.json`.
-Mixed continuation and the remaining completed visits are in progress. Other
-ages have not gained actual duration evidence from this single native control.
+Mixed continuation and the remaining visits were still pending at that point.
+This single native control did not establish duration for other ages.
 
 Three guest and three permitted profile visits have now completed with clean
 handset-down endpoints. Entry and game source remained unchanged between the
 recorded PIDs. The exact ordered game → successful story → conversation →
-recovery chain remains incomplete: its youngest story was rejected before TTS.
+recovery chain was still incomplete at that point: its youngest story was rejected before TTS.
 
 Further native age controls were isolated from the live application. A bounded
 shared revision can now address both long sentences and insufficient plot
@@ -392,15 +393,23 @@ chunks, 2,760,000 samples at 48,000 Hz (57.5 seconds), and at most eight words
 per sentence. It completed in 18.532 seconds without a revision or deadline
 expiry; cleanup completed. This measures full-story preparation, not ordinary
 conversation latency or browser hearing. The candidate's 114 focused tests and
-canonical acceptance passed; browser lighting and final mixed acceptance remain
-pending. The reviewed candidate was then deployed as PID 16858, readiness
+canonical acceptance passed. The reviewed candidate was then deployed as PID 16858, readiness
 `READY`, with unchanged providers, receipt and both 16,384-token contexts.
 Its manifest and rollback sources are in the same artifact directory. Actual
 young guest game → personal story → pause/resume → active exit passed with
 53.625 seconds of browser PCM. Initial wave movement and pause hold were
-observed; two samples over a three-second resumed window did not differ, so
-resumed visible wave movement remains unverified. Evidence:
+observed. Two samples over an early three-second resumed window did not differ;
+that window ended before full PCM transfer and did not establish a stopped
+effect. Evidence:
 `runtime/local-integration-20261117/runpod-young-mixed-16858.json`.
+A subsequent actual older 6–7 browser story passed at 104.150 seconds, with
+pause checkpoint 22,869 ms, a new resumed lease at the same offset, and active
+exit followed by clean hangup. After the resumed lease's final PCM frame,
+received and rendered lighting both changed: `task_active=true`, frame counts
+304 → 305 → 306, wave stages 6 → 0 → 1, and no engine error. Initial wave and
+pause hold also passed. This closes resumed-light movement without changing
+`lighting.py` or generating a story solely for lighting. Evidence:
+`runtime/local-integration-20261117/runpod-old-final-16858.json`.
 Physical microphone/hearing and final whole-demo acceptance remain unverified.
 
 A one-shot browser `AudioBufferSourceNode.start` failure was injected during
@@ -408,8 +417,8 @@ ordinary PCM playback on PID 16069. The panel exposed an error and subsequent
 chunks continued; ordinary PCM has no canonical playback identity, so this
 did not exercise `/stand/audio/failed`. Hangup cleared the error, and a new
 guest visit completed a useful ordinary turn with an actual new source and
-drained audio, followed by a clean dark endpoint. Same-visit retry remains
-unverified: the first follow-up arrived after the separate 120-second profile
+drained audio, followed by a clean dark endpoint. Same-visit retry was not
+established in that run: the first follow-up arrived after the separate 120-second profile
 expiry and cannot establish audio recovery success or failure. Evidence:
 `runtime/local-integration-20261117/runpod-controlled-audio-failure-16069.json`.
 This is a browser playback-fault check, not a provider, physical microphone or
@@ -425,10 +434,18 @@ and the next turn, gives Russian retry/exit guidance, and clears the matching
 old message at a new text attempt or successful new ordinary playback. Separate
 attempt and cleanup fences suppress late ordinary errors, including the real
 phone text bridge path; server stop cannot discard the displayed-error marker.
-Eight affected Node suites and independent focused review passed. Real rendered
-retry/recapture acceptance remains pending. The prior successful typed retry
-started browser audio 4.394 seconds after input; this excludes STT and physical
-hearing. Background scheduler diagnostics also passed both cancellation orders
+Eight affected Node suites and independent focused review passed. Actual final
+guest acceptance on this exact client also passed: a controlled ordinary start
+failure showed Russian retry/Tools/hangup guidance, remaining damaged chunks
+stopped, and the next same-visit question completed with new audio and no stale
+error. Explicit microphone enable reached capture/accepting with no pending
+permission; hangup then cleared all media, pressed keys and all 18 lights.
+Evidence: `runtime/local-integration-20261117/runpod-final-guest-retry-16858.json`.
+The last retry took 4.405 seconds from the UI text action to the first source;
+this includes opening/filling Tools, and its HTTP-start timestamp was not logged.
+It excludes STT and physical hearing. The older full 104.150-second story took
+25.852 seconds from request to first source, including full preparation.
+Background scheduler diagnostics also passed both cancellation orders
 through multiple full lighting cycles; no engine defect was reproduced, and
 `lighting.py` was preserved.
 
@@ -486,7 +503,8 @@ laptop. SSH host identity was checked through the Runpod management channel;
 strict host-key checking stays enabled. The current Wi-Fi source address is
 `192.168.1.195`; this is a connection-specific bind, not a VPN or routing change.
 Authenticated contents API returned 200 twice on reopening, unauthenticated API returned 403,
-and the login page opened in Codex. Browser sign-in remains a separate check.
+and agent browser sign-in/reopening passed. Roman's personal sign-in and
+reopening have not been observed.
 
 The owner-only local token file is
 `/home/khugardin/Documents/Codex/2026-11-16/project-manager/work/mishka-remote-stand/recovery-20261117/private/jupyter-token`.
