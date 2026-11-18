@@ -1043,6 +1043,26 @@ class MockLLMProvider:
 class OllamaLLMProvider:
     """Ollama `/api/chat` NDJSON adapter with exact model readiness checks."""
 
+    STORY_RESPONSE_SCHEMA = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "plot", "age_band", "estimated_duration_sec", "safety_tags", "ending_state"],
+        "properties": {
+            "title": {"type": "string", "minLength": 1},
+            "plot": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["setting", "problem", "attempt", "resolution"],
+                "properties": {section: {"type": "string", "minLength": 1}
+                               for section in ("setting", "problem", "attempt", "resolution")},
+            },
+            "age_band": {"type": "string", "enum": ["1-3", "3-5", "4-5", "5-7", "6-7"]},
+            "estimated_duration_sec": {"type": "integer", "minimum": 45, "maximum": 150},
+            "safety_tags": {"type": "array", "items": {"type": "string"}},
+            "ending_state": {"type": "string", "enum": ["safe_resolved"]},
+        },
+    }
+
     def __init__(self, base_url: str, model: str, timeout_s: float, *, quantization: str = "", num_ctx: int = 8192, temperature: float = 0.2, max_tokens: int = 160, keep_alive: str = "-1", think: bool = False, warmup_timeout_s: float = 120.0, story_backend_contract=None):
         self.base_url=base_url.rstrip("/"); self.model=model; self.timeout_s=timeout_s
         self.quantization=quantization; self.num_ctx=num_ctx; self.temperature=temperature
@@ -1092,7 +1112,7 @@ class OllamaLLMProvider:
             timeout=httpx.Timeout(self.timeout_s)
             payload=self._payload(messages,True,max_tokens)
             if num_ctx is not None:payload['options']['num_ctx']=num_ctx
-            if story:payload.update(truncate=False,shift=False)
+            if story:payload.update(truncate=False,shift=False,format=self.STORY_RESPONSE_SCHEMA)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("POST",f"{self.base_url}/api/chat",json=payload,headers={"x-request-id":request_id}) as response:
                     response.raise_for_status()

@@ -29,6 +29,7 @@ def story_messages(theme,band,constraints):
     prompt = ('Create a complete original Russian children story with setting, a gentle problem, an attempt and a safe resolved ending. '
               'No medical advice/promises, real schedules, secrets from adults, identifying details, instructions or quoted copyrighted stories. '
               'Return ONLY JSON with exact keys title,plot,age_band,estimated_duration_sec,safety_tags,ending_state. Plot is an object with exactly setting,problem,attempt,resolution, each a distinct nonempty paragraph of complete sentences. Do not repeat the story in a separate text field; the application joins the four paragraphs. '
+              f'estimated_duration_sec must be a JSON integer from {lower} to {upper}, never float, string, boolean or null. '
               'ending_state must be safe_resolved. Full text at most 6000 characters; no markup. '
               f'Each spoken sentence at most {POLICIES[band].max_words} words (engineering age adaptation, not clinical assurance). '
               f'Natural spoken duration {lower} to {upper} seconds, never silence/padding. Brief: {json.dumps(brief,ensure_ascii=False)}')

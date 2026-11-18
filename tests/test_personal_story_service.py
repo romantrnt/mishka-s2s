@@ -3,7 +3,7 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 import pytest
-from app.foundation.personal_story import PersonalStoryService, DURATION_BOUNDS
+from app.foundation.personal_story import PersonalStoryService, DURATION_BOUNDS, story_messages
 from app.foundation.s2s import AudioChunk, S2SConfig
 from app.foundation.validation import AsyncResponseValidator, ValidationDecision
 
@@ -30,6 +30,28 @@ class Voice:
 def engine(band='3-5',duration=None,text=TEXT):
     return SimpleNamespace(llm=LLM(band,text),tts=TTS(duration or DURATION_BOUNDS[band][0]),voice=Voice(),
         response_validator=AsyncResponseValidator(mini=Mini()),config=S2SConfig())
+
+@pytest.mark.parametrize('band',list(DURATION_BOUNDS))
+def test_story_prompt_declares_typed_age_specific_duration(band):
+    lower,upper=DURATION_BOUNDS[band]
+    prompt=story_messages('лес',band,())[0]['content']
+    assert f'estimated_duration_sec must be a JSON integer from {lower} to {upper}' in prompt
+    assert 'never float, string, boolean or null' in prompt
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('duration',[60.0,'60',True,None])
+async def test_non_integer_duration_rejected_before_semantic_validation_and_tts(duration):
+    e=engine();original=e.llm.stream_story;semantic=[]
+    async def candidate(*args):
+        async for raw in original(*args):
+            value=json.loads(raw);value['estimated_duration_sec']=duration
+            yield json.dumps(value)
+    async def validate(*args):
+        semantic.append(True)
+        return ValidationDecision('allow',True,'test',.99,'test')
+    e.llm.stream_story=candidate;e.response_validator.validate_story=validate
+    assert await PersonalStoryService(e).render('лес','3-5',(),1,lambda:True) is None
+    assert not semantic and not e.tts.calls
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('band',list(DURATION_BOUNDS))
