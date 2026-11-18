@@ -76,7 +76,7 @@ class EngagementIdleMixin:
             keys.add(button)
         elif event.event_type=='ButtonReleased' and 'stale' not in reason and 'duplicate' not in reason:
             keys.discard(event.payload.get('button_id'))
-        elif not rejected and ((event.event_type=='HandsetLifted' or voice_activity)
+        elif not rejected and ((event.event_type in {'HandsetLifted','SessionStarted','InterviewSkipped'} or voice_activity)
                 or (event.event_type=='HandsetPlaced' and state.mode=='game_active')):
             fresh=True
         now=self.monotonic_now()

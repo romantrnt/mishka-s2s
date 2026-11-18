@@ -80,7 +80,7 @@ def parse_event(payload: dict[str, Any], session_id: str, sequence: int, source:
         raise EventValidationError("unknown event type")
     if 'cancelled' in payload and (name != 'ButtonReleased' or type(payload['cancelled']) is not bool):
         raise EventValidationError('cancelled must be a boolean on button release')
-    if name in {"DialogueFallback"} | IDENTITY_INTERNAL_EVENT_TYPES:
+    if name in {"DialogueFallback", "SessionStarted", "InterviewSkipped"} | IDENTITY_INTERNAL_EVENT_TYPES:
         # Generic API/UART frames have no authority to assert internal
         # resolution or provider outcomes, regardless of payload/source.
         raise EventValidationError("internal event is not accepted from generic ingress")

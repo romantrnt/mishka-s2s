@@ -147,11 +147,30 @@ function postAdmissionAvailable() {
   return !current?.simulator || (wsSnapshotReady && !wsReloadRequired && !authBlocked);
 }
 
+function interactionActive(state = current) {
+  const active = state?.simulator?.session?.interaction_active;
+  return typeof active === 'boolean' ? active : Boolean(state?.session?.handset_up);
+}
+
+function sessionActionIsCurrent(payload) {
+  const simulator = current?.simulator;
+  if (!simulator || authBlocked || !['start', 'end', 'skip_interview'].includes(payload.action)
+    || !/^[a-f0-9]{16}$/.test(payload.instance_id || '') || payload.instance_id !== simulator.instance_id
+    || !Number.isSafeInteger(payload.epoch) || payload.epoch !== simulator.epoch
+    || typeof payload.session_id !== 'string' || payload.session_id !== simulator.session?.session_id) return false;
+  // End can cancel an already submitted Start before its first state arrives.
+  if (payload.action === 'end') return true;
+  return postAdmissionAvailable() && simulator.admission?.input_ready && simulator.admission.connected
+    && Array.isArray(simulator.session.session_actions) && simulator.session.session_actions.includes(payload.action)
+    && (payload.action !== 'skip_interview' || (Number.isSafeInteger(payload.state_version)
+      && payload.state_version === simulator.session.state_version));
+}
+
 function personalStoryCancelAvailable(path, payload) {
   const simulator = current?.simulator;
   if (!simulator || !postAdmissionAvailable() || !simulator.admission?.input_ready
-      || !simulator.admission.connected || !current.session?.handset_up
-      || simulator.devices?.handset?.state !== 'up'
+      || !simulator.admission.connected || !interactionActive(current)
+      || (simulator.session?.interaction_active === undefined && simulator.devices?.handset?.state !== 'up')
       || current.session.node !== 'personal_story_generating'
       || simulator.session?.node !== 'personal_story_generating'
       || current.canonical_state?.mode !== 'personal_story_generating'
@@ -193,10 +212,12 @@ function post(path, body = {}) {
   const wireBody = JSON.stringify(path.startsWith('/stand/simulator/') ? body : { session_id: session(), ...body });
   const payload = JSON.parse(wireBody);
   const simulated = path === '/stand/simulator/action';
+  const sessionAction = simulated && ['start', 'end', 'skip_interview'].includes(payload.action);
+  if (sessionAction && !sessionActionIsCurrent(payload)) return Promise.resolve(null);
   const storyCancel = personalStoryCancelAvailable(path, payload);
   const urgent = path === '/stand/reset' || (path === '/stand/handset' && body.state === 'down')
     || (simulated && (body.action === 'reset' || (body.action === 'handset' && body.state === 'down')))
-    || (path === '/stand/simulator/fault' && body.mode === 'disconnect') || storyCancel;
+    || (path === '/stand/simulator/fault' && body.mode === 'disconnect') || storyCancel || (sessionAction && payload.action === 'end');
   const lifecycle = LIFECYCLE_POST_PATHS.has(path) || (simulated && body.action === 'button' && body.press === 'release');
   // Keep terminal cleanup available, but an open transport alone cannot
   // authorize input against a snapshot retained from an earlier connection.
@@ -261,7 +282,7 @@ function post(path, body = {}) {
   }
   const timeoutMs = !urgent && (MODEL_POST_PATHS.has(path) || (simulated && !lifecycle))
     ? TURN_REQUEST_TIMEOUT_MS : undefined;
-  const item = { path, wireBody, owner, lifecycle, urgent, storyCancel, timeoutMs, generation: postGeneration, controller: new AbortController() };
+  const item = { path, wireBody, owner, lifecycle, urgent, storyCancel, sessionAction, timeoutMs, generation: postGeneration, controller: new AbortController() };
   item.promise = new Promise((resolve, reject) => { item.resolve = resolve; item.reject = reject; });
   // Some DOM handlers ignore the return value; errors are already shown here.
   item.promise.catch(() => {});
@@ -292,6 +313,7 @@ function dispatchNextPost() {
 
 async function runPost(item) {
   try {
+    if (item.sessionAction && !sessionActionIsCurrent(JSON.parse(item.wireBody))) return null;
     if (item.storyCancel && !personalStoryCancelAvailable(item.path, JSON.parse(item.wireBody))) return null;
     if (item.controller.signal.aborted || (!item.urgent && !item.lifecycle && !postAdmissionAvailable())) return null;
     recordLiveInput(item.path, JSON.parse(item.wireBody));
@@ -598,7 +620,7 @@ function connect() {
     cancelOrdinaryPosts();
     clearMic();
     audioReconnectPending = !authBlocked && (audioReconnectPending
-      || Boolean(current?.simulator && current.session.handset_up && !suppressPhoneAudio));
+      || Boolean(current?.simulator && interactionActive(current) && !suppressPhoneAudio));
     if (current?.simulator) suppressPhoneAudio = true;
     interruptAudioForInput();
     window.mishkaPhoneConnection?.(false);
@@ -670,9 +692,9 @@ function connect() {
         const completionOwnsSnapshot = completion?.session_id === completionSessionId
           || (completion?.session_id === undefined && Number.isSafeInteger(completion?.canonical_state?.state_version)
             && completion.canonical_state.state_version === (state.simulator?.session?.state_version ?? state.canonical_state?.state_version)
-            && completion.canonical_state.mode === state.session.node && completion.canonical_state.handset === 'up');
+            && completion.canonical_state.mode === state.session.node && (completion.canonical_state.interaction_active ?? (completion.canonical_state.handset === 'up')));
         const completionCurrent = completionOwnsSnapshot
-          && state.session.handset_up && !authBlocked && !wsReloadRequired
+          && interactionActive(state) && !authBlocked && !wsReloadRequired
           && (!state.simulator || (!suppressPhoneAudio && state.simulator.epoch === current?.simulator?.epoch
             && state.simulator.session.session_id === current?.simulator?.session?.session_id));
         if (completionCurrent) {
@@ -939,22 +961,29 @@ function render(state, { fromWebSocket = false } = {}) {
   // Check before touching media fences, current state or any projected control.
   // Poll responses, WS snapshots and POST responses all enter here.
   if (!simulatorSnapshotIsCurrent(state)) return;
-  if (!state.session.handset_up
+  if (state.simulator && current?.simulator && (state.simulator.epoch !== current.simulator.epoch
+      || state.simulator.session.session_id !== current.simulator.session.session_id)) {
+    clearMic();
+    interruptAudioForInput();
+  }
+  if (!interactionActive(state)
     || state.simulator?.session?.session_id !== current?.simulator?.session?.session_id
     || state.simulator?.epoch !== current?.simulator?.epoch) {
     failedPCMOwner = null;
     clearPCMPlaybackError();
   }
-  if (audioRetry && (!state.session.handset_up || audioRetry.sessionId !== (state.simulator?.session?.session_id || session())
+  if (audioRetry && (!interactionActive(state) || audioRetry.sessionId !== (state.simulator?.session?.session_id || session())
     || audioRetry.epoch !== state.simulator?.epoch || audioRetry.node !== state.session.node)) audioRetry = null;
   // Recover transport-only suppression from an accepted snapshot on the new
   // socket. Polling and a pending local cleanup cannot reopen this boundary.
   if (fromWebSocket && audioReconnectPending) {
     audioReconnectPending = false;
-    if (!authBlocked && wsSnapshotReady && !wsReloadRequired && state.simulator && state.session.handset_up) suppressPhoneAudio = false;
+    if (!authBlocked && wsSnapshotReady && !wsReloadRequired && state.simulator && interactionActive(state)) suppressPhoneAudio = false;
   }
-  if (state.simulator && wsSnapshotReady && !wsReloadRequired && state.session.handset_up && current?.simulator && !current.session.handset_up) suppressPhoneAudio = false;
-  if (state.simulator && !state.session.handset_up) suppressPhoneAudio = true;
+  if (state.simulator && wsSnapshotReady && !wsReloadRequired && interactionActive(state) && current?.simulator
+    && (!interactionActive(current) || state.simulator.epoch !== current.simulator.epoch
+      || state.simulator.session.session_id !== current.simulator.session.session_id)) suppressPhoneAudio = false;
+  if (state.simulator && !interactionActive(state)) suppressPhoneAudio = true;
   current = state;
   if (state.simulator?.session?.session_id) $('session').value = state.simulator.session.session_id;
   syncMicAdmission();
@@ -976,9 +1005,9 @@ function render(state, { fromWebSocket = false } = {}) {
   $('pipeline-mode').textContent = modeLabel;
   $('pipeline-mode').dataset.mode = mode;
   const sessionState = String(state.session?.state || '').trim().toUpperCase();
-  if (mic && ['NONE', 'IDLE', 'ENDED'].includes(sessionState)) clearMic();
+  if (mic && (!interactionActive(state) || ['NONE', 'IDLE', 'ENDED'].includes(sessionState))) clearMic();
   const handsetUp = Boolean(state.session.handset_up);
-  $('session-mode-label').textContent = handsetUp ? 'SESSION ACTIVE' : 'STANDBY';
+  $('session-mode-label').textContent = interactionActive(state) ? 'SESSION ACTIVE' : 'STANDBY';
   $('state').textContent = state.session.state;
   $('node').textContent = (state.session.scenario || '—') + ' / ' + (state.session.state === 'ENDED' ? 'session_closed' : (state.session.node || '—'));
   const last = state.latencies.at(-1);
@@ -1492,9 +1521,9 @@ function resumeStoryAsset() {
 }
 
 function speakCommands(state) {
-  if (state.session && (!state.session.handset_up || !['fixed_story_playing', 'story_paused',
+  if (state.session && (!interactionActive(state) || !['fixed_story_playing', 'story_paused',
       'story_pause_announcement', 'story_resume_announcement'].includes(state.session.node))) publicStoryBuffer = null;
-  if (state.session && (!state.session.handset_up || !['personal_story_playing', 'story_paused',
+  if (state.session && (!interactionActive(state) || !['personal_story_playing', 'story_paused',
       'story_pause_announcement', 'story_resume_announcement'].includes(state.session.node))) discardPersonalStoryPlayback();
   for (const command of state.commands) {
     if (command.sequence <= lastSpokenCommand) continue;
@@ -1560,7 +1589,8 @@ function interactionGuide(state, media) {
   if (state?.canonical_state?.public_story_checkpoint_pending) {
     return ['Сказка приостановлена', 'Восстанавливаем место в сказке. Если она не продолжилась, нажми 7 и выбери сказку заново.'];
   }
-  if (!state?.session?.handset_up) return null;
+  if (!interactionActive(state)) return state?.simulator?.session?.session_actions?.includes('start')
+    ? ['Начнём?', 'Нажми «Начать» или подними трубку, чтобы поговорить с Мишкой.'] : null;
   const node = state.session.node;
   const page = state.canonical_state?.scene_menu_descriptor;
   if (['game_menu', 'fixed_story_menu', 'personal_story_theme', 'schedule_weather'].includes(node) && page?.scene === node) {
@@ -1699,7 +1729,7 @@ function updateGuide(state, contract = validateButtonContract(state.button_contr
     content[0] = 'Закончить игру?';
     content[1] = '6 — продолжить; 7 — закончить; 5 — помощь.';
   }
-  if (normalizedState !== 'ENDED' && node === 'wellbeing_check' && !state.session.handset_up) {
+  if (normalizedState !== 'ENDED' && node === 'wellbeing_check' && !interactionActive(state)) {
     content[1] = 'Поднимите трубку, чтобы услышать вопрос. 5 — помощь.';
   }
   const unavailable = state.simulator && (!state.simulator.admission?.input_ready || !state.simulator.admission?.connected);
@@ -1773,7 +1803,7 @@ async function playPCM(message, generation = audioGeneration) {
     if (generation !== audioGeneration) return;
     let personal = null;
     if (identity?.response_id === 'PERSONAL_STORY') {
-      if (current?.session.node !== 'personal_story_playing' || !current.session.handset_up
+      if (current?.session.node !== 'personal_story_playing' || !interactionActive(current)
           || message.generation < minimumPCMGeneration) return;
       const offsetMs = message.story_offset_ms, durationMs = message.story_duration_ms;
       if (!Number.isSafeInteger(offsetMs) || !Number.isSafeInteger(durationMs)
@@ -2050,7 +2080,7 @@ function microphoneEligible() {
 }
 function microphoneOwnerIsCurrent(owner = micOwner) {
   if (!owner || authBlocked || ws !== owner.socket || ws?.readyState !== WebSocket.OPEN
-    || session() !== owner.sessionId || !current?.session?.handset_up) return false;
+    || session() !== owner.sessionId || !interactionActive(current)) return false;
   if (current.simulator) return wsSnapshotReady && !wsReloadRequired && current.simulator.session.session_id === owner.sessionId
     && current.simulator.epoch === owner.epoch
     && current.simulator.admission?.input_ready === true && current.simulator.admission?.connected === true;
@@ -2224,7 +2254,7 @@ window.addEventListener('keyup', event => {
 window.MishkaConsole = Object.freeze({
   snapshot: () => current,
   acceptSnapshot: simulatorSnapshotIsCurrent,
-  post, render, unlockAudio, startMic, clearMic, stopMic, interactionGuide, updateGuide,
+  post, render, unlockAudio, startMic, clearMic, stopMic, interactionGuide, updateGuide, interactionActive, sessionActionIsCurrent,
   cleanup: ({preserveReconnect = false} = {}) => { if (!preserveReconnect) audioReconnectPending = false; suppressPhoneAudio = true; clearMic(); interruptAudioForInput(); },
   media: () => ({ microphone: Boolean(mic), microphoneAccepting: microphoneAccepting(), pending: micStarting, audioReady, audioRetry: Boolean(audioRetry),
     connected: ws?.readyState === WebSocket.OPEN, authBlocked,

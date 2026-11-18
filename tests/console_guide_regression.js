@@ -4,6 +4,7 @@ const source=fs.readFileSync(process.argv[2],'utf8');
 const start=source.indexOf('function interactionGuide('), end=source.indexOf('function enqueuePCM(',start);
 assert(start>=0&&end>start);
 const fields={}, context=vm.createContext({mic:null,micStarting:false,audioRetry:null,microphoneAccepting:()=>false,$:id=>(fields[id] ||= {}), document:{querySelector:()=>({hidden:false})}, buttonLegendSummary:()=>''});
+vm.runInContext(source.slice(source.indexOf('function interactionActive('),source.indexOf('function sessionActionIsCurrent(')),context);
 vm.runInContext(source.slice(start,end),context);
 function guide(mode,substate='',up=true,page=null) {
  context.updateGuide({canonical_state:{mode,substate,scene_menu_descriptor:page},session:{node:mode,state:'ACTIVE',handset_up:up}},{});

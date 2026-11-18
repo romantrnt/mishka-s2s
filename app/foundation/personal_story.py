@@ -278,7 +278,7 @@ class PersonalStoryMixin:
     def _personal_story_scope(self,sid,owner,*,playback=False,checkpoint=False):
         state=self.canonical_runtime.sessions.get(sid)
         if not (owner and not owner.closed and self._personal_stories.get(sid) is owner
-                and state and state.handset=='up' and state.mode in STORY_MODES
+                and state and state.interaction_open and state.mode in STORY_MODES
                 and self._session_epochs.get(sid,0)==owner.epoch
                 and (state.profile_ref,state.identity_request_id)==owner.identity):return False
         if owner.identity[0] and not self._identity_scope_live(sid,'personalize'):return False

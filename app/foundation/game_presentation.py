@@ -39,7 +39,7 @@ class GamePresentationMixin:
         """Ordinary key edges and pattern ticks keep one game's speech owner."""
         state = self.canonical_runtime.sessions.get(session_id)
         engine = getattr(state, "game_engine_state", None)
-        if (state is None or state.mode != "game_active" or state.handset != "up"
+        if (state is None or state.mode != "game_active" or not state.interaction_open
                 or state.game_audio_stage != "playing" or engine is None or engine.seven_exit_phase != 'idle'):
             return None
         return (id(state), self._session_epochs.get(session_id, 0), state.active_game_id,
@@ -289,7 +289,7 @@ class GamePresentationMixin:
             lease = self._active_audio.get(session_id)
             return bool(self._game_prompt_cues.get(session_id) is owner
                 and self.canonical_runtime.sessions.get(session_id) is state
-                and state is not None and state.mode == "game_active" and state.handset == "up"
+                and state is not None and state.mode == "game_active" and state.interaction_open
                 and state.game_engine_state is not None and state.game_engine_state.seven_exit_phase == 'idle'
                 and state.playback_lease == playback_lease
                 and self._session_epochs.get(session_id, 0) == generation

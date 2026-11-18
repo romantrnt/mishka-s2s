@@ -4,6 +4,7 @@ const root=process.argv[2]||'app/foundation/console';
 const phone=fs.readFileSync(root+'/phone.js','utf8'),source=fs.readFileSync(root+'/console.js','utf8');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const micState=(epoch=3,id='owner')=>({session:{handset_up:true,state:'ACTIVE'},simulator:{epoch,session:{session_id:id},admission:{input_ready:true,connected:true},microphone:{eligible:true}}});
+const loadInteraction=context=>vm.runInContext(source.slice(source.indexOf('function interactionActive('),source.indexOf('function sessionActionIsCurrent(')),context);
 function modelKeyTravel(){
  const text=fs.readFileSync(root+'/phone-model.js','utf8');
  const extrusion=kind=>text.match(new RegExp('const '+kind+'=new THREE.Mesh\\(extruded\\(shape,([^,]+),([^\\)]+)\\)')).slice(1).map(Number);
@@ -195,6 +196,7 @@ async function latePermission(){
   $:id=>(fields[id]||={}),bytesToB64:()=>'',Float32Array,
  });
  const start=source.indexOf('function microphoneEligible()'),end=source.indexOf("$('mic').onclick",start);
+ loadInteraction(context);
  vm.runInContext(source.slice(start,end),context);
  const pending=context.startMic();await tick();assert(context.micStarting);
  context.clearMic();permission(stream);await pending;
@@ -217,6 +219,7 @@ async function microphoneWireFlow(){
   $:id=>(fields[id]||={}),btoa:value=>Buffer.from(value,'binary').toString('base64'),Float32Array,
  });
  const start=source.indexOf('function bytesToB64('),end=source.indexOf("$('mic').onclick",start);
+ loadInteraction(context);
  vm.runInContext(source.slice(start,end),context);
  await context.startMic();
  const process=context.mic.node.onaudioprocess;
@@ -258,6 +261,9 @@ async function microphoneWireFlow(){
  for(const change of [s=>s.simulator.epoch++,s=>s.simulator.session.session_id='new-owner',s=>s.simulator.admission.input_ready=false,s=>s.session.handset_up=false]){
   context.current=micState();await context.startMic();assert(context.mic);change(context.current);context.syncMicAdmission();assert.strictEqual(context.mic,null,'terminal context change closes capture');
  }
+ context.current=micState();context.current.session.handset_up=false;context.current.simulator.session.interaction_active=true;
+ await context.startMic();assert(context.mic,'explicit microphone enable accepts the current logical panel owner with real handset DOWN');
+ context.current.simulator.session.interaction_active=false;context.syncMicAdmission();assert.strictEqual(context.mic,null,'logical End closes capture without inventing a physical edge');
  context.current=micState();await context.startMic();context.ws={readyState:1,send:()=>{throw new Error('stale capture sent to replacement socket');}};context.stopMic();assert.strictEqual(context.mic,null);
 }
 function snapshotFences(){
@@ -266,10 +272,12 @@ function snapshotFences(){
  const context=vm.createContext({current:null,suppressPhoneAudio:false,audioReconnectPending:false,authBlocked:false,wsSnapshotReady:true,wsReloadRequired:false,mic:null,micStarting:false,audioRetry:null,failedPCMOwner:null,pcmPlaybackError:null,pcmTextAttempt:0,clearPCMPlaybackError:()=>{},firstSnapshotRendered:false,lastSpokenCommand:0,audioReady:true,
   normalizeState:value=>value,showError:error=>{throw error;},$:field,document:{getElementById:field,querySelector:()=>null},
   window:{mishkaPhoneUpdate:value=>updates.push(value)},validateButtonContract:()=>({valid:true}),
-  renderButtonLegend:()=>{},clearMic:()=>{},syncMicAdmission:()=>{},buttonLegendSummary:()=>'',microphoneAccepting:()=>false,cardStatusProjection:()=>({label:'',tone:''}),setRuntimeValue:()=>{},
+  renderButtonLegend:()=>{},clearMic:()=>{},interruptAudioForInput:()=>{},syncMicAdmission:()=>{},buttonLegendSummary:()=>'',microphoneAccepting:()=>false,cardStatusProjection:()=>({label:'',tone:''}),setRuntimeValue:()=>{},
   renderLog:()=>{},renderHumanLog:()=>{},eventSummary:()=>{},resultSummary:()=>{},renderAudioStatus:()=>{},renderStoryStatus:()=>{},renderRuntimeStatus:()=>{},
   deriveLEDState:()=>({}),normalizeLightingState:()=>({valid:true,state:{}}),renderButtons:()=>{},renderLightingElements:()=>{},renderLiveDialogue:()=>{},speakCommands:value=>speeches.push(value),
  });
+ const interactionStart=source.indexOf('function interactionActive(');
+ if(interactionStart>=0)vm.runInContext(source.slice(interactionStart,source.indexOf('function personalStoryCancelAvailable(',interactionStart)),context);
  const helperStart=source.indexOf('function simulatorSnapshotIsCurrent(');
  const start=helperStart>=0?helperStart:source.indexOf('function render(state)');
  const end=source.indexOf('function normalizeLightingState(',start);
@@ -417,6 +425,60 @@ async function handsetGeneration(){
  assert.strictEqual(requests.length,3);assert.strictEqual(JSON.parse(requests[2].options.body).state,'down');
  permission();await lockedLift;assert.strictEqual(requests.length,3,'late audio unlock cannot submit an obsolete lift');
  requests[2].resolve();await cancelled;
+}
+async function panelSessionControls(){
+ const {context,fields,snapshot}=snapshotFences(),requests=[];let unlock,unlocks=0,stops=0;
+ context.authBlocked=false;context.wsReloadRequired=false;context.wsSnapshotReady=true;context.current=null;
+ context.recordLiveInput=()=>{};context.recordLiveResult=()=>{};context.AbortController=AbortController;context.session=()=> 'stand';
+ context.clearMic=()=>{stops++;};context.interruptAudioForInput=()=>{stops++;};
+ context.unlockAudio=()=>{unlocks++;return new Promise(resolve=>unlock=resolve);};
+ context.fetchWithTimeout=(path,options)=>new Promise(resolve=>requests.push({path,body:JSON.parse(options.body),signal:options.signal,resolve}));
+ vm.runInContext(source.slice(source.indexOf('const MAX_PENDING_POSTS ='),source.indexOf('function recordLiveInput(')),context);
+ vm.runInContext(source.slice(source.indexOf('window.MishkaConsole =')),context);
+ vm.runInContext(phone.slice(phone.indexOf('function mountPhone')),context);
+ let cursor=0;
+ const state=(active=false,actions=['start'],epoch=20,version=1,node=active?'bear_dialogue':'idle')=>{
+  const value=snapshot(epoch,++cursor,false,version);value.session.state=active?'ACTIVE':'IDLE';value.session.node=node;
+  Object.assign(value.simulator,{instance_id:'c'.repeat(16)});Object.assign(value.simulator.session,{node,interaction_active:active,interaction_route:active?'panel':null,session_actions:actions});
+  value.simulator.microphone.eligible=active;value.canonical_state={mode:node,interaction_active:active};return value;
+ };
+ const show=(...args)=>{const value=state(...args);context.render(value);return value;};
+ show();const start=fields['phone-start'],end=fields['phone-end'],skip=fields['phone-skip-interview'];
+ assert.strictEqual(typeof start?.onclick,'function','screen start has an actual action');
+ assert.strictEqual(start.hidden,false);assert.strictEqual(end.hidden,true);assert.strictEqual(skip.hidden,true);
+ const warming=start.onclick({detail:0});assert.strictEqual(unlocks,1,'native click starts AudioContext unlock synchronously');
+ assert.strictEqual(requests.length,0,'no request before unlock');assert.strictEqual(end.hidden,false,'pending start remains cancellable');
+ await end.onclick({detail:0});unlock();await warming;assert.strictEqual(requests.length,0,'cancelled pre-submit unlock has no start or end POST');
+ const starting=start.onclick({detail:0});unlock();await tick();
+ assert.deepStrictEqual(requests[0].body,{action:'start',instance_id:'c'.repeat(16),epoch:20,session_id:'stand'});
+ await start.onclick({detail:0});assert.strictEqual(requests.length,1,'pending start is idempotent in UI');
+ const beforeStop=stops,ending=end.onclick({detail:0});assert(stops>beforeStop,'end immediately stops local mic/audio before the network');
+ assert.strictEqual(requests[0].signal.aborted,true);assert.strictEqual(requests[1].body.action,'end');
+ requests[1].resolve({state:state(false,['start'],21)});await ending;requests[0].resolve({state:state(true,['end'],20)});await starting;await tick();
+ assert.strictEqual(context.current.simulator.epoch,21,'late start cannot revive an ended owner');
+ const fresh=start.onclick({detail:0});unlock();await tick();requests[2].resolve({state:state(true,['end'],21)});await fresh;
+ assert.strictEqual(context.current.session.handset_up,false,'screen start never forges handset UP');
+ assert.strictEqual(context.suppressPhoneAudio,false,'accepted logical start opens browser audio while handset stays DOWN');
+ assert.strictEqual(fields['phone-microphone'].disabled,false);assert.match(fields['phone-instruction'].textContent,/7.*меню/);
+ show(true,['end','skip_interview'],21,5,'exhibition_name_capture');assert.strictEqual(skip.hidden,false);
+ const held=context.post('/stand/text',{text:'held'}),skipping=skip.onclick({detail:0});assert.strictEqual(requests.length,4);
+ show(true,['end','skip_interview'],21,6,'exhibition_age_selection');requests[3].resolve({});await held;await tick();
+ assert.strictEqual(requests.length,4,'skip rechecks exact current phase version at actual FIFO dispatch');await skipping;
+ const acceptedSkip=skip.onclick({detail:0});assert.strictEqual(requests[4].body.state_version,6);requests[4].resolve({state:state(true,['end'],21,7,'root_menu')});await acceptedSkip;
+ assert.strictEqual(skip.hidden,true);
+ end.onkeydown({code:'Enter',repeat:false});show(true,['end'],22,1);const afterReplacement=stops;
+ assert.strictEqual(context.suppressPhoneAudio,false,'accepted replacement owner must keep its new browser audio admission');
+ await end.onclick({detail:0});assert.strictEqual(requests.length,5);assert.strictEqual(stops,afterReplacement,'stale activation cannot stop the next visit locally');
+ // Even urgent cleanup can wait behind another urgent request: fence at dispatch.
+ const reset=context.post('/stand/simulator/action',{action:'reset'}),oldEnd=end.onclick({detail:0});
+ show(true,['end'],23,1);requests[5].resolve({});await reset;await tick();assert.strictEqual(requests.length,6,'old queued End cannot reach a new owner');await oldEnd;
+ show(false,['start'],24);const denied=start.onclick({detail:0});unlock();await tick();requests[6].resolve({result:{error:{code:'runtime_unavailable',message:'Сервис пока недоступен.'}}});await denied;
+ assert.strictEqual(fields['phone-error'].hidden,false);assert.match(fields['phone-error'].textContent,/недоступен/);assert.strictEqual(start.disabled,false,'failed start can be retried');
+ const barrier=context.post('/stand/text',{text:'held start'}),staleStart=start.onclick({detail:0});unlock();await tick();
+ show(false,['start'],25);requests[7].resolve({});await barrier;await tick();assert.strictEqual(requests.length,8,'stale queued start cannot reach the next owner');await staleStart;
+ show(true,['end'],26);context.wsSnapshotReady=false;context.current.simulator.admission.input_ready=false;context.render(context.current);
+ assert.strictEqual(end.disabled,false,'current-owner cleanup remains available without normal admission');
+ const cleanup=end.onclick({detail:0});assert.strictEqual(requests[8].body.action,'end');requests[8].resolve({});await cleanup;
 }
 function menuCopy(){
  const {context,fields,snapshot}=snapshotFences();
@@ -686,4 +748,4 @@ async function legacyObserverFallback(){
  requests[1].resolve();assert.strictEqual((await second).order,2);
  assert.deepStrictEqual(results,[1,2],'both legacy HTTP results complete in order without a WebSocket');
 }
-(async()=>{modelKeyTravel();lightingProjection();serverInstanceRecovery();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone key travel, lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{modelKeyTravel();lightingProjection();serverInstanceRecovery();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();await panelSessionControls();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone key travel, lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});

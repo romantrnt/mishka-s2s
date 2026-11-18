@@ -20,6 +20,7 @@ const context = vm.createContext({console, Set, Map, Date:{now:()=>clockMs},
   post: async (path,payload) => {posts.push({path,payload});return {};}, showError: error => {throw error;},
 });
 function load(start,end) {vm.runInContext(source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start))),context);}
+load('function interactionActive(', 'function sessionActionIsCurrent(');
 load('function handleAudioStop(', 'function speakCommands(');
 load('function enqueuePCM(', 'function initDiagnostics(');
 load('function interruptAudioForInput(', "$('text-form').onsubmit");

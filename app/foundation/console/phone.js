@@ -39,6 +39,11 @@ function mountPhone() {
   let state=null,simulator=null,model=null,rendererGeneration=0,handsetPending=null,handsetGeneration=0;
   let journalCursor=0,journalInFlight=false,journalItems=[],mediaTimer=null,stopped=false,lastEpoch=null;
   let microphoneError='',drawerReturn=null;
+  let sessionPending=null;
+  const sessionButtons={start:$('phone-start'),end:$('phone-end'),skip_interview:$('phone-skip-interview')};
+  const sessionScope=action=>({action,instance_id:simulator?.instance_id,epoch:simulator?.epoch,session_id:simulator?.session?.session_id,
+    ...(action==='skip_interview'?{state_version:simulator?.session?.state_version}:{})});
+  const sameSessionScope=body=>body&&JSON.stringify(body)===JSON.stringify(sessionScope(body.action));
   const connected=()=>Boolean(bridge.media().connected&&!bridge.media().authBlocked);
   const canMutate=()=>Boolean(connected()&&bridge.media().inputReady&&simulator?.admission?.input_ready&&simulator?.admission?.connected);
   const showError=error=>{$('phone-error').textContent=String(error?.message||error);$('phone-error').hidden=false;};
@@ -66,7 +71,23 @@ function mountPhone() {
       key.dataset.symbol=String(simulator?.devices?.lighting?.[channels[id][2]]===1);
     }
   }
-  function cleanup(options) {handsetGeneration++;handsetPending=null;input.cancel();pointers.clear();bridge.cleanup(options);}
+  function cleanup({preserveMedia=false,...options}={}) {handsetGeneration++;handsetPending=null;sessionPending=null;input.cancel();pointers.clear();if(!preserveMedia)bridge.cleanup(options);}
+  async function sessionAction(action,body) {
+    if(!sameSessionScope(body)||!bridge.sessionActionIsCurrent(body))return;
+    const pendingStart=sessionPending?.action==='start'?sessionPending:null;
+    if(action==='end') {
+      cleanup();
+      if(pendingStart&&!pendingStart.submitted){render();return;}
+    } else if(sessionPending || !bridge.sessionActionIsCurrent(body))return;
+    const ticket={action,submitted:false};sessionPending=ticket;render();
+    try {
+      if(action==='start')await bridge.unlockAudio();
+      if(sessionPending!==ticket||!sameSessionScope(body)||!bridge.sessionActionIsCurrent(body))return;
+      ticket.submitted=true;
+      await send(body);
+    } catch(error){if(sessionPending===ticket)showError(error);}
+    finally{if(sessionPending===ticket){sessionPending=null;render();}}
+  }
   async function handset() {
     if(handsetPending==='down' || !simulator)return;
     const down=handsetPending==='up'||simulator.devices.handset.state==='up';
@@ -80,7 +101,7 @@ function mountPhone() {
   }
   async function reset() {cleanup();try{await send({action:'reset'});}catch(error){showError(error);}}
   function renderInstruction(media=bridge.media()) {
-    const live=connected(),up=simulator?.devices?.handset?.state==='up';
+    const live=connected(),up=bridge.interactionActive(state);
     const hint=bridge.interactionGuide(state,media);
     const tutorial=['exhibition_menu_tutorial_intro','exhibition_menu_tutorial_prompt','exhibition_menu_tutorial_buttons','exhibition_menu_wave','exhibition_menu_repeat_prompt','exhibition_menu_repeat_listen','exhibition_menu_replay_buttons'].includes(simulator?.session?.node);
     const skipHint='Нажмите любую кнопку, чтобы пропустить подсказку. Затем нажмите нужную кнопку для выбора.';
@@ -116,6 +137,14 @@ function mountPhone() {
     const handsetLabel=up?'Положить трубку':'Поднять трубку';
     $('phone-handset').textContent=handsetPending==='up'?'Положить трубку':handsetPending==='down'?'Ожидание телефона…':handsetLabel;
     $('phone-handset').disabled=handsetPending==='down'||!simulator||(!up&&handsetPending!=='up'&&!canMutate());
+    const actions=Array.isArray(simulator?.session?.session_actions)?simulator.session.session_actions:[];
+    for(const [action,button] of Object.entries(sessionButtons))if(button){
+      const pending=sessionPending?.action===action;
+      const available=actions.includes(action)||(action==='end'&&['start','end'].includes(sessionPending?.action));
+      button.hidden=!available;
+      button.disabled=!available||pending||(action!=='end'&&Boolean(sessionPending))||!bridge.sessionActionIsCurrent(sessionScope(action));
+      button.textContent=pending?{start:'Начинаем…',end:'Завершаем…',skip_interview:'Переходим к занятиям…'}[action]:{start:'Начать',end:'Завершить',skip_interview:'Сразу к занятиям'}[action];
+    }
     $('phone-flat-handset').disabled=$('phone-handset').disabled;$('phone-flat-handset').setAttribute('aria-label',handsetLabel);$('phone-flat-handset').dataset.up=String(up);
     $('phone-prompt').textContent=simulator?.prompt?.text||'Сейчас нет записанной реплики. Текст личных ответов скрыт.';
     for(const button of document.querySelectorAll('[data-phone-card]'))button.disabled=!canMutate()||!simulator?.devices?.rfid?.available;
@@ -129,8 +158,9 @@ function mountPhone() {
     if(!value?.simulator)return;
     if(!bridge.acceptSnapshot(value,state))return;
     const next=value.simulator;
-    if(lastEpoch!==null&&next.epoch!==lastEpoch)cleanup();
-    if(state?.simulator?.session?.session_id!==undefined && next.session.session_id!==state.simulator.session.session_id)cleanup();
+    // console.render already revoked old media before accepting the new owner.
+    if((lastEpoch!==null&&next.epoch!==lastEpoch)||(state?.simulator?.session?.session_id!==undefined
+      &&next.session.session_id!==state.simulator.session.session_id))cleanup({preserveMedia:true});
     lastEpoch=next.epoch;state=value;simulator=next;
     render();
     if(tools.open)refreshJournal();
@@ -168,6 +198,17 @@ function mountPhone() {
     catch(error){microphoneError=error.name==='NotAllowedError'?'Доступ к микрофону запрещён. Разрешите его в настройках браузера и повторите.':error.message;}
     renderMedia();
   };
+  for(const [action,button] of Object.entries(sessionButtons))if(button){
+    let activation=null;
+    button.onpointerdown=event=>{if(event.button===0)activation={body:sessionScope(action)};};
+    button.onkeydown=event=>{if(['Space','Enter'].includes(event.code)){if(event.repeat)event.preventDefault();else activation={body:sessionScope(action)};}};
+    button.onpointercancel=button.onblur=()=>{if(activation)activation.cancelled=true;};
+    button.onclick=event=>{
+      const captured=activation;activation=null;
+      if(button.hidden||button.disabled||captured?.cancelled||(event.detail>0&&!captured))return;
+      return sessionAction(action,captured?.body||sessionScope(action));
+    };
+  }
   for(const [id,key] of keys) {
     key.addEventListener('pointerdown',event=>{if(event.button!==0)return;event.preventDefault();if(input.press(id,event.pointerId)){pointers.set(event.pointerId,id);key.setPointerCapture(event.pointerId);}});
     key.addEventListener('pointerup',event=>{event.preventDefault();pointers.delete(event.pointerId);input.release(id,false,event.pointerId);});
