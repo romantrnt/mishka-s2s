@@ -23,9 +23,6 @@ async def sequence_game():
     async def choose(up=False):
         if up:await send('HandsetLifted')
         await send('ButtonPressed',1);await send('ButtonReleased',1)
-        if up and app.canonical_runtime.sessions['sequence'].scene_menu_phase!='ready':
-            assert (await send('ButtonPressed',1))['reason']=='scene_menu_skipped'
-            await send('ButtonReleased',1)
         await send('ButtonPressed',3);await send('ButtonReleased',3)
         assert app.canonical_runtime.sessions['sequence'].active_game_id=='repeat_pattern'
     def frame(buttons):
@@ -181,9 +178,8 @@ async def test_exhibition_full_path_hangup_cancels_demo():
     h=Harness(card(age=4))
     try:
         await h.ready();await h.lift();await h.complete();await h.complete()
-        # Existing root narration can be skipped once; then game menu invite
-        # is skipped once, and the stable third slot selects the pattern game.
-        for b in (1,1,1,3):
+        # Skip the root tutorial once, open games, then select its third slot.
+        for b in (1,1,3):
             await h.send('ButtonPressed',{'button_id':b});await h.send('ButtonReleased',{'button_id':b})
         assert h.state.active_game_id=='repeat_pattern'
         assert h.state.game_engine_state.phase=='instruction'
