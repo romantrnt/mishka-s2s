@@ -1149,15 +1149,17 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
 
     def _catalogue_voice_scope(self, session_id):
         state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
+        descriptor = state.scene_menu_descriptor if state is not None else {}
         if (state is None or state.mode not in {'game_menu','fixed_story_menu'} or state.handset != 'up'
                 or state.safety_severity != 'none' or state.scene_menu_refresh_required
-                or not state.scene_menu_descriptor.get('items')):
+                or state.scene_menu_active != state.mode or descriptor.get('scene') != state.mode
+                or not descriptor.get('items')):
             return None
-        from .menu_content import catalogue_items
-        from .game_engine import IMMERSIVE_GAME_SPECS
-        items = catalogue_items(state.mode, state.age_band, stories=self.canonical_runtime.stories, game_specs=IMMERSIVE_GAME_SPECS)
+        # Capture owns this committed entry, not asset authorization. Selection
+        # still verifies the exact asset; paging keeps named choices current.
         return (id(state), self._session_epochs.get(session_id, 0), state.mode, state.scene_menu_generation, state.profile_ref,
-                state.identity_request_id, tuple(items))
+                state.identity_request_id, state.age_band,
+                id(self.canonical_runtime.stories) if state.mode == 'fixed_story_menu' else None)
 
     def _finish_game_audio_wait(self, wait) -> None:
         if wait is not None and self._game_audio_waits.pop(wait["token"], None) is wait:
