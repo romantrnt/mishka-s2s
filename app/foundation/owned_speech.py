@@ -5,7 +5,8 @@ from dataclasses import replace
 from .domain import PlaybackHandle
 from .private_welcome import valid_pcm
 
-TYPED_AUDIO_IDS = frozenset({'TYPED_MENU','TYPED_DATE','TYPED_WEATHER','TYPED_WHAT_NEXT','TYPED_WHERE_NOW'})
+TYPED_AUDIO_IDS = frozenset({'TYPED_MENU','TYPED_DATE','TYPED_WEATHER','TYPED_WHAT_NEXT','TYPED_WHERE_NOW',
+    'DIALOGUE_OFFER', 'DIALOGUE_RETURN', 'DIALOGUE_FINISH'})
 PRIVATE_TYPED_AUDIO_IDS = frozenset({'TYPED_WHAT_NEXT','TYPED_WHERE_NOW'})
 from .scene_menus import MENU_PCM_MODES
 MENU_AUDIO_IDS = frozenset(MENU_PCM_MODES)

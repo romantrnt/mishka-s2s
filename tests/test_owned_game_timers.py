@@ -5,7 +5,7 @@ from app.foundation.api import build_application
 from app.foundation.config import Settings
 from app.foundation.domain import Event
 from app.foundation.age_policy import POLICIES
-from app.foundation.game_engine import start, timer_step, next_deadline
+from app.foundation.game_engine import start, timer_step, next_deadline, current_challenge
 
 @pytest.mark.parametrize('band',tuple(POLICIES))
 def test_existing_policy_wait_windows_and_bounded_repeats(band):
@@ -29,15 +29,16 @@ async def game():
     app,*_=build_application(settings=Settings(profile='mock',runtime_mode='clinical'),
                             monotonic_now=lambda:clock[0],background_scheduler=False)
     sequence=0
-    async def send(kind,button=None,**payload):
+    async def send(kind,button=None,text=None,**payload):
         nonlocal sequence
         sequence+=1
         if button is not None: payload['button_id']=button
-        return await app.receive_async(Event(kind,'timer-game',sequence,clock[0],'test',payload,f't:{sequence}',clock[0]))
+        return await app.receive_async(Event(kind,'timer-game',sequence,clock[0],'test',payload,f't:{sequence}',clock[0]),text)
     await send('ButtonPressed',1)
     await send('ButtonReleased',1)
-    await send('ButtonPressed',1)
-    await send('ButtonReleased',1)
+    assert (await send('ButtonPressed',4))['reason']=='game_started'
+    await send('ButtonReleased',4)
+    assert app.canonical_runtime.sessions['timer-game'].active_game_id=='odd_one_out'
     try:
         yield app,clock,send
     finally:
@@ -65,10 +66,18 @@ async def test_actual_boundary_silent_onhook_and_no_penalty(game):
     clock[0]=136.
     assert len(await app.flush_game_timers())==1
     assert state.game_engine_state.hints_emitted==2
+    assert state.game_engine_state.hint_deadline is None
+    # The final silent hint still opens an answer window, never a third hint.
+    clock[0]=154.
+    assert (await app.flush_game_timers())[0]['reason']=='game_response_window_elapsed'
+    assert state.game_engine_state.hints_emitted==2
+    assert state.game_engine_state.round==original.round and state.game_level==0
+    assert app.led.output.snapshot()==before and 'timer-game' not in app._active_audio
     assert 'timer-game' not in app._game_timer_scopes
-    assert (await send('ButtonPressed',1))['reason']=='game_progress'
+    answer=current_challenge(state.game_engine_state).answer
+    assert (await send('ButtonPressed',answer))['reason']=='game_progress'
     assert state.game_engine_state.hints_emitted==0
-    assert app._game_timer_scopes['timer-game'][-1]==154.
+    assert app._game_timer_scopes['timer-game'][-1]==172.
 
 @pytest.mark.asyncio
 async def test_external_timer_cannot_spoof_source_time_or_ownership(game):
@@ -87,7 +96,7 @@ async def test_external_timer_cannot_spoof_source_time_or_ownership(game):
 async def test_late_timer_revoked_by_actual_navigation(game,action):
     app,clock,send=game
     scope=app._game_timer_scopes['timer-game']
-    if action=='help': await send('ButtonPressed',5)
+    if action=='help': await send('SpeechReceived',text='Позови взрослого')
     elif action=='exit': await send('ButtonPressed',7)
     elif action=='reset': await send('SessionReset')
     else: await send('HardwareDisconnected')
@@ -113,7 +122,7 @@ async def test_scope_rechecked_after_awaited_ingress_race(game):
     task=asyncio.create_task(app._fire_game_timer('timer-game',scope))
     try:
         await entered.wait()
-        await send('ButtonPressed',5)
+        await send('SpeechReceived',text='Позови взрослого')
         frame=dict(app.led.output.snapshot())
         release.set()
         assert (await task)['reason']=='game_timer_stale'
@@ -151,19 +160,18 @@ async def test_profile_to_game_timer_and_exhibition_reset_without_state_seeding(
         await h.send('ButtonReleased',{'button_id':1})
         await h.send('ButtonPressed',{'button_id':1})
         await h.send('ButtonReleased',{'button_id':1})
-        # First game-chooser press only interrupts its spoken menu.
-        assert (await h.send('ButtonPressed',{'button_id':1}))['reason']=='scene_menu_skipped'
-        await h.send('ButtonReleased',{'button_id':1})
-        assert (await h.send('ButtonPressed',{'button_id':1}))['reason']=='game_started'
-        await h.send('ButtonReleased',{'button_id':1})
-        await h.complete()  # finish optional game instruction
+        # A fresh valid chooser edge selects immediately; free lights have no timer.
+        assert (await h.send('ButtonPressed',{'button_id':4}))['reason']=='game_started'
+        await h.send('ButtonReleased',{'button_id':4})
+        await h.complete()  # recorded game introduction
+        await h.complete()  # actual owned odd-one-out prompt arms the wait
         sid=h.boundary.session_id
         scope=h.app._game_timer_scopes[sid]
         assert scope[-1]==h.clock[0]+seconds
         assert h.state.game_engine_state.hint_limit==repeats
         h.clock[0]+=seconds
         assert (await h.app.flush_game_timers())[0]['reason']=='game_wait_hint'
-        assert h.app._active_audio[sid]['content_id']=='PHRASE_030'
+        assert h.app._active_audio[sid]['content_id']=='GAME_PROMPT'
         scope=h.app._game_timer_scopes.get(sid)
         await h.send('HandsetPlaced')
         assert sid not in h.app._game_timer_scopes
@@ -181,16 +189,17 @@ async def test_background_task_is_cancelled_on_help_and_cleanup():
     app,*_=build_application(settings=Settings(profile='mock',runtime_mode='clinical'),
                             monotonic_now=lambda:clock[0],background_scheduler=True)
     sequence=0
-    async def send(kind,button):
+    async def send(kind,button=None,text=None):
         nonlocal sequence
         sequence+=1
-        return await app.receive_async(Event(kind,'background-game',sequence,clock[0],'test',{'button_id':button},f'b:{sequence}',clock[0]))
+        return await app.receive_async(Event(kind,'background-game',sequence,clock[0],'test',
+            {} if button is None else {'button_id':button},f'b:{sequence}',clock[0]),text)
     try:
-        for kind in ['ButtonPressed','ButtonReleased','ButtonPressed','ButtonReleased']:
-            await send(kind,1)
+        for kind,button in [('ButtonPressed',1),('ButtonReleased',1),('ButtonPressed',4),('ButtonReleased',4)]:
+            await send(kind,button)
         task=app._game_timer_tasks['background-game']
         assert not task.done()
-        await send('ButtonPressed',5)
+        await send('SpeechReceived',text='Позови взрослого')
         await asyncio.sleep(0)
         assert task.done()
         assert 'background-game' not in app._game_timer_tasks

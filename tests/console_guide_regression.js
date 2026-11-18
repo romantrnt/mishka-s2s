@@ -25,4 +25,15 @@ assert(guide('wellbeing_check','',false)[1].includes('Поднимите тру�
 assert(!guide('schedule_weather')[1].includes('4 — куда идти'));
 assert(!guide('game_menu')[1].includes('Повтори паттерн'));
 assert(!guide('fixed_story_menu')[1].includes('Прививок'));
-console.log('console guide regression: 11 assertions passed');
+const media = {microphone: false, pending: false, microphoneAccepting: false};
+const offered = ready => ({session:{node:'bear_dialogue',handset_up:true},
+ canonical_state:{pending_game_offer:'quiz',game_offer_ready:ready}});
+assert(context.interactionGuide(offered(false),media)[1].includes('Дослушай предложение'));
+assert(!context.interactionGuide(offered(false),media)[1].includes('1 — начать'));
+assert(context.interactionGuide(offered(true),media)[0].includes('Вопросы Мишки'));
+assert(context.interactionGuide(offered(true),media)[1].includes('1 — начать; 7 — продолжить разговор'));
+for(const stage of ['prompt','playing']) {
+ const quiz={session:{node:'game_active',handset_up:true},canonical_state:{active_game_id:'quiz',game_audio_stage:stage}};
+ assert(context.interactionGuide(quiz,media)[1].includes('удерживай 7 пять секунд и отпусти'));
+}
+console.log('console guide regression: contextual offer, nonvoice exit and existing guidance passed');

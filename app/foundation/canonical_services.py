@@ -45,6 +45,7 @@ LED_PRESETS = {
     "SUPPORT": ((2, 1), (14, 1)),
     "PERSONAL_STORY": ((3, 1), (14, 1)),
     "BEAR_DIALOGUE": ((14, 1),),
+    "GAME_OFFER": _button_lights(1, 7, digits=True),
     "SCHEDULE_WEATHER": ((6, 1), (15, 1)),
     "MOOD_CHOICES": _button_lights(1, 2, 3, 4, 5, 6, 7),
     "LISTENING": tuple((element, 1) for element in DIALOGUE_FILL_ELEMENTS + DIALOGUE_ANCHOR_ELEMENTS),
@@ -66,6 +67,13 @@ BUTTON_ELEMENTS = dict(BUTTON_OUTPUT_ELEMENTS)
 class SafetyClassification:
     severity: str
     reason: str
+
+def wellbeing_reassurance(text: str, question: str | None) -> bool:
+    patterns = {"pain_or_discomfort": r"нет,?\s+ничего\s+не\s+болит",
+                "fear": r"нет,?\s+мне\s+не\s+страшно"}
+    pattern = patterns.get(question)
+    return bool(pattern and re.fullmatch(r"\s*" + pattern + r"\s*[.!]*\s*", text, re.I))
+
 
 class SafetyClassifier:
     """Deterministic first layer; semantic classifiers may only raise severity."""
@@ -94,8 +102,8 @@ class SafetyClassifier:
     # Semantic classification can raise even this narrowly exempted input.
     NOT_LOST = re.compile(r"\s*(?:я\s+)?не\s+потерял(?:ся|ась)\s*[.!]*\s*", re.I)
 
-    def classify(self, text: str, semantic: str = "none") -> SafetyClassification:
-        deterministic = ("none" if self.NOT_LOST.fullmatch(text) else
+    def classify(self, text: str, semantic: str = "none", *, wellbeing_question: str | None = None) -> SafetyClassification:
+        deterministic = ("none" if self.NOT_LOST.fullmatch(text) or wellbeing_reassurance(text, wellbeing_question) else
                          "urgent" if self.URGENT.search(text.strip()) else
                          "concern" if self.CONCERN.search(text) else "none")
         levels = {"none": 0, "concern": 1, "urgent": 2}
@@ -139,6 +147,30 @@ def classify_intent(text: str) -> str:
     if re.search(r"^(нет|неа|не хочу|не надо|не нужно|не повторяй)([.!?, ]|$)", value): return "no"
     if re.search(r"(сказк|истори)", value): return "story_theme"
     return "free_speech"
+
+
+def game_confirmation_intent(text: str) -> str:
+    """Only a complete answer confirms the current owned game proposal."""
+    value = " ".join(text.casefold().split()).strip(" .!?…,")
+    if re.fullmatch(r"(?:ну\s+)?(?:да|давай|давай сыграем|давай поиграем|ага|угу|конечно|хорошо|ладно|согласен|согласна|хочу|хочу играть|хочу поиграть|поиграем|запускай)(?:,? пожалуйста)?", value):
+        return "yes"
+    if re.fullmatch(r"(?:нет|неа|не хочу|не надо|не нужно|отмена|передумал|передумала)(?:,? спасибо)?", value):
+        return "no"
+    return "free_speech"
+
+
+def day_information_intent(text: str) -> str | None:
+    """Context-only requests; facts always come from the typed provider."""
+    value = text.casefold()
+    if re.search(r"погод|температур|на улице|дожд|снег", value):
+        return "weather"
+    if re.search(r"какое?\s+(?:сегодня\s+)?число|дат[ауы]|день\s+недел|какой\s+(?:сегодня\s+)?день", value):
+        return "date"
+    if re.search(r"что\s+(?:будет\s+)?(?:потом|дальше)|следующ|после\s+этого", value):
+        return "what_next"
+    if re.search(r"куда|где|сейчас|текуще", value):
+        return "where_now"
+    return None
 
 def lint_persona(text: str) -> tuple[bool, str | None]:
     if not isinstance(text, str) or not text.strip(): return False, "empty"

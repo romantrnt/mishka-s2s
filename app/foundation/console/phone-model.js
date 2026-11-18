@@ -121,12 +121,12 @@ export function createPhoneModel(stage, handlers) {
     const material=new THREE.MeshPhysicalMaterial({color:item.color,roughness:.41,metalness:0,clearcoat:.14,emissive:item.color,emissiveIntensity:0});
     const cap=new THREE.Group();group.add(cap);cap.position.z=.045;
     const mesh=new THREE.Mesh(extruded(shape,.045,.027),material);mesh.castShadow=true;mesh.receiveShadow=true;mesh.userData.button=item.id;cap.add(mesh);interactive.push(mesh);
-    const labelMaterial=new THREE.MeshBasicMaterial({map:labelTexture(item.id),transparent:true,depthWrite:false,toneMapped:false,color:'#d8e0e0'});
+    const labelMaterial=new THREE.MeshBasicMaterial({map:labelTexture(item.id),transparent:true,depthWrite:false,toneMapped:false,color:'#53626a'});
     const digitSize=item.id>=6?.38:Math.min(w,h)*.84;
     const digit=new THREE.Mesh(new THREE.PlaneGeometry(digitSize,digitSize),labelMaterial);digit.position.set(item.id===6?.08:item.id===7?-.08:0,item.id>=6?-h*.24:0,.076);cap.add(digit);
     let symbolMaterial=null;
     if(item.id>=6) {
-      symbolMaterial=new THREE.MeshBasicMaterial({map:labelTexture(item.id,true),transparent:true,depthWrite:false,toneMapped:false,color:'#d8e0e0'});
+      symbolMaterial=new THREE.MeshBasicMaterial({map:labelTexture(item.id,true),transparent:true,depthWrite:false,toneMapped:false,color:'#53626a'});
       const symbol=new THREE.Mesh(new THREE.PlaneGeometry(w*.68,w*.68),symbolMaterial);symbol.position.set(item.id===6?-.035:.035,h*.21,.076);cap.add(symbol);
     }
     keys.set(item.id,{group,cap,mesh,material,labelMaterial,symbolMaterial,color:item.color,pressed:false});
@@ -192,8 +192,8 @@ export function createPhoneModel(stage, handlers) {
         const lit=lights[fill]===1;
         key.material.color.set(lit?key.color:'#8b8b8b');
         key.material.emissiveIntensity=lit?.32:0;
-        key.labelMaterial.color.set(lights[digit]===1?'#ffffff':'#d8e0e0');
-        if(key.symbolMaterial)key.symbolMaterial.color.set(lights[symbol]===1?'#ffffff':'#d8e0e0');
+        key.labelMaterial.color.set(lights[digit]===1?'#ffffff':'#53626a');
+        if(key.symbolMaterial)key.symbolMaterial.color.set(lights[symbol]===1?'#ffffff':'#53626a');
       }
     },
     destroy() {destroyed=true;cancelAnimationFrame(frame);observer.disconnect();if(activePointer?.button)handlers.release(activePointer.button,true);scene.traverse(object=>{object.geometry?.dispose();const materials=Array.isArray(object.material)?object.material:[object.material];for(const material of materials){material?.map?.dispose();material?.dispose();}});renderer.dispose();renderer.domElement.remove();},

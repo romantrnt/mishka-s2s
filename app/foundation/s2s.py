@@ -836,6 +836,14 @@ class ResponseTagParser:
             else:
                 attrs=dict(self.ATTR.findall(match.group(2))); action=attrs.pop("type", "")
                 if action == "led" and attrs.get("pattern") in {"calm","attention","off"}: outputs.append(ParsedOutput("action", "led", attrs))
+                elif action == "offer_game":
+                    from .game_engine import IMMERSIVE_GAME_SPECS
+                    pairs = self.ATTR.findall(match.group(2))
+                    if (set(attrs) != {"game_id"} or len(pairs) != 2
+                            or self.ATTR.sub("", match.group(2)).strip()
+                            or attrs["game_id"] not in {spec.game_id for spec in IMMERSIVE_GAME_SPECS}):
+                        raise ValueError("unknown or invalid model action")
+                    outputs.append(ParsedOutput("action", action, attrs))
                 elif action == "return_to_scenario" and re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", attrs.get("target", "")): outputs.append(ParsedOutput("action", "return_to_scenario", attrs))
                 else: raise ValueError("unknown or invalid model action")
         residue=value
@@ -3088,6 +3096,8 @@ class BoundedConversationEngine:
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
         policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + f'. NON_NEGOTIABLE_RUNTIME_OUTPUT: start immediately; emit only complete <say>...</say> blocks, plus at most the allowlisted <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/>. Never emit JSON, markdown, analysis, tool calls, URLs, hardware commands, unclosed tags, or plain text outside tags. Use one or two short Russian spoken sentences, at most {age_words} words total, and stop.'
+        if context.node_id == "bear_dialogue":
+            policy += ' GAME PROPOSAL OUTPUT EXCEPTION: ONLY when the child meaningfully requests to play, select the matching exact catalog ID and emit one offer_game action without <say> or other actions. Example: <action type="offer_game" game_id="quiz"/>; quiz is an example, never the default. Otherwise answer normally in <say> and do not offer a game. The application speaks the proposal and obtains consent before launch.'
         native_streaming = _native_audio_stream_method(self.tts) is not None
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
@@ -3156,6 +3166,8 @@ class BoundedConversationEngine:
             async def handle(item):
                 nonlocal spoken_chars, raw_spoken
                 if item.kind=="say":
+                    if any(action.value == "offer_game" for action in actions):
+                        raise ValueError("game_offer_mixed_with_speech")
                     raw_spoken += item.value
                     # Validate the complete text seen so far as well as the
                     # fragment. This prevents a blocked phrase split across
@@ -3172,7 +3184,12 @@ class BoundedConversationEngine:
                     spoken_chars += len(safe)
                     if spoken_chars > self.config.max_response_chars: raise ValueError("total model speech exceeded limit")
                     await close_chunks(chunker.feed(safe))
-                else: actions.append(item)
+                else:
+                    if item.value == "offer_game" and (context.node_id != "bear_dialogue" or raw_spoken.strip() or actions):
+                        raise ValueError("game_offer_mixed_or_out_of_context")
+                    if any(action.value == "offer_game" for action in actions):
+                        raise ValueError("game_offer_mixed_actions")
+                    actions.append(item)
             consume_task=asyncio.create_task(self.consumer.consume_parsed(provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,token_received,flush_closed_say), name=f"s2s-llm-{context.session_id}-{token}")
             failure_task=asyncio.create_task(queue.failure_event.wait(), name=f"s2s-queue-failure-{{context.session_id}}-{{token}}") if queue.failure_event is not None else None
             try:
@@ -3202,7 +3219,12 @@ class BoundedConversationEngine:
             self.metrics.observe("llm", generation_started)
             self.metrics.observe_voice_stage(context.session_id, "llm", generation_started, generation_id=trace_generation_id)
             llm_completed=True
-            await queue.finish(); self.metrics.observe_voice_stage(context.session_id, "queue", queue_started, generation_id=trace_generation_id); context.turns+=1; context.history=self._bound_history(context.history+[(text," ".join(chunks))], protect_last=True)
+            await queue.finish()
+            self.metrics.observe_voice_stage(context.session_id, "queue", queue_started, generation_id=trace_generation_id)
+            # A proposal is navigation, not a spoken conversational answer.
+            control_offer = not chunks and len(actions) == 1 and actions[0].value == "offer_game"
+            context.turns += int(not control_offer)
+            context.history=self._bound_history(context.history+[(text," ".join(chunks))], protect_last=True)
             self.metrics.mark_voice(context.session_id, "turn_complete", generation_id=trace_generation_id)
             self.metrics.finish_voice_turn(context.session_id, "completed", generation_id=trace_generation_id)
             await self._notify_lifecycle(context.session_id, "listening", source="turn_finished")

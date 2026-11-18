@@ -751,6 +751,9 @@ class HeadlessAudioOutput:
 class HardwareIntegrationStand:
     """One simulated installation connected to the real serial protocol boundary."""
     def __init__(self, settings: Settings | None = None, content_root: str | Path | None = None, monotonic_now=None, background_scheduler: bool = True):
+        self._panel_snapshot_revision = 0
+        self._panel_snapshot_lock = threading.Lock()
+        self._panel_instance_id = secrets.token_hex(8)
         self.settings=settings or Settings.from_env(); self.hub=StandHub(); self.pty=PTYUARTSimulator()
         self.background_scheduler = bool(background_scheduler)
         self.monotonic_now = monotonic_now or time.monotonic
@@ -1276,10 +1279,19 @@ class HardwareIntegrationStand:
             owner = self.application._personal_stories.get(handle.session_id)
             return self.application._personal_story_scope(handle.session_id, owner, playback=True)
         if handle.response_id == "PERSONAL_WELCOME" or handle.response_id in PRIVATE_TYPED_AUDIO_IDS:
+            if handle.response_id in PRIVATE_TYPED_AUDIO_IDS and state.mode != "schedule_weather":
+                return False
             capability = "personalize" if handle.response_id == "PERSONAL_WELCOME" else "schedule"
             return bool(identity_binding and all(identity_binding)
                 and (state.profile_ref,state.identity_request_id) == identity_binding
                 and self.application._identity_scope_live(handle.session_id,capability))
+        if handle.response_id == "DIALOGUE_OFFER":
+            return (state.mode == "bear_dialogue" and state.pending_game_offer is not None
+                    and not state.game_offer_ready)
+        if handle.response_id == "DIALOGUE_RETURN":
+            return state.mode == "bear_dialogue"
+        if handle.response_id == "DIALOGUE_FINISH":
+            return state.mode == "root_menu"
         if handle.response_id in {"GAME_PROMPT", "GAME_HINT"}:
             return state.mode == "game_active" and state.game_audio_stage == "prompt"
         from .scene_menus import MENU_PCM_MODES
@@ -3214,6 +3226,13 @@ class HardwareIntegrationStand:
 
     def panel_snapshot(self) -> dict[str, Any]:
         """Bounded/redacted state projection for WebPanel observers."""
+        # Order capture, not delivery: a delayed HTTP response must not replace
+        # a newer WS animation frame that has the same input-journal cursor.
+        with self._panel_snapshot_lock:
+            self._panel_snapshot_revision += 1
+            return self._capture_panel_snapshot(self._panel_snapshot_revision)
+
+    def _capture_panel_snapshot(self, snapshot_revision: int) -> dict[str, Any]:
         source = self.snapshot()
         session = source.get("session") if isinstance(source.get("session"), dict) else {}
         canonical = source.get("canonical_state") if isinstance(source.get("canonical_state"), dict) else {}
@@ -3222,6 +3241,10 @@ class HardwareIntegrationStand:
             "menu_tutorial_step", "active_effect", "lighting_effect",
             "public_story_checkpoint_pending",
         ) if key in canonical}
+        from .game_engine import IMMERSIVE_GAME_SPECS
+        if canonical.get("pending_game_offer") in tuple(spec.game_id for spec in IMMERSIVE_GAME_SPECS):
+            canonical_safe["pending_game_offer"] = canonical["pending_game_offer"]
+            canonical_safe["game_offer_ready"] = canonical.get("game_offer_ready") is True
         if (canonical.get("active_story_id") == "PERSONAL_STORY"
                 and canonical.get("mode") in {"story_pause_announcement", "story_paused"}):
             canonical_safe["personal_story_checkpoint_pending"] = not canonical.get("story_checkpoint_confirmed", False)
@@ -3301,6 +3324,8 @@ class HardwareIntegrationStand:
         remote = getattr(self, "remote_devices", None)
         if remote is not None:
             panel["simulator"] = remote.projection(source)
+            panel["simulator"]["snapshot_revision"] = snapshot_revision
+            panel["simulator"]["instance_id"] = self._panel_instance_id
         return panel
 
     async def aclose(self, *, hardware_stopped: bool = False):

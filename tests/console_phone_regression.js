@@ -6,6 +6,19 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const micState=(epoch=3,id='owner')=>({session:{handset_up:true,state:'ACTIVE'},simulator:{epoch,session:{session_id:id},admission:{input_ready:true,connected:true},microphone:{eligible:true}}});
 function lightingProjection(){
  const modelSource=fs.readFileSync(root+'/phone-model.js','utf8');
+ const css=fs.readFileSync(root+'/phone.css','utf8'),off='#53626a',on='#ffffff';
+ const declarations=selector=>{
+  const escaped=selector.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const rule=css.match(new RegExp(escaped+'\\s*\\{([^}]+)\\}'));
+  assert(rule,'indicator CSS rule exists: '+selector);
+  return Object.fromEntries(rule[1].split(';').filter(value=>value.includes(':')).map(value=>{const split=value.indexOf(':');return[value.slice(0,split).trim(),value.slice(split+1).trim()];}));
+ };
+ const flatOff=declarations('body[data-phone] .phone-key').color;
+ const flatDigitOn=declarations('body[data-phone] .phone-key[data-digit="true"] span').color;
+ const flatSymbolOn=declarations('body[data-phone] .phone-key[data-symbol="true"] svg').color;
+ assert.strictEqual(flatOff,off,'flat OFF indicators are gray rather than luminous white');
+ assert.strictEqual(flatDigitOn,on);assert.strictEqual(flatSymbolOn,on);
+ for(const name of ['labelMaterial','symbolMaterial'])assert.match(modelSource,new RegExp(name+"=new THREE\\.MeshBasicMaterial\\([^\\n]+color:'"+off+"'"),'initial 3D '+name+' is dim before the first state');
  // Pin the physical contract independently of either browser renderer:
  // button 2 uses channel 13 for its orange fill and 12 for its white digit.
  const expected={1:[14,15],2:[13,12],3:[10,11],4:[9,8],5:[6,7],6:[3,2,4,5],7:[1,0,17,16]};
@@ -21,11 +34,45 @@ function lightingProjection(){
  const snapshot={devices:{handset:{state:'up'},buttons:[],lighting:{14:1,13:1,10:1,9:1,6:1,3:1,1:1,5:1,16:1}}};
  model.update(snapshot);
  for(const [id,key] of keys){assert.strictEqual(key.material.color.value,'enabled-'+id,'root menu fill remains colored for button '+id);assert.strictEqual(key.material.emissiveIntensity,.32);}
- assert.strictEqual(keys.get(2).labelMaterial.color.value,'#d8e0e0','unlit digit is independent of lit orange fill');
+ assert.strictEqual(keys.get(2).labelMaterial.color.value,off,'unlit digit is independent of lit orange fill');
  snapshot.devices.lighting={12:1};model.update(snapshot);
  assert.strictEqual(keys.get(2).material.color.value,'#8b8b8b','white digit alone never lights the orange fill');
  assert.strictEqual(keys.get(2).material.emissiveIntensity,0);
  assert.strictEqual(keys.get(2).labelMaterial.color.value,'#ffffff');
+ const controls=new Map([6,7].map(id=>[id,{dataset:{},setAttribute(){}}]));
+ const context=vm.createContext({simulator:snapshot,model:null,input:{pressed:()=>new Set()},keys:controls,channels:flat,canMutate:()=>true});
+ vm.runInContext(phone.slice(phone.indexOf('function renderMechanical('),phone.indexOf('function cleanup(')),context);
+ snapshot.devices.buttons=[6,7].map(id=>({id,enabled:true,pressed:false,color:'unchanged'}));
+ const check=(id,fill,digit,symbol,compensation=false)=>{
+  const [fillChannel,digitChannel,symbolChannel,compensationChannel]=expected[id];
+  snapshot.devices.lighting={[fillChannel]:Number(fill),[digitChannel]:Number(digit),[symbolChannel]:Number(symbol),[compensationChannel]:Number(compensation)};
+  context.simulator=snapshot;context.renderMechanical();model.update(snapshot);
+  const key=keys.get(id),control=controls.get(id);
+  assert.strictEqual(key.labelMaterial.color.value,digit?on:off,'3D digit '+id+' follows only its digit channel');
+  assert.strictEqual(key.symbolMaterial.color.value,symbol?on:off,'3D emblem '+id+' follows only its symbol channel');
+  assert.strictEqual(control.dataset.digit,String(digit),'flat digit '+id+' follows its physical channel');
+  assert.strictEqual(control.dataset.symbol,String(symbol),'flat emblem '+id+' follows its physical channel');
+  assert.strictEqual(control.dataset.fill,String(fill));
+  assert.strictEqual(control.dataset.digit==='true'?flatDigitOn:flatOff,key.labelMaterial.color.value);
+  assert.strictEqual(control.dataset.symbol==='true'?flatSymbolOn:flatOff,key.symbolMaterial.color.value);
+  assert.strictEqual(key.material.color.value,fill?'enabled-'+id:'#8b8b8b','indicator channels never alter fill '+id);
+  assert.strictEqual(key.material.emissiveIntensity,fill?.32:0);
+  const other=keys.get(id===6?7:6);
+  assert.strictEqual(other.labelMaterial.color.value,off,'no cross-button digit leak');
+  assert.strictEqual(other.symbolMaterial.color.value,off,'no cross-button emblem leak');
+ };
+ for(const id of [6,7]){
+  for(const fill of [false,true])for(const [digit,symbol] of [[false,false],[true,false],[false,true],[true,true]])check(id,fill,digit,symbol);
+  check(id,false,false,false,true); // Compensation is a distinct physical channel, not another emblem.
+  for(const [digit,symbol] of [[true,true],[false,true],[true,false],[false,false],[true,true],[false,false]])check(id,true,digit,symbol);
+ }
+ context.simulator=null;context.renderMechanical();model.update(null);
+ for(const id of [6,7]){
+  const key=keys.get(id),control=controls.get(id);
+  assert.strictEqual(key.labelMaterial.color.value,off);assert.strictEqual(key.symbolMaterial.color.value,off);
+  assert.strictEqual(key.material.color.value,'#8b8b8b');assert.strictEqual(key.material.emissiveIntensity,0);
+  assert.strictEqual(control.dataset.digit,'false');assert.strictEqual(control.dataset.symbol,'false');assert.strictEqual(control.dataset.fill,'false');
+ }
 }
 async function gestures(){
  const sent=[],errors=[];let now=100,epoch=3,allow=true;
@@ -215,6 +262,24 @@ function snapshotFences(){
  assert.strictEqual(context.suppressPhoneAudio,true,'auth block prevents reconnect audio recovery');
  return {context,fields,snapshot};
 }
+function serverInstanceRecovery(){
+ const {context,fields,snapshot}=snapshotFences();
+ context.authBlocked=false;context.wsReloadRequired=false;context.wsSnapshotReady=false;context.current=null;
+ const captured=(id,revision,cursor=0)=>{const value=snapshot(0,cursor,false);Object.assign(value.simulator,{instance_id:id,snapshot_revision:revision});return value;};
+ const old=captured('a'.repeat(16),500);context.render(old);
+ context.ws=null;context.connect();context.ws.onopen();
+ context.ws.onmessage({data:JSON.stringify({type:'stand_state',state:captured('b'.repeat(16),1)})});
+ assert.strictEqual(context.current,old,'a fresh server incarnation cannot replace retained state');
+ assert.strictEqual(context.wsReloadRequired,true,'restart at identical epoch/cursor still offers reload');
+ assert.strictEqual(fields.connection.textContent,'RELOAD REQUIRED');
+ // A delayed first WS snapshot from the same process is ordinary transport reordering.
+ context.current=null;context.wsReloadRequired=false;context.wsSnapshotReady=false;
+ context.render(captured('b'.repeat(16),10,10));
+ context.ws.onmessage({data:JSON.stringify({type:'stand_state',state:captured('b'.repeat(16),9,9)})});
+ assert.strictEqual(context.wsReloadRequired,false,'same-instance delivery delay is not a restart');
+ context.ws.onmessage({data:JSON.stringify({type:'stand_state',state:captured('b'.repeat(16),11,11)})});
+ assert.strictEqual(context.wsSnapshotReady,true,'a later same-instance frame restores admission');
+}
 async function handsetGeneration(){
  const {context,fields,snapshot}=snapshotFences(),requests=[];
  let permission;
@@ -292,8 +357,8 @@ function gameGuidance(){
  show('repeat_pattern','playing','demonstrate');check(/Посмотри.*Потом повтори/);
  show('repeat_pattern');check(/Повтори подсвеченные кнопки.*7 — выйти/);
  show('odd_one_out');check(/подсвеченную кнопку.*7 — выйти/);
- show('quiz');check(/подсвеченную кнопку.*закончить игру.*микрофон/);
- show('quiz','playing','demonstrate');check(/подсвеченную кнопку.*закончить игру.*микрофон/);
+ show('quiz');check(/подсвеченную кнопку.*ответа 7 нажми и отпусти.*удерживай 7 пять секунд и отпусти/);
+ show('quiz','playing','demonstrate');check(/подсвеченную кнопку.*удерживай 7 пять секунд и отпусти/);
  assert.doesNotMatch(fields['guide-text'].textContent,/7 —/,'quiz 7 may be an answer');
  const word=show('word_game');check(/Включи микрофон и назови слово/);
  context.micStarting=true;context.window.mishkaPhoneMedia();check(/Разреши микрофон/);
@@ -507,4 +572,4 @@ async function legacyObserverFallback(){
  requests[1].resolve();assert.strictEqual((await second).order,2);
  assert.deepStrictEqual(results,[1,2],'both legacy HTTP results complete in order without a WebSocket');
 }
-(async()=>{lightingProjection();await gestures();await latePermission();await microphoneWireFlow();await handsetGeneration();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{lightingProjection();serverInstanceRecovery();await gestures();await latePermission();await microphoneWireFlow();await handsetGeneration();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});

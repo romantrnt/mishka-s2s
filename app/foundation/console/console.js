@@ -638,11 +638,17 @@ function connect() {
         const state = normalizeState(message.state);
         if (!state) { showError("WebSocket sent invalid stand state"); return; }
         if (!simulatorSnapshotIsCurrent(state)) {
-          if (!wsSnapshotReady && Number.isSafeInteger(state.simulator?.epoch)
+          const changedInstance = typeof state.simulator?.instance_id === 'string'
+            && /^[a-f0-9]{16}$/.test(state.simulator.instance_id)
+            && typeof current?.simulator?.instance_id === 'string'
+            && state.simulator.instance_id !== current.simulator.instance_id;
+          const sameInstance = typeof state.simulator?.instance_id === 'string'
+            && state.simulator.instance_id === current?.simulator?.instance_id;
+          if (changedInstance || (!sameInstance && !wsSnapshotReady && Number.isSafeInteger(state.simulator?.epoch)
             && Number.isSafeInteger(state.simulator?.journal_cursor)
             && (state.simulator.epoch < current?.simulator?.epoch
               || (state.simulator.epoch === current?.simulator?.epoch
-                && state.simulator.journal_cursor < current.simulator.journal_cursor))) {
+                && state.simulator.journal_cursor < current.simulator.journal_cursor)))) {
             wsReloadRequired = true;
             cancelOrdinaryPosts();
             audioReconnectPending = false;
@@ -908,11 +914,22 @@ function simulatorSnapshotIsCurrent(nextState, previousState = current) {
   if (!next) return !previous;
   if (!Number.isSafeInteger(next.epoch) || next.epoch < 0
     || !Number.isSafeInteger(next.journal_cursor) || next.journal_cursor < 0) return false;
+  if (next.snapshot_revision !== undefined
+    && (!Number.isSafeInteger(next.snapshot_revision) || next.snapshot_revision < 0)) return false;
+  if (next.instance_id !== undefined
+    && (typeof next.instance_id !== 'string' || !/^[a-f0-9]{16}$/.test(next.instance_id))) return false;
   if (!previous) return true;
+  if (previous.instance_id !== undefined && next.instance_id !== previous.instance_id) return false;
+  if (previous.snapshot_revision !== undefined && next.snapshot_revision === undefined) return false;
   // Epoch owns cleanup boundaries; the journal orders changes within one
   // boundary. Session state_version can restart after a clean relift.
-  return next.epoch > previous.epoch || (next.epoch === previous.epoch
-    && next.journal_cursor >= previous.journal_cursor);
+  if (next.epoch !== previous.epoch) return next.epoch > previous.epoch;
+  if (next.journal_cursor < previous.journal_cursor) return false;
+  if (previous.snapshot_revision !== undefined) {
+    return Number.isSafeInteger(next.snapshot_revision)
+      && next.snapshot_revision >= previous.snapshot_revision;
+  }
+  return true;
 }
 
 function render(state, { fromWebSocket = false } = {}) {
@@ -1558,7 +1575,9 @@ function interactionGuide(state, media) {
     const title = {free_lights: 'Живой свет', quiz: 'Вопросы Мишки', repeat_pattern: 'Повтори огоньки',
       odd_one_out: 'Выбери лишнее', word_game: 'Игра в слова'}[game.active_game_id] || 'Игра';
     if (['starting', 'prompt'].includes(game.game_audio_stage)
-      || ['instruction', 'awaiting_prompt'].includes(game.game_phase)) return [title, 'Дослушай Мишку. Потом можно будет ответить.'];
+      || ['instruction', 'awaiting_prompt'].includes(game.game_phase)) return [title,
+        'Дослушай Мишку. Потом можно будет ответить. ' + (game.active_game_id === 'quiz'
+          ? 'Для выхода удерживай 7 пять секунд и отпусти.' : '7 — выйти из игры.')];
     if (game.active_game_id === 'repeat_pattern' && game.game_phase === 'demonstrate') return [title, 'Посмотри, как загораются огоньки. Потом повтори последовательность. 7 — выйти из игры.'];
     if (game.active_game_id === 'word_game') {
       const hint = media.pending ? 'Разреши микрофон в окне браузера и назови слово.'
@@ -1570,7 +1589,7 @@ function interactionGuide(state, media) {
       free_lights: 'Нажимай кнопки 1–6 и играй с огоньками. 7 — выйти из игры.',
       repeat_pattern: 'Повтори подсвеченные кнопки в том же порядке. 7 — выйти из игры.',
       odd_one_out: 'Нажми подсвеченную кнопку с лишним предметом. 7 — выйти из игры.',
-      quiz: 'Нажми подсвеченную кнопку с ответом. Для выхода скажи «закончить игру» через микрофон или напиши это в «Инструментах».',
+      quiz: 'Нажми подсвеченную кнопку с ответом. Для ответа 7 нажми и отпусти. Для выхода удерживай 7 пять секунд и отпусти.',
     }[game.active_game_id] || 'Следуй текущей подсветке и подсказке Мишки.'];
   }
   if (node === 'support_intake') {
@@ -1584,6 +1603,11 @@ function interactionGuide(state, media) {
     return ['Расскажи Мишке', text];
   }
   if (node === 'bear_dialogue') {
+    const offered = {free_lights: 'Живой свет', quiz: 'Вопросы Мишки', repeat_pattern: 'Повтори огоньки',
+      odd_one_out: 'Выбери лишнее', word_game: 'Игра в слова'}[state.canonical_state?.pending_game_offer];
+    if (offered) return ['Поиграем в «' + offered + '»?', state.canonical_state.game_offer_ready
+      ? '1 — начать; 7 — продолжить разговор. Можно сказать «да» или «нет».'
+      : 'Дослушай предложение Мишки. 7 — продолжить разговор.'];
     const text = media.pending
       ? 'Разреши микрофон в окне браузера. Или напиши Мишке в «Инструментах».'
       : !media.microphone

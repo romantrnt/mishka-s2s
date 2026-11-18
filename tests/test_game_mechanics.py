@@ -1,6 +1,6 @@
 import random
 import pytest
-from app.foundation.game_engine import start, advance, pause, AVAILABLE_GAME_SPECS
+from app.foundation.game_engine import start, advance, pause
 
 
 def driver(game):
@@ -77,18 +77,22 @@ def test_random_mechanics_never_score_non_edges_or_reserved(game):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('game', ['find_pair','press_together','hold_light'])
-async def test_actual_application_frames_for_each_mechanic(game, monkeypatch):
-    # Menu pagination is another component. Supply one available spec to its
-    # existing selection seam; all lifecycle, engine and physical LED paths run.
-    import app.foundation.canonical_contract as contract
+async def test_actual_application_frames_for_each_mechanic(game):
+    # These retained mechanics have no current public chooser slot. Start an
+    # explicit compatibility owner, then exercise real application edges/frames.
+    from app.foundation.canonical_contract import CanonicalState
     from app.foundation.api import build_application
     from app.foundation.config import Settings
     from app.foundation.domain import Event
-    from app.foundation.canonical_services import BUTTON_ELEMENTS
-    spec = next(item for item in AVAILABLE_GAME_SPECS if item.game_id == game)
-    monkeypatch.setattr(contract, 'AVAILABLE_GAME_SPECS', (spec,))
-    app, *_ = build_application(settings=Settings(profile='mock', runtime_mode='clinical'), background_scheduler=False)
+    from app.foundation.lighting import BUTTON_FILL_ELEMENTS
     seq, clock = 0, 0.
+    app, *_ = build_application(settings=Settings(profile='mock', runtime_mode='clinical'),
+        monotonic_now=lambda:clock, background_scheduler=False)
+    engine=start(game,sequence=0,now=clock,selection_button=4,run_id=f'compat-{game}')
+    state=CanonicalState('mechanic',mode='game_active',handset='down',
+        active_game_id=game,game_engine_state=engine,game_target=engine.target,
+        game_audio_stage='playing',expected_inputs=['button','handset_up'])
+    app.canonical_runtime.sessions['mechanic']=state
     async def send(kind, button=None, elapsed=.1):
         nonlocal seq, clock
         seq += 1
@@ -96,14 +100,12 @@ async def test_actual_application_frames_for_each_mechanic(game, monkeypatch):
         return await app.receive_async(Event(kind,'mechanic',seq,clock,'test',
             {} if button is None else {'button_id':button},f'm:{seq}',clock))
     def assert_lit(buttons):
-        ids = {i for b in buttons for i in BUTTON_ELEMENTS[b]}
+        # The current legacy game output is colors: digits stay off.
+        ids = {BUTTON_FILL_ELEMENTS[b] for b in buttons}
         assert app.led.output.snapshot() == {str(i):int(i in ids) for i in range(18)}
     try:
-        await send('ButtonPressed',1)
-        await send('ButtonReleased',1)
-        assert (await send('ButtonPressed',1))['reason'] == 'game_started'
-        await send('ButtonReleased',1)
-        state = app.canonical_runtime.sessions['mechanic']
+        await send('ButtonReleased',4)
+        assert state.game_engine_state.game_id==game and not state.game_engine_state.immersive
         assert_lit([1,2] if game != 'hold_light' else [1])
         await send('ButtonPressed',1)
         if game == 'find_pair':

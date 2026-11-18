@@ -25,7 +25,7 @@ body[data-phone] .phone-flat-handset {position:absolute;left:50%;top:11%;width:m
 body[data-phone] .phone-flat-handset:hover {background:#2098a8;}
 body[data-phone] .phone-flat-handset[data-up="true"] {transform:translate(-51%,-35%) rotate(-7deg);}
 .phone-paw {position:absolute;left:50%;top:55%;width:min(62%,380px);height:58%;max-height:270px;transform:translate(-50%,-44%);z-index:3;pointer-events:none;}
-body[data-phone] .phone-key {position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;justify-content:center;align-items:center;color:#f3f7f6;padding:0;border:3px solid #344c56;border-radius:48%;background:var(--key-color);box-shadow:inset 3px 4px 6px #ffffff30,inset -3px -4px 4px #16323e3d,0 3px 1px #334b55;min-width:44px;min-height:44px;line-height:1;pointer-events:auto;touch-action:none;transition:filter .1s,transform .1s;}
+body[data-phone] .phone-key {position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;justify-content:center;align-items:center;color:#53626a;padding:0;border:3px solid #344c56;border-radius:48%;background:var(--key-color);box-shadow:inset 3px 4px 6px #ffffff30,inset -3px -4px 4px #16323e3d,0 3px 1px #334b55;min-width:44px;min-height:44px;line-height:1;pointer-events:auto;touch-action:none;transition:filter .1s,transform .1s;}
 body[data-phone] .phone-key:disabled {opacity:1;cursor:default;}
 body[data-phone] .phone-key span {font:600 clamp(24px,3.5vh,39px)/1 Arial,sans-serif;}
 body[data-phone] .phone-key svg {width:65%;height:auto;margin-bottom:8%;}
@@ -111,8 +111,8 @@ body[data-phone] .phone-primary:hover {background:#343a3a;}
  .phone-tool-section dl {grid-template-columns:110px minmax(0,1fr);}
 }
 @media(prefers-reduced-motion:reduce) {body[data-phone] *,body[data-phone] *::before {transition:none!important;scroll-behavior:auto!important;}}
-body[data-phone] .phone-key[data-digit="true"] span {text-shadow:0 0 8px #fff7;}
-body[data-phone] .phone-key[data-symbol="true"] svg {filter:drop-shadow(0 0 6px #fff8);}
+body[data-phone] .phone-key[data-digit="true"] span {color:#ffffff;text-shadow:0 0 8px #fff7;}
+body[data-phone] .phone-key[data-symbol="true"] svg {color:#ffffff;filter:drop-shadow(0 0 6px #fff8);}
 /* A continuous curved receiver in the functional WebGL fallback. */
 body[data-phone] .phone-flat-handset {
  border-radius:0;

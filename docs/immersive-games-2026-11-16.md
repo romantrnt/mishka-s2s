@@ -3,6 +3,14 @@
 Base: `162bedaaa1741095a674606ee6e4f54c37826720`. Work branch: `feat/immersive-games-20261116`.
 This document describes the candidate; it is not a deployment or physical acceptance claim.
 
+Current Stage 1 source adds a nonvoice quiz exit: a short release on 7 can
+answer the current question; hold 7 for five seconds and release to exit,
+including during its instruction. Other games retain their existing back key.
+Conversation-launched games return to their preserved conversation caller;
+root-launched games return to the menu. See the current runtime and acceptance
+record in [the runbook](remote-stand-runbook.md); the checks below remain
+historical evidence for the 2026-11-16 candidate.
+
 ## Product choices
 
 - A personal greeting proceeds to the menu without the unanswered “How are you?” exchange. Personalized name validation and private RAM audio remain.

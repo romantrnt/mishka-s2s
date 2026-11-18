@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-18
 
-**Status**: Brownfield baseline; implementation and live acceptance pending
+**Status**: Active Stage 1 product-integrity work; previous acceptance is a baseline
 
 **Input**: Roman's full MISHKA demonstration mission relayed to the Steward, the
 historical research and current evidence identified in [research.md](research.md).
@@ -76,6 +76,15 @@ spoken words, checking intended hints and button/voice exits.
 5. **Given** support, wellbeing, personal-story or calendar entry, **When** its
    offered path is followed, **Then** it completes or explains a real unavailable
    capability with recovery; no appointment or adult delivery is invented.
+6. **Given** ordinary conversation, **When** a real model response proposes a
+   supported game and the child confirms the current offer, **Then** that game
+   starts with exclusive media/control ownership. Completion or cancellation
+   returns to the valid conversation caller; root-launched games return to root.
+   Refusal, a different request, cleanup or expired identity revokes old consent.
+7. **Given** a game whose answer includes button 7, **When** the child uses its
+   documented nonvoice exit gesture, **Then** that gesture exits without also
+   scoring an answer. Short answer presses remain usable. Waiting and gentle
+   reminders do not silently change the 120-second inactivity rule.
 
 ### User Story 3 - Listen, pause, continue and leave stories (Priority: P1)
 
@@ -238,6 +247,23 @@ service restart/reload → complete another guest/profile visit → reopen files
   of versioning; publishing it does not complete the mission. Continue meaningful
   implementation and independent verification until the original complete,
   reliable MISHKA outcome is established, independent of version numbers.
+- **FR-026**: Treat voice games and conversation as contextual callers of the
+  same real speech pipeline. Support owned model proposals and confirmation for
+  game entry, preserve committed caller memory separately from game history,
+  and restore a valid caller on ordinary completion/cancellation. Stale results,
+  repeated consent, safety, hangup and identity cleanup cannot revive a caller.
+- **FR-027**: Provide understandable nonvoice game exits without stealing a
+  legitimate answer. Keep bounded rounds and gentle reminders appropriate to
+  the actual game; examples of 10 questions, 20 seconds or a 60-second exit are
+  not approved constants. System reminders are not user activity. Distinguish
+  technical dialogue budgets, engagement idle, playback and authorization expiry.
+- **FR-028**: Dim readable OFF digits/emblems and show their actual independent
+  hardware channels accurately in flat and 3D simulation. Preserve fill behavior;
+  do not invent channels or infer physical-board acceptance from the browser.
+- **FR-029**: Order all HTTP and WS panel snapshots, including background light
+  frames without journal events, so delayed delivery cannot roll back state.
+  Continue investigating significant unnamed interactions across all scenarios
+  rather than treating the existing matrix or these requirements as a ceiling.
 
 ### Key Entities *(include if feature involves data)*
 

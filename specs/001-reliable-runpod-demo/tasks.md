@@ -32,14 +32,36 @@ All paths are repository-relative. In this file, `feature/` means
 `specs/001-reliable-runpod-demo/`. Existing `docs/remote-stand-runbook.md` is
 the operator outcome record. Do not add a parallel daily-report system.
 
-## Observed outcomes — 2026-11-18
+## Active Stage 1 extension — 2026-11-18
+
+Roman's latest direction reopens substantial software work. Earlier passes below
+are a source-bound baseline, not completion or a reason to wait for personal
+hearing/access checks. Future user narratives are not prerequisites. The matrix
+remains an investigation aid rather than a scope limit.
+
+| Work | Confirmed baseline / intended observable result | Sole writer / independent check |
+| --- | --- | --- |
+| T031 Conversation and games | `word_game` really uses S2S; normal dialogue cannot yet offer/confirm/launch games, and game exit always returns to root. Add actual allowlisted model proposals, owned confirmation, preserved caller RAM and contextual return; reject stale/duplicate consent and clear on cleanup. | contextual_game_flow / Chief |
+| T032 Game controls and waiting | Quiz can use answer 7; preserve it with short-release scoring and a consumed long-release exit based on actual HID edges. Clarify word-game round budget and provide bounded gentle reminders without changing engagement/authorization deadlines or treating system speech as user activity. A reminder must not invalidate speech admitted before its deadline while mandatory safety classification is pending, including a spoken quiz exit. | contextual_game_flow / Chief |
+| T033 Indicator presentation | Existing 18 channels already separate digits and emblems. Dim readable OFF marks and distinguish each ON channel in flat/3D views; cover combinations, rapid updates and session reset. No physical-brightness claim. | menu_guidance_design_review / Chief rendered matrix |
+| T034 Snapshot ordering | Background lighting frames can share journal cursor with a delayed HTTP snapshot. Give all panel snapshots an independent order so late HTTP cannot roll back newer WS frames, while idle animations still move. Serialize detached capture with its revision; identify a restarted service and offer reload without mistaking delayed same-instance frames for restart. | PM / Chief reproduction and review |
+| T035 Other product chains | Reproduced: root-3 safe questions repeat a listening invitation without calling dialogue; advertised day-menu voice queries other than `where_now` are ignored; back from queued typed date leaves the audio owner active. Repair through existing bounded speech/typed-provider ownership and cover affected cleanup. Apply the reviewed narrow current-question wellbeing reassurance before semantic severity merge; only verified safe current answers advance, preserving urgent/concern/failure/stale protections. Personal-story references must not steal button 7 from a later help question or root menu; preserve genuine story back/pause/resume and public checkpoints. Continue discovery beyond these findings. | contextual_game_flow after core flow / Chief |
+| T036 Integrated acceptance | Browser Runpod: word game → actual scoped S2S reply → same game/round/next turn → exit; dialogue → proposal/confirmation → game → finish/cancel → caller; rapid input and transition interruptions; faults and new-session cleanup. Inspect actual sound ownership, lights, guide and capture eligibility. | PM integration / Chief live acceptance |
+
+Decisions are grounded in current code, not the illustrative 10-question,
+20-second or 60-second values. Preserve Silero without voice conversion,
+120-second engagement semantics, independent Max expiry, active story playback,
+all activities, data and access controls. Do not stop the pod or delete branches.
+Real microphone/hearing and physical board behavior remain distinct evidence.
+
+## Previous observed outcomes — 2026-11-18
 
 Candidate: application PID `16858`, source `9fe4f90`, branch
 `codex/remote-device-simulator`; authenticated HTTP serves client SHA-256
 `c28ed3fc6e63e95897b82c71e7ecb685e6726095bca9ffc7c3715cc45e82377a`.
 The existing runbook identifies exact earlier PIDs and source transfers.
 Current proof is software/browser acceptance, not physical hearing or clinical
-acceptance. No further software blocker was established in the final controls.
+acceptance. New findings and work above supersede the earlier stopping point.
 
 | Tasks | Observed status and limits |
 | --- | --- |
@@ -50,7 +72,7 @@ acceptance. No further software blocker was established in the final controls.
 | T017–T020 | Software S2S and two earlier synthetic microphone/STT turns passed. Final client fault → same-visit useful answer → explicit microphone capture/accepting → clean hangup passed. T020/SC-004 physical microphone and two heard answers remain NOT OBSERVED; Roman has been asked to check. |
 | T021–T026 | Existing desktop/390px, keyboard/flat view, overlapping input, reconnect/reload, actual app restart and next-visit evidence is retained with unchanged-source limits. Final client error/retry was inspected in the real browser. Protected Jupyter agent login/reopening passed; Roman's personal opening/reopening remains NOT OBSERVED for T025/SC-007. |
 | T027–T029 | Chief independently reviewed each integrated source change, reproduced the phone-text race, and reviewed the corrected exact client. Relevant checks passed: 114 Python cases, canonical acceptance, four scheduler cases, eight affected Node suites and final diff checks. Steward's 07:40 and Chief's 07:43 final documentation/source consistency reviews passed; no broad unchanged suite is claimed rerun. |
-| T030 | Ordered young game → successful story pause/resume → conversation → fault/retry plus clean recovery/new visit is recorded. Older browser and final client recovery artifacts close the remaining software controls. Whole mission remains open for the explicit hearing/personal-access observations; neither version 0.1.0 nor these software passes declare completion. |
+| T030 | Ordered young game → successful story pause/resume → conversation → fault/retry plus clean recovery/new visit is recorded. Older browser and final client recovery artifacts close those previous software controls. Whole mission remains open for the active Stage 1 software work above as well as the explicit hearing/personal-access observations; neither version 0.1.0 nor these software passes declare completion. |
 
 Final artifacts: `runpod-young-mixed-16858.json`,
 `runpod-young-mixed-recovery-16858.json`, `runpod-old-final-16858.json`, and

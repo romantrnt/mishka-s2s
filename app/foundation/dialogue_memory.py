@@ -52,6 +52,26 @@ class DialogueMemoryMixin:
     def _transition_dialogue_memory(self, session_id, event_type, previous_state,
                                     state, *, takes_ownership, exhibition_reset):
         self.expire_dialogue_memory()
+        caller = self._game_callers.get(session_id)
+        owner = (self._session_epochs.get(session_id, 0),
+                 getattr(state, "profile_ref", None), getattr(state, "identity_request_id", None))
+        if ((takes_ownership and (exhibition_reset or event_type in {"HandsetPlaced", "AnonymousStart", "SessionCancel", "SessionReset",
+                "HardwareDisconnected", "InteractionIdleExpired"})) or state is None
+                or state.safety_severity != "none" or (caller and caller["owner"] != owner)):
+            self._game_callers.pop(session_id, None)
+        elif (takes_ownership and previous_state is not None and previous_state.mode == "bear_dialogue"
+                and state.mode == "game_active" and state.game_return_mode == "bear_dialogue"):
+            context = self.conversation_contexts.pop(session_id, None)
+            if context is not None:
+                self._game_callers[session_id] = {"context": copy.deepcopy(context), "owner": owner,
+                    "suspended_at": self.monotonic_now()}
+        elif (takes_ownership and caller and previous_state is not None and previous_state.mode == "game_active"
+                and state.mode != "game_active"):
+            self._game_callers.pop(session_id, None)
+            if state.mode == "bear_dialogue" and previous_state.game_return_mode == "bear_dialogue":
+                context = caller["context"]
+                context.started_at += max(0., self.monotonic_now() - caller["suspended_at"])
+                self.conversation_contexts[session_id] = context
         current = self.conversation_contexts.get(session_id)
         if current is None or not takes_ownership:
             return
@@ -85,7 +105,8 @@ class DialogueMemoryMixin:
                 else self.monotonic_now() + state.dialogue_memory.ttl_seconds)
             self.conversation_contexts[session_id] = current
             self._schedule_dialogue_expiry(session_id, current)
-        elif previous_state is not None and previous_state.mode == "bear_dialogue" and state.mode != "bear_dialogue":
+        elif (previous_state is not None and previous_state.mode in {"bear_dialogue", "support_intake"}
+              and state.mode != previous_state.mode):
             self._drop_dialogue_context(session_id)
         elif getattr(current, "_ram_expires_at", None) is not None and event_type in {"HandsetLifted", "ButtonPressed", "VoiceIntentReady"}:
             # Real interaction resets the inactivity clock; audio callbacks,

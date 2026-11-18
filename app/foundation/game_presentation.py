@@ -61,6 +61,8 @@ class GamePresentationMixin:
                     segments.append((f"{labels[button]}: {text}.", (button,), None))
             segments.append(("Что из этого лишнее?" if effect.get("game_id") == "odd_one_out"
                              else "Нажми свой ответ.", (), None))
+        if effect.get("exit_hint"):
+            segments.append((effect["exit_hint"], (), None))
         return segments
 
     def _load_game_asset(self, phrase_id, token):
@@ -325,7 +327,7 @@ class GamePresentationMixin:
         elif age_band in {"6-7", "5-7"}:
             rule = "Играйте в цепочку слов по последней букве. Ь, Ъ и Ы пропускайте. Подсказывай коротко и доброжелательно."
         else:
-            rule = "Играйте в знакомые слова одной категории, например животные. После удачного ответа предложи следующее слово."
+            rule = "Играйте по очереди в знакомые слова категории животные. После удачного ответа предложи следующее слово."
         return ("\nТЕКУЩАЯ ИГРА В СЛОВА: " + rule
                 + " Один короткий ход, затем жди ответа. Не превращай игру в обычную беседу."
                 + " Отказ играть принимай сразу. Все правила детской безопасности и формат тегов сохраняются.")

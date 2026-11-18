@@ -73,8 +73,8 @@ class InputSafetyGate:
                 story_backend_contract=story_backend_contract,
             )
 
-    async def classify(self, text: str) -> InputSafetyDecision:
-        deterministic = self.rules.classify(text)
+    async def classify(self, text: str, *, wellbeing_question: str | None = None) -> InputSafetyDecision:
+        deterministic = self.rules.classify(text, wellbeing_question=wellbeing_question)
         if deterministic.severity == "urgent":
             return InputSafetyDecision("urgent", "deterministic")
         if self.semantic is None and self.mock:
@@ -89,7 +89,7 @@ class InputSafetyGate:
                 raise ValueError("invalid input safety decision")
             # Even an uncertain possible urgent disclosure escalates. A low
             # confidence 'none' can never authorize an ordinary command.
-            raised = self.rules.classify(text, semantic=severity)
+            raised = self.rules.classify(text, semantic=severity, wellbeing_question=wellbeing_question)
             if confidence < 0.75 and severity != "urgent":
                 return InputSafetyDecision(raised.severity, "input_safety_uncertain", False)
             return InputSafetyDecision(raised.severity, raised.reason)

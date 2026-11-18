@@ -13,6 +13,7 @@ from typing import Any, Mapping, TypedDict
 from langgraph.graph import END, StateGraph
 
 from app.foundation.canonical_contract import STATE_NAMES
+from app.foundation.game_engine import IMMERSIVE_GAME_SPECS
 
 
 class AuthorizationState(TypedDict, total=False):
@@ -53,6 +54,8 @@ TOOL_CAPABILITY_POLICY: dict[str, dict[str, Any]] = {
 MODEL_ACTION_POLICY: dict[str, Any] = {
     "led": {"patterns": frozenset({"calm", "attention", "off"}), "states": frozenset(STATE_NAMES - {"safety_stop"})},
     "return_to_scenario": {"targets": frozenset({"root_menu", "fixed_story_menu", "menu_ready"})},
+    "offer_game": {"targets": frozenset(spec.game_id for spec in IMMERSIVE_GAME_SPECS),
+                   "states": frozenset({"bear_dialogue"})},
 }
 SAFETY_POLICY = {
     "levels": frozenset({"none", "concern", "urgent"}),
@@ -94,6 +97,11 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
         return False
     if current == target:
         return True
+    if current == "bear_dialogue" and target == "game_active":
+        return event_type in {"ButtonPressed", "VoiceIntentReady"}
+    if current == "game_active" and target == "bear_dialogue":
+        return event_type in {"ButtonPressed", "ButtonReleased", "ButtonLongHeld", "VoiceIntentReady",
+                              "DialogueFallback", "AudioCompleted", "AudioFailed"}
     if current == "safety_stop":
         return (event_type in {"HandsetPlaced", "SessionCancel", "SessionReset"}
                 and target in {"idle", "session_closed"})
@@ -170,6 +178,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
     if event_type == "ButtonReleased":
         # The hold game completes its last round on a measured release.
         return current == "game_active" and target == "root_menu"
+    if event_type == "ButtonLongHeld":
+        return current == "game_active" and target == "root_menu"
     if event_type == "ButtonPressed":
         return (
             (current == "root_menu" and target == "profile_ready") or
@@ -201,6 +211,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
     if event_type == "DialogueFallback":
         return ((current == "game_active" and target == "root_menu")
                 or (current == "bear_dialogue" and target in {"bear_dialogue", "root_menu"})
+                or (current == "support_intake" and target in {"support_intake", "root_menu"})
                 or (current in {"personal_story_generating", "personal_story_validating", "personal_story_playing"}
                     and target == "fixed_story_menu"))
     if event_type == "VoiceIntentReady":
@@ -298,6 +309,12 @@ def _policy_validate(state: AuthorizationState) -> AuthorizationState:
     elif action == "return_to_scenario":
         if str(state.get("model_action_target") or "") not in MODEL_ACTION_POLICY["return_to_scenario"]["targets"]:
             return {**state, "allowed": False, "reason": "model_action_rejected"}
+    elif action == "offer_game":
+        if (str(state.get("current_mode") or "") not in MODEL_ACTION_POLICY[action]["states"]
+                or str(state.get("model_action_target") or "") not in MODEL_ACTION_POLICY[action]["targets"]):
+            return {**state, "allowed": False, "reason": "model_action_rejected"}
+    elif action:
+        return {**state, "allowed": False, "reason": "model_action_rejected"}
     return {**state, "reason": "transition_allowed"}
 
 
@@ -373,6 +390,8 @@ class CanonicalLangGraphAuthorizer:
             allowed = current in MODEL_ACTION_POLICY["led"]["states"] and target in MODEL_ACTION_POLICY["led"]["patterns"]
         elif action == "return_to_scenario":
             allowed = current != "safety_stop" and target in MODEL_ACTION_POLICY["return_to_scenario"]["targets"]
+        elif action == "offer_game":
+            allowed = current in MODEL_ACTION_POLICY[action]["states"] and target in MODEL_ACTION_POLICY[action]["targets"]
         else:
             allowed = False
         return {"ok": allowed, "reason": "model_action_allowed" if allowed else "model_action_rejected",
@@ -387,5 +406,6 @@ class CanonicalLangGraphAuthorizer:
                 "tool_capabilities": {name: {"states": sorted(policy["states"]), "profile_required": policy["profile_required"]}
                                       for name, policy in TOOL_CAPABILITY_POLICY.items()},
                 "model_actions": {"led": sorted(MODEL_ACTION_POLICY["led"]["patterns"]),
+                                  "offer_game": sorted(MODEL_ACTION_POLICY["offer_game"]["targets"]),
                                   "return_to_scenario": sorted(MODEL_ACTION_POLICY["return_to_scenario"]["targets"])},
                 "safety_policy": {"urgent_target": SAFETY_POLICY["urgent_target"], "help_intent": SAFETY_POLICY["help_intent"]}}

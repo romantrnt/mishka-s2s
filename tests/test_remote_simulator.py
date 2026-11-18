@@ -125,7 +125,7 @@ async def test_pcm_envelopes_have_browser_owner_and_stop_fences_remaining_frames
     pcm = [item for item in hub.sent if item["type"] == "audio_pcm_output"]
     assert len(pcm) == 1
     assert pcm[0]["session_id"] == "stand" and pcm[0]["generation"] == 0
-    assert hub.sent[-1] == {"type": "audio_stop", "generation": 1}
+    assert hub.sent[-1] == {"type": "audio_stop", "generation": 1, "checkpoint_request": None}
 
 
 @pytest.mark.asyncio
@@ -349,6 +349,6 @@ async def test_uart_stop_notification_identifies_its_snapshot_command():
         assert phrase["payload"]["content_kind"] == "phrase"
         notice = next(item for item in notifications if item["type"] == "audio_stop")
         assert notice == {"type": "audio_stop", "generation": stand.playback._generation,
-                          "command_sequence": stop["sequence"]}
+                          "command_sequence": stop["sequence"], "checkpoint_request": None}
     finally:
         await stand.aclose()

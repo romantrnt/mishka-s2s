@@ -103,7 +103,7 @@ async def test_other_canonical_scenarios_keep_the_topic_allowlist():
     try:
         state = app.canonical_runtime.sessions["open-dialogue"]
         assert app._canonical_audio_context("open-dialogue").allowed_topics == ("__all__",)
-        for mode in ("support_intake", "fixed_story_playing", "personal_story_theme", "game_active", "exhibition_name_capture"):
+        for mode in ("fixed_story_playing", "personal_story_theme", "game_active", "exhibition_name_capture"):
             state.mode = mode
             context = app._canonical_audio_context("open-dialogue")
             assert "__all__" not in context.allowed_topics

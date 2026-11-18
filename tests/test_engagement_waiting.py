@@ -200,18 +200,19 @@ async def test_empty_or_untrusted_voice_does_not_refresh_wait(kind,payload,text)
 
 @pytest.mark.asyncio
 async def test_system_game_hint_does_not_restart_full_wait():
-    h=Harness()
+    from test_immersive_game_runtime import GameRuntime
+    h=GameRuntime()
     try:
-        await h.send('HandsetLifted')
-        for _ in range(3):
-            await h.send('ButtonPressed',{'button_id':1});await h.send('ButtonReleased',{'button_id':1})
-        await terminal(h)
-        deadline=h.app._engagement_owners['memory']['deadline']
-        h.clock[0]=120;await h.app.flush_game_timers()
-        assert 'memory' in h.app._active_audio
-        h.clock[0]=125;await terminal(h)
-        assert h.app._engagement_owners['memory']['deadline']==deadline
-        h.clock[0]=deadline;await h.app.expire_engagement_sessions()
+        await h.start(4);await h.complete()
+        sid=h.state.session_id
+        deadline=h.app._engagement_owners[sid]['deadline']
+        h.clock[0]=h.app._game_timer_scopes[sid][-1]
+        assert (await h.app.flush_game_timers())[0]['reason']=='game_wait_hint'
+        assert h.app._active_audio[sid]['content_id']=='GAME_PROMPT'
+        h.clock[0]+=5;await h.complete()
+        assert h.app._engagement_owners[sid]['deadline']==deadline
+        h.clock[0]=deadline
+        assert (await h.app.expire_engagement_sessions())[0]['reason']=='interaction_idle'
         assert h.state.interaction_idle
     finally: await h.close()
 
@@ -260,14 +261,19 @@ async def test_cancel_resistant_menu_tts_same_sid_old_epoch_is_not_busy():
         return None
     render.synthesize=resistant
     app.bounded_s2s.tts=render;app.bounded_s2s.voice=render
-    async def send(kind,button=None):
+    async def send(kind,button=None,payload=None):
         nonlocal sequence
         sequence+=1
-        return await app.receive_async(Event(kind,'old-menu',sequence,clock[0],'test',{} if button is None else {'button_id':button},str(sequence),clock[0]))
+        return await app.receive_async(Event(kind,'old-menu',sequence,clock[0],'test',
+            payload or ({} if button is None else {'button_id':button}),str(sequence),clock[0]))
     pending=None
     try:
         await send('HandsetLifted')
-        pending=asyncio.create_task(send('ButtonPressed',1));await entered.wait()
+        await send('ButtonPressed',1);await send('ButtonReleased',1)
+        invitation=dict(app._active_audio['old-menu'])
+        assert invitation['content_id']=='PHRASE_019'
+        pending=asyncio.create_task(send('AudioCompleted',payload={**invitation,'response_id':'PHRASE_019'}))
+        await asyncio.wait_for(entered.wait(),2)
         await send('HandsetPlaced')
         assert app._owned_text_jobs
         await send('ButtonReleased',1);await send('ButtonPressed',1)

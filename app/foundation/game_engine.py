@@ -76,6 +76,8 @@ class GameState:
     challenge_index: int = 0
     # Shared ordered-hint cursor; hints_emitted separately bounds timer repeats.
     challenge_attempts: int = 0
+    seven_answer_generation: int | None = None
+    seven_exit_down_at: float | None = None
 
 @dataclass(frozen=True)
 class GameTransition:
@@ -153,6 +155,8 @@ def start(game_id: str, *, sequence: int, now: float, selection_button: int, hel
         return replace(state, phase='awaiting_prompt', deck=deck)
     if game_id == 'repeat_pattern':
         return replace(state, phase='instruction', rounds=3)
+    if game_id == 'word_game':
+        return replace(state, phase='awaiting_prompt')
     return arm_wait(state, now)
 
 
@@ -169,6 +173,32 @@ def _progress(state: GameState) -> GameTransition:
                           'PHRASE_028' if complete else None, complete)
 
 
+def _answer_challenge(state: GameState, button: int) -> GameTransition:
+    challenge = current_challenge(state)
+    if button != challenge.answer:
+        hints = challenge.hints or ('Попробуем ещё раз. ' + challenge.prompt,)
+        hint = hints[min(state.challenge_attempts, len(hints) - 1)]
+        state = replace(state, phase='awaiting_prompt',
+                        challenge_attempts=state.challenge_attempts + 1,
+                        response_deadline=None, hint_deadline=None,
+                        timer_generation=state.timer_generation + 1)
+        return GameTransition(state, desired_buttons(state), 'retry', speech_text=hint)
+    count = state.round + 1
+    index = state.challenge_index + 1
+    deck = state.deck
+    if index >= len(deck):
+        # A new shuffle after each full deck; never a finite auto-exit.
+        deck = build_deck(state.game_id, state.age_band, seed=state.seed + count)
+        index = 0
+    state = replace(state, round=count, level=state.level + 1,
+                    round_generation=state.round_generation + 1, deck=deck,
+                    challenge_index=index, challenge_attempts=0, hints_emitted=0,
+                    phase='awaiting_prompt', response_deadline=None, hint_deadline=None,
+                    timer_generation=state.timer_generation + 1)
+    return GameTransition(state, desired_buttons(state), 'progress',
+                          feedback_id='PHRASE_022', speech_text=current_challenge(state).prompt)
+
+
 def advance(state: GameState, *, edge: str, button: int, sequence: int, now: float, paused: bool = False) -> GameTransition:
     if (not math.isfinite(now) or now < state.last_time or sequence <= state.last_sequence
             or edge not in {'ButtonPressed', 'ButtonReleased', 'ButtonHeld', 'ButtonLongHeld'}):
@@ -182,7 +212,16 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
     if edge == 'ButtonReleased':
         started = down.pop(button, None)
         held.discard(button)
-        state = replace(state, held=tuple(sorted(held)), down_times=tuple(sorted(down.items())))
+        pending_generation = state.seven_answer_generation
+        exit_started = state.seven_exit_down_at
+        state = replace(state, held=tuple(sorted(held)), down_times=tuple(sorted(down.items())),
+                        seven_answer_generation=None if button == 7 else pending_generation,
+                        seven_exit_down_at=None if button == 7 else exit_started)
+        if button == 7 and exit_started is not None and now - exit_started >= 5.:
+            return GameTransition(state, desired_buttons(state), 'exit_requested')
+        if button == 7 and started is not None and pending_generation is not None:
+            if not paused and pending_generation == state.round_generation and 7 in game_answer_buttons(state):
+                return _answer_challenge(state, 7)
         if not paused and state.game_id == 'hold_light' and button == state.target and started is not None:
             if now - started >= state.hold_seconds:
                 return _progress(state)
@@ -191,6 +230,10 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
         return GameTransition(state, desired_buttons(state), 'released')
     if edge != 'ButtonPressed':
         started = down.get(button)
+        if (edge == 'ButtonLongHeld' and button == 7 and state.seven_exit_down_at is not None
+                and now - state.seven_exit_down_at >= 5.):
+            return GameTransition(replace(state, seven_answer_generation=None, seven_exit_down_at=None),
+                                  desired_buttons(state), 'exit_requested')
         if (not paused and state.game_id == 'hold_light' and button == state.target
                 and started is not None and now - started >= state.hold_seconds and not state.hold_ready):
             state = replace(state, hold_ready=True)
@@ -199,12 +242,17 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
     if button in held:
         return GameTransition(state, desired_buttons(state), 'held')
     held.add(button)
+    if button == 7:
+        state = replace(state, seven_exit_down_at=now)
     if not paused:
         down[button] = now
     state = replace(state, held=tuple(sorted(held)), down_times=tuple(sorted(down.items())))
     if paused:
         # Pause is not part of an active hold; no fabricated duration on resume.
         return GameTransition(replace(state, down_times=(), hold_ready=False), desired_buttons(state), 'paused')
+    if button == 7 and state.game_id in {'quiz', 'odd_one_out'} and button in game_answer_buttons(state):
+        return GameTransition(replace(state, seven_answer_generation=state.round_generation),
+                              desired_buttons(state), 'answer_pending_release')
     if button not in game_answer_buttons(state):
         return GameTransition(state, desired_buttons(state), 'ignored')
     if state.game_id == 'free_lights':
@@ -212,29 +260,7 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
     if state.game_id == 'visual_free_play':
         return GameTransition(state, desired_buttons(state), 'free_play')
     if state.game_id in {'quiz', 'odd_one_out'}:
-        challenge = current_challenge(state)
-        if button != challenge.answer:
-            hints = challenge.hints or ('Попробуем ещё раз. ' + challenge.prompt,)
-            hint = hints[min(state.challenge_attempts, len(hints) - 1)]
-            state = replace(state, phase='awaiting_prompt',
-                            challenge_attempts=state.challenge_attempts + 1,
-                            response_deadline=None, hint_deadline=None,
-                            timer_generation=state.timer_generation + 1)
-            return GameTransition(state, desired_buttons(state), 'retry', speech_text=hint)
-        count = state.round + 1
-        index = state.challenge_index + 1
-        deck = state.deck
-        if index >= len(deck):
-            # A new shuffle after each full deck; never a finite auto-exit.
-            deck = build_deck(state.game_id, state.age_band, seed=state.seed + count)
-            index = 0
-        state = replace(state, round=count, level=state.level + 1,
-                        round_generation=state.round_generation + 1, deck=deck,
-                        challenge_index=index, challenge_attempts=0, hints_emitted=0,
-                        phase='awaiting_prompt', response_deadline=None, hint_deadline=None,
-                        timer_generation=state.timer_generation + 1)
-        return GameTransition(state, desired_buttons(state), 'progress',
-                              feedback_id='PHRASE_022', speech_text=current_challenge(state).prompt)
+        return _answer_challenge(state, button)
     if state.game_id == 'repeat_pattern':
         if button != state.pattern[state.answer_index]:
             state = begin_demonstration(state, now)
@@ -272,9 +298,9 @@ def arm_wait(state: GameState, now: float, *, reset_hints: bool = True) -> GameS
     if state.game_id == 'repeat_pattern' and state.phase in {'instruction','demonstrate'}:
         return begin_demonstration(state, now)
     count = 0 if reset_hints else state.hints_emitted
-    timed = state.phase == 'playing' and state.game_id not in {'visual_free_play', 'free_lights', 'word_game'}
+    timed = state.phase == 'playing' and state.game_id not in {'visual_free_play', 'free_lights'}
     return replace(state, hints_emitted=count,
-        response_deadline=now + state.response_window_s if timed else None,
+        response_deadline=now + state.response_window_s if timed and state.game_id != 'word_game' else None,
         hint_deadline=now + state.first_hint_s if timed and count < state.hint_limit else None,
         timer_generation=state.timer_generation + 1)
 
@@ -334,6 +360,9 @@ def timer_step(state: GameState, now: float) -> GameTransition:
         hint_deadline=(now + state.response_window_s if count < state.hint_limit else None)
                       if hint else state.hint_deadline,
         timer_generation=state.timer_generation + 1)
+    if hint and state.game_id == 'word_game':
+        state = replace(state, phase='awaiting_prompt', response_deadline=None, hint_deadline=None)
+        return GameTransition(state, (), 'wait_hint', speech_text='Я рядом. Можно назвать слово или нажать семь, чтобы закончить.')
     if hint and state.game_id in {'quiz', 'odd_one_out'}:
         challenge = current_challenge(state)
         hints = challenge.hints or ('Попробуем ещё раз. ' + challenge.prompt,)

@@ -1,6 +1,7 @@
 """Public fallback projections must not promote raw provider/child data."""
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -96,6 +97,8 @@ def test_actual_validator_timeout_reaches_panel_with_fallback_and_no_text():
             # This is exactly the in-memory envelope used by inject and the
             # asynchronous audio-completion callback, without a physical PTY.
             stand = HardwareIntegrationStand.__new__(HardwareIntegrationStand)
+            stand._panel_snapshot_lock = threading.Lock()
+            stand._panel_snapshot_revision = 0
             stand.snapshot = lambda: {"results": [stored], "pipeline_metrics": app.bounded_s2s.metrics.snapshot()}
             panel = stand.panel_snapshot()
             reasons = [out.get("fallback_reason") for item in panel["results"] for out in item.get("outputs", [])]
