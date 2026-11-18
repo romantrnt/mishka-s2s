@@ -4,6 +4,36 @@ const root=process.argv[2]||'app/foundation/console';
 const phone=fs.readFileSync(root+'/phone.js','utf8'),source=fs.readFileSync(root+'/console.js','utf8');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const micState=(epoch=3,id='owner')=>({session:{handset_up:true,state:'ACTIVE'},simulator:{epoch,session:{session_id:id},admission:{input_ready:true,connected:true},microphone:{eligible:true}}});
+function modelKeyTravel(){
+ const text=fs.readFileSync(root+'/phone-model.js','utf8');
+ const extrusion=kind=>text.match(new RegExp('const '+kind+'=new THREE.Mesh\\(extruded\\(shape,([^,]+),([^\\)]+)\\)')).slice(1).map(Number);
+ const [baseDepth,baseBevel]=extrusion('base'),[capDepth,capBevel]=extrusion('mesh');
+ const baseFront=baseDepth+baseBevel,capFront=capDepth+capBevel;
+ const rest=Number(text.match(/cap\.position\.z=([^;]+);/)[1]);
+ const digitZ=Number(text.match(/digit\.position\.set\([^\n]+,([.\d]+)\);cap\.add\(digit\)/)[1]);
+ const symbolZ=Number(text.match(/symbol\.position\.set\([^\n]+,([.\d]+)\);cap\.add\(symbol\)/)[1]);
+ const start=text.indexOf('  const animate=now=>'),end=text.indexOf('\n  frame=requestAnimationFrame(animate);',start);
+ for(const reduced of [false,true]){
+  const keys=new Map(Array.from({length:7},(_,i)=>[i+1,{cap:{position:{z:rest}},pressed:false}]));
+  const context=vm.createContext({keys,destroyed:false,lastTime:0,handsetValue:0,up:false,reduced:{matches:reduced},
+   handset:{position:{set(){}},rotation:{}},projectControls(){},renderer:{render(){}},scene:{},camera:{},requestAnimationFrame:()=>1,frame:null});
+  vm.runInContext(text.slice(start,end)+';globalThis.step=animate;',context);
+  let now=0;
+  for(const pressed of [true,false,true,false]){
+   for(const key of keys.values())key.pressed=pressed;
+   for(let frame=0;frame<120;frame++){
+    context.step(now+=1000/60);
+    for(const [id,key] of keys){
+     assert(key.cap.position.z+capFront>baseFront,'pressed/rest cap '+id+' must stay in front of its base');
+     assert(key.cap.position.z+digitZ>baseFront,'digit '+id+' must not be occluded by the base');
+     if(id>=6)assert(key.cap.position.z+symbolZ>baseFront,'emblem '+id+' must not be occluded by the base');
+    }
+   }
+   for(const key of keys.values())assert(pressed?key.cap.position.z<rest:Math.abs(key.cap.position.z-rest)<1e-6,
+    'press visibly travels inward and release restores rest position');
+  }
+ }
+}
 function lightingProjection(){
  const modelSource=fs.readFileSync(root+'/phone-model.js','utf8');
  const css=fs.readFileSync(root+'/phone.css','utf8'),off='#53626a',on='#ffffff';
@@ -651,4 +681,4 @@ async function legacyObserverFallback(){
  requests[1].resolve();assert.strictEqual((await second).order,2);
  assert.deepStrictEqual(results,[1,2],'both legacy HTTP results complete in order without a WebSocket');
 }
-(async()=>{lightingProjection();serverInstanceRecovery();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{modelKeyTravel();lightingProjection();serverInstanceRecovery();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone key travel, lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});

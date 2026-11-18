@@ -175,7 +175,7 @@ export function createPhoneModel(stage, handlers) {
     handsetValue+=(Number(up)-handsetValue)*(reduced.matches?1:1-Math.exp(-delta*9));
     handset.position.set(-.06*handsetValue,.77*handsetValue,.37*handsetValue);handset.rotation.z=-.08*handsetValue;
     for(const key of keys.values()) {
-      const target=key.pressed?-.06:.045;
+      const target=key.pressed?.025:.045;
       key.cap.position.z+=(target-key.cap.position.z)*(reduced.matches?1:1-Math.exp(-delta*(key.pressed?30:23)));
     }
     projectControls();renderer.render(scene,camera);frame=requestAnimationFrame(animate);
