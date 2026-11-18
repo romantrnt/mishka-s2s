@@ -1,7 +1,7 @@
 import json
 import pytest
 from app.foundation.personal_story import PersonalStoryService
-from test_personal_story_service import engine
+from test_personal_story_service import engine, PLOT_SENTENCES
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('size,accepted',[(6000,True),(6001,False)])
@@ -9,7 +9,7 @@ async def test_derived_story_body_limit_independent_of_wire_limit(size,accepted)
     e=engine();sections={}
     # Four distinct sections, each using short complete sentences. Fill the
     # exact character budget with ordinary spaces, not synthesized silence.
-    base=['Лес.','Путь.','Мост.','Дом.']
+    base=[' '.join(part[:7]) for part in PLOT_SENTENCES]
     remaining=size-(sum(map(len,base))+3)
     for index,key in enumerate(('setting','problem','attempt','resolution')):
         extra=remaining//4+(index<remaining%4)

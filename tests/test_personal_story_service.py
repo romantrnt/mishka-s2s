@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 import pytest
@@ -7,28 +8,61 @@ from app.foundation.personal_story import PersonalStoryService, DURATION_BOUNDS,
 from app.foundation.s2s import AudioChunk, S2SConfig
 from app.foundation.validation import AsyncResponseValidator, ValidationDecision
 
-TEXT='Зайчик нашёл семечко. Он захотел вырастить цветок. Земля была сухая. Зайчик принёс воду. Друзья помогли ему. Скоро появился росток. Потом распустился красивый цветок. Друзья вместе любовались цветком.'
+PLOT_SENTENCES=(
+    ('Зайчик нашёл семечко.', 'На поляне ласково светило утреннее солнце.',
+     'Он решил вырастить красивый лесной цветок.', 'Белочка предложила вместе заботиться о маленьком растении.',
+     'Друзья выбрали светлое место возле старого пенька.', 'Рядом тихонько шелестели широкие листья папоротника.',
+     'Семечко лежало на мягком зелёном листочке.', 'Его гладкая скорлупка блестела после недавнего дождя.',
+     'За пеньком начиналась знакомая тропинка к ручью.', 'Зайчик поставил возле грядки маленькую пустую корзинку.'),
+    ('Но земля возле пенька оказалась очень сухой.', 'Зайчик попробовал разрыхлить её тоненькой веточкой.',
+     'Сухие комочки никак не хотели рассыпаться.', 'Для посадки нужна была мягкая влажная земля.',
+     'Друзья задумались, где найти немного чистой воды.', 'Большая лейка осталась далеко возле лесного домика.',
+     'В маленькой корзинке вода сразу просочилась бы.', 'Зайчик посмотрел на круглые листья под кустом.',
+     'На одном листочке ещё держалась дождевая капля.', 'Белочка заметила, как листочек бережно держит воду.'),
+    ('Белочка осторожно свернула большой листочек в чашечку.', 'Зайчик принёс в нём воду из ручья.',
+     'Друзья полили землю и аккуратно посадили семечко.', 'Потом они укрыли грядку мягким сухим мхом.',
+     'Теперь земля сохраняла влагу даже солнечным днём.', 'Рядом поставили палочку с нарисованным маленьким цветком.',
+     'Каждое утро друзья проверяли свою зелёную грядку.', 'Однажды возле палочки показался тонкий нежный росток.',
+     'Белочка убрала мешавший ему тяжёлый сухой лист.', 'Зайчик подлил воды совсем близко к корешку.'),
+    ('Скоро над грядкой раскрылся яркий лесной цветок.', 'Друзья вместе любовались его нежными золотистыми лепестками.',
+     'Зайчик радовался, что они нашли удачное решение.', 'Белочка предложила нарисовать цветок на большом листе.',
+     'Получился подарок на память об общем деле.', 'К цветку прилетела маленькая полосатая лесная пчёлка.',
+     'Она собрала нектар и тихонько улетела дальше.', 'Под вечер друзья устроились возле знакомого пенька.',
+     'Вокруг цветка постепенно зажигались мягкие огоньки светлячков.', 'Полянка стала уютным местом для спокойных встреч.'),
+)
+
+def story_text(band='3-5'):
+    count=5 if band=='1-3' else 10 if band in {'5-7','6-7'} else 7
+    return ' '.join(sentence for part in PLOT_SENTENCES for sentence in part[:count])
+
+TEXT=story_text()
 class Mini:
     supports_full_story=True
     async def validate(self,text,context=()):
         return ValidationDecision('allow',True,'test_full_story',.99,'test')
 class LLM:
     supports_full_story=True  # Explicit synthetic full-story provider, not production approval.
-    def __init__(self,band='3-5',text=TEXT):self.band=band;self.text=text;self.calls=[]
+    def __init__(self,band='3-5',text=None):self.band=band;self.text=story_text(band) if text is None else text;self.calls=[]
     async def stream_story(self,messages,request_id,cancelled):
         self.calls.append(messages)
-        parts=self.text.split('. '); plot=dict(zip(('setting','problem','attempt','resolution'), ['. '.join(parts[:2])+'.', '. '.join(parts[2:4])+'.', '. '.join(parts[4:6])+'.', '. '.join(parts[6:])]))
+        sentences=re.findall(r'[^.!?]+[.!?]+|[^.!?]+$',self.text)
+        count=len(sentences)//4
+        plot=dict(zip(('setting','problem','attempt','resolution'),
+            [' '.join(s.strip() for s in sentences[i*count:(i+1)*count] if s.strip()) for i in range(3)]
+            +[' '.join(s.strip() for s in sentences[3*count:] if s.strip())]))
         yield json.dumps({'title':'Цветок','plot':plot,'age_band':self.band,'estimated_duration_sec':DURATION_BOUNDS[self.band][0], 'safety_tags':['safe'],'ending_state':'safe_resolved'},ensure_ascii=False)
 class TTS:
-    def __init__(self,duration):self.duration=duration;self.calls=[]
+    def __init__(self,duration,sentences=None):self.duration=duration;self.sentences=sentences or len(re.findall(r'[.!?]+',TEXT));self.calls=[]
     async def synthesize(self,text,token,cancelled):
         self.calls.append(text)
-        return AudioChunk((.01,)*int(self.duration*1000/8),1000,token,'')
+        samples,remainder=divmod(round(self.duration*1000),self.sentences)
+        return AudioChunk((.01,)*(samples+((len(self.calls)-1)%self.sentences<remainder)),1000,token,'')
 class Voice:
     async def convert_private(self,audio,cancelled):return audio
 
-def engine(band='3-5',duration=None,text=TEXT):
-    return SimpleNamespace(llm=LLM(band,text),tts=TTS(duration or DURATION_BOUNDS[band][0]),voice=Voice(),
+def engine(band='3-5',duration=None,text=None):
+    llm=LLM(band,text)
+    return SimpleNamespace(llm=llm,tts=TTS(duration or DURATION_BOUNDS[band][0],len(re.findall(r'[.!?]+',llm.text))),voice=Voice(),
         response_validator=AsyncResponseValidator(mini=Mini()),config=S2SConfig())
 
 @pytest.mark.parametrize('band',list(DURATION_BOUNDS))
@@ -78,6 +112,7 @@ async def test_sentence_budget_keeps_full_content_and_measured_story_duration(wo
 async def test_full_story_validated_then_measured_all_age_bands(band):
     e=engine(band);audio=await PersonalStoryService(e).render('лес',band,(),1,lambda:True)
     assert audio and len(audio.samples)/audio.sample_rate==DURATION_BOUNDS[band][0]
+    assert len(e.llm.calls)==1, 'an already complete draft needs no repair'
     assert '8 words' in e.llm.calls[0][0]['content'] if band=='1-3' else True
 
 @pytest.mark.asyncio
@@ -96,14 +131,15 @@ async def test_declared_midpoint_still_requires_measured_pcm_after_semantic_vali
     async def observe(*args):
         semantic.append(True)
         return await validate(*args)
-    samples_per_sentence=duration_ms  # Eight sentences at 8kHz represent these milliseconds exactly.
+    rate=1000*len(re.findall(r'[.!?]+',e.llm.text))
+    samples_per_sentence=duration_ms
     async def synthesize(text,token,cancelled):
         e.tts.calls.append(text)
-        return AudioChunk((.01,)*samples_per_sentence,8000,token,'')
+        return AudioChunk((.01,)*samples_per_sentence,rate,token,'')
     e.llm.stream_story=candidate;e.response_validator.validate_story=observe;e.tts.synthesize=synthesize
     audio=await PersonalStoryService(e).render('лес','3-5',(),1,lambda:True)
     assert semantic and ' '.join(e.tts.calls)==TEXT
-    assert len(e.tts.calls)*samples_per_sentence/8000==duration_ms/1000
+    assert len(e.tts.calls)*samples_per_sentence/rate==duration_ms/1000
     if allowed:
         assert audio and audio.duration_ms==duration_ms
     else:
@@ -171,4 +207,4 @@ async def test_duplicate_external_text_field_is_rejected():
 async def test_aggregate_pcm_ceiling_stops_synthesis_before_joining_oversize_story():
     e=engine(duration=160)
     assert await PersonalStoryService(e).render('лес','3-5',(),1,lambda:True) is None
-    assert len(e.tts.calls)==6  # 6*20s exceeds accepted100s, not all8sentences.
+    assert len(e.tts.calls)<e.tts.sentences

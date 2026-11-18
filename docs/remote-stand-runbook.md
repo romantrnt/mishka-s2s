@@ -268,7 +268,56 @@ thresholds, timeouts and failure handling. Eleven runner-profile cases passed
 independently, including the actual application classifier; Chief approved the
 exact diff. One running model at context 16384 was confirmed after startup.
 Evidence: `/workspace/mishka-artifacts/input-classifier-runner-20261118`.
-Chief owns real repeated-cancel acceptance on PID 15307; that result is pending.
+On PID 15307, actual browser cancellation returned in 2.928 seconds without
+private PCM. Same-visit generation then reached whole-text semantic validation
+and all 13 TTS sentences; one 16,384-context model remained resident. This
+confirms recovery of that previously failing runner path. The complete personal
+story still failed its final measured duration gate: 2,757,000 samples at
+48,000 Hz gave 57.4375 seconds, below the 60-second minimum for this age band.
+The joined body was 794 characters. Evidence:
+`runtime/local-integration-20261117/runpod-input-classifier-15307.json`.
+A bounded drafting-volume correction is being implemented; padding, slowed
+playback and weaker PCM limits are not accepted substitutes. This failure does
+not invalidate the earlier 64.85-second browser pause/resume control, but full
+repeated personal-story acceptance remains incomplete.
+
+Two further guest visits completed on PID 15307 with no JavaScript errors.
+Age 2 selected the 1–3 policy, heard the offered date, received truthful
+profile-required schedule unavailability, then exercised distinct free-light
+responses and exited. Age 7 selected the 6–7 policy; rainbow answer 7 was
+accepted as an answer and continued the quiz. The typed game-exit command
+returned to root. Both handset-down endpoints cleared all 18 lights, held keys
+and media. Evidence:
+`runtime/local-integration-20261117/runpod-age-calendar-15307.json`.
+Weather, a separate `what_next` request and profile calendar outcomes are not
+established by these visits; navigation input here was typed, not a physical
+microphone test.
+
+Two permitted synthetic profile visits (`demo-1`, `demo-2`) also completed on
+PID 15307: identified welcome reached the menu without recapturing name or
+age, the offered date played, and both schedule requests were truthfully
+blocked by missing identity scope. Identified entry alone does not establish
+schedule permission. Both visits returned to root, then handset-down cleared
+authorization, lights, held keys and media without JavaScript errors. Evidence:
+`runtime/local-integration-20261117/runpod-profile-calendar-15307.json`.
+This establishes two completed guest and two profile visits, not the required
+three of each or a positive real schedule/weather-provider path.
+
+The independently reviewed drafting-volume correction is now deployed as
+application PID 15780, with readiness `READY`, one resident model and both
+context settings still 16,384. Only `personal_story.py` changed in the runtime
+(SHA-256 `c260a5c3d9ac301ef8f9a8c3c85d7a0354c504aae86e36b721559421cf24ea08`).
+An undersized four-part draft can receive one measured revision before whole
+semantic validation and synthesis, within the original owner deadline and
+fresh provider context budget. Sufficient drafts make no second generation
+request. The final measured PCM-duration gate remains unchanged. The exact
+794-character regression, repeated-short failure, cancellation, deadline and
+context-budget cases passed; 82 final affected tests passed, and Chief
+independently reviewed the frozen source and ran the 15 new cases. Deployment
+backups and manifest are under
+`/workspace/mishka-artifacts/story-draft-volume-20261118`.
+Actual repeated-generation, full PCM, pause/resume and active-exit acceptance
+on PID 15780 is pending; drafting character counts do not establish seconds.
 
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input
