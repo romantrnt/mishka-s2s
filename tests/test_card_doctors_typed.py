@@ -191,7 +191,7 @@ async def test_weather_clothes_are_deterministic_from_returned_facts(temperature
     class Service:
         async def weather(self, *args, **kwargs):
             return {'summary':'Фактическая погода', 'temperature_c':temperature, 'condition':condition, 'source':'test'}
-    info = await TypedInfoRenderer(Service(), None, None).render('weather')
+    info = await TypedInfoRenderer(Service(), None, None).render('weather', weather_scope='configured_point')
     assert clothes in info['text'] and info['source'] == 'test'
 
 

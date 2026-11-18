@@ -286,9 +286,12 @@ def test_yandex_temperature_plausibility_before_typed_rendering(monkeypatch, tem
     weather_http(monkeypatch, handle)
     renderer = TypedInfoRenderer(ProductionScheduleWeatherService(YandexWeatherProvider("synthetic-key", 55., 37.)), {}, None)
     if accepted:
-        rendered = asyncio.run(renderer.render("weather"))
-        assert rendered == {"kind": "weather", "text": f"дождь, {temperature:+g} °C", "source": "yandex_weather"}
+        rendered = asyncio.run(renderer.render("weather", weather_scope='configured_point'))
+        clothes = ('Для прогулки пригодятся тёплая куртка и шапка.' if temperature <= 5 else
+                   'Для прогулки подойдёт лёгкая одежда.')
+        assert rendered == {"kind": "weather", "text": f"дождь, {temperature:+g} °C. {clothes} Если пойдёшь гулять, пригодится дождевик.",
+                            "source": "yandex_weather"}
     else:
         with pytest.raises(ScheduleWeatherSchemaError, match="^malformed_yandex_weather_response$"):
-            asyncio.run(renderer.render("weather"))
+            asyncio.run(renderer.render("weather", weather_scope='configured_point'))
     assert len(calls) == 1

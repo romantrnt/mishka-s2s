@@ -21,7 +21,7 @@ from .domain import AudioOutput, DisplayController, Event, EventPublisher, Inten
 from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
 from .schedule_weather import ScheduleWeatherProviderError, validate_report
 from .age_policy import trusted_canonical_age
-from .canonical_services import LED_PRESETS, DIALOGUE_FILL_ELEMENTS, DIALOGUE_ANCHOR_ELEMENTS, BUTTON_ELEMENTS, RecordedPhraseResolver, TypedInfoRenderer, classify_intent, game_confirmation_intent, wellbeing_reassurance
+from .canonical_services import LED_PRESETS, DIALOGUE_FILL_ELEMENTS, DIALOGUE_ANCHOR_ELEMENTS, BUTTON_ELEMENTS, RecordedPhraseResolver, TypedInfoRenderer, classify_intent, game_confirmation_intent, wellbeing_reassurance, weather_request_scope
 from .config import settings_from_compat_env
 from .identity import IdentityDecision, IdentityValidationError, validate_identity_decision
 from .input_safety import InputSafetyGate
@@ -1368,6 +1368,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        _game_timer_scope: tuple | None = None,
                                        identity_profile: dict[str, Any] | None = None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None,
+                                       _weather_scope: str | None = None, _weather_origin_current=None,
                                        _story_checkpoint_guard=None) -> dict[str, Any]:
         if event.event_type == "InteractionIdleExpired" and not interaction_idle_authorized:
             return self._identity_result(event.session_id, "interaction_idle_untrusted")
@@ -1382,6 +1383,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 await asyncio.shield(waiter[1])
             if self.optional_identity and not event.event_type.startswith("Identity") and event.event_type not in {"ClientProfileReady", "ClientProfileCleared"}:
                 await self.expire_identity_leases()
+            if _weather_scope is not None and (not dialogue_fallback_authorized
+                    or event.event_type != 'DialogueFallback' or _weather_origin_current is None
+                    or not _weather_origin_current()):
+                return self._identity_result(event.session_id, 'stale_session_generation')
             return await self._receive_canonical_event_inner(
                 event, transient_text,
                 dialogue_fallback_authorized=dialogue_fallback_authorized,
@@ -1393,6 +1398,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 identity_profile=identity_profile,
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
+                _weather_scope=_weather_scope,
                 _story_checkpoint_guard=_story_checkpoint_guard,
                 _safety_guidance=safety_guidance,
             )
@@ -1428,6 +1434,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              _game_timer_scope: tuple | None = None,
                                              identity_profile: dict[str, Any] | None = None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
+                                             _weather_scope: str | None = None,
                                              _story_checkpoint_guard=None,
                                              _safety_guidance: dict) -> dict[str, Any]:
         """Bridge canonical decisions to application-owned effects.
@@ -1497,6 +1504,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         personal_welcome_answer_verified = False
         game_confirmation_authorized = False
         catalogue_descriptor = None
+        weather_scope = _weather_scope
         if event.event_type == "SpeechReceived":
             if _speech_lifecycle_guard is not None and not _speech_lifecycle_guard():
                 return self._identity_result(event.session_id, "stale_session_generation")
@@ -1577,6 +1585,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                           else "input_retry" if safety.severity == "none" else "free_speech")
             personal_welcome_answer_verified = (safety.verified and safety.severity == "none"
                 and not uncertain_stt and bool((transient_text or "").strip()))
+            weather_scope = weather_request_scope(transient_text) if personal_welcome_answer_verified else None
             if (personal_welcome_answer_verified and reassurance and current.mode == "wellbeing_check"
                     and current.support_question_kind == wellbeing_question and current.safety_severity == "none"):
                 intent = "no"
@@ -2522,7 +2531,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                     followup = await self._receive_canonical_event(self._internal_followup(event,
                                         'DialogueFallback', 'bounded_catalogue', {'reason':'catalogue_request',
                                             'action':action, 'target':target}, 'catalogue-request'),
-                                        dialogue_fallback_authorized=True)
+                                        dialogue_fallback_authorized=True,
+                                        _weather_scope=weather_scope if action == 'request_information' and target == 'weather' else None,
+                                        _weather_origin_current=still_current)
                                     return {**followup, 'outputs':[effect, *(followup.get('outputs') or [])]}
                         if (fallback_reason is None and snapshot.get("mode") == "bear_dialogue" and len(offers) == 1
                                 and not turn.chunks and self.transition_authorizer.authorize_model_action(
@@ -2679,8 +2690,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     if tool_name != "schedule" and not self._identity_scope_live(event.session_id, "personalize"):
                         profile = None
                     schedule_ref = self._canonical_schedule_refs.get(event.session_id) if self._identity_scope_live(event.session_id, "schedule") else None
+                    request_scope = weather_scope
+                    if (tool_kind == 'weather' and event.event_type == 'ButtonPressed'
+                            and previous_state is not None and previous_state.mode == 'schedule_weather'
+                            and previous_state.scene_menu_descriptor.get('scene') == 'schedule_weather'
+                            and any(item.get('id') == 'weather' and item.get('slot') == payload.get('button_id')
+                                    for item in previous_state.scene_menu_descriptor.get('items', ()) if isinstance(item, dict))):
+                        request_scope = 'configured_point'
                     info = await TypedInfoRenderer(self.schedule_weather, profile, schedule_ref).render(
-                        tool_kind, allow_demo=getattr(self.settings, "profile", "") == "mock")
+                        tool_kind, allow_demo=getattr(self.settings, "profile", "") == "mock",
+                        weather_scope=request_scope)
                     def audio_current():
                         return bool(still_current() and state_owner.handset == "up"
                             and (state_owner.mode == "schedule_weather" or (state_owner.mode == 'bear_dialogue'

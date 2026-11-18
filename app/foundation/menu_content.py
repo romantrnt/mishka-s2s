@@ -210,6 +210,8 @@ def build_menu_page(scene: str, band: str, page: int = 0, *,
     if scene == 'schedule_weather':
         available = {item_id for item_id, _ in choices}
         prefix = ('Расписания сейчас не вижу. ' if not {'what_next','where_now'}.intersection(available) else '')
+        if 'weather' not in available:
+            prefix += 'Погоду сейчас не могу проверить. '
         spoken_text = prefix + spoken_text
     if len(spoken_text) > 320:
         # Never truncate a title or omit a control while routing still offers it.

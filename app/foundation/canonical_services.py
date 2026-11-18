@@ -178,6 +178,11 @@ def day_information_intent(text: str) -> str | None:
     return None
 
 
+def _weather_source_place_question(value: str) -> bool:
+    return bool(re.search(r'\bкако\w+\s+(?:город|мест|точк|регион)\w*\b|'
+                          r'\bгде\s+(?:именно\s+)?(?:сейчас\s+)?(?:эта|такая)\s+погода\b', value))
+
+
 def conversational_information_intent(text: str) -> str | None:
     """Explicit factual subject; character/location talk is ordinary dialogue."""
     value = ' '.join(text.casefold().split())
@@ -188,7 +193,8 @@ def conversational_information_intent(text: str) -> str | None:
     # not a request for the child's local provider facts.
     if re.search(r'\b(?:игр\w*|поигра\w*|сыгра\w*|квиз\w*|викторин\w*|сказк\w*|истори\w*|волшебн\w*|сказочн\w*)\b', value):
         return None
-    if re.search(r'\b(?:тво\w*|у тебя)\b', value):
+    if (re.search(r'\bтво\w*\b', value)
+            or (re.search(r'\bу тебя\b', value) and not _weather_source_place_question(value))):
         return None
     if re.search(r'\b(?:почему|зачем|что такое|как (?:образуется|меняется|устроен[ао]?))\b', value):
         return None
@@ -216,6 +222,33 @@ def conversational_information_intent(text: str) -> str | None:
             return 'card_doctors'
         return 'where_now'
     return None
+
+
+def weather_request_scope(text: str | None) -> str | None:
+    """Minimize this admitted factual request; scope grants no authorization."""
+    if not isinstance(text, str) or conversational_information_intent(text) != 'weather':
+        return None
+    value = ' '.join(text.casefold().split()).strip(' .!?…')
+    if _weather_source_place_question(value):
+        return 'source_place_question'
+    current = r'(?:сейчас|сегодня|на сегодня|на сейчас|в данный момент|в настоящее время)'
+    context = rf'(?:{current}|на улице|на улицу|на прогулку|для прогулки|для улицы)'
+    clothes_context = (rf'(?:{context}|'
+        r'в (?:дождь|снег|жару|холод|мороз)|для (?:дождя|снега|жары|холода|мороза)|'
+        r'в (?:такую|эту|прохладную|холодную|т[её]плую|жаркую|дождливую|снежную|ветреную|пасмурную) погоду)')
+    prefix = (r'(?:(?:мишка|пожалуйста|а|ну|(?:скажи|расскажи|подскажи|покажи)(?: мне)?|узнай|'
+        r'можно(?: мне)? узнать|хочу узнать|(?:я )?не (?:знаю|помню|могу вспомнить))[, :]+)*')
+    fact = (rf'(?:(?:какая|какую) )?(?:{current} )?(?:погод[ау]|температур[ау](?: воздуха)?)'
+        r'(?: и (?:погода|температура(?: воздуха)?))?')
+    body = rf'(?:{fact}|(?:про погоду|о погоде)|как(?: {current})? погода|что(?: {current})? с погодой)'
+    clothes = r'(?:что(?: мне)?(?: (?:нужно|надо))?(?: мне)? надеть|как(?: мне)? одеться|(?:нужно|надо)(?: мне)? надеть)'
+    # Every word must belong to a complete supported current request. Unknown
+    # place/time qualifiers are not evidence for the configured observation.
+    fact_request = rf'(?:{context} ){{0,2}}{body}(?: {context}){{0,2}}'
+    clothes_request = rf'(?:{clothes_context} ){{0,2}}{clothes}(?: {clothes_context}){{0,2}}'
+    pattern = rf'{prefix}(?:{fact_request}|{clothes_request})(?:[, ]+(?:мишка|пожалуйста|спасибо))*'
+    return 'configured_point' if re.fullmatch(pattern, value) else 'unresolved_request'
+
 
 def lint_persona(text: str) -> tuple[bool, str | None]:
     if not isinstance(text, str) or not text.strip(): return False, "empty"
@@ -317,7 +350,8 @@ class TypedInfoRenderer:
             'showers','wet-snow','thunderstorm-with-rain','thunderstorm-with-hail'} else ''
         return text + ' ' + clothes + rain
 
-    async def render(self, kind: str, *, allow_demo: bool = False) -> dict[str, Any]:
+    async def render(self, kind: str, *, allow_demo: bool = False,
+                     weather_scope: str | None = None) -> dict[str, Any]:
         if kind == "menu":
             return {"kind": "menu", "text": "Один — дата. Два — погода. Три — планы. Четыре — куда идти. Семь — назад."}
         if kind == "date":
@@ -332,6 +366,16 @@ class TypedInfoRenderer:
             return {'kind':kind, 'text':self._card_doctors_text()}
         if kind not in {"weather", "what_next", "where_now"}:
             raise ValueError("unknown typed information kind")
+        if kind == 'weather' and weather_scope != 'configured_point':
+            limitations = {
+                'requested_place': 'Погоду в этом месте проверить не могу.',
+                'source_place_question': 'Название города мне не передали. Точно назвать его не могу.',
+                'unsupported_time': 'Погоду на этот день проверить не могу.',
+                'unresolved_request': 'На этот вопрос о погоде ответить не могу.',
+            }
+            if isinstance(weather_scope, str) and weather_scope in limitations:
+                return {'kind': kind, 'text': limitations[weather_scope]}
+            raise ScheduleWeatherProviderError('weather_request_scope_unavailable')
         if self.service is None or (kind != "weather" and not isinstance(self.profile, Mapping)):
             raise ScheduleWeatherProviderError("typed_information_unavailable")
         # Production services expose independent typed calls so a weather

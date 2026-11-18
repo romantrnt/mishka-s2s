@@ -2948,7 +2948,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     return self._decision(state, [], "info_request_ignored")
                 if information in {"what_next", "where_now", 'card_doctors'} and state.profile_status != "identified":
                     return self._decision(state, [{"type": "privacy_blocked"}, {"type": "speak", "phrase_id": "PHRASE_101"}], "schedule_requires_profile")
-                offered = {item.get("id") for item in state.scene_menu_descriptor.get("items", ()) if isinstance(item, dict)}
+                offered = {item[0] for item in getattr(self, 'day_menu_items', lambda sid: ())(state.session_id)}
                 if information in {"date", "weather"} and information not in offered:
                     state.state_version += 1
                     return self._decision(state, [{"type": "audio_stop"}, {"type": "speak", "phrase_id": "PHRASE_100"}],
