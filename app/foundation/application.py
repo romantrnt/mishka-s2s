@@ -199,7 +199,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self.history_repository: Any = history
         # Canonical scenario documents and LangGraph are the single source of
         self.voice_manifest = RecordedPhraseResolver(f"{getattr(settings, 'content_root', 'content')}/audio/voice_manifest.json", allow_development_assets=self.allow_development_placeholders)
-        self.safety_classifier = InputSafetyGate(settings)
+        self.safety_classifier = InputSafetyGate(settings, story_backend_contract=
+            getattr(self.bounded_s2s, "story_backend_contracts", {}).get("validator"))
         self._canonical_profiles: dict[str, dict[str, Any] | None] = {}
         self._canonical_schedule_refs: dict[str, str | None] = {}
         self.transition_authorizer = CanonicalLangGraphAuthorizer() if self.canonical_runtime is not None else None

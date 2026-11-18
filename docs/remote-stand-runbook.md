@@ -253,7 +253,22 @@ with the generator and validator receipt digests/runners matching. GPU memory
 was 14,041 MiB used and 10,084 MiB free out of 24,576 MiB. Pod/providers were not
 restarted. Deployment evidence is in
 `/workspace/mishka-artifacts/stable-shared-runner-20261118`.
-Chief owns real repeated-cancel acceptance; that result remains pending.
+PID 14544 still failed after cancellation. The remaining caller was the separate
+`OllamaInputClassifier`: it constructed its own payload, lacked the engine's
+validator receipt, and switched the shared runner back to `shift=true` during
+input classification. Live daemon launch flags corroborated that transition;
+the pod clock was approximately 46.6 seconds ahead of the local QA clock at
+the comparison, so cross-host event times require that correction.
+The exact two-file repair is now deployed as PID 15307 with readiness `READY`:
+`application.py` SHA `2a3d90f7c634dcf463e0eda1c07025c1c34b9687617f0c6f6861b098d64a4ae6`,
+`input_safety.py` SHA `84bcef55a2108ed752080a51638862380cbe8d54a57b5e270aa225f89f73ecaa`.
+The existing validator receipt reaches the actual application input classifier,
+which retains the same runner pin while preserving classification policy,
+thresholds, timeouts and failure handling. Eleven runner-profile cases passed
+independently, including the actual application classifier; Chief approved the
+exact diff. One running model at context 16384 was confirmed after startup.
+Evidence: `/workspace/mishka-artifacts/input-classifier-runner-20261118`.
+Chief owns real repeated-cancel acceptance on PID 15307; that result is pending.
 
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input

@@ -36,13 +36,16 @@ class OllamaInputClassifier(OllamaMiniLLMValidator):
             "When uncertain use concern with low confidence. Never produce child-facing advice."
         )
         keep_alive = self.keep_alive.strip()
-        payload = json.dumps({
+        request = {
             "model": self.model, "stream": False, "think": False, "format": "json",
             "keep_alive": int(keep_alive) if keep_alive.lstrip("-").isdigit() else keep_alive,
             "messages": [{"role": "system", "content": prompt},
                          {"role": "user", "content": json.dumps({"utterance": text}, ensure_ascii=False)}],
             "options": {"temperature": 0, "num_predict": 64, "num_ctx": self.num_ctx},
-        }, ensure_ascii=False).encode("utf-8")
+        }
+        if self._story_runner_pinned:
+            request["shift"] = False
+        payload = json.dumps(request, ensure_ascii=False).encode("utf-8")
         raw = await self._request_bytes(payload)
         result = json.loads(json.loads(raw.decode("utf-8"))["message"]["content"])
         return result["severity"], result["confidence"]
@@ -56,7 +59,7 @@ class InputSafetyGate:
     Deterministic concerns and possible semantic danger remain safety signals.
     The mock profile exercises software routing only, never clinical safety.
     """
-    def __init__(self, settings, semantic=None):
+    def __init__(self, settings, semantic=None, *, story_backend_contract=None):
         self.rules = SafetyClassifier()
         self.mock = settings.profile == "mock"
         self.timeout_s = max(0.01, settings.validation_timeout_ms / 1000)
@@ -67,6 +70,7 @@ class InputSafetyGate:
                 base_url=settings.ollama_base_url, model=settings.validation_model,
                 timeout_s=self.timeout_s, num_ctx=settings.validation_num_ctx,
                 keep_alive=settings.validation_keep_alive,
+                story_backend_contract=story_backend_contract,
             )
 
     async def classify(self, text: str) -> InputSafetyDecision:
