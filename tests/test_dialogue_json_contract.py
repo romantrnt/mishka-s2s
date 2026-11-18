@@ -1,6 +1,7 @@
 """Request-local production wire contract; all provider I/O is in memory."""
 import asyncio
 import json
+import re
 from dataclasses import FrozenInstanceError
 
 import httpx
@@ -297,3 +298,70 @@ async def test_completed_json_budget_does_not_charge_semantics_or_audio(monkeypa
     requests = semantic(e,before_reply=slow)
     result = await e.run_text_turn("Привет",context())
     assert result.chunks == ("Я слушаю тебя.",) and e.playback.played and len(requests) == 1
+
+
+@pytest.mark.parametrize("band", ["3-5","4-5","5-7","6-7"])
+def test_older_schema_rejects_three_sentences_already_rejected_by_bridge(band):
+    contract = DialogueResponseContract.from_context(context(band=band))
+    text = "Привет. Я Мишка. Я слушаю."
+    assert len(text.split()) < contract.max_words
+    with pytest.raises(ValueError):
+        contract.to_xml(json.dumps({"type":"say","text":text},ensure_ascii=False))
+    assert re.fullmatch(contract.text_pattern,text) is None
+
+
+@pytest.mark.parametrize("band,limit", [("3-5",18),("4-5",18),("5-7",30),("6-7",30)])
+@pytest.mark.parametrize("kind,extra", [("say",{}),("say_led",{"pattern":"calm"}),
+    ("say_return",{"target":"root_menu"})])
+def test_older_one_or_two_sentences_share_global_word_cap_in_every_speech_branch(band,limit,kind,extra):
+    contract=DialogueResponseContract.from_context(context(band=band))
+    schema=next(branch for branch in contract.schema()['oneOf'] if branch['properties']['type']['enum']==[kind])
+    pattern=schema['properties']['text']['pattern']
+    one=" ".join(["Слово"]*limit)+"."
+    assert re.fullmatch(pattern,one)
+    assert contract.to_xml(json.dumps({"type":kind,"text":one,**extra},ensure_ascii=False)).startswith('<say>'+one+'</say>')
+    assert re.fullmatch(pattern,one[:-1]+" ещё.") is None
+    # Every split of the SAME total budget is legal, including 1 + N-1.
+    for first in range(1,limit):
+        text=" ".join(["Слово"]*first)+"! "+" ".join(["Слово"]*(limit-first))+"?"
+        assert re.fullmatch(pattern,text)
+        assert contract.to_xml(json.dumps({"type":kind,"text":text,**extra},ensure_ascii=False)).startswith('<say>'+text+'</say>')
+        overflow=text[:-1]+" ещё?"
+        assert re.fullmatch(pattern,overflow) is None
+        with pytest.raises(ValueError):
+            contract.to_xml(json.dumps({"type":kind,"text":overflow,**extra},ensure_ascii=False))
+    assert re.fullmatch(pattern,"Привет. Я Мишка. Я слушаю.") is None
+
+
+@pytest.mark.parametrize("band", ["3-5","4-5","5-7","6-7"])
+def test_older_sentence_grammar_preserves_normal_words_and_internal_punctuation(band):
+    pattern=DialogueResponseContract.from_context(context(band=band)).text_pattern
+    for text in ("Зайчик-побегайчик вернулся домой.","Алёна, Мишка; зайчик: друзья!",
+                 "Алёна, Мишка; зайчик: друзья! Лиса-плутовка пришла?", "Привет! Пока?"):
+        assert re.fullmatch(pattern,text)
+    for text in ("Привет. Пока. Ещё?", "Привет! Пока? Ещё.", "Привет? Пока! Ещё!",
+                 "Привет.. Пока.", "Привет.  Пока.", "Привет.\nПока."):
+        assert re.fullmatch(pattern,text) is None
+
+
+def test_young_sentence_pattern_is_byte_identical_and_still_single_sentence():
+    pattern=DialogueResponseContract.from_context(context()).text_pattern
+    assert pattern==r"^[А-Яа-яЁё]+(?:-[А-Яа-яЁё]+)*(?:[,;:]? [А-Яа-яЁё]+(?:-[А-Яа-яЁё]+)*){0,7}[.!?]$"
+    assert re.fullmatch(pattern,"Я живу в добром лесу рядом с рекой.")
+    assert re.fullmatch(pattern,"Я живу в добром волшебном лесу рядом с рекой.") is None
+    assert re.fullmatch(pattern,"Привет. Пока.") is None
+
+
+@pytest.mark.asyncio
+async def test_actual_older_wire_validates_two_sentences_but_rejects_three_before_semantics(monkeypatch):
+    answers=["Я слушаю тебя. Давай поговорим.","Привет. Я Мишка. Я слушаю."]
+    requests=wire(monkeypatch,lambda _:json.dumps({'type':'say','text':answers.pop(0)},ensure_ascii=False))
+    e=engine()
+    semantic_requests=semantic(e)
+    ctx=context(band='4-5')
+    first=await e.run_text_turn('Привет',ctx)
+    assert first.chunks and len(semantic_requests)==1
+    second=await e.run_text_turn('Ещё',ctx)
+    assert second.fallback_reason and not second.chunks and not second.actions
+    assert len(semantic_requests)==1 and len(requests)==2
+    assert not e.playback.played

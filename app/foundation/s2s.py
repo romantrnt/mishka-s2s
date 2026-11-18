@@ -569,8 +569,15 @@ class DialogueResponseContract:
     @property
     def text_pattern(self):
         word = r"[А-Яа-яЁё]+(?:-[А-Яа-яЁё]+)*"
-        punctuation = r"[,;:]?" if self.young else r"[,;:.!?]?"
-        return rf"^{word}(?:{punctuation} {word}){{0,{self.max_words - 1}}}[.!?]$"
+        def sentence(limit):
+            return rf"{word}(?:[,;:]? {word}){{0,{limit - 1}}}[.!?]"
+        single = sentence(self.max_words)
+        if self.young:
+            return rf"^{single}$"
+        # Each possible first-sentence length leaves only the remaining words.
+        pairs = [rf"{word}(?:[,;:]? {word}){{{first - 1}}}[.!?] {sentence(self.max_words - first)}"
+                 for first in range(1, self.max_words)]
+        return "^(?:" + "|".join((single, *pairs)) + ")$"
 
     def schema(self):
         from .game_engine import IMMERSIVE_GAME_SPECS
