@@ -11,7 +11,7 @@ import math
 import uuid
 from datetime import datetime, timezone
 
-from .identity import normalize_profile, _bounded_text
+from .identity import IdentityValidationError, normalize_profile, _bounded_text, _card_doctor_facts
 
 
 def _map_card(card, context_ref, now, monotonic_now):
@@ -37,6 +37,22 @@ def _map_card(card, context_ref, now, monotonic_now):
     if birth["age_years"] is not None:
         profile.update(age_years=birth["age_years"], age_source="data14_age_years",
                        birth_data_state=birth["birth_data_state"])
+    doctors, visit = card.get("doctors_today"), card["visit"]
+    try:
+        if (not isinstance(doctors, list) or len(doctors) > 32
+                or visit.get("rfid_state") != "active" or visit.get("doctors_today") != doctors):
+            raise IdentityValidationError("invalid DATA-14 doctor list")
+        for row in doctors:
+            if not isinstance(row, dict) or set(row) != {"code", "display_name"}:
+                raise IdentityValidationError("invalid DATA-14 doctor row")
+            _bounded_text(row["code"], "doctor_code", 160)
+        profile.update(_card_doctor_facts({
+            "card_doctor_names": [row["display_name"] for row in doctors],
+            "card_visit_date": visit.get("date"), "card_doctors_source": "data14.v1",
+        }))
+    except IdentityValidationError:
+        # Optional clinical facts can be unavailable without losing basic identity.
+        pass
     # These are facts for future local scenario use, not prompts/flags/schedules.
     kind = card["acquaintance"]["kind"]
     if kind not in {"first", "repeat"}:

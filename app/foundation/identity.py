@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 import math
 import re
+import unicodedata
 from typing import Any, Literal, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -36,6 +37,30 @@ def _bounded_text(value: Any, field_name: str, maximum: int) -> str:
     return value
 
 
+def _card_doctor_facts(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """Closed private card facts; the source marker never grants authorization."""
+    fields = {"card_doctor_names", "card_visit_date", "card_doctors_source"}
+    if not fields.intersection(profile):
+        return {}
+    names, visit_date = profile.get("card_doctor_names"), profile.get("card_visit_date")
+    if (not fields.issubset(profile) or profile["card_doctors_source"] != "data14.v1"
+            or not isinstance(names, list) or len(names) > 32
+            or not isinstance(visit_date, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", visit_date)):
+        raise IdentityValidationError("invalid DATA-14 doctor facts")
+    try:
+        date.fromisoformat(visit_date)
+    except ValueError:
+        raise IdentityValidationError("invalid DATA-14 visit date") from None
+    copied = []
+    for name in names:
+        name = _bounded_text(name, "card_doctor_names", 160)
+        if (any(char in "<>&[]{}*_`#\\" for char in name)
+                or any(unicodedata.category(char) in {"Cf", "Zl", "Zp"} for char in name)):
+            raise IdentityValidationError("invalid DATA-14 doctor name")
+        copied.append(name)
+    return {"card_doctor_names": copied, "card_visit_date": visit_date, "card_doctors_source": "data14.v1"}
+
+
 
 
 def normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
@@ -58,6 +83,7 @@ def normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {"profile_ref": reference or legacy_reference}
     if result["profile_ref"] is None:
         raise IdentityValidationError("identity profile requires profile_ref")
+    result.update(_card_doctor_facts(profile))
 
     for name, maximum in (("display_name", 80), ("schedule_ref", 128)):
         if name in profile:
