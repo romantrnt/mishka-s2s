@@ -11,8 +11,8 @@ async def weather_page(h):
         raise AssertionError('menu must not query provider')
     service.weather_provider.current=forbidden
     h.app.schedule_weather=service
-    await h.button(7);await h.release(7);await h.button(1);await h.release(1)
-    await h.button(6);await h.release(6);await h.button(1);await h.release(1)
+    await h.button(7);await h.release(7)
+    await h.button(6);await h.release(6)
     assert h.state.scene_menu_descriptor['items'][0]['id']=='weather'
     return service
 

@@ -83,7 +83,7 @@ async def test_blocked_schedule_grant_has_recorded_fallback_not_silence():
         h.app.optional_identity=True
         assert not h.state.scene_menu_refresh_required
         result=await h.where_now()
-        assert result['outputs'][0]['resolution']=='typed_information_blocked_by_identity'
+        assert any(item.get('resolution')=='typed_information_blocked_by_identity' for item in result['outputs'])
         assert h.app.audio.commands[-1]['response_id']=='PHRASE_101'
     finally:await h.close()
 

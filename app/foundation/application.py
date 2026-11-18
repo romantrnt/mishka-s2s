@@ -451,6 +451,13 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         return Event(kind, session_id, sequence, self.now(), "internal_identity", payload,
                      "identity:" + uuid.uuid4().hex, self.monotonic_now())
 
+    def _internal_followup(self, event: Event, kind: str, source: str, payload: dict, suffix: str) -> Event:
+        state = self.canonical_runtime.sessions.get(event.session_id)
+        sequence = state.last_sequence_by_source.get(source, 0) + 1 if state else 1
+        origin = event.correlation_id or f"admitted:{(event.session_id, self._session_epochs.get(event.session_id, 0), event.source, event.sequence)!r}"
+        return Event(kind, event.session_id, sequence, self.now(), source, payload,
+                     f"{origin}:{suffix}", self.monotonic_now())
+
 
     async def _set_dialogue_lighting_phase(self, session_id: str, phase: str) -> dict[str, Any] | None:
         """Drive the dialogue LED frame from the actual bounded-runtime phase.
@@ -1481,7 +1488,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 intent = "no"
             if current.pending_game_offer:
                 game_confirmation_authorized = bool(personal_welcome_answer_verified and admitted_offer
-                    and admitted_offer == (current.game_offer_id, True))
+                    and admitted_offer == (current.game_offer_id, True) and not explicit_help_request)
                 if game_confirmation_authorized:
                     intent = game_confirmation_intent(text)
             payload.update({"intent": intent, "safety_severity": safety.severity,
@@ -1509,8 +1516,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if (not self._personal_story_scope(event.session_id, owner, checkpoint=True)
                     or owner.checkpoint_ms is None or not current.story_checkpoint_confirmed):
                 return self._identity_result(event.session_id, "personal_story_checkpoint_pending")
-        if (current is not None and current.mode == "personal_story_theme" and current.scene_menu_phase != "repeat_listen" and transient_text
-                and payload.get("safety_severity") == "none" and personal_welcome_answer_verified):
+        if (current is not None and current.mode == "personal_story_theme" and transient_text
+                and payload.get("safety_severity") == "none" and personal_welcome_answer_verified
+                and payload.get("intent") != "help_request"):
             payload["intent"] = story_theme(transient_text) or "unsupported_story_theme"
         # Transport-supplied timestamps cannot make the real welcome clock due.
         if (event.event_type == "WelcomeTimerFired" and current is not None
@@ -1918,11 +1926,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             if (self._personal_story_scope(event.session_id,owner,checkpoint=True)
                                     and offset_ms <= int(1000*len(owner.audio.samples)/owner.audio.sample_rate)):
                                 owner.checkpoint_ms = offset_ms
-                        checkpoint = await self._receive_canonical_event(Event(
-                            "StoryPositionUpdated", event.session_id, event.sequence,
-                            self.now(), "audio_pause",
+                        checkpoint = await self._receive_canonical_event(self._internal_followup(
+                            event, "StoryPositionUpdated", "audio_pause",
                             {"story_id": effect.get("story_id"), "offset_ms": offset_ms},
-                            f"{event.correlation_id or event.sequence}:pause-position",
+                            "pause-position",
                         ))
                         if not still_current():
                             return stale_result()
@@ -2400,17 +2407,17 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         if (fallback_reason is None and snapshot.get("mode") == "bear_dialogue" and len(offers) == 1
                                 and not turn.chunks and self.transition_authorizer.authorize_model_action(
                                     "bear_dialogue", "offer_game", offers[0].params.get("game_id", ""))["ok"]):
-                            followup = await self._receive_canonical_event(Event(
-                                "DialogueFallback", event.session_id, event.sequence, self.now(),
+                            followup = await self._receive_canonical_event(self._internal_followup(
+                                event, "DialogueFallback",
                                 "bounded_game_offer", {"reason": "game_offer", "game_id": offers[0].params["game_id"]},
-                                f"{event.correlation_id}:game-offer", self.monotonic_now()),
+                                "game-offer"),
                                 dialogue_fallback_authorized=True)
                             return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
                         if fallback_reason is None and effect.get("game_id") == "word_game":
-                            followup = await self._receive_canonical_event(Event(
-                                "DialogueFallback", event.session_id, event.sequence, self.now(),
+                            followup = await self._receive_canonical_event(self._internal_followup(
+                                event, "DialogueFallback",
                                 "bounded_word_turn", {"reason": "word_turn_complete"},
-                                f"{event.correlation_id}:word-complete", self.monotonic_now()),
+                                "word-complete"),
                                 dialogue_fallback_authorized=True)
                             return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
                     except Exception as exc:
@@ -2421,11 +2428,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         effect["fallback_reason"] = type(exc).__name__
                         fallback_reason = "provider_or_validation_failure"
                 if fallback_reason is not None and still_current():
-                    fallback = await self._receive_canonical_event(Event(
-                        "DialogueFallback", event.session_id, event.sequence, self.now(),
+                    fallback = await self._receive_canonical_event(self._internal_followup(
+                        event, "DialogueFallback",
                         "bounded_dialogue", {"reason": fallback_reason},
-                        f"{event.correlation_id or event.session_id}:dialogue-fallback",
-                        self.monotonic_now(),
+                        "dialogue-fallback",
                     ), dialogue_fallback_authorized=True)
                     if not still_current():
                         return stale_result()
@@ -2454,9 +2460,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 if not still_current():
                     return stale_result()
                 if owner is not None:
-                    ready = await self._receive_canonical_event(Event(
-                        "PersonalStoryReady",event.session_id,event.sequence,self.now(),"internal_personal_story",
-                        {"request_id":owner.request_id},owner.request_id,self.monotonic_now()), personal_story_authorized=True)
+                    ready = await self._receive_canonical_event(self._internal_followup(
+                        event,"PersonalStoryReady","internal_personal_story",
+                        {"request_id":owner.request_id},"story-ready"), personal_story_authorized=True)
                     if not still_current():
                         return stale_result()
                     deferred_effects.extend(ready.get("outputs") or [])
@@ -2464,9 +2470,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     decision["reason"] = ready.get("reason")
                     snapshot = self.canonical_runtime.sessions[event.session_id].snapshot()
                 else:
-                    fallback = await self._receive_canonical_event(Event(
-                        "DialogueFallback",event.session_id,event.sequence,self.now(),"personal_story_unavailable",
-                        {"reason":"personal_story_unavailable"},f"{event.correlation_id}:story-unavailable",self.monotonic_now()), dialogue_fallback_authorized=True)
+                    fallback = await self._receive_canonical_event(self._internal_followup(
+                        event,"DialogueFallback","personal_story_unavailable",
+                        {"reason":"personal_story_unavailable"},"story-unavailable"), dialogue_fallback_authorized=True)
                     if not still_current():
                         return stale_result()
                     deferred_effects.extend(fallback.get("outputs") or [])
@@ -2480,11 +2486,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 except Exception:
                     queued = False
                 if queued == "completed":
-                    terminal = await self._receive_canonical_event(Event(
-                        "AudioCompleted",event.session_id,event.sequence,self.now(),"internal_personal_story_complete",
+                    terminal = await self._receive_canonical_event(self._internal_followup(
+                        event,"AudioCompleted","internal_personal_story_complete",
                         {"response_id":STORY_ID,"token":record.cancellation_token,
                          "generation":effect["generation"],"playback_id":effect["playback_id"],
-                         "playback_lease":effect["playback_lease"]},f"{event.correlation_id}:story-already-complete",self.monotonic_now()), personal_story_authorized=True)
+                         "playback_lease":effect["playback_lease"]},"story-already-complete"), personal_story_authorized=True)
                     if not still_current():
                         return stale_result()
                     deferred_effects.extend(terminal.get("outputs") or [])
@@ -2494,9 +2500,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 elif queued:
                     effect["resolution"] = "personal_story_pcm_queued"
                 else:
-                    fallback = await self._receive_canonical_event(Event(
-                        "DialogueFallback",event.session_id,event.sequence,self.now(),"personal_story_unavailable",
-                        {"reason":"personal_story_unavailable"},f"{event.correlation_id}:story-output-unavailable",self.monotonic_now()), dialogue_fallback_authorized=True)
+                    fallback = await self._receive_canonical_event(self._internal_followup(
+                        event,"DialogueFallback","personal_story_unavailable",
+                        {"reason":"personal_story_unavailable"},"story-output-unavailable"), dialogue_fallback_authorized=True)
                     if not still_current():
                         return stale_result()
                     deferred_effects.extend(fallback.get("outputs") or [])
@@ -2575,10 +2581,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     if not still_current():
                         return stale_result()
                     effect["resolution"] = unavailable_reason or "typed_information_unavailable"
-                    fallback = await self._receive_canonical_event(Event(
-                        "DialogueFallback", event.session_id, event.sequence, self.now(),
+                    fallback = await self._receive_canonical_event(self._internal_followup(
+                        event, "DialogueFallback",
                         "typed_information", {"reason": "typed_information_unavailable", "kind": tool_kind},
-                        f"{event.correlation_id or event.session_id}:typed-unavailable", self.monotonic_now(),
+                        "typed-unavailable",
                     ), dialogue_fallback_authorized=True)
                     if not still_current():
                         return stale_result()
@@ -2589,11 +2595,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return stale_result()
         effects.extend(deferred_effects)
         if audio_failure is not None and event.event_type != "AudioFailed":
-            failure = await self._receive_canonical_event(Event(
-                "AudioFailed", event.session_id,
-                state_owner.last_sequence_by_source.get("canonical_audio_failure", 0) + 1, self.now(),
+            failure = await self._receive_canonical_event(self._internal_followup(
+                event, "AudioFailed",
                 "canonical_audio_failure", audio_failure,
-                f"{event.correlation_id or event.session_id}:audio-failed", self.monotonic_now(),
+                "audio-failed",
             ))
             failure["audio_origin"] = dict(audio_failure)
             # Preserve the declarative effect that failed alongside the
@@ -2786,12 +2791,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 and result.get("reason") == "exhibition_onboarding_completed"
                 and getattr(self.canonical_runtime, "exhibition_mode", False)):
             current = self.canonical_runtime.sessions.get(event.session_id)
-            handoff = await self._receive_canonical_event(Event(
-                "ExhibitionOnboardingComplete", event.session_id, event.sequence + 1,
-                self.now(), "canonical_gr03_handoff",
+            handoff = await self._receive_canonical_event(self._internal_followup(
+                event, "ExhibitionOnboardingComplete", "canonical_gr03_handoff",
                 {"state_version": current.state_version if current is not None else 0},
-                f"{event.correlation_id or event.session_id}:exhibition-onboarding-complete",
-                self.monotonic_now(),
+                "exhibition-onboarding-complete",
             ))
             handoff["gr03_completion"] = {
                 "reason": result.get("reason"), "state": result.get("canonical_state"),

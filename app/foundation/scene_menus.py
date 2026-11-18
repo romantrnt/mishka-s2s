@@ -21,12 +21,12 @@ class SceneMenuMixin:
         return action[1] if action and action[0] == 'select' else None
 
     def _prepare_scene_menu(self, state, effects, reason):
+        if (state.scene_menu_active in SCENE_AUDIO and
+                (state.mode != state.scene_menu_active or reason in {
+                    'typed_info_requested', 'schedule_requires_profile', 'typed_information_unavailable'})):
+            effects = [{'type':kind} for kind in ('audio_stop','capture_close')
+                       if not any(effect.get('type') == kind for effect in effects)] + effects
         if state.mode not in SCENE_AUDIO:
-            if (reason == 'game_started' and state.scene_menu_active == 'game_menu'
-                    and state.scene_menu_phase in {'invite','narrating','repeat_prompt','repeat_listen'}):
-                # A fresh, verified choice owns this edge. Stop the old menu
-                # before its replacement game-start recording is dispatched.
-                effects = [{'type':'audio_stop'}, {'type':'capture_close'}] + effects
             if state.scene_menu_refresh_required and state.scene_menu_active in state.scene_menu_seen:
                 state.scene_menu_seen.remove(state.scene_menu_active)
             state.scene_menu_refresh_required = False
@@ -103,18 +103,24 @@ class SceneMenuMixin:
             return self._decision(state, [], 'scene_menu_release_required')
         state.scene_menu_held.append(button)
         if state.scene_menu_phase in {'invite','narrating','repeat_prompt','repeat_listen'}:
-            if (state.mode == 'game_menu' and not state.scene_menu_refresh_required
-                    and self._menu_selection(state, button) is not None):
-                # Valid game choices interrupt and select on the same fresh
-                # press. Held keys and obsolete mappings cannot enter here.
+            page = self._menu_page(state)
+            action = page.action_for(button)
+            stable_back = (action == ('back', None) and state.scene_menu_descriptor.get('scene') == state.mode
+                           and button in state.scene_menu_descriptor.get('buttons', ()))
+            if state.scene_menu_descriptor != page.as_dict() and not stable_back:
+                action = None
+            if action and (action[0] == 'back' or not state.scene_menu_refresh_required):
                 state.scene_menu_answers[state.mode]='skipped'
-                return None
-            state.scene_menu_phase='ready'
-            state.scene_menu_answers[state.mode]='skipped'
-            state.state_version+=1
-            return self._decision(state,[{'type':'audio_stop'},{'type':'capture_close'}] +
-                ([{'type':'capture_open'}] if state.mode=='game_menu' else []),
-                'scene_menu_skipped',clear_audio=True)
+                state.scene_menu_phase='ready'
+                if action[0] != 'next_page':return None
+                # Paging below owns its replacement narration on this edge.
+            else:
+                state.scene_menu_phase='ready'
+                state.scene_menu_answers[state.mode]='skipped'
+                state.state_version+=1
+                return self._decision(state,[{'type':'audio_stop'},{'type':'capture_close'}] +
+                    ([{'type':'capture_open'}] if state.mode=='game_menu' else []),
+                    'scene_menu_skipped',clear_audio=True)
         if state.scene_menu_refresh_required and button in ((1,2,3,4,5) if state.mode == 'game_menu' else (1,2,3,4)):
             return self._decision(state,[{'type':'audio_stop'},{'type':'capture_close'}],
                                   'scene_menu_refresh',clear_audio=True)
@@ -169,6 +175,16 @@ class SceneMenuMixin:
             return self._decision(state,[],'scene_menu_refresh_required')
         if state.scene_menu_phase!='repeat_listen':return None
         if not verified:return self._decision(state,[],'scene_menu_answer_unverified')
+        from .canonical_services import day_information_intent
+        from .personal_story import story_theme
+        request = ((state.mode == 'schedule_weather' and day_information_intent(text or '') is not None)
+                   or (state.mode == 'personal_story_theme' and getattr(self,'personal_story_capable',False)
+                       and story_theme(text) is not None))
+        if request:
+            state.scene_menu_answers[state.mode]='skipped'
+            state.scene_menu_phase='ready'
+            state.state_version+=1
+            return None
         from .canonical_contract import normalize_exhibition_repeat_answer
         answer=normalize_exhibition_repeat_answer(text or '') or (intent if intent in {'yes','no'} else None)
         if answer is None:return self._decision(state,[],'scene_menu_answer_unknown')

@@ -232,7 +232,7 @@ async def test_voice_accepted_before_prompt_finishes_cannot_become_late_consent(
     try:
         await h.offer('quiz')
         h.app.safety_classifier.classify = slow
-        task = asyncio.create_task(h.send('SpeechReceived', text='Да'))
+        task = asyncio.create_task(h.send('SpeechReceived', text='Да, давай.'))
         await entered.wait()
         await h.done()
         release.set()
@@ -528,5 +528,59 @@ async def test_actual_bear_prompt_limits_action_only_exception_to_requests_for_p
         assert result['reason'] == 'dialogue_turn'
         assert h.state.mode == 'bear_dialogue' and h.state.pending_game_offer is None
         assert h.app.conversation_contexts[h.state.session_id].turns == 1
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('text', ['Да, давай.', 'Да, хочу.', 'Ага, хочу поиграть',
+    'Ну да, давай поиграем, пожалуйста', 'Хорошо и давай сыграем', 'Да хочу играть'])
+async def test_complete_positive_compound_confirms_only_current_ready_offer(text):
+    h = Harness(band='1-3')
+    try:
+        await h.offer('quiz')
+        await h.done()
+        result = await h.send('SpeechReceived', text=text)
+        assert result['reason'] == 'game_started' and h.state.active_game_id == 'quiz'
+        assert h.state.game_return_mode == 'bear_dialogue'
+        assert len(h.model.calls) == 1
+    finally:
+        await h.close()
+
+
+@pytest.mark.parametrize('text', ['Да, но лучше поговорим', 'Да не хочу', 'Да, нет',
+    'Да, давай другую игру', 'Да, хочу в слова', 'Да, хочу играть, но не сейчас', 'Да? Давай'])
+def test_compound_confirmation_cannot_accept_nonpositive_or_alternative_clauses(text):
+    from app.foundation.canonical_services import game_confirmation_intent
+    assert game_confirmation_intent(text) == 'free_speech'
+
+
+@pytest.mark.asyncio
+async def test_untrusted_compound_does_not_authorize_or_consume_current_proposal():
+    h = Harness()
+    try:
+        await h.offer('quiz')
+        await h.done()
+        offer = h.state.game_offer_id
+        await h.send('SpeechReceived', {'_stt_untrusted': True}, text='Да, давай.')
+        assert h.state.mode == 'bear_dialogue' and h.state.game_offer_id == offer
+        await h.send('SpeechReceived', text='Да, хочу поиграть')
+        assert h.state.active_game_id == 'quiz'
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('text', ['Позови маму', 'Позови взрослого', 'Нужен взрослый'])
+async def test_explicit_help_during_ready_offer_preempts_confirmation_and_model(text):
+    h = Harness()
+    try:
+        await h.offer('quiz')
+        await h.done()
+        result = await h.send('SpeechReceived', text=text)
+        assert result['reason'] == 'help_requested'
+        assert h.state.mode == 'safety_stop' and h.state.active_audio_id == 'PHRASE_091'
+        assert h.state.pending_game_offer is None and h.state.active_game_id is None
+        assert len(h.model.calls) == 1
     finally:
         await h.close()

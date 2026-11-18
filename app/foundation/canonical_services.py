@@ -152,7 +152,8 @@ def classify_intent(text: str) -> str:
 def game_confirmation_intent(text: str) -> str:
     """Only a complete answer confirms the current owned game proposal."""
     value = " ".join(text.casefold().split()).strip(" .!?…,")
-    if re.fullmatch(r"(?:ну\s+)?(?:да|давай|давай сыграем|давай поиграем|ага|угу|конечно|хорошо|ладно|согласен|согласна|хочу|хочу играть|хочу поиграть|поиграем|запускай)(?:,? пожалуйста)?", value):
+    positive = r"(?:да|ага|угу|конечно|хорошо|ладно|согласен|согласна|давай(?: сыграем| поиграем)?|хочу(?: играть| поиграть)?|поиграем|запускай)"
+    if re.fullmatch(rf"(?:ну\s+)?{positive}(?:(?:\s*,\s*|\s+(?:и\s+)?){positive}){{0,2}}(?:,? пожалуйста)?", value):
         return "yes"
     if re.fullmatch(r"(?:нет|неа|не хочу|не надо|не нужно|отмена|передумал|передумала)(?:,? спасибо)?", value):
         return "no"
@@ -338,4 +339,3 @@ class CanonicalContentCatalog:
             item = self.stories.stories.get(str(story_id))
             return dict(item) if isinstance(item, dict) else None
         return None
-
