@@ -161,6 +161,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._game_timer_scopes: dict[str, tuple] = {}
         self._game_timer_sequences: dict[str, int] = {}
         self._game_speech_checks: dict[asyncio.Task, tuple] = {}
+        self._game_audio_waits: dict[object, dict] = {}
         self._welcome_timers: dict[str, asyncio.Task[Any]] = {}
         self._private_welcomes: dict[str, Any] = {}
         self._private_welcome_tasks: set[asyncio.Task[Any]] = set()
@@ -738,6 +739,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         cancel_session = getattr(owner, "cancel_session", None)
         if not callable(cancel_session):
             return {"status": "unavailable", "operation": operation, "session_id": session_id}
+        game_audio_waits = tuple(token for token, wait in self._game_audio_waits.items()
+            if owner is self.s2s_audio and wait["owner"][0] == session_id)
         captured_lease = self._active_audio.get(session_id)
         def cleanup_current():
             # A transition can queue a new recording without a new revision
@@ -795,6 +798,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self.audio_runtime_diagnostics.append(diagnostic)
             logger.warning("audio owner cleanup failed; continuing reset: %s", diagnostic["detail"])
             return {**diagnostic, "status": "failed"}
+        finally:
+            if any(token in self._game_audio_waits for token in game_audio_waits):
+                self._sync_game_timer(session_id)
         return {"status": "completed", "operation": operation, "session_id": session_id}
 
     async def _cleanup_session_resources(self, session_id: str, *, identity_request: dict[str, Any] | None = None,
@@ -823,6 +829,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._discard_private_welcome(session_id)
         self._drop_engagement(session_id, keys=True)
         self._cancel_game_timer(session_id)
+        self._drop_game_audio_waits(session_id)
         # Resource cleanup can retain canonical admission history. Keep its
         # producer sequences monotonic until a full canonical session reset.
         self._cancel_welcome_timer(session_id)
@@ -1140,16 +1147,73 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return None
         return (session_id, id(state), self._session_epochs.get(session_id, 0), engine.run_id, engine.round_generation)
 
+    def _finish_game_audio_wait(self, wait) -> None:
+        if wait is not None and self._game_audio_waits.pop(wait["token"], None) is wait:
+            if getattr(wait["pipeline"], "_canonical_game_audio_wait", None) is wait:
+                wait["pipeline"]._canonical_game_audio_wait = None
+            self._sync_game_timer(wait["owner"][0])
+
+    def _drop_game_audio_waits(self, session_id) -> None:
+        for token, wait in tuple(self._game_audio_waits.items()):
+            if wait["owner"][0] == session_id:
+                self._game_audio_waits.pop(token, None)
+                if getattr(wait["pipeline"], "_canonical_game_audio_wait", None) is wait:
+                    wait["pipeline"]._canonical_game_audio_wait = None
+
+    @contextlib.contextmanager
+    def _game_audio_wait(self, session_id, pipeline, guard):
+        owner = self._game_speech_check_owner(session_id)
+        wait = None
+        if pipeline is not None and owner is not None and self._game_voice_scope(session_id) is not None and guard():
+            prior = getattr(pipeline, "_canonical_game_audio_wait", None)
+            if (pipeline.active and prior is not None and self._game_audio_waits.get(prior["token"]) is prior
+                    and prior["owner"] == owner and prior["guard"]()):
+                wait = prior
+            else:
+                config = self.s2s_audio.config
+                wait = {"token": object(), "owner": owner, "pipeline": pipeline, "guard": guard,
+                        "deadline": self.monotonic_now() + config.max_speech_ms / 1000 + config.stt_timeout_s,
+                        "completion": None}
+                self._game_audio_waits[wait["token"]] = wait
+                pipeline._canonical_game_audio_wait = wait
+            self._sync_game_timer(session_id)
+        failed = True
+        try:
+            yield wait
+            failed = False
+        finally:
+            # Silence/pre-roll never holds a reminder. A confirmed onset may
+            # span uploads, but its fixed wall deadline survives every frame.
+            if wait is not None and (failed or not (wait["completion"] is not None or
+                    (pipeline.active and getattr(pipeline, "_canonical_game_audio_wait", None) is wait))):
+                self._finish_game_audio_wait(wait)
+
+    def _game_audio_wait_deadline(self, session_id, owner):
+        deadlines = []
+        for token, wait in tuple(self._game_audio_waits.items()):
+            if wait["owner"][0] != session_id:
+                continue
+            if (wait["owner"] != owner or self.s2s_audio.ingress.get(session_id) is not wait["pipeline"]
+                    or not wait["guard"]()):
+                self._game_audio_waits.pop(token, None)
+                if getattr(wait["pipeline"], "_canonical_game_audio_wait", None) is wait:
+                    wait["pipeline"]._canonical_game_audio_wait = None
+            else:
+                deadlines.append(wait["deadline"])
+        return max(deadlines) if deadlines else None
+
     def _current_game_timer_scope(self, session_id: str) -> tuple | None:
         state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
         engine = state.game_engine_state if state is not None else None
+        owner = self._game_speech_check_owner(session_id)
+        audio_wait = self._game_audio_wait_deadline(session_id, owner)
         if (state is None or state.mode != "game_active" or state.substate == "game_exit_confirmation"
                 or engine is None or not engine.run_id or game_deadline(engine) is None):
             return None
-        owner = self._game_speech_check_owner(session_id)
         deadline = game_deadline(engine)
         wakeup = deadline
-        if owner is not None and owner in self._game_speech_checks.values():
+        speech_wait = owner is not None and owner in self._game_speech_checks.values()
+        if speech_wait or audio_wait is not None:
             mechanics = []
             if engine.phase == "demonstrate" and engine.demonstration_deadline is not None:
                 mechanics.append(engine.demonstration_deadline)
@@ -1157,6 +1221,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 started = dict(engine.down_times).get(engine.target)
                 if started is not None and engine.target in engine.held:
                     mechanics.append(started + engine.hold_seconds)
+            if not speech_wait:
+                mechanics.append(max(deadline, audio_wait))
             if not mechanics:
                 return None
             # A suppressed earlier hint must not hide a later mechanic deadline.
@@ -1196,7 +1262,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._game_timer_tasks[session_id] = asyncio.create_task(wait(), name="mishka-game-timer")
 
     async def _fire_game_timer(self, session_id: str, scope: tuple) -> dict[str, Any] | None:
-        if self._current_game_timer_scope(session_id) != scope or self.monotonic_now() < scope[-1]:
+        if self._current_game_timer_scope(session_id) != scope:
+            self._sync_game_timer(session_id)
+            return None
+        if self.monotonic_now() < scope[-1]:
             return None
         sequence = self._game_timer_sequences.get(session_id, 0) + 1
         self._game_timer_sequences[session_id] = sequence
@@ -2913,27 +2982,30 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         turn_limit = POLICIES.get(profile_context.age_band, POLICIES["3-5"]).dialogue_turn_limit
         return ConversationContext(session_id, "canonical_product", node_id, allowed_topics, ("diagnosis", "medicine", "secret", "personal_data"), turn_limit, 120, 2, profile=profile_context, system_prompt=prompt)
 
-    async def _complete_canonical_audio_turn(self, session_id: str, sequence: int, pending: asyncio.Task[Any], epoch: int, correlation_id: str, *, _ingress_guard=None) -> None:
+    async def _complete_canonical_audio_turn(self, session_id: str, sequence: int, pending: asyncio.Task[Any], epoch: int, correlation_id: str, *, _ingress_guard=None, _game_audio_wait=None) -> None:
         try:
-            audio_result = await pending
-        except asyncio.CancelledError:
-            return
-        await self.expire_identity_leases()
-        session = self.sessions.get(session_id)
-        if session is None or session.state == Lifecycle.ENDED or self._session_epochs.get(session_id, 0) != epoch or session.correlation_id != correlation_id:
-            return
-        if audio_result.stt is None or not audio_result.stt.text.strip():
-            return
-        payload = await self._receive_canonical_event(
-            Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio",
-                  {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result)},
-                  f"{correlation_id}:audio:{sequence}"),
-            audio_result.stt.text,
-            _speech_ingress_guard=_ingress_guard,
-            _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard),
-        )
-        if payload.get("reason") != "stale_session_generation" and self._session_epochs.get(session_id, 0) == epoch:
-            await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
+            try:
+                audio_result = await pending
+            except asyncio.CancelledError:
+                return
+            await self.expire_identity_leases()
+            session = self.sessions.get(session_id)
+            if session is None or session.state == Lifecycle.ENDED or self._session_epochs.get(session_id, 0) != epoch or session.correlation_id != correlation_id:
+                return
+            if audio_result.stt is None or not audio_result.stt.text.strip():
+                return
+            payload = await self._receive_canonical_event(
+                Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio",
+                      {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result)},
+                      f"{correlation_id}:audio:{sequence}"),
+                audio_result.stt.text,
+                _speech_ingress_guard=_ingress_guard,
+                _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard),
+            )
+            if payload.get("reason") != "stale_session_generation" and self._session_epochs.get(session_id, 0) == epoch:
+                await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
+        finally:
+            self._finish_game_audio_wait(_game_audio_wait)
 
     def _untrusted_stt(self, result) -> bool:
         threshold = getattr(getattr(self.s2s_audio, "config", None), "stt_confidence_threshold", 0.45)
@@ -2966,6 +3038,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         # Keep its first private-listener owner on the bounded VAD instance,
         # not on the final (possibly fresh-phase silence) transport frame.
         utterance_guard = _ingress_guard
+        pipeline = None
         if isinstance(self.s2s_audio, LocalS2SPipeline):
             pipeline = self.s2s_audio.ingress.setdefault(session_id,
                 AudioIngressPipeline(self.s2s_audio.vad, self.s2s_audio.config))
@@ -2980,57 +3053,61 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     if state is not None and state.mode in {"personal_welcome_listen", "game_active"} else None)
         async def no_llm_turn(_text: str, _generation: int):
             return TurnResult((), (), False, None)
-        audio_result = await self.s2s_audio.feed_audio(session_id, samples, context, wait_for_turn=wait_for_turn, turn_handler=no_llm_turn)
-        if (isinstance(self.s2s_audio, LocalS2SPipeline)
-                and getattr(pipeline, "_canonical_private_owner", None) is utterance_guard
-                and audio_result.ingress_status == "collecting"):
-            if not pipeline.active and utterance_guard is not None and not utterance_guard():
-                # Low-VAD pre-roll can contain speech: keep its provenance until
-                # normal bounded rolling has certainly displaced every old sample.
-                replacement = getattr(pipeline, "_canonical_private_replacement_owner", None)
-                if replacement is None or not replacement():
-                    pipeline._canonical_private_stale_samples = 0
-                    pipeline._canonical_private_replacement_owner = _ingress_guard
-                stale_samples = getattr(pipeline, "_canonical_private_stale_samples", 0) + len(samples)
-                pipeline._canonical_private_stale_samples = stale_samples
-                if stale_samples >= (pipeline._pre_roll.maxlen or 0) + 512:
-                    pipeline._canonical_private_owner = _ingress_guard
+        with self._game_audio_wait(session_id, pipeline, utterance_guard) as audio_wait:
+            audio_result = await self.s2s_audio.feed_audio(session_id, samples, context, wait_for_turn=wait_for_turn, turn_handler=no_llm_turn)
+            if (isinstance(self.s2s_audio, LocalS2SPipeline)
+                    and getattr(pipeline, "_canonical_private_owner", None) is utterance_guard
+                    and audio_result.ingress_status == "collecting"):
+                if not pipeline.active and utterance_guard is not None and not utterance_guard():
+                    # Low-VAD pre-roll can contain speech: keep its provenance until
+                    # normal bounded rolling has certainly displaced every old sample.
+                    replacement = getattr(pipeline, "_canonical_private_replacement_owner", None)
+                    if replacement is None or not replacement():
+                        pipeline._canonical_private_stale_samples = 0
+                        pipeline._canonical_private_replacement_owner = _ingress_guard
+                    stale_samples = getattr(pipeline, "_canonical_private_stale_samples", 0) + len(samples)
+                    pipeline._canonical_private_stale_samples = stale_samples
+                    if stale_samples >= (pipeline._pre_roll.maxlen or 0) + 512:
+                        pipeline._canonical_private_owner = _ingress_guard
+                        pipeline._canonical_private_stale_samples = 0
+                        pipeline._canonical_private_replacement_owner = None
+                else:
                     pipeline._canonical_private_stale_samples = 0
                     pipeline._canonical_private_replacement_owner = None
-            else:
-                pipeline._canonical_private_stale_samples = 0
-                pipeline._canonical_private_replacement_owner = None
-        _ingress_guard = utterance_guard
-        await self.expire_identity_leases()
-        current = self.sessions.get(session_id)
-        if (current is not session or session.state == Lifecycle.ENDED
-                or not session.handset_up or self._session_epochs.get(session_id, 0) != epoch
-                or (_ingress_guard is not None and not getattr(_ingress_guard, "lifecycle_current", _ingress_guard)())):
-            return {"session_id": session_id, "state": "idle", "outputs": [],
-                    "reason": "stale_session_generation", "audio_status": "ignored",
-                    "pending": False, "barge_in": False}
-        barge_outputs = [{"action": "barge_in", "status": "previous_output_cancelled"}] if audio_result.barge_in else []
-        if audio_result.pending is not None:
-            epoch = self._session_epochs.get(session_id, 0)
-            completion = asyncio.create_task(self._complete_canonical_audio_turn(session_id, sequence, audio_result.pending, epoch, session.correlation_id, _ingress_guard=_ingress_guard), name=f"canonical-audio-{session_id}")
-            owned = self._audio_completions.setdefault(session_id, set()); owned.add(completion)
-            self._audio_completion_started_at[session_id] = self.monotonic_now()
-            completion.add_done_callback(self._audio_completion_callback(session_id))
+            _ingress_guard = utterance_guard
+            await self.expire_identity_leases()
+            current = self.sessions.get(session_id)
+            if (current is not session or session.state == Lifecycle.ENDED
+                    or not session.handset_up or self._session_epochs.get(session_id, 0) != epoch
+                    or (_ingress_guard is not None and not getattr(_ingress_guard, "lifecycle_current", _ingress_guard)())):
+                return {"session_id": session_id, "state": "idle", "outputs": [],
+                        "reason": "stale_session_generation", "audio_status": "ignored",
+                        "pending": False, "barge_in": False}
+            barge_outputs = [{"action": "barge_in", "status": "previous_output_cancelled"}] if audio_result.barge_in else []
+            if audio_result.pending is not None:
+                epoch = self._session_epochs.get(session_id, 0)
+                completion = asyncio.create_task(self._complete_canonical_audio_turn(session_id, sequence, audio_result.pending, epoch, session.correlation_id, _ingress_guard=_ingress_guard, _game_audio_wait=audio_wait), name=f"canonical-audio-{session_id}")
+                if audio_wait is not None:
+                    audio_wait["completion"] = completion
+                owned = self._audio_completions.setdefault(session_id, set()); owned.add(completion)
+                self._audio_completion_started_at[session_id] = self.monotonic_now()
+                completion.add_done_callback(self._audio_completion_callback(session_id))
+                completion.add_done_callback(lambda _done, wait=audio_wait: self._finish_game_audio_wait(wait))
+                self.sessions.save(session)
+                return {**self._result(session, barge_outputs, "audio_processing"), "audio_status": "processing", "pending": True, "barge_in": audio_result.barge_in}
+            if audio_result.stt is not None and audio_result.stt.text.strip():
+                result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard))
+                result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
+                return result
+            if _ingress_guard is not None and not _ingress_guard():
+                return {**self._result(session, [], "stale_session_generation"), "pending": False}
+            if audio_result.turn is not None and audio_result.turn.fallback_reason:
+                # This is an STT/VAD ingress retry, not a local safety reaction.
+                # Keep it visual/diagnostic until a canonical retry phrase is
+                # authorized for every mode; never dispatch untracked audio.
+                return {**self._result(session, barge_outputs + [{"action": "audio_retry", "reason": audio_result.turn.fallback_reason}], "audio_retry"), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
             self.sessions.save(session)
-            return {**self._result(session, barge_outputs, "audio_processing"), "audio_status": "processing", "pending": True, "barge_in": audio_result.barge_in}
-        if audio_result.stt is not None and audio_result.stt.text.strip():
-            result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard))
-            result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
-            return result
-        if _ingress_guard is not None and not _ingress_guard():
-            return {**self._result(session, [], "stale_session_generation"), "pending": False}
-        if audio_result.turn is not None and audio_result.turn.fallback_reason:
-            # This is an STT/VAD ingress retry, not a local safety reaction.
-            # Keep it visual/diagnostic until a canonical retry phrase is
-            # authorized for every mode; never dispatch untracked audio.
-            return {**self._result(session, barge_outputs + [{"action": "audio_retry", "reason": audio_result.turn.fallback_reason}], "audio_retry"), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
-        self.sessions.save(session)
-        return {**self._result(session, barge_outputs, audio_result.ingress_status), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
+            return {**self._result(session, barge_outputs, audio_result.ingress_status), "audio_status": audio_result.ingress_status, "pending": False, "barge_in": audio_result.barge_in}
 
     async def receive_audio_async(self, session_id: str, samples: tuple[float, ...], sequence: int, *, wait_for_turn: bool = True, _ingress_guard=None) -> dict[str, Any]:
         if _ingress_guard is None:
@@ -3048,11 +3125,13 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         private_phase = bool(state and state.mode == "personal_welcome_listen")
         game_phase = bool(state and state.mode == "game_active")
         game_scope = self._game_voice_scope(session_id)
+        game_owner = self._game_speech_check_owner(session_id)
         transport_guard = _ingress_guard
         phase_guard = lambda: (transport_guard()
             and (not private_phase or (self.canonical_runtime.sessions.get(session_id) is state
                 and state.state_version == version))
             and (not game_phase or (game_scope is not None
+                and self._game_speech_check_owner(session_id) == game_owner
                 and self._game_voice_scope(session_id) == game_scope)))
         phase_guard.lifecycle_current = getattr(transport_guard, "lifecycle_current", transport_guard)
         return await self._receive_canonical_audio(session_id, samples, sequence, wait_for_turn=wait_for_turn, _ingress_guard=phase_guard)
@@ -3324,6 +3403,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._discard_private_welcome(session_id)
         self._drop_engagement(session_id, keys=True)
         self._cancel_game_timer(session_id)
+        self._drop_game_audio_waits(session_id)
         self._cancel_welcome_timer(session_id)
         self._welcome_timer_sequences.pop(session_id, None)
         self._cancel_menu_tutorial(session_id)

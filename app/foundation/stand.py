@@ -93,6 +93,11 @@ _PARSER_REASON_CODES = {
     "unclosed <say> tag": "unclosed_say_tag", "LLM stream exceeded limit": "model_stream_limit",
     "total model speech exceeded limit": "model_speech_limit",
     "unsafe or oversized model output": "unsafe_model_output",
+    "age_word_budget_exceeded": "age_word_budget_exceeded",
+    "game_offer_mixed_with_speech": "game_offer_mixed_with_speech",
+    "game_offer_mixed_or_out_of_context": "game_offer_mixed_or_out_of_context",
+    "game_offer_mixed_actions": "game_offer_mixed_actions",
+    "empty_model_speech": "empty_model_speech",
 }
 _PIPELINE_EVENTS = frozenset({
     "audio_cancelled", "audio_dropped", "audio_ready", "audio_generation_failed", "barge_in", "chunk_closed",

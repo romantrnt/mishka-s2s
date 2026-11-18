@@ -34,6 +34,22 @@ def test_validation_reason_is_enum_not_adapter_prose(reason, expected):
     assert "PRIVATE_" not in json.dumps(result)
 
 
+@pytest.mark.parametrize("reason", [
+    "age_word_budget_exceeded", "game_offer_mixed_with_speech",
+    "game_offer_mixed_or_out_of_context", "game_offer_mixed_actions",
+    "empty_model_speech",
+])
+def test_static_game_parser_reason_survives_but_adapter_detail_is_redacted(reason):
+    events = HardwareIntegrationStand._panel_metrics({"events": [
+        {"event": "validation_failure", "source": "stream_parser", "reason": reason},
+        {"event": "validation_failure", "source": "stream_parser",
+         "reason": reason + ":PRIVATE_CHILD_NAME"},
+    ]})["events"]
+    assert events[0]["reason"] == reason
+    assert events[1]["reason"] == "validation_detail_redacted"
+    assert "PRIVATE_" not in json.dumps(events)
+
+
 @pytest.mark.parametrize("bad", ["PRIVATE_NUMBER", True, -1, float("nan"), float("inf"), 10**1000, {"raw": "PRIVATE_NESTED"}])
 def test_numeric_and_source_fields_cannot_smuggle_private_data(bad):
     raw = {"PRIVATE_STAGE": 1, "utterance_hash": "PRIVATE_HASH",
