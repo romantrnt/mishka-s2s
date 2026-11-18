@@ -9,7 +9,7 @@ Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
 Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
-`18180`, runtime source commit `7f15b5dfb555c534be46826fb2c15c74f52e01c8` on
+`18670`, runtime source commit `33dc48bfef038e059b100ec5c5d3196c560de248` on
 `codex/remote-device-simulator`. Open
 `https://fihihgl91rnwu4-8000.proxy.runpod.net/console` and use the protected
 credentials described below. The reviewed Stage 1 candidate is ready; actual
@@ -28,10 +28,13 @@ served `console.js` SHA-256
 `50615a1b80a65074a0afa3f43b118442871562dfe02ea5cd330ace773d23d7e7`.
 Readiness returned `READY`; the initial handset was down with no browser owner.
 Prior files, the manifest and rollout/readiness receipts are retained under
-`/workspace/mishka-artifacts/product-integrity-20261118-v4/`. Its three-file
-follow-up builds on the reviewed v3 deployment; v4 retains a complete 16-file
-manifest. Earlier v1/v2 archives were superseded during review and were never
-executed.
+`/workspace/mishka-artifacts/product-integrity-20261118-v5/`. This two-file
+audio/diagnostics follow-up builds on v4's three-file menu/identity correction;
+both retain complete 16-file manifests and backups. V5's helper ran once,
+PID `18180` shut down gracefully, and PID `18670` reached `READY`. Initial
+capture was down without a browser owner; simulator instance
+`8bc8e7a8c4a77577` and revision 2 were read back. Earlier v1/v2 archives and
+v5's local-only db5 draft were superseded during review and never executed.
 
 Implemented and independently reviewed:
 
@@ -72,6 +75,15 @@ Implemented and independently reviewed:
   own source ordering. Missing original correlation and a switch between
   independently numbered input sources cannot turn a new reply into a false
   duplicate/stale event. Actual original replays remain inert.
+- Actual game VAD/STT also owns its pending utterance: a reminder cannot cancel
+  speech admitted before its deadline. Silence/pre-roll does not defer hints;
+  confirmed collection has a fixed wall cap derived from the existing speech
+  and recognition limits. Disconnect, reset, terminal cleanup, detached failure
+  and cancellation release the exact owned wait without resurrecting a timer.
+  A late ordinary transcript cannot answer the next round after typed input;
+  an urgent disclosure from the same valid capture retains priority. Five
+  additional fixed parser reason codes survive diagnostics; arbitrary detail
+  remains redacted. No parser, safety or age limit was relaxed.
 
 Local checks and their limits:
 
@@ -80,7 +92,7 @@ Local checks and their limits:
   passed 26 cases. The story/help batch passed 65 cases, with 27 related public
   checkpoint/expiry cases. Nine affected Node suites, canonical verification,
   syntax checks and final diff checks passed.
-- The final three-file follow-up passed 215 linked cases on its exact frozen
+- The v4 three-file follow-up passed 215 linked cases on its exact frozen
   sources, including actual Stand ingress with empty correlation, four turns
   and natural completion, source-order changes, repeated offers/fallbacks,
   original replay, menu phases, both help-priority contexts, personal stories,
@@ -100,25 +112,36 @@ Local checks and their limits:
   The two affected modules passed **17 cases**, reaching the original strict
   HID, owned lease, timing, scoring, demonstration and hangup checks. PM reviewed
   their diff independently; no runtime file or public game route was changed.
+- V5's final audio source passed 30 affected cases, including all 25 new
+  VAD/STT boundaries and five cleanup/idle controls. An earlier 63-case batch
+  passed before the final three-line token-membership correction; it is not
+  relabelled as a final-source run. Chief independently replayed 13 narrow
+  controls and the cleanup REDs on the frozen final hash. The separate public
+  diagnostic projection module passed 25 cases and independent privacy review.
 
-Current hosted acceptance is owned by Chief against PID `18180`: actual model
+Current hosted acceptance is owned by Chief against PID `18670`: actual model
 proposal/confirmation/game/caller, scoped word turns and natural PCM drain,
 short/held exit, interruptions, repaired root/day/help paths and a clean next
 visit. Readiness, mocks and local rendering do not establish those results.
 Physical microphone/hearing, physical RFID/board, positive external schedule or
 weather data and clinical suitability remain outside the software proof.
 
-On PID `18180`, a continuous synthetic-WAV request → actual Whisper → native
+On the preceding PID `18180`, a continuous synthetic-WAV request → actual Whisper → native
 quiz proposal → typed “Да, давай” → real quiz → button 7 → preserved caller
 passed. This does not establish spoken consent: two affirmation WAVs produced
 a retry or ordinary dialogue rather than starting the game, and their actual
-recognition has not been established. A separate word WAV crossed the reminder
-boundary during VAD/STT and returned `stale_session_generation`; a local
-barrier reproduction is in progress. Neither that hypothesis nor a later
-synthetic utterance reaching help is classified as a confirmed cause without
-the relevant recognition/ownership evidence. Multiple word turns and natural
-completion remain open. Server result timestamps describe completion, not
-request admission; they alone do not establish a second live client.
+recognition had not been established. A separate word WAV crossed the reminder
+boundary during VAD/STT and returned `stale_session_generation`; the actual
+local VAD/STT barrier reproduced the cause and V5 fixes it. A later synthetic
+utterance reaching help is not classified as a false safety reaction without
+recognition evidence. A fresh typed party then completed four real-model word
+turns, with one validation fallback/retry between successful turns, returned to
+the caller and completed another ordinary answer. All 43 sources in the final
+word response ended naturally, with no audio stop after its first PCM.
+`runpod-stage1-v4-party-18180.json` records that source-bound result; seamless
+no-failure or fully spoken acceptance is not claimed. Server result timestamps
+describe completion, and server/browser clocks differed by about 44.8 seconds;
+after alignment, the suspected foreign inputs matched the test's own requests.
 
 The first hosted Stage 1 pass on PID `17636` established ordinary native
 dialogue/Silero drain, root-3 useful speech, verified pain/fear reassurance,
@@ -141,6 +164,29 @@ Synthetic-WAV request → offer and the separate typed full game chain are not
 combined into one continuous voice-path pass. A 5.2-second gesture on a quiz
 question without answer 7 established ordinary button exit, not the long-hold
 threshold; hosted answer-7/threshold acceptance remains separate.
+
+The conversational-access addition remains active (FR-030–032 / T037–040).
+Generic game/story choice, named verified assets during narration, contextual
+story return, direct sourced day questions and warmer safe persona dialogue
+are being implemented locally; they are not features of PID `18670`. All five
+current fixed WAVs exist, and `fixed_neznayka_v1` means Telephone rather than
+Neznayka. Max's contract has only today's doctor names/codes, not timed visits,
+order or rooms; no such schedule or Max modification is claimed.
+
+A separate weather-only candidate binds existing validated weather settings
+without overriding voice/private settings and checks actual `fact.obs_time`
+rather than the API server's `now_dt`. The two-hour observation age and
+five-minute future skew are local conservative policy, not a Yandex SLA.
+Adapter/config/hardening checks passed 42 cases; launcher/menu checks passed
+30. They use mocked HTTP/factory boundaries, without a paid provider call.
+Independent review is pending and these files are **not deployed** in V5.
+Read-only V5's preceding effective configuration was demo with no weather key
+or coordinates configured; no actual Yandex access has been verified. The
+[official REST contract](https://yandex.ru/dev/weather/doc/ru/concepts/forecast-rest)
+documents the measurement timestamp and existing endpoint; its
+[release notes](https://yandex.ru/dev/weather/doc/ru/concepts/releases) list v2
+as current. A key and suitable tariff remain external prerequisites for a
+positive real-provider weather observation.
 
 ## Runtime and server boundary
 

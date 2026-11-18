@@ -85,6 +85,11 @@ spoken words, checking intended hints and button/voice exits.
    documented nonvoice exit gesture, **Then** that gesture exits without also
    scoring an answer. Short answer presses remain usable. Waiting and gentle
    reminders do not silently change the 120-second inactivity rule.
+8. **Given** ordinary conversation, **When** the child asks generally to play
+   or names any currently supported game, **Then** a short real catalogue
+   choice or the matching game is offered without an unnecessary full-menu
+   detour. Voice and button selection, including during chooser narration,
+   converge on one owned launch and retain the valid conversation caller.
 
 ### User Story 3 - Listen, pause, continue and leave stories (Priority: P1)
 
@@ -110,6 +115,15 @@ pause-idle exit. Observe authorized profile expiry as a separate sequence.
    safe policy, without extending the credential or calling that ordinary idle.
 4. **Given** exit/cancellation or a new session, **When** an old story completes
    late, **Then** it cannot restart speech, capture, light or the previous scene.
+5. **Given** a general or named fixed-story request from conversation or its
+   chooser, **When** an unambiguous available title is selected, including
+   during narration, **Then** old menu audio stops and the exact verified
+   catalogue asset plays. Unknown/ambiguous titles are clarified, never
+   generated from memory or inferred from a historical asset ID.
+6. **Given** a story called from conversation, **When** it completes or the
+   child intentionally leaves, **Then** the valid caller resumes naturally.
+   Pause/resume retains the checkpoint; safety, hangup, reset and identity
+   change cannot restore the old caller or media.
 
 ### User Story 4 - Have a spoken exchange and recover (Priority: P1)
 
@@ -136,6 +150,15 @@ permission and exercise a controlled recognition/response failure.
 4. **Given** a safety-sensitive statement, **When** existing safety handling
    activates, **Then** local response remains truthful without claiming delivery
    to an adult through a nonexistent channel.
+5. **Given** an explicit weather or personal-day question in conversation or
+   section 7, **When** the relevant source and authorization are available,
+   **Then** sourced current facts are spoken; missing schedule details,
+   credentials or fresh observations produce an honest limitation. A guest
+   never receives another child's data, and a doctor list is not an itinerary.
+6. **Given** an innocuous everyday or character question, **When** the model
+   answers, **Then** calm age-appropriate playful fiction is permitted within
+   the established persona. Real clinical, child, schedule and weather facts
+   remain grounded; necessary safety checks and justified fallbacks remain.
 
 ### User Story 5 - Operate, recover and repeat (Priority: P2)
 
@@ -264,6 +287,25 @@ service restart/reload → complete another guest/profile visit → reopen files
   frames without journal events, so delayed delivery cannot roll back state.
   Continue investigating significant unnamed interactions across all scenarios
   rather than treating the existing matrix or these requirements as a ceiling.
+- **FR-030**: Make ordinary conversation an actual gateway to every supported
+  game and verified fixed-story asset, plus existing typed information
+  capabilities. General requests receive concise catalogue choices; precise
+  requests avoid redundant menu traversal. Uncertain names are clarified.
+  Support fresh voice/button choices during narration without double launch,
+  overlapping old audio or loss of the valid caller. Preserve contextual
+  button assignments, including game answer 7.
+- **FR-031**: Ground section 7 and conversational information in existing
+  integration contracts and current authorization. Do not modify Max's code
+  or database or invent appointment time/order/room from `doctors_today`.
+  Support configured real weather through existing validated settings; inspect
+  credential presence without disclosing values or buying a connection.
+  Reject stale/malformed observations and explain absent data honestly.
+- **FR-032**: Investigate fallback causes across parsing, age limits,
+  recognition, validation and scenario ownership. Remove demonstrated false
+  refusals and contradictory instructions while retaining safety and age
+  bounds. Permit harmless playful persona details separately from real
+  clinical/private/provider facts; do not use a broad location matcher to
+  turn a character question into a personal schedule query.
 
 ### Key Entities *(include if feature involves data)*
 

@@ -54,8 +54,8 @@ Decisions are grounded in current code, not the illustrative 10-question,
 all activities, data and access controls. Do not stop the pod or delete branches.
 Real microphone/hearing and physical board behavior remain distinct evidence.
 
-Reviewed source `7f15b5dfb555c534be46826fb2c15c74f52e01c8` is deployed as
-application PID `18180`. The guarded rollout verified all 16 runtime hashes,
+Reviewed source `33dc48bfef038e059b100ec5c5d3196c560de248` is deployed as
+application PID `18670`. The guarded rollout verified all 16 runtime hashes,
 readiness and served client `50615a1b…`; it retained the environment, private
 assets and running pod/Ollama. Chief owns the active actual-provider/browser
 acceptance. T031–T035 have implementation, focused local checks and independent
@@ -66,16 +66,52 @@ relabelled as evidence for these new paths.
 The initial hosted pass found repeat-menu interception, incomplete compound
 consent and internal-event identity/order defects. The follow-up corrects the
 shared causes, including existing theme requests and adult-help priority;
-215 linked cases and independent final-source review passed. Chief replays the
-affected native paths against PID `18180`; the initial first-turn success does
+215 linked cases and independent review passed on the v4 source. The new
+VAD/STT reminder/cleanup correction passed 30 final-source affected cases and
+independent replay before V5 deployment; its five diagnostic-code additions
+passed 25 projection/privacy cases. Chief replays the affected native paths
+against PID `18670`; the initial first-turn success does
 not establish multiple turns, and ordinary exit is separate from answer-7/hold
 threshold acceptance.
 
-The continuous PID `18180` WAV request → Whisper → quiz proposal → typed
-compound consent → real quiz → manual exit → caller passed. Spoken consent,
-multiple word turns/natural finish and actual answer-7/hold remain open. A word
-audio/reminder boundary is being reproduced before any further runtime change;
-the existing semantic-classification barrier test does not cover VAD/STT.
+The preceding PID `18180` WAV request → Whisper → quiz proposal → typed
+compound consent → real quiz → manual exit → caller passed. Its later word
+party completed four successful real-model turns with one validation retry,
+natural final drain and another caller answer. Actual VAD/STT reproduction
+established the reminder race fixed by V5. Isolated actual Whisper replay found
+the three old eSpeak fixtures misrecognized; they establish neither spoken
+consent/word routing nor a false safety reaction. Human microphone/hearing,
+hosted reminder-boundary replay and actual answer-7/hold remain separate gates.
+
+### Conversational access addition — active, not yet available in V5
+
+Roman's next addition extends the same investigation. Confirmed baseline inventory:
+all five immersive games accept model offers, but no generic owned voice
+chooser exists. All five fixed WAVs are present, including Aibolit; the old
+`fixed_neznayka_v1` ID now means **Telephone**, not an alias for Neznayka.
+Early button choices work; early spoken catalogue selection does not. Story
+finish/exit lacks a conversation caller. These are facts, not native passes.
+
+Max's current contract supplies only `doctors_today` code/name, explicitly not
+a dated plan, sequence or room. MISHKA currently drops that list, grants only
+personalization, and has no actual appointment lookup behind `schedule_ref`.
+Do not present the list as a next appointment or modify Max/client/database.
+The Yandex adapter exists, but the remote launcher forces demo. Read-only
+PID `18180` readiness confirms provider `demo` and no configured key or
+coordinates; this is effective configuration, not a search of unrelated
+credential stores. Provider observation freshness also needs correction.
+
+| Work | Observable result / current boundary | Ownership / independent check |
+| --- | --- | --- |
+| T037 Catalogue gateway | All five games and verified story assets reachable by precise or general conversation requests; early voice/button choice launches once; ambiguous/unknown names clarify. Restore a valid caller across chooser, playback, pause, finish and cancellation. Include actual capture/VAD/STT admission, not only text routing. | contextual_game_flow after reviewed audio freeze / Chief |
+| T038 Sourced day information | Section 7 and conversation use actual scoped facts and honest missing-data responses. Character/location questions stay ordinary conversation. Exact scene/identity/lease guards reject late provider and PCM work; context-sensitive 7 remains intact. | contextual_game_flow / Chief |
+| T039 Weather configuration and freshness | Bind existing canonical/legacy weather settings without replacing explicit voice/private configuration. Current/no-key/error/stale observations are distinguished; no paid calls or fake facts. | console_recovery_fix: launcher and weather provider only / Chief |
+| T040 Natural safe dialogue | Establish precise native fallback reasons; align actual age caps and final-word instructions; remove reproduced harmless-noun/persona false refusals while preserving real privacy, medical and safety checks. | Chief readonly architecture; coupled writer assigned after plan / independent review |
+
+The new matrix is another investigation aid. Native coverage must include
+different actual games, exact story assets and interruptions, source failure
+and missing/private-data boundaries. One quiz, synthetic WAV or local mock
+cannot establish all routes or human microphone/hearing acceptance.
 
 ## Previous observed outcomes — 2026-11-18
 
