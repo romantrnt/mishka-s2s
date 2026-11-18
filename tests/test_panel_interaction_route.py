@@ -1,4 +1,5 @@
 """Panel DOWN follows real voice/owned-media paths, with mocked providers only."""
+import json
 import pytest
 
 from app.foundation.domain import Event
@@ -40,8 +41,10 @@ async def test_actual_browser_pcm_vad_stt_semantic_dialogue_works_at_down_withou
         assert result["reason"] == "dialogue_turn", result
         assert recognizer.calls == 1 and checked == ["Как дела?"] and len(model.calls) == 1
         prompt = model.calls[0][0]["content"]
-        assert '"handset": "down"' in prompt and '"interaction_active": true' in prompt
-        assert '"interaction_route": "panel"' in prompt
+        context = json.loads(next(line.removeprefix("RUNTIME_CONTEXT_DATA=")
+                                  for line in prompt.splitlines() if line.startswith("RUNTIME_CONTEXT_DATA=")))
+        assert context["handset"] == "down" and context["interaction_active"] is True
+        assert context["interaction_route"] == "panel"
         assert h.state.handset == "down" and not h.app.sessions.get("stand").handset_up
     finally:
         await h.close()

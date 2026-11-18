@@ -82,6 +82,27 @@ async def test_ready_down_can_end_authorization_without_start_or_hook_change(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("physical_up", [False, True])
+async def test_explicit_end_after_local_help_allows_fresh_auth_without_reactivation(tmp_path, physical_up):
+    h = PanelStand(tmp_path, identity=True)
+    try:
+        await h.control("start")
+        await h.menu()
+        if physical_up:
+            await h.simulator.action({"action": "handset", "state": "up"})
+        await h.key(5)
+        await h.key(7)
+        assert h.state.mode == "safety_stop" and h.state.active_audio_id == "PHRASE_091"
+        await h.control("end")
+        assert not h.state.interaction_open and not h.app._active_audio
+        assert (await h.ready())["reason"] == "profile_ready"
+        assert h.state.mode == "profile_ready" and not h.state.interaction_open
+        assert h.state.handset == ("up" if physical_up else "down") and not h.app._active_audio
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("age_step", [False, True])
 async def test_optional_guest_skip_is_scoped_and_late_old_audio_cannot_advance_it(tmp_path, age_step):
     h = PanelStand(tmp_path)
