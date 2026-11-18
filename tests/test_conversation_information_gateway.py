@@ -54,6 +54,54 @@ async def test_persona_and_general_questions_keep_normal_dialogue(text):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('text,kind', [
+    ('Кто меня сегодня принимает?', 'card_doctors'),
+    ('Кто будет меня принимать?', 'card_doctors'),
+    ('Кто примет меня сегодня?', 'card_doctors'),
+    ('Кто со мной занимается?', 'card_doctors'),
+    ('Кто будет заниматься со мной?', 'card_doctors'),
+    ('Я не знаю, кто со мной занимается', 'card_doctors'),
+    ('Кто мой специалист?', 'card_doctors'),
+    ('Какой специалист занимается со мной?', 'card_doctors'),
+    ('С кем у меня занятие?', 'card_doctors'),
+    ('Во сколько мне на приём?', 'what_next'),
+    ('Во сколько меня примет врач?', 'what_next'),
+    ('Кто мой следующий врач?', 'what_next'),
+    ('Куда мне на процедуру?', 'where_now'),
+    ('Какая у меня процедура?', 'where_now'),
+    ('Какое у меня занятие?', 'where_now'),
+])
+async def test_personal_clinical_question_family_cannot_use_model_fact_guesses(text, kind):
+    h = Harness('<say>Сегодня тебя принимает педиатр.</say>')
+    try:
+        result = await h.send('SpeechReceived', text=text)
+        assert not h.model.calls
+        effect = next(e for e in result['outputs'] if e.get('type') == 'typed_info_request')
+        assert effect['kind'] == kind
+        assert h.state.mode == 'bear_dialogue' and h.state.active_audio_id == 'PHRASE_101'
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('text', [
+    'Кто принимает гостей в сказке?', 'Мишка, ты принимаешь гостей?',
+    'Кто меня принимает в гости?', 'Кто со мной играет?',
+    'Что делает специалист?', 'Ты врач?', 'Что делает врач?',
+    'Не говори, кто меня сегодня принимает', 'Не рассказывай моё расписание',
+])
+async def test_clinical_question_family_preserves_hosting_play_professions_and_refusal(text):
+    h = Harness('<say>Давай поговорим о добрых героях.</say>')
+    try:
+        result = await h.send('SpeechReceived', text=text)
+        assert len(h.model.calls) == 1
+        assert not any(e.get('type') == 'typed_info_request' for e in result['outputs'])
+        assert h.state.dialogue_information_kind is None and h.state.mode == 'bear_dialogue'
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
 async def test_same_personal_doctor_question_uses_day_typed_privacy_fallback():
     h = DayHarness()
     try:

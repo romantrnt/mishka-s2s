@@ -197,14 +197,24 @@ def conversational_information_intent(text: str) -> str | None:
     if re.search(r'какое?\s+(?:сегодня\s+)?число|какая\s+(?:сегодня\s+)?дата|какой\s+(?:сегодня\s+)?день|день\s+недел', value):
         return 'date'
     child = bool(re.search(r'\b(?:мне|меня|мной|мой|моя|мое|моё|мои|моим|моего|моей|моему|моими|моих|мы|нам|нас|я)\b', value))
-    appointment = bool(re.search(r'заняти[еяюй]|расписани|кабинет|врач|прием|приём|доктор|процедур', value))
+    clinical_noun = bool(re.search(r'заняти[еяюй]|расписани|кабинет|врач|прием|приём|доктор|специалист|процедур', value))
+    # Receiving a patient and working with a child are relations, not the
+    # bare noun «приём». Keep object/partner ownership in both word orders.
+    receiving = bool(re.search(r'\b(?:меня|нас)\b.{0,48}\b(?:принима(?:ет|ют|ть)|прим(?:ет|ут))\b|'
+                              r'\b(?:принима(?:ет|ют|ть)|прим(?:ет|ут))\b.{0,48}\b(?:меня|нас)\b', value))
+    lesson = bool(re.search(r'\b(?:со? мной|с нами)\b.{0,48}\bзанима(?:ется|ются|ться)\b|'
+                           r'\bзанима(?:ется|ются|ться)\b.{0,48}\b(?:со? мной|с нами)\b', value))
+    appointment = clinical_noun or ((receiving or lesson) and not re.search(r'\bгост\w*\b', value))
     if child and re.search(r'куда\s+(?:мне|нам)\s+(?:сейчас\s+)?идти', value):
         return 'where_now'
-    request = bool(re.search(r'\b(?:кто|кого|кому|кем|какой|какие|какая|какому|каким|какого|какую|каких|когда|куда|где|как|сколько|что|чего|чему|чем|покажи|скажи|расскажи|узнать)\b', value))
+    request = bool(re.search(r'\b(?:кто|кого|кому|кем|какой|какие|какая|какое|каком|какому|каким|какого|какую|каких|когда|куда|где|как|сколько|что|чего|чему|чем|покажи|скажи|расскажи|узнать)\b', value))
     if child and appointment and request:
-        if re.search(r'\b(?:кто|какой|какие)\b', value) and re.search(r'врач|доктор', value):
+        if re.search(r'следующ|потом|дальше|после|расписани|когда|во сколько|через сколько', value):
+            return 'what_next'
+        if (re.search(r'\b(?:кто|с кем)\b', value) or
+                (re.search(r'\b(?:какой|какие|какая)\b', value) and re.search(r'врач|доктор|специалист', value))):
             return 'card_doctors'
-        return 'what_next' if re.search(r'следующ|потом|дальше|после|расписани|когда', value) else 'where_now'
+        return 'where_now'
     return None
 
 def lint_persona(text: str) -> tuple[bool, str | None]:
