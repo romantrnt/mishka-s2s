@@ -209,6 +209,30 @@ and context checks. Whole personal browser playback/pause/resume remains open.
 Evidence: `runtime/local-integration-20261117/runpod-personal-12428.json` and
 `story-contract-cancel-deadlock-probe.json` in the same directory. Chief closed
 the browser and released the live audio/GPU slot after this failed acceptance.
+Recovery commit `629f255` changes only `story_context.py` in production: cancelled
+verification preserves the last successful availability observation, while any
+real metadata failure invalidates it and fences older successes. Each actual
+model request still performs a fresh bounded verification. The 22 new recovery
+regressions passed independently, and Chief/Reviewer approved the exact source.
+It is deployed as PID 12927 with story-context SHA
+`827a1c1fcf2500dbbb95f010f6ad0529fe33550eafbf9316e1e95e269328971a`;
+readiness is `READY`, console `4b3c` is unchanged, and the pod/providers were not
+restarted. Deployment evidence is in
+`/workspace/mishka-artifacts/story-contract-cancel-recovery-20261118`.
+The subsequent PID 12927 browser run still failed: cancellation passed in
+2.522 seconds, but the next generation fell back after 297 ms without private
+PCM. The corrected contract bug does not establish the cause of this live
+failure. No further generation fix is inferred from the isolated service probe.
+PID 13655 now adds local whitelisted stage diagnostics in `personal_story.py`
+only (SHA `e032b10e998d66474eeaa55ab1e6ee74c21628743179351e68ffcf397b1ddc2d`).
+Ten diagnostic/privacy tests passed independently; Chief approved the exact
+diff. Constant stages/reasons, booleans, counts, known age bands and bounded
+error classes reach local WARNING logs; story text, PCM, identities and raw
+exceptions do not. Generation conditions remain unchanged. The coordinated
+restart intentionally interrupted Chief's public story to check remote recovery.
+Evidence: `/workspace/mishka-artifacts/personal-story-diagnostics-20261118`.
+Chief owns the sole browser/audio slot for reload/new-visit recovery and one
+actual personal request to locate the rejecting stage. That result is pending.
 
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input

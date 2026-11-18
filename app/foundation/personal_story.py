@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field, replace
 import json
+import logging
+import math
 import re
 import uuid
+from itertools import count
 from .age_policy import POLICIES
 from .private_welcome import valid_pcm
 from .domain import Event, PlaybackHandle
@@ -13,6 +16,23 @@ STORY_ID = 'PERSONAL_STORY'
 STORY_MODES = {'personal_story_generating', 'personal_story_playing', 'story_pause_announcement', 'story_paused', 'story_resume_announcement'}
 DURATION_BOUNDS = {'1-3': (45,70), '3-5': (60,100), '4-5': (60,100), '5-7': (90,150), '6-7': (90,150)}
 THEMES = {'dinosaurs':'динозавры', 'космос':'космос', 'лес':'лес', 'дружелюбные машины':'дружелюбные машины', 'море':'море'}
+_DIAGNOSTIC_ATTEMPTS=count(1)
+_logger=logging.getLogger('mishka.personal_story')
+_ERROR_CLASSES={'StoryContextError','TimeoutError','CancelledError','RuntimeError','ValueError',
+                'TypeError','AttributeError','OSError','HTTPStatusError','ConnectError','ReadTimeout','other'}
+_ERROR_CODES={'story_backend_unverified','story_backend_changed','story_backend_metadata',
+              'story_backend_endpoint','story_context_budget'}
+_DIAGNOSTIC_STAGES={'admission','prepare','generation','structure','semantic','tts','voice','pcm'}
+_DIAGNOSTIC_REASONS={'begin','render_unavailable','owner_stale','invalid_part','wire_limit','invalid_json',
+    'invalid_keys','invalid_plot','invalid_paragraph','duplicate_paragraph','body_limit','contract_rejected',
+    'sentence_limit','markup_rejected','blocked','invalid_audio','sample_rate_changed','duration_ceiling',
+    'duration_rejected','ready','admission_rejected','jobs_busy','job_started','job_timeout','job_cancelled',
+    'render_none','caller_cancelled','exception'}
+_DIAGNOSTIC_NUMBERS={'characters','sentences','chunks','samples','rate','jobs','jobs_done','jobs_cancelling',
+                     'budget','private_pcm_available','service_capable','generator_capable','validator_capable',
+                     'generator_receipt_matches','generator_receipt_observed','validator_receipt_matches',
+                     'validator_receipt_observed','diagnostic_error','band_valid','theme_valid','epoch_current',
+                     'identity_current','owner_current','handset_up'}
 
 def story_theme(value):
     value = str(value or '').strip().casefold()
@@ -41,6 +61,42 @@ def story_messages(theme,band,constraints):
 class PersonalStoryService:
     def __init__(self, engine):
         self.engine = engine
+        self._diagnostic_attempt=None
+        self._stage='admission'
+
+    def _diagnostic(self,stage,reason,**fields):
+        stage=stage if type(stage) is str and stage in _DIAGNOSTIC_STAGES else 'unknown'
+        reason=reason if type(reason) is str and reason in _DIAGNOSTIC_REASONS else 'unknown'
+        self._stage=stage
+        if self._diagnostic_attempt is None:self._diagnostic_attempt=next(_DIAGNOSTIC_ATTEMPTS)
+        safe={'attempt':self._diagnostic_attempt,'stage':stage,'reason':reason}
+        for key,value in fields.items():
+            if ((key in _DIAGNOSTIC_NUMBERS and (type(value) in (bool,int)
+                        or (type(value) is float and math.isfinite(value))))
+                    or (type(value) is str and ((key=='band' and value in POLICIES)
+                        or (key=='error' and value in _ERROR_CLASSES)
+                        or (key=='code' and value in _ERROR_CODES)))):
+                safe[key]=value
+        _logger.warning('personal_story %s',json.dumps(safe,sort_keys=True))
+
+    def _reject(self,stage,reason,**fields):
+        self._diagnostic(stage,reason,**fields)
+        return None
+
+    def _capability_diagnostics(self):
+        # Only booleans leave provider/receipt objects; no binding values.
+        try:
+            generator=self.provider();validator=getattr(self.engine,'response_validator',None)
+            mini=getattr(validator,'mini',validator)
+            safe={'service_capable':self.capable(),
+                  'generator_capable':getattr(generator,'supports_full_story',False) is True,
+                  'validator_capable':getattr(validator,'supports_full_story',False) is True}
+            for role,provider in (('generator',generator),('validator',mini)):
+                contract=getattr(provider,'story_backend_contract',None)
+                safe[role+'_receipt_matches']=bool(contract and contract.matches(provider.base_url,provider.model))
+                safe[role+'_receipt_observed']=bool(contract and contract._observed is not None)
+            return safe
+        except Exception:return {'diagnostic_error':True}
 
     def provider(self):
         from .s2s import RetryingLLMProvider
@@ -66,17 +122,20 @@ class PersonalStoryService:
     async def render(self, theme, band, constraints, token, current):
         from .canonical_contract import validate_generated_story
         from .s2s import CachedTTSProvider, ResilientVoiceProvider
-        if not self.capable() or theme not in THEMES or band not in POLICIES: return None
+        if not self.capable() or theme not in THEMES or band not in POLICIES:
+            return self._reject('admission','render_unavailable',**self._capability_diagnostics())
+        self._diagnostic('generation','begin',band=band)
         e=self.engine; lower,upper=DURATION_BOUNDS[band]
         brief={'theme':theme,'age_band':band,'forbidden_topics':['diagnosis','treatment','real_schedule','secrets'],
                'content_constraints':[v for v in constraints if v in {'avoid_parent_assumptions','avoid_body_assumptions'}]}
         raw=''
         async for part in self.provider().stream_story(story_messages(theme,band,constraints),str(uuid.uuid4()),lambda:not current()):
-            if not current(): return None
-            if not isinstance(part,str): return None
+            if not current(): return self._reject('generation','owner_stale')
+            if not isinstance(part,str): return self._reject('generation','invalid_part')
             raw+=part
-            if len(raw)>8000: return None
-        if not current(): return None
+            if len(raw)>8000: return self._reject('generation','wire_limit')
+        if not current(): return self._reject('generation','owner_stale')
+        self._diagnostic('structure','begin',characters=len(raw))
         try:
             def unique(pairs):
                 result={}
@@ -85,28 +144,31 @@ class PersonalStoryService:
                     result[key]=value
                 return result
             candidate=json.loads(raw,object_pairs_hook=unique)
-        except (ValueError,TypeError): return None
+        except (ValueError,TypeError): return self._reject('structure','invalid_json')
         required={'title','plot','age_band','estimated_duration_sec','safety_tags','ending_state'}
-        if not isinstance(candidate,dict) or set(candidate)!=required: return None
+        if not isinstance(candidate,dict) or set(candidate)!=required: return self._reject('structure','invalid_keys')
         plot=candidate.get('plot')
         keys=('setting','problem','attempt','resolution')
-        if not isinstance(plot,dict) or set(plot)!=set(keys):return None
+        if not isinstance(plot,dict) or set(plot)!=set(keys):return self._reject('structure','invalid_plot')
         parts=[plot[k] for k in keys]
         if any(not isinstance(v,str) or not v.strip() or v!=v.strip()
-               or v[-1] not in '.!?' for v in parts):return None
-        if len(set(parts))!=4:return None
+               or v[-1] not in '.!?' for v in parts):return self._reject('structure','invalid_paragraph')
+        if len(set(parts))!=4:return self._reject('structure','duplicate_paragraph')
         candidate['text']=' '.join(parts)
         # One derived body, not duplicate model-produced copies. The wire JSON
         # stays bounded at8000; the spoken body separately stays at6000.
-        if len(candidate['text'])>6000:return None
-        if not validate_generated_story(candidate,brief)[0]: return None
+        if len(candidate['text'])>6000:return self._reject('structure','body_limit')
+        if not validate_generated_story(candidate,brief)[0]: return self._reject('structure','contract_rejected')
         text=candidate['text']; sentences=[v for v in re.split(r'[.!?]+',text) if v.strip()]
-        if not sentences or any(len(v.split())>POLICIES[band].max_words for v in sentences): return None
-        if re.search(r'[<>]|https?://',text): return None
+        if not sentences or any(len(v.split())>POLICIES[band].max_words for v in sentences):
+            return self._reject('structure','sentence_limit',sentences=len(sentences))
+        if re.search(r'[<>]|https?://',text): return self._reject('structure','markup_rejected')
         # Whole-text safety before any synthesis. Model tags are not authority.
         validate=getattr(e.response_validator,'validate_story',e.response_validator.validate)
+        self._diagnostic('semantic','begin',characters=len(text),sentences=len(sentences))
         decision=await validate(candidate['title']+'. '+text)
-        if not current() or not decision.allowed: return None
+        if not current():return self._reject('semantic','owner_stale')
+        if not decision.allowed:return self._reject('semantic','blocked',code=getattr(decision,'reason',None))
         tts,voice=e.tts,e.voice
         while isinstance(tts,CachedTTSProvider): tts=tts.delegate
         if isinstance(voice,ResilientVoiceProvider): voice=voice.primary
@@ -116,20 +178,26 @@ class PersonalStoryService:
         # the age duration ceiling. A provider's own native allocations remain
         # its responsibility; this bounds accepted aggregate PCM in this owner.
         spoken=re.findall(r'[^.!?]+[.!?]+|[^.!?]+$',text)
+        self._diagnostic('tts','begin',sentences=len(spoken))
         for sentence in spoken:
-            if not current():return None
+            if not current():return self._reject('tts','owner_stale')
+            self._stage='tts'
             audio=await tts.synthesize(sentence.strip(),token,lambda:not current())
             if (not current() or not valid_pcm(audio) or audio.token!=token
-                    or audio.sample_rate>192000 or len(audio.samples)>upper*audio.sample_rate):return None
+                    or audio.sample_rate>192000 or len(audio.samples)>upper*audio.sample_rate):
+                return self._reject('tts','invalid_audio',chunks=len(chunks))
+            self._stage='voice'
             audio=await voice.convert_private(audio,lambda:not current())
             if (not current() or not valid_pcm(audio) or audio.token!=token
-                    or audio.sample_rate>192000):return None
+                    or audio.sample_rate>192000):return self._reject('voice','invalid_audio',chunks=len(chunks))
             if sample_rate is None:sample_rate=audio.sample_rate
-            if audio.sample_rate!=sample_rate:return None
+            if audio.sample_rate!=sample_rate:return self._reject('pcm','sample_rate_changed')
             sample_count+=len(audio.samples)
-            if sample_count>upper*sample_rate:return None
+            if sample_count>upper*sample_rate:return self._reject('pcm','duration_ceiling',samples=sample_count,rate=sample_rate)
             chunks.append(audio.samples)
-        if not chunks or not lower<=sample_count/sample_rate<=upper:return None
+        if not chunks or not lower<=sample_count/sample_rate<=upper:
+            return self._reject('pcm','duration_rejected',samples=sample_count,rate=sample_rate)
+        self._diagnostic('pcm','ready',samples=sample_count,rate=sample_rate,chunks=len(chunks))
         from itertools import chain
         return replace(audio,samples=tuple(chain.from_iterable(chunks)))
 
@@ -178,15 +246,25 @@ class PersonalStoryMixin:
         self._discard_personal_story(sid)
         state=self.canonical_runtime.sessions[sid]
         theme=story_theme(brief.get('theme')); band=state.age_band
-        if not self.personal_story_available() or theme is None or band not in POLICIES:return None
-        if len(self._personal_story_jobs)>=1:return None
+        service=PersonalStoryService(self.bounded_s2s)
+        service._diagnostic('prepare','begin',band=band,jobs=len(self._personal_story_jobs))
+        private_pcm_available=bool(getattr(self.audio,'private_pcm_supported',False))
+        available=bool(private_pcm_available and callable(getattr(self.audio,'play_pcm_owned',None)) and service.capable())
+        if not available or theme is None or band not in POLICIES:
+            return service._reject('prepare','admission_rejected',private_pcm_available=private_pcm_available,
+                theme_valid=theme is not None,band_valid=band in POLICIES,**service._capability_diagnostics())
+        if len(self._personal_story_jobs)>=1:
+            return service._reject('prepare','jobs_busy',jobs=len(self._personal_story_jobs),
+                jobs_done=sum(task.done() for task in self._personal_story_jobs),
+                jobs_cancelling=sum(task.cancelling()>0 for task in self._personal_story_jobs))
         e=self.bounded_s2s
         budget=min(e.config.max_turn_seconds,e.config.llm_timeout_s+e.config.tts_timeout_s+e.config.rvc_timeout_s)
+        service._diagnostic('prepare','job_started',budget=budget)
         owner=StoryOwner(self._session_epochs.get(sid,0),uuid.uuid4().hex,
                          (state.profile_ref,state.identity_request_id),band,self.monotonic_now()+budget)
         self._personal_stories[sid]=owner
         current=lambda:self._personal_story_scope(sid,owner)
-        task=asyncio.create_task(PersonalStoryService(e).render(theme,band,brief.get('content_constraints',()),token,current),name='mishka-personal-story')
+        task=asyncio.create_task(service.render(theme,band,brief.get('content_constraints',()),token,current),name='mishka-personal-story')
         owner.task=task;self._personal_story_jobs.add(task)
         def observed(done):
             self._personal_story_jobs.discard(done)
@@ -194,14 +272,30 @@ class PersonalStoryMixin:
         task.add_done_callback(observed)
         try:
             done,_=await asyncio.wait({task},timeout=budget)
-            if not done or task.cancelled() or not current():owner.close();return None
+            if not done or task.cancelled() or not current():
+                reason='job_timeout' if not done else 'job_cancelled' if task.cancelled() else 'owner_stale'
+                live=self.canonical_runtime.sessions.get(sid)
+                service._diagnostic(service._stage,reason,
+                    epoch_current=self._session_epochs.get(sid,0)==owner.epoch,
+                    identity_current=bool(live and (live.profile_ref,live.identity_request_id)==owner.identity),
+                    owner_current=self._personal_stories.get(sid) is owner,
+                    handset_up=bool(live and live.handset=='up'))
+                owner.close();return None
             owner.audio=task.result()
             owner.task=None
-            if owner.audio is None:owner.close();return None
+            if owner.audio is None:
+                service._diagnostic(service._stage,'render_none')
+                owner.close();return None
+            service._diagnostic('prepare','ready')
             return owner
         except asyncio.CancelledError:
+            service._diagnostic(service._stage,'caller_cancelled')
             owner.close();raise
-        except Exception:
+        except Exception as exc:
+            from .story_context import StoryContextError
+            error=type(exc).__name__
+            code=exc.args[0] if isinstance(exc,StoryContextError) and exc.args else None
+            service._diagnostic(service._stage,'exception',error=error if error in _ERROR_CLASSES else 'other',code=code)
             owner.close();return None
 
     def _play_personal_story(self,sid,effect,token):
