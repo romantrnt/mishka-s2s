@@ -95,7 +95,8 @@ BUTTON_TARGETS = frozenset({
 })
 
 
-def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
+def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
+                           intent: str = "", safety_level: str = "none") -> bool:
     """The whole allowlist for state-changing canonical scenario events."""
     if current not in STATE_NAMES or target not in STATE_NAMES:
         return False
@@ -108,7 +109,12 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
     if current == 'bear_dialogue' and event_type == 'DialogueFallback' and target in {'game_menu','fixed_story_menu','fixed_story_playing'}:
         return True
     if current in {'game_menu','fixed_story_menu'} and event_type == 'VoiceIntentReady':
-        return target in {'game_active','fixed_story_playing','root_menu'}
+        if safety_level == 'urgent' or intent == SAFETY_POLICY['help_intent']:
+            return target == SAFETY_POLICY['urgent_target']
+        if safety_level == 'concern':
+            return target == 'support_intake'
+        activity = 'game_active' if current == 'game_menu' else 'fixed_story_playing'
+        return target in {activity, 'root_menu'}
     if current == "bear_dialogue" and target == "game_active":
         return event_type in {"ButtonPressed", "VoiceIntentReady"}
     if current == "game_active" and target == "bear_dialogue":
@@ -258,7 +264,9 @@ def _node_for(mode: str):
         current = str(state.get("current_mode") or "")
         target = str(state.get("target_mode") or "")
         event_type = str(state.get("event_type") or "")
-        allowed = bool(state.get("allowed", True)) and current == mode and _is_explicitly_allowed(current, target, event_type)
+        allowed = bool(state.get("allowed", True)) and current == mode and _is_explicitly_allowed(
+            current, target, event_type, intent=str(state.get("intent") or ""),
+            safety_level=str(state.get("safety_level") or "none"))
         return {
             **state,
             "allowed": allowed,

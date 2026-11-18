@@ -1682,6 +1682,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             else:
                 self.canonical_runtime.sessions[event.session_id] = previous_state
                 rejected_state = previous_state.snapshot()
+            self.last_canonical_state = dict(rejected_state)
             return {
                 "reason": "transition_rejected",
                 "state": rejected_state["mode"],
