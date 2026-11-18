@@ -2345,6 +2345,19 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     }
                     deferred_effects.extend(fallback.get("outputs") or [])
             elif kind == "generate_personal_story":
+                # Expose the accepted waiting state before the provider holds
+                # its HTTP request, so the browser can deliver scoped cancel.
+                hook = self.state_update_hook
+                if callable(hook):
+                    try:
+                        update = hook(event.session_id, {"reason": decision["reason"],
+                            "state": snapshot.get("mode"), "canonical_state": state_owner.snapshot(), "outputs": effects})
+                        if inspect.isawaitable(update):
+                            await update
+                    except Exception:
+                        logger.exception("personal story state update hook failed", extra={"session_id": event.session_id})
+                if not still_current():
+                    return stale_result()
                 owner = await self._prepare_personal_story(event.session_id, effect.get("brief") or {}, record.cancellation_token)
                 if not still_current():
                     return stale_result()

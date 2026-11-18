@@ -355,6 +355,18 @@ async function onboardingGuidance(){
  const denied=fields['phone-microphone'].onclick();assertHint(pending);await tick();
  permissions.shift().reject(Object.assign(new Error('denied'),{name:'NotAllowedError'}));await denied;assertHint(off);
  assert.match(fields['phone-media-status'].textContent,/Доступ к микрофону запрещён/);
+ const supportOff='Включи микрофон и расскажи, что случилось. Можно написать в «Инструментах».';
+ const supportPending='Разреши микрофон в окне браузера. Или напиши, что случилось, в «Инструментах».';
+ const supportAccepting='Расскажи, что случилось, или задай вопрос. Можно написать в «Инструментах».';
+ const supportPaused='Дослушай Мишку. Потом расскажи, что случилось, или напиши в «Инструментах».';
+ const support=show('support_intake');assertHint(supportOff);
+ const supportEnable=fields['phone-microphone'].onclick();assertHint(supportPending);await tick();
+ permissions.shift().resolve({getTracks:()=>[{stop:()=>{}}]});await supportEnable;assertHint(supportAccepting);
+ support.simulator.microphone.eligible=false;context.window.mishkaPhoneMedia();assertHint(supportPaused);
+ support.simulator.microphone.eligible=true;context.window.mishkaPhoneMedia();assertHint(supportAccepting);
+ support.simulator.prompt={text:'Текущая реплика поддержки'};context.window.mishkaPhoneMedia();
+ assert.strictEqual(fields['phone-instruction'].textContent,'Текущая реплика поддержки');
+ delete support.simulator.prompt;await fields['phone-microphone'].onclick();assertHint(supportOff);
  const closed=show('session_closed');closed.session.state='ENDED';closed.simulator.prompt={text:'Старая реплика'};context.render(closed);
  assertHint('Сеанс завершён. Положи трубку, чтобы начать заново.');
  assert.strictEqual(fields['phone-handset'].disabled,false,'closed session still offers handset cleanup');

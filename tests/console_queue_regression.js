@@ -418,6 +418,55 @@ async function ignoredCallerErrors() {
   }
 }
 
+function generatingSnapshot() {
+  return {session:{node:'personal_story_generating',handset_up:true,state:'ACTIVE'},
+    canonical_state:{mode:'personal_story_generating'},
+    simulator:{epoch:3,session:{session_id:'first-session',node:'personal_story_generating'},
+      admission:{input_ready:true,connected:true},devices:{handset:{state:'up'}}}};
+}
+
+async function scopedPersonalStoryCancellation() {
+  for (const simulated of [false,true]) {
+    const h=harness();
+    Object.assign(h.context,{current:generatingSnapshot(),wsSnapshotReady:true,wsReloadRequired:false,authBlocked:false});
+    const generation=h.context.post('/stand/text',{text:'story theme'});
+    const release=h.context.post('/stand/button-released',{button_id:1,state:'released'});
+    const oldCompletion=h.context.post('/stand/audio/completed',{response_id:'old',playback_lease:'old'});
+    const discarded=h.context.post('/stand/button',{button_id:2});
+    const path=simulated?'/stand/simulator/action':'/stand/button';
+    const cancel=h.context.post(path,simulated?{action:'button',button_id:7,press:'press',epoch:3}:{button_id:7,state:'pressed'});
+    assert.strictEqual(h.context.post(path,simulated?{action:'button',button_id:7,press:'press',epoch:3}:{button_id:7,state:'pressed'}),cancel,
+      'repeated cancel retains the exact current cancellation request');
+    const cancelRelease=h.context.post('/stand/button-released',{button_id:7,state:'released'});
+    await tick();
+    assert.strictEqual(h.requests.length,2,'owned generation cancel reaches transport before the pending model POST');
+    assert(h.requests[0].options.signal.aborted);
+    assert.strictEqual(await generation,null);assert.strictEqual(await discarded,null);
+    assert.strictEqual(JSON.parse(h.requests[1].options.body).button_id,7);
+    h.requests[1].resolve(response({reason:'activity_back'}));await cancel;await tick();
+    for(const task of [release,oldCompletion,cancelRelease]) {
+      h.requests.at(-1).resolve(response());await task;await tick();
+    }
+    assert.deepStrictEqual(h.requests.slice(2).map(item=>item.path),[
+      '/stand/button-released','/stand/audio/completed','/stand/button-released'], 'queued release/lifecycle callbacks retain their order');
+    h.requests[0].resolve(response({obsolete:true}));await tick();
+    assert(!h.results.some(value=>value?.obsolete),'late model response cannot replace cancellation');
+  }
+  for(const patch of [
+    value=>{value.session.node=value.simulator.session.node=value.canonical_state.mode='game_active';},
+    value=>{value.session.node=value.simulator.session.node=value.canonical_state.mode='wellbeing';},
+    value=>{value.simulator.epoch=4;},
+    value=>{value.simulator.session.session_id='another-owner';},
+  ]) {
+    const h=harness();const state=generatingSnapshot();patch(state);
+    Object.assign(h.context,{current:state,wsSnapshotReady:true,wsReloadRequired:false,authBlocked:false});
+    const active=h.context.post('/stand/text',{text:'pending'});
+    const next=h.context.post('/stand/simulator/action',{action:'button',button_id:7,press:'press',epoch:3});
+    await tick();assert.strictEqual(h.requests.length,1,'other scenes or old owner/epoch keep ordinary FIFO semantics');
+    h.requests[0].resolve(response());await active;await tick();h.requests[1].resolve(response());await next;
+  }
+}
+
 async function run() {
   await lifecycleUnderNormalBacklog();
   await lifecycleCoalescing();
@@ -430,6 +479,22 @@ async function run() {
   await modelProducingDeadlines();
   await totalPostDeadline();
   await ignoredCallerErrors();
+  await scopedPersonalStoryCancellation();
   console.log('console queue regression: backlog, urgent cleanup, stale fences, FIFO, audio identity and total deadlines passed');
 }
-run().catch(error => { console.error(error); process.exitCode = 1; });
+if(process.argv.includes('--bridge')) {
+  const h=harness();const lines=require('readline').createInterface({input:process.stdin});let tail=Promise.resolve();
+  lines.on('line',line=>{tail=tail.then(async()=>{
+    try {
+      const value=JSON.parse(line);
+      if(value.op==='snapshot') {
+        h.selectSession(value.state.simulator.session.session_id);
+        Object.assign(h.context,{current:value.state,wsSnapshotReady:true,wsReloadRequired:false,authBlocked:false});
+      }
+      if(value.op==='post')h.context.post(value.path,value.payload).catch(()=>{});
+      if(value.op==='resolve')h.requests[value.index].resolve(response(value.value));
+      await tick();
+      process.stdout.write(JSON.stringify({requests:h.requests.map((item,index)=>({index,path:item.path,payload:JSON.parse(item.options.body),aborted:item.options.signal.aborted})),results:h.results})+'\n');
+    }catch(error){process.stdout.write(JSON.stringify({error:error.message})+'\n');}
+  });});
+}else run().catch(error => { console.error(error); process.exitCode = 1; });

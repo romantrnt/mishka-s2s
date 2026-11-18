@@ -71,6 +71,29 @@ async def test_cancel_during_render_never_queues_late_pcm(kind,payload):
         await app.shutdown_identity()
 
 @pytest.mark.asyncio
+async def test_cancel_during_generating_publication_cannot_start_provider_after_await():
+    app=await start_app();published=asyncio.Event();release=asyncio.Event();pending=None
+    async def hook(sid,result):
+        if result['state']=='personal_story_generating':
+            published.set()
+            await release.wait()
+    app.state_update_hook=hook
+    try:
+        await enter(app)
+        pending=asyncio.create_task(send(app,'ButtonPressed',{'button_id':1}))
+        await asyncio.wait_for(published.wait(),2)
+        assert not app.bounded_s2s.llm.calls
+        assert (await send(app,'ButtonPressed',{'button_id':7}))['reason']=='activity_back'
+        release.set()
+        assert (await asyncio.wait_for(pending,2))['reason']=='stale_session_generation'
+        assert app.canonical_runtime.sessions['story-test'].mode=='root_menu'
+        assert not app.bounded_s2s.llm.calls and not app._personal_stories
+    finally:
+        release.set()
+        if pending:await asyncio.gather(pending,return_exceptions=True)
+        await app.shutdown_identity()
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('unavailable',['provider','timeout'])
 async def test_unavailable_generates_one_honest_080(unavailable):
     app=await start_app()

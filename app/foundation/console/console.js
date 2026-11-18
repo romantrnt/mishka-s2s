@@ -143,6 +143,20 @@ function postAdmissionAvailable() {
   return !current?.simulator || (wsSnapshotReady && !wsReloadRequired && !authBlocked);
 }
 
+function personalStoryCancelAvailable(path, payload) {
+  const simulator = current?.simulator;
+  if (!simulator || !postAdmissionAvailable() || !simulator.admission?.input_ready
+      || !simulator.admission.connected || !current.session?.handset_up
+      || simulator.devices?.handset?.state !== 'up'
+      || current.session.node !== 'personal_story_generating'
+      || simulator.session?.node !== 'personal_story_generating'
+      || current.canonical_state?.mode !== 'personal_story_generating'
+      || simulator.session.session_id !== session() || payload.button_id !== 7) return false;
+  return path === '/stand/simulator/action'
+    ? payload.action === 'button' && payload.press === 'press' && payload.epoch === simulator.epoch
+    : path === '/stand/button' && payload.state === 'pressed' && payload.session_id === simulator.session.session_id;
+}
+
 function cancelOrdinaryPosts() {
   // Legacy panels retain their HTTP fallback when the observer socket drops.
   if (!current?.simulator) return;
@@ -165,9 +179,10 @@ function post(path, body = {}) {
   const wireBody = JSON.stringify(path.startsWith('/stand/simulator/') ? body : { session_id: session(), ...body });
   const payload = JSON.parse(wireBody);
   const simulated = path === '/stand/simulator/action';
+  const storyCancel = personalStoryCancelAvailable(path, payload);
   const urgent = path === '/stand/reset' || (path === '/stand/handset' && body.state === 'down')
     || (simulated && (body.action === 'reset' || (body.action === 'handset' && body.state === 'down')))
-    || (path === '/stand/simulator/fault' && body.mode === 'disconnect');
+    || (path === '/stand/simulator/fault' && body.mode === 'disconnect') || storyCancel;
   const lifecycle = LIFECYCLE_POST_PATHS.has(path) || (simulated && body.action === 'button' && body.press === 'release');
   // Keep terminal cleanup available, but an open transport alone cannot
   // authorize input against a snapshot retained from an earlier connection.
@@ -184,11 +199,18 @@ function post(path, body = {}) {
       ? JSON.stringify(['audio', payload.session_id, payload.response_id, payload.playback_id,
         payload.playback_lease, payload.generation, payload.token])
       : null;
+  if (storyCancel) {
+    const pending = [activePost, ...postQueue].find(item => item?.storyCancel && item.path === path && item.wireBody === wireBody);
+    if (pending) return pending.promise;
+  }
   if (urgent) {
     audioReconnectPending = false;
     postGeneration += 1;
     postQueue = postQueue.filter(item => {
-      if (item.urgent) return true;
+      if (item.urgent || (storyCancel && item.lifecycle)) {
+        item.generation = postGeneration;
+        return true;
+      }
       item.resolve(null);
       return false;
     });
@@ -225,11 +247,12 @@ function post(path, body = {}) {
   }
   const timeoutMs = !urgent && (MODEL_POST_PATHS.has(path) || (simulated && !lifecycle))
     ? TURN_REQUEST_TIMEOUT_MS : undefined;
-  const item = { path, wireBody, owner, lifecycle, urgent, timeoutMs, generation: postGeneration, controller: new AbortController() };
+  const item = { path, wireBody, owner, lifecycle, urgent, storyCancel, timeoutMs, generation: postGeneration, controller: new AbortController() };
   item.promise = new Promise((resolve, reject) => { item.resolve = resolve; item.reject = reject; });
   // Some DOM handlers ignore the return value; errors are already shown here.
   item.promise.catch(() => {});
-  postQueue.push(item);
+  if (storyCancel) postQueue.splice(postQueue.findLastIndex(pending => pending.urgent) + 1, 0, item);
+  else postQueue.push(item);
   dispatchNextPost();
   return item.promise;
 }
@@ -255,6 +278,7 @@ function dispatchNextPost() {
 
 async function runPost(item) {
   try {
+    if (item.storyCancel && !personalStoryCancelAvailable(item.path, JSON.parse(item.wireBody))) return null;
     if (item.controller.signal.aborted || (!item.urgent && !item.lifecycle && !postAdmissionAvailable())) return null;
     recordLiveInput(item.path, JSON.parse(item.wireBody));
     const value = await fetchWithTimeout(item.path, {
@@ -1529,6 +1553,16 @@ function interactionGuide(state, media) {
       quiz: 'Нажми подсвеченную кнопку с ответом. Для выхода скажи «закончить игру» через микрофон или напиши это в «Инструментах».',
     }[game.active_game_id] || 'Следуй текущей подсветке и подсказке Мишки.'];
   }
+  if (node === 'support_intake') {
+    const text = media.pending
+      ? 'Разреши микрофон в окне браузера. Или напиши, что случилось, в «Инструментах».'
+      : !media.microphone
+        ? 'Включи микрофон и расскажи, что случилось. Можно написать в «Инструментах».'
+        : media.microphoneAccepting
+          ? 'Расскажи, что случилось, или задай вопрос. Можно написать в «Инструментах».'
+          : 'Дослушай Мишку. Потом расскажи, что случилось, или напиши в «Инструментах».';
+    return ['Расскажи Мишке', text];
+  }
   if (node === 'bear_dialogue') {
     const text = media.pending
       ? 'Разреши микрофон в окне браузера. Или напиши Мишке в «Инструментах».'
@@ -1578,7 +1612,7 @@ function updateGuide(state, contract = validateButtonContract(state.button_contr
     game_active: ['1 · Игра', 'Следуйте текущей подсветке.'],
     fixed_story_menu: ['Сказки', 'Варианты загружаются из текущего меню.'],
     fixed_story_playing: ['2 · Сказка', 'Идёт утверждённая запись. 6 — пауза; 7 — остановить сказку.'],
-    support_intake: ['3 · Я слушаю', 'Расскажите, спросите или сообщите, что случилось.'],
+    support_intake: ['3 · Расскажи Мишке', 'Расскажите, спросите или сообщите, что случилось.'],
     personal_story_theme: ['4 · Новая сказка', 'Выберите безопасную тему.'],
     wellbeing_check: ['5 · Помощь', '1 — нет, 7 — да.'],
     bear_dialogue: ['6 · Ограниченный разговор', 'Короткий разговор по безопасным темам.'],
