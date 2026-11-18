@@ -1086,7 +1086,7 @@ class CanonicalRuntime(SceneMenuMixin):
         effects = ([] if preserve_output else [{"type":"audio_stop"}, {"type":"capture_close"}]) + [{"type":"game_exit"},
                    {"type":"lighting_preset","preset":"BEAR_DIALOGUE" if returning else "ROOT_MENU"}]
         if returning and not preserve_output:
-            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору. Я слушаю тебя."))
+            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору."))
         elif reason == "word_game_finished" and not preserve_output:
             effects.append(self._dialogue_prompt("DIALOGUE_FINISH", "Хорошо поиграли! Теперь можно выбрать другое занятие."))
         return self._decision(state, effects, reason, clear_audio=True)
@@ -1108,7 +1108,7 @@ class CanonicalRuntime(SceneMenuMixin):
         effects = [{"type":"audio_stop"}, {"type":"capture_close"},
                    {"type":"lighting_preset", "preset":"BEAR_DIALOGUE" if returning else "ROOT_MENU"}]
         if returning:
-            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору. Я слушаю тебя."))
+            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору."))
         return self._decision(state, effects, reason, clear_audio=True)
 
     def _information_effect(self, state, kind):
