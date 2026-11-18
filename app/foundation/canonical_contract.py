@@ -1599,7 +1599,8 @@ class CanonicalRuntime(SceneMenuMixin):
             state.active_story_id = "PERSONAL_STORY"
             state.state_version += 1
             state.expected_inputs = ["button_5", "button_6", "button_7", "handset_down"]
-            return self._decision(state, [{"type":"play_personal_story", "content_id":"PERSONAL_STORY"}], "personal_story_ready")
+            story_wave = {"type": "lighting_wave_intent", "pattern": "story_playback_wave", "groups": "story_playback", "source": "canonical", "loop": True, "stage_ms": 620}
+            return self._decision(state, [story_wave, {"type":"play_personal_story", "content_id":"PERSONAL_STORY"}], "personal_story_ready")
         if event.event_type == "DialogueFallback":
             if (state.mode == "game_active" and state.active_game_id == "word_game"
                     and state.handset == "up"):

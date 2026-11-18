@@ -1063,6 +1063,19 @@ class OllamaLLMProvider:
         },
     }
 
+    @classmethod
+    def story_response_schema_for_age(cls,age_band):
+        from copy import deepcopy
+        from .age_policy import POLICIES
+        if age_band not in POLICIES:raise ValueError('unsupported_story_age')
+        schema=deepcopy(cls.STORY_RESPONSE_SCHEMA)
+        if age_band=='1-3':
+            word=r'[А-Яа-яЁё]+(?:-[А-Яа-яЁё]+)*'
+            sentence=rf'{word}(?:[,;:]? {word}){{0,{POLICIES[age_band].max_words-1}}}[.!?]'
+            for section in schema['properties']['plot']['properties'].values():
+                section['pattern']=rf'^{sentence}(?: {sentence})*$'
+        return schema
+
     def __init__(self, base_url: str, model: str, timeout_s: float, *, quantization: str = "", num_ctx: int = 8192, temperature: float = 0.2, max_tokens: int = 160, keep_alive: str = "-1", think: bool = False, warmup_timeout_s: float = 120.0, story_backend_contract=None):
         self.base_url=base_url.rstrip("/"); self.model=model; self.timeout_s=timeout_s
         self.quantization=quantization; self.num_ctx=num_ctx; self.temperature=temperature
@@ -1108,23 +1121,35 @@ class OllamaLLMProvider:
         except RuntimeError:return False
 
     async def stream_story(self,messages,request_id,cancelled):
+        async for part in self._stream_story(messages,request_id,cancelled):yield part
+
+    async def stream_story_for_age(self,messages,request_id,cancelled,*,age_band):
+        schema=self.story_response_schema_for_age(age_band)
+        if age_band!='1-3':
+            async for part in self.stream_story(messages,request_id,cancelled):yield part
+        else:
+            async for part in self._stream_story(messages,request_id,cancelled,story_schema=schema):yield part
+
+    async def _stream_story(self,messages,request_id,cancelled,*,story_schema=None):
         from .story_context import StoryContextError
         contract=self.story_backend_contract
         if not self.supports_full_story:raise StoryContextError('story_backend_unverified')
         budget=contract.budget(messages,6000,self.num_ctx)
         await contract.refresh()
         if not self.supports_full_story:raise StoryContextError('story_backend_changed')
-        async for part in self._stream_bounded(messages,request_id,cancelled,max_tokens=6000,num_ctx=budget,story=True):
+        options={'max_tokens':6000,'num_ctx':budget,'story':True}
+        if story_schema is not None:options['story_schema']=story_schema
+        async for part in self._stream_bounded(messages,request_id,cancelled,**options):
             yield part
         await contract.refresh()
 
-    async def _stream_bounded(self,messages,request_id,cancelled,*,max_tokens=None,num_ctx=None,story=False):
+    async def _stream_bounded(self,messages,request_id,cancelled,*,max_tokens=None,num_ctx=None,story=False,story_schema=None):
         try:
             import httpx
             timeout=httpx.Timeout(self.timeout_s)
             payload=self._payload(messages,True,max_tokens)
             if num_ctx is not None:payload['options']['num_ctx']=num_ctx
-            if story:payload.update(truncate=False,shift=False,format=self.STORY_RESPONSE_SCHEMA)
+            if story:payload.update(truncate=False,shift=False,format=story_schema if story_schema is not None else self.STORY_RESPONSE_SCHEMA)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("POST",f"{self.base_url}/api/chat",json=payload,headers={"x-request-id":request_id}) as response:
                     response.raise_for_status()

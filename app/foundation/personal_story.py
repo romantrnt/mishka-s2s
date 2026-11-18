@@ -140,7 +140,10 @@ class PersonalStoryService:
             if not current():return self._reject('generation','owner_stale')
             self._diagnostic('generation','begin',band=band)
             raw=''
-            async for part in self.provider().stream_story(messages,str(uuid.uuid4()),lambda:not current()):
+            provider=self.provider();aged=getattr(provider,'stream_story_for_age',None)
+            args=(messages,str(uuid.uuid4()),lambda:not current())
+            stream=aged(*args,age_band=band) if callable(aged) else provider.stream_story(*args)
+            async for part in stream:
                 if not current(): return self._reject('generation','owner_stale')
                 if not isinstance(part,str): return self._reject('generation','invalid_part')
                 raw+=part

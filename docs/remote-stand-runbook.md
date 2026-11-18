@@ -379,11 +379,35 @@ are preserved under `/workspace/mishka-artifacts/story-age-sentence-20261118`
 and `/workspace/mishka-artifacts/story-sentence-target-20261118`.
 The addressed extension leaves the successful older volume-only HTTP payload
 unchanged, as checked by regression. Final targeted checks passed (29 cases),
-but young model compliance remains a real failure. Pinned-runtime schema
-constraint support is being investigated; another wording-only retry is not
-acceptance. Live PID 16069 still uses `229c12f3`, with its accepted middle-age
-browser controls. Physical microphone/hearing and final whole-demo acceptance
-remain unverified.
+but young model compliance remains a real failure. The next candidate applies
+a request-local pattern only to the four youngest plot strings; older payloads
+and three-argument custom providers retain their existing path. An actual
+zero-evaluation conversion on the pinned runner produced four explicit
+eight-word GBNF rules, without a generic-string fallback, in 0.049 seconds.
+The schema and generated grammar are preserved under
+`/workspace/mishka-artifacts/story-young-pattern-20261118`. Independent replay
+of that exact generated grammar passed all 44 boundary cases. The young native
+control then passed: one generation, whole semantic allow, 16 real Silero
+chunks, 2,760,000 samples at 48,000 Hz (57.5 seconds), and at most eight words
+per sentence. It completed in 18.532 seconds without a revision or deadline
+expiry; cleanup completed. This measures full-story preparation, not ordinary
+conversation latency or browser hearing. The candidate's 114 focused tests and
+canonical acceptance passed; browser lighting and final mixed acceptance remain
+pending. Live PID 16069 still uses `229c12f3`, with its accepted
+middle-age browser controls. Physical microphone/hearing and final whole-demo
+acceptance remain unverified.
+
+A one-shot browser `AudioBufferSourceNode.start` failure was injected during
+ordinary PCM playback on PID 16069. The panel exposed an error and subsequent
+chunks continued; ordinary PCM has no canonical playback identity, so this
+did not exercise `/stand/audio/failed`. Hangup cleared the error, and a new
+guest visit completed a useful ordinary turn with an actual new source and
+drained audio, followed by a clean dark endpoint. Same-visit retry remains
+unverified: the first follow-up arrived after the separate 120-second profile
+expiry and cannot establish audio recovery success or failure. Evidence:
+`runtime/local-integration-20261117/runpod-controlled-audio-failure-16069.json`.
+This is a browser playback-fault check, not a provider, physical microphone or
+hearing check.
 
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input

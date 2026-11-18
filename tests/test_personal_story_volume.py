@@ -161,7 +161,8 @@ async def test_actual_ollama_http_transmits_measured_repair_feedback_without_rep
         assert feedback['revision_request']=='Revise the full draft within allowed_sentence_words and required_minimum, aiming for desired_sentence_words and desired_volume. Split long sentences into complete simple short sentences. Preserve the full plot and add additional_sentences_per_part distinct meaningful sentences/events in the named parts; zero means only split or rebalance existing text. Return revised full JSON, never an unchanged draft; keep age/theme/schema, no repetition, padding or fragments.'
     assert isinstance(feedback['revision_request'],str) and 0<len(feedback['revision_request'])<500
     assert all(item['shift'] is False and item['truncate'] is False
-               and item['options']['num_ctx']==16384 and item['format']==e.llm.STORY_RESPONSE_SCHEMA for item in sent)
+               and item['options']['num_ctx']==16384
+               and item['format']==e.llm.story_response_schema_for_age(band) for item in sent)
     assert c.ready(URL,MODEL)
     assert bool(e.tts.calls) is expanded
 
