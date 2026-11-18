@@ -1328,6 +1328,11 @@ class CanonicalRuntime(SceneMenuMixin):
             effects.append({"type": "lighting_select_button", "button": 6})
         return self._decision(state, effects, "public_story_identity_expired", clear_audio=True)
 
+    @staticmethod
+    def _session_action_noop(state, reason):
+        return {"reason": reason, "state": state.snapshot(), "effects": [],
+                "guards": {"expected_state_version": state.state_version}, "reset_session": False}
+
     def _decision(self, state: CanonicalState, effects: list[dict[str, Any]], reason: str, *,
                   reset_session: bool = False, clear_audio: bool = False) -> dict[str, Any]:
         if (state.mode not in {"game_menu", "game_active", "fixed_story_menu", "fixed_story_playing",
@@ -1465,7 +1470,7 @@ class CanonicalRuntime(SceneMenuMixin):
         # Authority is an out-of-band server argument, never event.source or
         # client-controlled payload. Untrusted resolve does not consume sequence.
         if event.event_type in {"SessionStarted", "InterviewSkipped"} and not session_action_authorized:
-            return self._decision(state, [], "session_action_untrusted")
+            return self._session_action_noop(state, "session_action_untrusted")
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired"} and not identity_event_authorized:
             return self._decision(state, [], "identity_outcome_untrusted")
         if event.event_type == "InteractionIdleExpired" and not interaction_idle_authorized:
@@ -1632,6 +1637,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, effects + [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "identity_expired_safety_preserved")
             state.mode = "session_closed" if state.handset == "up" else "idle"
             state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
+            state.interaction_route = None
             return self._decision(state, effects + [{"type": "lighting_dark"}], "identity_expired")
         if self.optional_identity and state.mode == "session_closed" and event.event_type == "HandsetPlaced":
             state.handset, state.mode, state.expected_inputs = "down", "idle", ["handset_up"]
@@ -1649,9 +1655,9 @@ class CanonicalRuntime(SceneMenuMixin):
             return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}, lighting], "soft_end" if event.event_type == "SessionCancel" else "session_closed")
         if event.event_type == "SessionStarted":
             if state.substate == "profile_cleanup_failed":
-                return self._decision(state, [], "session_start_cleanup_failed")
+                return self._session_action_noop(state, "session_start_cleanup_failed")
             if state.interaction_open and state.mode not in {"idle", "profile_ready", "soft_end", "session_closed"}:
-                return self._decision(state, [], "interaction_already_started")
+                return self._session_action_noop(state, "interaction_already_started")
             state.interaction_route = "panel"
             state.interaction_idle = False
             state.identity_ready_deadline = None
@@ -1661,7 +1667,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if (not state.interaction_open or state.profile_status == "identified"
                     or state.mode not in {"exhibition_introduction", "exhibition_name_question",
                         "exhibition_name_capture", "exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"}):
-                return self._decision(state, [], "interview_skip_unavailable")
+                return self._session_action_noop(state, "interview_skip_unavailable")
             return self._personal_welcome_menu(state, "exhibition_interview_skipped")
         # A closed/soft-ended session is inert until an authorized profile or explicit
         # anonymous start creates a fresh scenario context. Stray handset,
@@ -2352,8 +2358,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.mode = "idle"
             if state.interaction_route == "panel":
                 state.handset = "up"
-                return {"reason": "panel_handset_lifted", "state": state.snapshot(), "effects": [],
-                        "guards": {"expected_state_version": state.state_version}, "reset_session": False}
+                return self._session_action_noop(state, "panel_handset_lifted")
             state.interaction_route = "handset"
             state.handset = "up"; state.state_version += 1
             if state.mode == "idle":

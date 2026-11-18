@@ -82,6 +82,39 @@ async def test_ready_down_can_end_authorization_without_start_or_hook_change(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("age_step", [False, True])
+async def test_optional_guest_skip_is_scoped_and_late_old_audio_cannot_advance_it(tmp_path, age_step):
+    h = PanelStand(tmp_path)
+    try:
+        await h.control("start")
+        await h.harness.advance(5)
+        await h.done()
+        assert h.state.mode == "exhibition_introduction"
+        if age_step:
+            await h.done()
+            await h.done()
+            assert h.state.mode == "exhibition_name_capture"
+            await h.stand.inject("text", {"text": "Тестик"})
+            assert h.state.mode == "exhibition_age_prompt"
+        old = dict(h.app._active_audio["stand"])
+        payload = {"action": "skip_interview", **h.scope(), "state_version": h.state.state_version}
+        await h.done()
+        current = dict(h.app._active_audio["stand"])
+        assert (await h.simulator.action(payload))["reason"] == "stale_state_version"
+        assert h.app._active_audio["stand"] == current
+        assert "skip_interview" in h.stand.panel_snapshot()["simulator"]["session"]["session_actions"]
+        nonce = h.app._engagement_owners["stand"]["nonce"]
+        assert (await h.control("skip_interview"))["reason"] == "exhibition_interview_skipped"
+        assert h.state.mode == "exhibition_menu_tutorial_prompt" and h.state.age_years is None
+        assert h.app._engagement_owners["stand"]["nonce"] != nonce
+        await h.done(old)
+        assert h.state.mode == "exhibition_menu_tutorial_prompt"
+        assert "skip_interview" not in h.stand.panel_snapshot()["simulator"]["session"]["session_actions"]
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
 async def test_explicit_start_down_opens_logical_session_without_lift(tmp_path):
     h = PanelStand(tmp_path)
     try:
@@ -158,7 +191,8 @@ async def test_panel_down_auth_start_orders_and_ordinary_nonvoice_day(tmp_path, 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field,value", [("epoch", True), ("epoch", -1),
     ("instance_id", "old"), ("session_id", "foreign"), ("route", "panel"),
-    ("handset", "up"), ("profile", {"name": "PRIVATE"})])
+    ("handset", "up"), ("profile", {"name": "PRIVATE"}), ("action", ["start"]),
+    ("action", {"start": True})])
 async def test_session_action_scope_is_closed_and_cannot_override_state(tmp_path, field, value):
     h = PanelStand(tmp_path)
     try:
@@ -238,4 +272,83 @@ async def test_end_cancels_start_waiting_at_actual_application_await(tmp_path):
         release.set()
         if pending:
             await asyncio.gather(pending, return_exceptions=True)
+        await h.close()
+
+
+@pytest.mark.asyncio
+async def test_new_start_waits_for_owned_end_cleanup_before_new_audio(tmp_path):
+    h = PanelStand(tmp_path)
+    original = h.app._cleanup_session_resources
+    entered, release = asyncio.Event(), asyncio.Event()
+    ending = starting = None
+    async def cleanup(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        if asyncio.current_task() is ending:
+            entered.set()
+            await release.wait()
+        return result
+    try:
+        await h.control("start")
+        h.app._cleanup_session_resources = cleanup
+        ending = asyncio.create_task(h.control("end"))
+        await asyncio.wait_for(entered.wait(), 2)
+        starting = asyncio.create_task(h.control("start"))
+        await asyncio.sleep(0)
+        assert not starting.done() and not h.app._active_audio and not h.state.interaction_open
+        release.set()
+        assert (await ending)["reason"] == "soft_end"
+        assert (await starting)["reason"] == "panel_session_started"
+        assert h.state.interaction_open and h.state.active_audio_id == "RINGTONE"
+    finally:
+        release.set()
+        await asyncio.gather(*(t for t in (ending, starting) if t), return_exceptions=True)
+        await h.close()
+
+
+@pytest.mark.asyncio
+async def test_ended_up_duplicate_lift_during_fresh_auth_cleanup_never_reactivates(tmp_path):
+    h = PanelStand(tmp_path, identity=True)
+    original = h.app._cleanup_session_resources
+    entered, release = asyncio.Event(), asyncio.Event()
+    pending = None
+    async def cleanup(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        if asyncio.current_task() is pending:
+            entered.set()
+            await release.wait()
+        return result
+    try:
+        await h.simulator.action({"action": "handset", "state": "up"})
+        await h.control("end")
+        h.app._cleanup_session_resources = cleanup
+        pending = asyncio.create_task(h.ready())
+        await asyncio.wait_for(entered.wait(), 2)
+        await h.simulator.action({"action": "handset", "state": "up"})
+        assert h.state.handset == "up" and h.state.interaction_route is None
+        release.set()
+        assert (await pending)["reason"] == "profile_ready"
+        assert h.state.mode == "profile_ready" and not h.state.interaction_open
+        assert not h.app._active_audio
+    finally:
+        release.set()
+        if pending:
+            await asyncio.gather(pending, return_exceptions=True)
+        await h.close()
+
+
+@pytest.mark.asyncio
+async def test_current_panel_route_survives_source_scan_clear_and_fresh_ready_at_up(tmp_path):
+    h = PanelStand(tmp_path, identity=True)
+    try:
+        await h.control("start")
+        await h.ready()
+        await h.simulator.action({"action": "handset", "state": "up"})
+        old = h.state.identity_request_id
+        h.client.events.append({"kind": "clear", "reason_code": "scan_started"})
+        assert (await h.boundary.step())["reason"] == "profile_cleared"
+        assert h.state.interaction_route == "panel" and not h.app._canonical_profiles
+        assert (await h.ready())["reason"] == "profile_ready"
+        assert h.state.identity_request_id != old and h.state.mode == "voice_welcome"
+        assert h.state.interaction_route == "panel" and h.state.handset == "up"
+    finally:
         await h.close()

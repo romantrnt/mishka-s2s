@@ -288,7 +288,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         fresh = runtime._new_state(sid, None)
         if old is not None:
             fresh.handset = old.handset
-            fresh.interaction_route = (old.interaction_route if old.interaction_route != "panel" or old.interaction_open else None)
+            carry_panel = old.interaction_open or (old.substate == "profile_cleared"
+                and self._identity_replacements.get(sid, (None,))[0] is old)
+            fresh.interaction_route = old.interaction_route if old.interaction_route != "panel" or carry_panel else None
             fresh.state_version = old.state_version + 1
             fresh.last_sequence_by_source = dict(old.last_sequence_by_source)
             fresh.seen_correlations = set(old.seen_correlations)
@@ -2168,7 +2170,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             _safety_guidance.update(owner=state_owner, epoch=epoch,
                                    lease=guidance.get("playback_lease"), effect=guidance)
 
-        if identity_cleanup and not fresh_profile_prepared:
+        if ((identity_cleanup and not fresh_profile_prepared)
+                or (session_action_authorized and event.event_type == "SessionCancel")):
             # Fence all private context/audio before any provider cleanup await.
             # The replacement profile context is installed only after this event commits.
             self._drop_identity_owner(event.session_id)

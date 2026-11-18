@@ -2389,9 +2389,14 @@ class HardwareIntegrationStand:
                 )
 
     async def session_action(self, action, *, ownership_guard, state_version=None):
-        result = await self.application.session_action(self.active_session_id, action,
-            ownership_guard=ownership_guard, state_version=state_version)
-        await self._flush_device_commands(timeout=1.0)
+        try:
+            result = await self.application.session_action(self.active_session_id, action,
+                ownership_guard=ownership_guard, state_version=state_version)
+            await self._flush_device_commands(timeout=1.0)
+        except Exception as exc:
+            self.errors.append({"at": time.time(), "stage": "panel_session",
+                                "error": type(exc).__name__})
+            result = {"error": {"code": "internal_error", "message": "screen session action failed"}}
         self._drain_device_commands()
         self._collect_events()
         await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})

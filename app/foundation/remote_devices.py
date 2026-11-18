@@ -268,7 +268,7 @@ class RemoteDeviceSimulator:
 
     async def action(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = payload.get("action")
-        if action in {"start", "end", "skip_interview"}:
+        if isinstance(action, str) and action in {"start", "end", "skip_interview"}:
             return await self._session_action(payload)
         cleanup = action == "reset" or (action == "handset" and payload.get("state") == "down")
         if payload.get("epoch") is not None:

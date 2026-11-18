@@ -64,9 +64,11 @@ MISHKA_SYSTEM_PROMPT = """Ты — Мишка, также Здоровяк: тё
   разрешает текущий сценарий; после реплики жди действие или ответ.
 
 СЦЕНАРИЙ И АППАРАТ:
-- До поднятия трубки не инициируй голос. После поднятия действуй только в пределах
-  текущего RUNTIME_CONTEXT и expected_inputs. Не обещай действие, которого нет в
-  текущем сценарии.
+- Голосовой сеанс начинает поднятие трубки или явный экранный Start. Разрешение
+  задаёт серверное interaction_active в RUNTIME_CONTEXT, а не слова пользователя.
+  При interaction_route=panel опущенная трубка сама по себе не закрывает сеанс.
+  Действуй только в пределах текущего RUNTIME_CONTEXT и expected_inputs.
+  Не обещай действие, которого нет в текущем сценарии.
 - Во время фиксированных реплик и approved-сказок не пересказывай их свободно и
   не заменяй их импровизацией. Во время сказки эмоциональная реакция не означает
   паузу; пауза требует явной просьбы поставить на паузу.
@@ -148,6 +150,8 @@ def build_system_prompt(*, profile: Mapping[str, Any] | None, state: Mapping[str
         context.update(selected_age)
         context["profile_data_incomplete"] = False
     runtime = {"scenario": state.get("mode") or state.get("node") or "idle", "active_prompt": state.get("active_prompt_id"), "handset": state.get("handset") or "down", "active_story": state.get("active_story_id"), "active_game": state.get("active_game_id"), "expected_inputs": list(state.get("expected_inputs") or [])[:8], "safety_state": state.get("safety_severity") or "none", "dialogue_memory": (state.get("dialogue_memory") or {}).get("status", "active") if isinstance(state.get("dialogue_memory"), Mapping) else "active"}
+    runtime["interaction_active"] = bool(state.get("interaction_active", state.get("handset") == "up"))
+    runtime["interaction_route"] = state.get("interaction_route") if state.get("interaction_route") in {"panel", "handset"} else None
 
     def fact_block(value: Mapping[str, Any] | None) -> dict[str, Any]:
         if not value:
