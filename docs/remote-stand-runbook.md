@@ -9,11 +9,11 @@ Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
 Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
-`18670`, runtime source commit `33dc48bfef038e059b100ec5c5d3196c560de248` on
+`19481`, runtime source commit `6fcc7ca6fe5892b5eac236b4c511fdbdde07cbda` on
 `codex/remote-device-simulator`. Open
 `https://fihihgl91rnwu4-8000.proxy.runpod.net/console` and use the protected
-credentials described below. The reviewed Stage 1 candidate is ready; actual
-browser acceptance of its new paths is in progress. Earlier browser passes
+credentials described below. The independently reviewed V6 conversational
+gateway is deployed; its linked browser acceptance is in progress. Browser passes
 below are source-bound baseline evidence. Physical hearing and Roman's
 personal file access remain unobserved. Earlier PIDs are historical evidence.
 
@@ -23,12 +23,20 @@ The application-only rollout retained the existing environment, model assets,
 private state, original story WAV files, Max fixture and story-backend receipt.
 The pod and loopback Ollama server were not restarted. Both model context
 settings remain `16384`; the current voice is Silero without voice conversion.
-All 16 runtime files matched the final reviewed manifest. Authenticated HTTP
+All 23 runtime files matched the final reviewed manifest. Authenticated HTTP
 served `console.js` SHA-256
-`50615a1b80a65074a0afa3f43b118442871562dfe02ea5cd330ace773d23d7e7`.
+`2fce8160a985afb57e50095be6c3d788556064bf65b20fcbeae04a8dacc284d5`.
 Readiness returned `READY`; the initial handset was down with no browser owner.
 Prior files, the manifest and rollout/readiness receipts are retained under
-`/workspace/mishka-artifacts/product-integrity-20261118-v5/`. This two-file
+`/workspace/mishka-artifacts/product-integrity-20261118-v6/`. The 261,084-byte
+archive has SHA-256 `bf2f6950448e18eebad6b844cdcb49d057046731f3ce131931f3fd1bae8159a1`.
+The guarded helper ran once, checked all 23 preceding and candidate hashes,
+and replaced 19 runtime files from the exact committed source. PID `18670`
+shut down gracefully; PID `19481` reached `READY` with instance
+`5f755e980e04bc02`, initial snapshot revision 1, no browser owner or pressed
+keys, Silero and disabled voice conversion. No rollback was required.
+
+The preceding V5 two-file
 audio/diagnostics follow-up builds on v4's three-file menu/identity correction;
 both retain complete 16-file manifests and backups. V5's helper ran once,
 PID `18180` shut down gracefully, and PID `18670` reached `READY`. Initial
@@ -84,6 +92,25 @@ Implemented and independently reviewed:
   an urgent disclosure from the same valid capture retains priority. Five
   additional fixed parser reason codes survive diagnostics; arbitrary detail
   remains redacted. No parser, safety or age limit was relaxed.
+- Conversation can open the actual five-game or verified five-recording
+  catalogue, or request a named recording. Fresh named or advertised-slot
+  voice/button choices can interrupt catalogue narration. A separate entry
+  generation fences old VAD/STT and delayed safety results after leave/reentry;
+  numeric choices also retain their admitted page. Story playback, pause,
+  completion and cancellation preserve a valid conversation caller.
+- An uncertain or unavailable catalogue choice receives one short application
+  prompt rather than silence or a guessed asset. Its exact static text, lease,
+  entry and descriptor are checked before rendering and after queued PCM drain.
+  Fresh selection interrupts it; complete refusal returns to the caller.
+  Complete compound repeat answers retain their existing yes/no meaning.
+- Accepted explicit factual questions use the typed executor before ordinary
+  generation. Personal appointment questions, general explanations, character
+  questions, fiction and refusal have distinct tested routes. The current card
+  supplies only source-qualified doctor names/date through personalization,
+  without a schedule grant or an invented next visit, time or room. These names
+  enter neither generative nor semantic model requests; ordinary model output
+  still requires semantic validation. Age instructions now match the unchanged
+  8/18/30-word limits and final word-game instructions take precedence.
 
 Local checks and their limits:
 
@@ -115,16 +142,70 @@ Local checks and their limits:
 - V5's final audio source passed 30 affected cases, including all 25 new
   VAD/STT boundaries and five cleanup/idle controls. An earlier 63-case batch
   passed before the final three-line token-membership correction; it is not
-  relabelled as a final-source run. Chief independently replayed 13 narrow
-  controls and the cleanup REDs on the frozen final hash. The separate public
+  relabelled as a final-source run. The Trust reviewer independently replayed
+  13 narrow controls and the cleanup REDs on the frozen final hash; Chief gave
+  the integrated rollout approval. The separate public
   diagnostic projection module passed 25 cases and independent privacy review.
 
-Current hosted acceptance is owned by Chief against PID `18670`: actual model
+V6 local acceptance includes source-bound batches rather than one additive total:
+83 new gateway cases before the isolated later corrections; 65 factual/card
+cases and 96 private/public-menu/PCM cases after their respective corrections;
+68 factual-family cases; and 12 final clarification/repeat/cancellation cases.
+The earlier related run had 285 passes and two failures, closed by 68 affected
+cases. The clarification run had 152 passes and one test-barrier timeout; its
+corrected barrier passed in isolation and the final 12-case run. Neither old
+mixed-result run is reported as a wholly green final-source suite. Canonical
+verification, syntax and diff checks passed; the nine affected Node suites
+passed on the unchanged final client hash. Independent reviewers replayed the
+authority, catalogue ABA, private-model, static-receipt and queued-PCM defects.
+The actual unmodified `PhoneUbuntuClient.poll` → `MaxJsonBoundary.step` path
+also passed a controlled-clock test with a synthetic card: system prompts did
+not renew the 120-second lease, exact expiry cleared facts, and old queued PCM
+and callbacks stayed inert. This is real client logic, not real RFID or a
+clinical API/data pass.
+
+Current hosted acceptance is owned by Chief against PID `19481`: actual model
 proposal/confirmation/game/caller, scoped word turns and natural PCM drain,
-short/held exit, interruptions, repaired root/day/help paths and a clean next
-visit. Readiness, mocks and local rendering do not establish those results.
+all five games/recordings, early browser capture, short/held exit, clarification,
+interruptions, sourced information, repaired root/day/help paths and a clean
+next visit. Readiness, mocks and local rendering do not establish those results.
 Physical microphone/hearing, physical RFID/board, positive external schedule or
 weather data and clinical suitability remain outside the software proof.
+
+The first V6 browser pass found two open model-output failures. In the real
+guest age-two flow, “Мишка, где ты живёшь?” reached the actual model but exceeded
+the correctly applied eight-word limit: `stream_parser/age_word_budget_exceeded`.
+Actual Chromium fake `getUserMedia` then delivered two voiced clips through
+capture and real STT, but the initial quiz request produced
+`stream_parser/game_offer_mixed_or_out_of_context`. The later standalone
+consent opened the general games catalogue. This is **not** a passed
+request → owned offer → spoken consent chain. Capture remained healthy;
+dialogue recovered through the bounded retry without a UI error. Read-only
+effective-prompt inspection confirmed the age/profile and eight-word boundary,
+and found competing speech-only and catalogue-action format instructions.
+Their correction and actual-model replay remain open; the strict parser,
+age limit and safety checks are retained. Evidence:
+`runtime/local-integration-20261117/runpod-stage1-v6-games-capture-19481.json`.
+That pass ended handset down, all 18 channels dark, no pressed keys and
+280 sources / 280 ended, with no browser errors; explicit cancellations mean
+these are not 280 natural completions. Fake browser capture is software
+evidence, not a human microphone or hearing check.
+
+Roman's subsequent immersion addition preserves the active work. A follow-up
+hold-seven design must retain a short press as an answer where applicable,
+show calm progress using the actual lighting protocol, latch readiness until
+release, and restore game state after an early release or interruption.
+Instructions must also explain the gesture without relying on sight. Timing
+and effects require investigation; the proposed wave is not a fixed design.
+The three wire fields are element ID, on/off state and transition duration,
+not RGB or arbitrary brightness. Physical-board behavior remains untested.
+Max's supplied data are test/provisional values, not real clinical facts;
+missing schedule/room/doctor fields are not defects to fill with invented
+content. Roman also confirms the weather key and coordinates are absent.
+Configured-source, missing-data and fault behavior can be accepted separately
+from a real API call. A future city name must come from a supported source,
+without an unconditional Saint Petersburg default or an unnecessary manual
+city question; an unavailable name must remain an explicit limitation.
 
 On the preceding PID `18180`, a continuous synthetic-WAV request → actual Whisper → native
 quiz proposal → typed “Да, давай” → real quiz → button 7 → preserved caller
@@ -143,6 +224,52 @@ no-failure or fully spoken acceptance is not claimed. Server result timestamps
 describe completion, and server/browser clocks differed by about 44.8 seconds;
 after alignment, the suspected foreign inputs matched the test's own requests.
 
+On PID `18670`, isolated actual Whisper plus Silero VAD replay found all three
+old eSpeak fixtures unsuitable: both consent fixtures produced unexpected words
+or non-confirmation classification; the word fixture was unknown below the
+unchanged 0.45 confidence threshold. Safe metadata is retained in
+`runtime/local-integration-20261117/stt-provider-diagnostic-result.json` without
+transcripts. This is an actual-provider fixture diagnosis, not a successful
+live-session voice exchange or permission to relax recognition/safety guards.
+
+The same runtime then passed the actual answer-7 quiz boundary. Short press
+returned `game_answer_pending_release`; release accepted the answer and advanced the same
+quiz. On a later question where 7 was again an actual answer, a fresh press
+followed by a 5.25-second hold and release returned
+`game_exited_by_long_button`, root menu, no active audio and no pressed keys.
+The current 7 was indicated by its color channel, so observing only its digit
+channel would have misidentified the available answer. Real keyboard edges and
+`runpod-stage1-v5-older-18670.json` record the path; no deck/state injection or
+stale initial challenge ID was used. Natural human hearing remains unobserved.
+
+Replacement fixtures were generated once with the existing cached Silero
+voice and qualified through actual Whisper and Silero VAD. A continuous visit
+then passed request WAV → Whisper → actual model quiz offer → separate consent
+WAV → Whisper confirmation → quiz → button exit → the same conversation caller.
+No typed input occurred between request and consent. The artifact is
+`runpod-stage1-v5-qualified-voice-18670.json`; the local fixture directory keeps
+the matching hashes. This establishes synthetic-WAV software voice consent,
+not browser `getUserMedia`, a human microphone or human hearing. The last visit
+closed with handset down, all 18 channels dark, no pressed keys, no browser
+errors and no remaining browser owner.
+
+A word WAV admitted 17.615 seconds after the prompt ended reached actual
+recognition and the model, but the reply exceeded its age word budget and
+produced an owned retry. This is not successful word progress or a hosted
+causal proof of crossing the full reminder deadline. The same precise parser
+reason was reproduced after a typed word: the base prompt allowed 45 words
+while the young-game parser allowed eight. V6 aligns the instructions with the
+existing limits, without raising them; further V6 model-compliance failures
+are tracked above. A separate live wellbeing compound reproduced a missed
+complete reassurance. Its narrow correction is deployed in V6 and awaits the
+linked replay; semantic escalation remains mandatory.
+
+The V5 browser pass also accepted a typed date request after the full day-menu narration,
+cancelled its playing typed answer with Back, recovered from a controlled
+browser audio-source failure to a useful real-model reply, and inspected the
+390px layout. These are browser/software observations; they do not establish
+human hearing or a spoken date query.
+
 The first hosted Stage 1 pass on PID `17636` established ordinary native
 dialogue/Silero drain, root-3 useful speech, verified pain/fear reassurance,
 typed game proposal → button confirmation → manual exit → caller → next answer,
@@ -158,22 +285,37 @@ request and the first Back press; compound consent such as “Да, давай�
 an offer; absent original correlation and inherited external sequence numbers
 made later internal replies duplicate/stale. Actual Stand parsing uses an empty
 correlation string. The local transport regression reproduced the second-word
-failure on the exact preceding source. These findings keep integrated
-acceptance open until the deployed follow-up is replayed against PID `18180`.
+failure on the exact preceding source. These findings motivated the v4/v5
+follow-ups; the later source-bound replays above record their outcomes.
 Synthetic-WAV request → offer and the separate typed full game chain are not
 combined into one continuous voice-path pass. A 5.2-second gesture on a quiz
 question without answer 7 established ordinary button exit, not the long-hold
-threshold; hosted answer-7/threshold acceptance remains separate.
+threshold; the later PID `18670` result above supplies that separate proof.
 
 The conversational-access addition remains active (FR-030–032 / T037–040).
 Generic game/story choice, named verified assets during narration, contextual
 story return, direct sourced day questions and warmer safe persona dialogue
-are being implemented locally; they are not features of PID `18670`. All five
+are deployed in V6; integrated acceptance is still open. They were not features
+of the preceding PID `18670`. All five
 current fixed WAVs exist, and `fixed_neznayka_v1` means Telephone rather than
-Neznayka. Max's contract has only today's doctor names/codes, not timed visits,
-order or rooms; no such schedule or Max modification is claimed.
+Neznayka. Max's contract provides a card's assigned doctor names/codes and
+visit date, not timed visits, order or rooms. A bounded private DTO and a
+source-qualified typed card answer are integrated with the existing
+personalization grant, without granting schedule access or modifying Max.
+The source date must not be inferred from the current clock, and a card list
+must not be described as the next appointment. Synthetic fixture integration
+does not prove real clinical assignment.
 
-A separate weather-only candidate binds existing validated weather settings
+The validation correction was committed as `6c09b83`: harmless device
+nouns and first-person Mishka play reach the mandatory semantic gate, while
+real identifiers, unsafe clauses and the no-semantic trusted path retain
+their protections. The final validation hash `82cb42f4…` passed 99 focused and
+249 affected cases, plus independent actual engine-to-mock-TTS replay of the
+privacy regressions and benign controls. These overlapping counts are not
+additive. Actual semantic-model behavior and persona wording are not yet
+accepted on this source. It is deployed in V6, and was absent from V5.
+
+The weather correction binds existing validated weather settings
 without overriding voice/private settings and checks actual `fact.obs_time`
 rather than the API server's `now_dt`. The two-hour observation age and
 five-minute future skew, plus an outdoor temperature plausibility range of
@@ -183,14 +325,30 @@ checks passed 51 cases on the final source; 30 launcher/menu cases passed on
 their unchanged configuration code. They use mocked HTTP/factory boundaries,
 without a paid provider call. Independent cancellation/config/freshness review
 and actual HTTP-mock → service → renderer range probes passed. These files
-are **not deployed** in V5.
-Read-only V5's preceding effective configuration was demo with no weather key
-or coordinates configured; no actual Yandex access has been verified. The
+are deployed in V6. Authenticated V6 readiness reports provider `yandex`, with
+key, latitude and longitude presence flags all false. The preceding V5
+configuration was demo; no actual Yandex access has been verified. The
 [official REST contract](https://yandex.ru/dev/weather/doc/ru/concepts/forecast-rest)
 documents the measurement timestamp and existing endpoint; its
 [release notes](https://yandex.ru/dev/weather/doc/ru/concepts/releases) list v2
-as current. A key and suitable tariff remain external prerequisites for a
-positive real-provider weather observation.
+as current. Actual account entitlement and successful source access have not
+been checked; no purchase or subscription was created.
+
+The subsequent read-only city audit found no unconditional Saint Petersburg
+default. The current adapter uses only configured latitude/longitude and does
+not retain a city name. The documented REST `info` fields do not promise a
+city; a timezone or URL is not a city-name source. Eight selected existing
+missing-configuration/typed-information tests and four additional in-memory
+day/conversation cases passed: missing configuration made no fetch, a
+configured fetch failure produced truthful `PHRASE_100`, and contextual return
+was preserved. These are local provider-stub checks, not HTTP/API acceptance.
+One location boundary remains open: an explicit named-city request currently
+reduces to `weather`, losing that qualifier while the provider always uses its
+fixed configured point. The next scoped executor change must retain that
+request distinction and state an unavailable location honestly; ordinary
+weather requests must not gain a mandatory city question. No geocoder,
+invented city or claim that configured coordinates equal the phone's location
+has been added.
 
 ## Runtime and server boundary
 

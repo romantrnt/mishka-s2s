@@ -54,8 +54,8 @@ Decisions are grounded in current code, not the illustrative 10-question,
 all activities, data and access controls. Do not stop the pod or delete branches.
 Real microphone/hearing and physical board behavior remain distinct evidence.
 
-Reviewed source `33dc48bfef038e059b100ec5c5d3196c560de248` is deployed as
-application PID `18670`. The guarded rollout verified all 16 runtime hashes,
+The preceding reviewed V5 source `33dc48bfef038e059b100ec5c5d3196c560de248`
+was deployed as application PID `18670`. Its guarded rollout verified all 16 runtime hashes,
 readiness and served client `50615a1b…`; it retained the environment, private
 assets and running pod/Ollama. Chief owns the active actual-provider/browser
 acceptance. T031–T035 have implementation, focused local checks and independent
@@ -69,7 +69,7 @@ shared causes, including existing theme requests and adult-help priority;
 215 linked cases and independent review passed on the v4 source. The new
 VAD/STT reminder/cleanup correction passed 30 final-source affected cases and
 independent replay before V5 deployment; its five diagnostic-code additions
-passed 25 projection/privacy cases. Chief replays the affected native paths
+passed 25 projection/privacy cases. Chief replayed the affected native paths
 against PID `18670`; the initial first-turn success does
 not establish multiple turns, and ordinary exit is separate from answer-7/hold
 threshold acceptance.
@@ -81,32 +81,76 @@ natural final drain and another caller answer. Actual VAD/STT reproduction
 established the reminder race fixed by V5. Isolated actual Whisper replay found
 the three old eSpeak fixtures misrecognized; they establish neither spoken
 consent/word routing nor a false safety reaction. Human microphone/hearing,
-hosted reminder-boundary replay and actual answer-7/hold remain separate gates.
+and hosted reminder-boundary replay remain separate gates. PID `18670` later
+passed real short-release answer 7 and a fresh 5.25-second hold/release exit on
+actual quiz questions, with no deck injection; source-bound evidence is in the
+runbook and `runpod-stage1-v5-older-18670.json`. Qualified replacement Silero
+fixtures then passed one continuous actual Whisper/model request → separate
+WAV consent → quiz → caller chain, with no typed consent. This is synthetic-WAV
+software evidence, not browser capture or human microphone/hearing. The word
+boundary fixture reached the model but produced an age-budget retry; successful
+word progress and a full hosted causal deadline crossing are not claimed.
 
-### Conversational access addition — active, not yet available in V5
+### Conversational access addition — deployed in V6, integrated acceptance active
 
-Roman's next addition extends the same investigation. Confirmed baseline inventory:
-all five immersive games accept model offers, but no generic owned voice
-chooser exists. All five fixed WAVs are present, including Aibolit; the old
+Current source `6fcc7ca6fe5892b5eac236b4c511fdbdde07cbda` is deployed as
+application PID `19481`, instance `5f755e980e04bc02`. All 23 runtime hashes and
+the served client `2fce8160…` matched the committed candidate. The one guarded
+app-only rollout preserved the pod, Ollama, environment/context settings,
+Silero without voice conversion, protected access and private assets. Initial
+readback was `READY`, handset down, no pressed keys or browser owner. Chief
+owns the linked browser/provider pass; deployment does not complete Stage 1.
+
+Roman's next addition extends the same investigation. The preceding inventory:
+all five immersive games accepted model offers, but no generic owned voice
+chooser existed. All five fixed WAVs were present, including Aibolit; the old
 `fixed_neznayka_v1` ID now means **Telephone**, not an alias for Neznayka.
-Early button choices work; early spoken catalogue selection does not. Story
-finish/exit lacks a conversation caller. These are facts, not native passes.
+Early button choices worked; early spoken catalogue selection did not. Story
+finish/exit lacked a conversation caller. V6 corrects these boundaries; its
+native results remain separate from the local implementation evidence.
 
-Max's current contract supplies only `doctors_today` code/name, explicitly not
-a dated plan, sequence or room. MISHKA currently drops that list, grants only
-personalization, and has no actual appointment lookup behind `schedule_ref`.
+Max's current contract supplies `doctors_today` code/name and a source visit
+date, explicitly not a timed plan, sequence or room. MISHKA previously dropped
+that list and granted only personalization. V6 retains bounded source-qualified
+card facts under the same grant; it still has no actual appointment lookup
+behind `schedule_ref`.
 Do not present the list as a next appointment or modify Max/client/database.
-The Yandex adapter exists, but the remote launcher forces demo. Read-only
-PID `18180` readiness confirms provider `demo` and no configured key or
+The preceding launcher forced demo. Read-only
+PID `18180` readiness confirmed provider `demo` and no configured key or
 coordinates; this is effective configuration, not a search of unrelated
-credential stores. Provider observation freshness also needs correction.
+credential stores. V6 binds actual weather settings and checks observation
+freshness; current readiness reports `yandex` with no configured key or
+coordinates. A real positive weather-provider response remains unverified.
+
+Current V6 native negatives remain open: the actual age-two persona question
+exceeded the applied eight-word cap; real browser fake microphone capture and
+STT succeeded, but the first quiz request failed the strict mixed-action
+parser and the later consent opened a generic catalogue. This does not pass
+the desired owned offer/confirmation chain. Effective-prompt inspection found
+competing format instructions; one local prompt correction and independent
+review are in progress while the hosted pass continues unchanged. Evidence:
+`runpod-stage1-v6-games-capture-19481.json`. No safety or age boundary is relaxed.
+
+Roman's next immersion addition does not interrupt active checks. After the
+current work, investigate calm hold-seven progress using the actual three-field
+lighting protocol, readiness latched until release, safe early/uneven release,
+restored game lighting and accessible spoken instruction. Preserve short-seven
+answers and distinguish web evidence from a physical-board check. Apply the
+same clear, patient feedback principle across other first-use paths for ages
+one to seven, including children with ASD. Max data are explicitly test and
+provisional; validate scoped integration, guest/missing-data behavior and the
+existing contract without changing Max code/database or inventing real facts.
+The weather key and coordinates are explicitly absent. Prepare configured API,
+missing/fault and sourced city-name handling; no unconditional Saint Petersburg
+or mandatory manual city input, and no real-API claim before actual access.
 
 | Work | Observable result / current boundary | Ownership / independent check |
 | --- | --- | --- |
 | T037 Catalogue gateway | All five games and verified story assets reachable by precise or general conversation requests; early voice/button choice launches once; ambiguous/unknown names clarify. Restore a valid caller across chooser, playback, pause, finish and cancellation. Include actual capture/VAD/STT admission, not only text routing. | contextual_game_flow after reviewed audio freeze / Chief |
-| T038 Sourced day information | Section 7 and conversation use actual scoped facts and honest missing-data responses. Character/location questions stay ordinary conversation. Exact scene/identity/lease guards reject late provider and PCM work; context-sensitive 7 remains intact. | contextual_game_flow / Chief |
-| T039 Weather configuration and freshness | Bind existing canonical/legacy weather settings without replacing explicit voice/private configuration. Current/no-key/error/stale observations are distinguished; no paid calls or fake facts. | console_recovery_fix: launcher and weather provider only / Chief |
-| T040 Natural safe dialogue | Establish precise native fallback reasons; align actual age caps and final-word instructions; remove reproduced harmless-noun/persona false refusals while preserving real privacy, medical and safety checks. | Chief readonly architecture; coupled writer assigned after plan / independent review |
+| T038 Sourced day information | Section 7 and conversation use actual scoped facts and honest missing-data responses. Explicit accepted factual requests reach the typed executor before model generation. Add bounded private card doctor names/date with the existing personalize grant only; describe a source-qualified card list, never a next appointment or invented room/time. Reject invalid DTOs, stale identity and late results; check source date before saying today. Character/location questions stay ordinary conversation. Context-sensitive 7 remains intact. | contextual_game_flow: coupled routes/rendering; console_recovery_fix: max_json.py/identity.py DTO; Chief independent privacy/date/expiry review |
+| T039 Weather configuration, location and freshness | Bind existing canonical/legacy weather settings without replacing explicit voice/private configuration. Current/no-key/error/stale observations are distinguished; no paid calls or fake facts. Missing/fault local checks pass; actual API/city naming remain unverified. Preserve an explicit requested-location scope so fixed configured coordinates cannot silently stand for a named other city. | console_recovery_fix: completed adapter/config audit; location executor follow-up after application.py ownership clears / Chief |
+| T040 Natural safe dialogue | Establish precise native fallback reasons; align actual age caps and final-word instructions; remove reproduced harmless-noun/persona false refusals while preserving real privacy, medical and safety checks. Validation 82cb42f4 and final prompts/core are independently cleared and deployed in V6; actual persona/model behavior remains a native gate. | contextual_game_flow: prompts/coupled routes; menu_guidance_design_review: validation.py and dedicated tests; Chief / independent review |
+| T041 Hold-seven feedback | Distinguish short answer from intentional hold; show protocol-supported progress, latch readiness until a valid release and restore the current game on early release/cancel. Reject stale timers/PCM, pointer-cancel exits and double scoring; explain the gesture without relying on sight. Preserve other contextual 7 roles and the existing inactivity policy. | menu_guidance_design_review: game state/timers, owned presentation, input cancel schema and client guide; Chief / independent review and actual browser |
 
 The new matrix is another investigation aid. Native coverage must include
 different actual games, exact story assets and interruptions, source failure

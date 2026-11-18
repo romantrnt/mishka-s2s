@@ -90,6 +90,13 @@ spoken words, checking intended hints and button/voice exits.
    choice or the matching game is offered without an unnecessary full-menu
    detour. Voice and button selection, including during chooser narration,
    converge on one owned launch and retain the valid conversation caller.
+9. **Given** a game with a hold-seven exit, **When** the child holds beyond
+   ordinary short-press recognition, **Then** calm progress reflects the actual
+   supported lighting channels. Once ready, the exit remains ready until a
+   valid release; holding longer does not miss an exit window. An early release
+   or interrupted gesture restores current game feedback without an unintended
+   answer or exit. Spoken instructions explain the gesture without relying on
+   sight; rapid/uneven repeats and session cleanup cannot revive old progress.
 
 ### User Story 3 - Listen, pause, continue and leave stories (Priority: P1)
 
@@ -280,6 +287,12 @@ service restart/reload → complete another guest/profile visit → reopen files
   the actual game; examples of 10 questions, 20 seconds or a 60-second exit are
   not approved constants. System reminders are not user activity. Distinguish
   technical dialogue budgets, engagement idle, playback and authorization expiry.
+  Where short-seven answers share a hold-and-release exit, distinguish a short
+  answer from an intentional hold, show supported calm progress, and latch
+  readiness until release rather than exiting while held. Explain readiness
+  and recovery accessibly; abort and cleanup restore the current scenario.
+  Choose timings from actual constraints and experience, not illustrative
+  user numbers, and verify web and physical behavior as separate evidence.
 - **FR-028**: Dim readable OFF digits/emblems and show their actual independent
   hardware channels accurately in flat and 3D simulation. Preserve fill behavior;
   do not invent channels or infer physical-board acceptance from the browser.
@@ -297,9 +310,21 @@ service restart/reload → complete another guest/profile visit → reopen files
 - **FR-031**: Ground section 7 and conversational information in existing
   integration contracts and current authorization. Do not modify Max's code
   or database or invent appointment time/order/room from `doctors_today`.
+  A valid current card may supply a bounded source-qualified doctor list
+  through its existing personalization permission; this does not grant
+  schedule permission. Preserve the source visit date, verify it before
+  saying today, and clear private facts on identity expiry or replacement.
+  Current Max values are test/provisional data. Verify the integration with
+  those values without presenting them as real clinical records; absent fields
+  remain honest contract limitations, not invented appointments.
   Support configured real weather through existing validated settings; inspect
   credential presence without disclosing values or buying a connection.
   Reject stale/malformed observations and explain absent data honestly.
+  Current key and coordinates are absent. Configured-source behavior and
+  missing/fault handling are separate from a real-API acceptance. Obtain any
+  city name from the coordinate API or another available supported source;
+  never default unconditionally to Saint Petersburg or require a manual city
+  question when unnecessary. State an unavailable name honestly.
 - **FR-032**: Investigate fallback causes across parsing, age limits,
   recognition, validation and scenario ownership. Remove demonstrated false
   refusals and contradictory instructions while retaining safety and age
