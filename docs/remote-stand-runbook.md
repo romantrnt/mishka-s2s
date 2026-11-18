@@ -176,10 +176,14 @@ order or rooms; no such schedule or Max modification is claimed.
 A separate weather-only candidate binds existing validated weather settings
 without overriding voice/private settings and checks actual `fact.obs_time`
 rather than the API server's `now_dt`. The two-hour observation age and
-five-minute future skew are local conservative policy, not a Yandex SLA.
-Adapter/config/hardening checks passed 42 cases; launcher/menu checks passed
-30. They use mocked HTTP/factory boundaries, without a paid provider call.
-Independent review is pending and these files are **not deployed** in V5.
+five-minute future skew, plus an outdoor temperature plausibility range of
+−100…+70 °C, are local policy, not a Yandex SLA or documented provider limits.
+Out-of-range values are rejected rather than clamped. Adapter/config/hardening
+checks passed 51 cases on the final source; 30 launcher/menu cases passed on
+their unchanged configuration code. They use mocked HTTP/factory boundaries,
+without a paid provider call. Independent cancellation/config/freshness review
+and actual HTTP-mock → service → renderer range probes passed. These files
+are **not deployed** in V5.
 Read-only V5's preceding effective configuration was demo with no weather key
 or coordinates configured; no actual Yandex access has been verified. The
 [official REST contract](https://yandex.ru/dev/weather/doc/ru/concepts/forecast-rest)

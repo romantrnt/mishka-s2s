@@ -7,7 +7,9 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -46,6 +48,51 @@ def test_state_permissions_token_reuse_and_symlink_failure(tmp_path, monkeypatch
     link.symlink_to(directory)
     with pytest.raises(RemoteLaunchError):
         _private_directory(link)
+
+
+def test_weather_settings_reach_actual_remote_factory_without_loading_runtime(tmp_path, monkeypatch):
+    import scripts.run_remote_stand as launcher
+    closed, reached = [], []
+
+    class FactoryReached(Exception):
+        pass
+
+    class Server:
+        server_address = ("127.0.0.1", 19443)
+        def __init__(self, *args, **kwargs): self.stopped = threading.Event()
+        def serve_forever(self): self.stopped.wait()
+        def shutdown(self): self.stopped.set()
+        def server_close(self): pass
+
+    phone = SimpleNamespace(close=lambda: closed.append(True))
+    demo = SimpleNamespace(DemoServer=Server, connect_demo=lambda *args, **kwargs: phone)
+    monkeypatch.setattr(launcher, "_load_max", lambda *args: (demo, lambda *args: None, {}))
+    monkeypatch.setattr(launcher, "_max_state", lambda demo, directory: directory)
+    monkeypatch.setenv("MISHKA_VOICE_CONVERSION", "off")
+    for name, value in {"MISHKA_WEATHER_PROVIDER": "yandex", "YANDEX_WEATHER_API_KEY": "synthetic-weather-key",
+                        "YANDEX_WEATHER_URL": "https://weather.example.test/forecast",
+                        "YANDEX_WEATHER_LATITUDE": "55", "YANDEX_WEATHER_LONGITUDE": "37",
+                        "YANDEX_WEATHER_TIMEOUT_S": "1.5"}.items():
+        monkeypatch.setenv(name, value)
+
+    def factory(settings, **kwargs):
+        reached.append(True)
+        config = settings.weather_configuration()
+        assert config.provider == "yandex" and config.available
+        assert config.api_key == "synthetic-weather-key"
+        assert config.timeout_s == 1.5 and config.latitude == 55 and config.longitude == 37
+        assert settings.voice_conversion == "off" and settings.tts_provider == "silero"
+        assert settings.mutation_auth_policy == "token_required" and not settings.allow_query_token
+        raise FactoryReached
+
+    monkeypatch.setattr("app.foundation.stand.create_stand_app", factory)
+    async def scenario():
+        with pytest.raises(FactoryReached):
+            async with remote_session(max_source=tmp_path, state_dir=tmp_path / "private", profile="local_gpu"):
+                pytest.fail("runtime loading should not be reached")
+    asyncio.run(scenario())
+    assert reached == [True] and closed == [True]
+    assert "synthetic-weather-key" not in (tmp_path / "private/launch.json").read_text()
 
 
 @pytest.mark.skipif(not HAS_MAX, reason="Explicit local Max source fixture is absent")

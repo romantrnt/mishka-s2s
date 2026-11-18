@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import math
 import re
+import time
 from urllib.parse import urlencode
 import httpx
 from typing import Any
@@ -73,9 +75,12 @@ class YandexWeatherProvider:
         return await self._fetch()
 
     MAX_RESPONSE_BYTES = 256 * 1024
+    # Local current-weather policy, not an upstream freshness guarantee.
+    MAX_OBSERVATION_AGE_S = 2 * 60 * 60
+    MAX_FUTURE_SKEW_S = 5 * 60
 
     async def _fetch(self) -> dict[str, Any]:
-        query = urlencode({"lat": self.latitude, "lon": self.longitude, "lang": "ru_RU", "limit": 1, "hours": False})
+        query = urlencode({"lat": self.latitude, "lon": self.longitude, "lang": "ru_RU", "limit": 1, "hours": "false"})
         try:
             async with asyncio.timeout(self.timeout_s):
                 async with self._http_slots:
@@ -96,10 +101,10 @@ class YandexWeatherProvider:
             payload = json.loads(body.decode("utf-8"))
         except ScheduleWeatherProviderError:
             raise
-        except TimeoutError:
+        except (TimeoutError, httpx.TimeoutException):
             raise ScheduleWeatherProviderError("weather_provider_timeout") from None
-        except Exception as exc:
-            raise ScheduleWeatherProviderError("yandex_weather_network_failure") from exc
+        except Exception:
+            raise ScheduleWeatherProviderError("yandex_weather_network_failure") from None
         return self._normalize(payload)
 
     @classmethod
@@ -113,16 +118,27 @@ class YandexWeatherProvider:
             raise ScheduleWeatherSchemaError("malformed_yandex_weather_response")
         condition = fact.get("condition")
         temperature = fact.get("temp")
-        if condition not in cls._conditions or not isinstance(temperature, (int, float)) or isinstance(temperature, bool):
+        observed = fact.get("obs_time")
+        if (not isinstance(condition, str) or condition not in cls._conditions
+                or not isinstance(temperature, (int, float)) or isinstance(temperature, bool)
+                or not isinstance(observed, (int, float)) or isinstance(observed, bool)):
             raise ScheduleWeatherSchemaError("malformed_yandex_weather_response")
-        if not math.isfinite(float(temperature)):
+        try:
+            finite = math.isfinite(temperature) and math.isfinite(observed)
+        except OverflowError:
+            finite = False
+        # Our conservative outdoor Celsius plausibility policy, not Yandex bounds.
+        if not finite or not -100 <= temperature <= 70:
             raise ScheduleWeatherSchemaError("malformed_yandex_weather_response")
+        # now/now_dt describe the API server clock, not the age of the measurement.
+        if not -cls.MAX_FUTURE_SKEW_S <= time.time() - observed <= cls.MAX_OBSERVATION_AGE_S:
+            raise ScheduleWeatherProviderError("yandex_weather_observation_not_current")
         return {
             "summary": f"{cls._conditions[condition]}, {temperature:+g} °C",
             "temperature_c": temperature,
             "condition": condition,
             "source": "yandex_weather",
-            "observed_at": payload.get("now_dt"),
+            "observed_at": datetime.fromtimestamp(observed, timezone.utc).isoformat(),
         }
 
 

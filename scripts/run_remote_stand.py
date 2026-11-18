@@ -29,6 +29,19 @@ class RemoteLaunchError(RuntimeError):
     """A bounded diagnostic, never raw upstream output or credentials."""
 
 
+def _weather_settings(profile: str) -> dict:
+    # Bind only weather env; voice, private paths and access remain explicit.
+    from app.foundation.config import _compat_float, _compat_optional_float, _compat_text
+    return {
+        "weather_provider": _compat_text("MISHKA_WEATHER_PROVIDER", "WEATHER_PROVIDER", "demo" if profile == "mock" else "yandex").lower(),
+        "weather_endpoint": _compat_text("YANDEX_WEATHER_URL", "WEATHER_URL", "https://api.weather.yandex.ru/v2/forecast"),
+        "yandex_weather_api_key": _compat_text("YANDEX_WEATHER_API_KEY", "WEATHER_API_KEY", ""),
+        "yandex_weather_latitude": _compat_optional_float("YANDEX_WEATHER_LATITUDE", "WEATHER_LATITUDE"),
+        "yandex_weather_longitude": _compat_optional_float("YANDEX_WEATHER_LONGITUDE", "WEATHER_LONGITUDE"),
+        "yandex_weather_timeout_s": _compat_float("YANDEX_WEATHER_TIMEOUT_S", "WEATHER_TIMEOUT_S", 2),
+    }
+
+
 def _private_directory(value: Path) -> Path:
     path = value.expanduser().absolute()
     if path.resolve() != path:
@@ -212,7 +225,7 @@ async def _remote_session(*, max_source: Path | None = None, max_bundle: Path | 
                             llm_num_ctx=int(os.environ.get("LLM_NUM_CTX", "4096")),
                             validation_num_ctx=int(os.environ.get("VALIDATION_NUM_CTX", "4096")),
                             story_backend_receipt_path=os.environ.get("MISHKA_STORY_BACKEND_RECEIPT_PATH", "").strip(),
-                            weather_provider="demo", history_db=str(directory / "session_history.sqlite3"),
+                            **_weather_settings(profile), history_db=str(directory / "session_history.sqlite3"),
                             silero_cache_path=str(directory / "cache/silero/v5_5_ru.pt"))
         if trained:
             from dataclasses import replace

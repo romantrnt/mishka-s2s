@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import sys
+import time
 from types import SimpleNamespace
 import pytest
 from app.foundation.config import Settings
@@ -183,7 +184,7 @@ async def test_http_response_bytes_are_bounded(kind, declare_length):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind',['validation','input','weather'])
 async def test_http_adapter_accepts_valid_response(kind):
-    value=({'info':{},'forecasts':[],'fact':{'condition':'clear','temp':5}} if kind=='weather' else {'message':{'content':json.dumps({'severity':'none','confidence':.99} if kind=='input' else {'decision':'allow','confidence':.99})}})
+    value=({'info':{},'forecasts':[],'fact':{'condition':'clear','temp':5,'obs_time':time.time()}} if kind=='weather' else {'message':{'content':json.dumps({'severity':'none','confidence':.99} if kind=='input' else {'decision':'allow','confidence':.99})}})
     async with local_http(json.dumps(value).encode()) as (url,active,calls):
         if kind=='validation':assert (await OllamaMiniLLMValidator(url,timeout_s=2).validate('Привет!')).allowed
         elif kind=='input':assert await OllamaInputClassifier(url,timeout_s=2).classify('Привет!')==('none',.99)
