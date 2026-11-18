@@ -15,7 +15,7 @@ This document describes the candidate; it is not a deployment or physical accept
 
 ## Short live check after installation
 
-Use an authorized bracelet and the middle or older age group for the number-answer check. Let the selected game finish its instruction before answering. The existing menu interruption rule applies: a press during narration stops it; release and press again to select.
+Use an authorized bracelet and the middle or older age group for the number-answer check. Let the selected game finish its instruction before answering. In the current game menu, a fresh press on an offered game (1–5) interrupts the invitation, narration or repeat prompt and selects that game immediately. Release an already held key before selecting. A non-selection key such as 6 only skips the menu audio; it does not select a game.
 
 1. Lift the handset: the name is spoken, then the menu starts without waiting for a “How are you?” answer.
 2. Enter games and choose 1. Tap different buttons rapidly and say “не хочу играть” while tapping. Voice exit must still work; re-enter and check button 7 as well. Waves should follow the new origin and leave no frozen frame after exit.
@@ -26,15 +26,15 @@ Use an authorized bracelet and the middle or older age group for the number-answ
 
 Physical sound, pronunciation, speech recognition and perceived animation quality require this live check; software checks do not establish them.
 
-## Candidate verification
+## Historical candidate verification
 
-Independent review has no open P1/P2 findings. Its final probes independently reproduced and then verified the fixes for stale word-game state after help, ignored keys cancelling a word turn, and voice exit lost during button activity.
+The review recorded for this candidate reported no open P1/P2 findings. Its final probes independently reproduced and then verified the fixes for stale word-game state after help, ignored keys cancelling a word turn, and voice exit lost during button activity. The measurements below describe that revision, not acceptance of the current Runpod browser path.
 
 The final focused batch covered canonical graph, game exits/instruction terminals, headless turn-taking, the four immersive-game modules, menu content, owned sequence playback, and private welcome: **265 passed in 55.60 seconds**. The Max integration module was initially skipped because its external bundle was not configured. The existing `/home/server/rfid-lab-20261113/phone-ubuntu-client-local-demo.zip` was then supplied with `MISHKA_TEST_MAX_BUNDLE`; only that module was rerun: **32 passed, 2 subtests passed in 6.47 seconds**. Total: **297 passed**, plus two subtests; the initial module skip is resolved. The external ZIP remained byte-identical.
 
 `python scripts/verify_canonical_contract.py` returned `canonical contract acceptance: OK`; `git diff --check` passed. The Max integration used local HTTPS/SQLite and synthetic capture; it did not establish physical RFID or live profile behavior. No Max production source, firmware, database, or `.env` changes are included. The full repository suite was not run. Live remained at the base commit during verification; hardware audio, recognition, and animation acceptance remain pending.
 
-## Serial timeout follow-up
+## Historical serial timeout follow-up
 
 On the first live game-1 test, voice exit reached `root_menu`; about one second later native UART writing timed out and hardware fail-closed handling latched `lighting_unavailable`. The process and HID reader remained alive. A light-only replay on the board passed before this patch, so the original transient USB/firmware cause is not established.
 
