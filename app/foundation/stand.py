@@ -2663,10 +2663,22 @@ class HardwareIntegrationStand:
         if session is None:
             return list(range(1, 8))
         mode = str(session.current_node or "idle")
-        if mode == "fixed_story_menu":
-            return [1, 2, 3, 4, 5, 7]
-        if mode == "schedule_weather":
-            return [1, 2, 3, 4, 7]
+        if mode in {"fixed_story_menu", "schedule_weather"}:
+            state = self.application.canonical_runtime.sessions.get(session.session_id)
+            if (state is None or state.mode != mode or state.scene_menu_active != mode
+                    or state.safety_severity != "none"):
+                return []
+            page = state.scene_menu_descriptor
+            if not isinstance(page, dict) or page.get("scene") != mode:
+                return []
+            buttons = page.get("buttons")
+            if not isinstance(buttons, (list, tuple)):
+                return []
+            # Reuse the committed mapping; rebuilding it here would verify
+            # story files on every panel/PCM snapshot.
+            return [button for button in buttons
+                    if type(button) is int and 1 <= button <= 7
+                    and f"button_{button}" in state.expected_inputs]
         if mode == "wellbeing_check":
             # 1/7 are the explicit no/yes controls; 5 repeats the question.
             return [1, 5, 7]
@@ -3223,7 +3235,8 @@ class HardwareIntegrationStand:
         elif mode == "personal_story_theme":
             titles = dict(STORY_THEME_ITEMS)
         elif mode == "schedule_weather":
-            titles = {"date": "Дата", "weather": "Погода", "what_next": "Следующее занятие", "where_now": "Текущее занятие"}
+            titles = {"date": "Дата", "weather": "Погода", "what_next": "Следующее занятие", "where_now": "Текущее занятие",
+                      "card_doctors": "Врачи в моей карточке"}
         else:
             return None
         items, buttons = page.get("items"), page.get("buttons")
