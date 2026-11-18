@@ -146,8 +146,9 @@ async def test_repeat_gate_does_not_invent_unavailable_themes_or_fixed_story_voi
     try:
         await enter(h, 2, 'repeat_listen')
         result = await h.send('SpeechReceived', text=text)
-        assert result['reason'] == 'scene_menu_answer_unknown'
-        assert h.state.mode == 'fixed_story_menu' and h.state.scene_menu_phase == 'repeat_listen'
+        assert result['reason'] == 'scene_menu_choice_clarification'
+        assert h.state.mode == 'fixed_story_menu' and h.state.scene_menu_phase == 'ready'
+        assert h.state.active_audio_id == 'CATALOGUE_CLARIFY'
     finally:
         await h.close()
 

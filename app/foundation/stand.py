@@ -1307,7 +1307,11 @@ class HardwareIntegrationStand:
             return state.mode == "root_menu"
         if handle.response_id in {"GAME_PROMPT", "GAME_HINT"}:
             return state.mode == "game_active" and state.game_audio_stage == "prompt"
-        from .scene_menus import MENU_PCM_MODES
+        from .scene_menus import MENU_PCM_MODES, CATALOGUE_CLARIFY
+        if handle.response_id == CATALOGUE_CLARIFY:
+            return (lease.get('_catalogue_choice_scope') is not None
+                and lease['_catalogue_choice_scope'] == self.application._catalogue_voice_scope(handle.session_id)
+                and lease.get('_catalogue_choice_descriptor') == state.scene_menu_descriptor)
         if handle.response_id in MENU_PCM_MODES:
             return state.mode == MENU_PCM_MODES[handle.response_id]
         return (state.mode == "schedule_weather" or (state.mode == 'bear_dialogue'

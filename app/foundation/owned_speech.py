@@ -4,11 +4,11 @@ import asyncio
 from dataclasses import replace
 from .domain import PlaybackHandle
 from .private_welcome import valid_pcm
+from .scene_menus import MENU_PCM_MODES, CATALOGUE_CLARIFY, CATALOGUE_CLARIFY_TEXT
 
 TYPED_AUDIO_IDS = frozenset({'TYPED_MENU','TYPED_DATE','TYPED_WEATHER','TYPED_WHAT_NEXT','TYPED_WHERE_NOW', 'TYPED_CARD_DOCTORS',
-    'DIALOGUE_OFFER', 'DIALOGUE_RETURN', 'DIALOGUE_FINISH'})
+    'DIALOGUE_OFFER', 'DIALOGUE_RETURN', 'DIALOGUE_FINISH', CATALOGUE_CLARIFY})
 PRIVATE_TYPED_AUDIO_IDS = frozenset({'TYPED_WHAT_NEXT','TYPED_WHERE_NOW', 'TYPED_CARD_DOCTORS'})
-from .scene_menus import MENU_PCM_MODES
 MENU_AUDIO_IDS = frozenset(MENU_PCM_MODES)
 OWNED_PCM_IDS = TYPED_AUDIO_IDS | MENU_AUDIO_IDS | {'PERSONAL_WELCOME', 'PERSONAL_STORY', 'GAME_PROMPT', 'GAME_HINT'}
 
@@ -95,6 +95,14 @@ class OwnedSpeechMixin:
                 if isinstance(candidate, PublicMenuAudioCache):
                     cache = candidate
                     key = cache.key(self, page, text)
+            elif effect.get('content_id') == CATALOGUE_CLARIFY:
+                state = self.canonical_runtime.sessions.get(session_id)
+                if (cancelled() or self._catalogue_voice_scope(session_id) is None
+                        or state.active_audio_id != CATALOGUE_CLARIFY or not state.playback_lease
+                        or effect.get('playback_lease') != state.playback_lease
+                        or text != engine.normalizer.normalize(CATALOGUE_CLARIFY_TEXT)):
+                    return None
+                validation = await engine.response_validator.validate_trusted(text)
             elif effect.get('content_id') == 'TYPED_CARD_DOCTORS':
                 # This exact application template contains private source names.
                 # Validate its current atomic DTO and rendering receipt locally;
@@ -163,6 +171,12 @@ class OwnedSpeechMixin:
             playback_lease=effect['playback_lease'],response_id=response_id,token=token)
         self._register_audio_lease(session_id,response_id,token,handle.playback_id,
             handle.playback_lease,duration_ms=int(1000*len(audio.samples)/audio.sample_rate))
+        if response_id == CATALOGUE_CLARIFY:
+            import copy
+            lease = self._active_audio[session_id]
+            lease['_catalogue_choice_scope'] = self._catalogue_voice_scope(session_id)
+            lease['_catalogue_choice_descriptor'] = copy.deepcopy(
+                self.canonical_runtime.sessions[session_id].scene_menu_descriptor)
         effect.update(playback_id=handle.playback_id,generation=handle.generation,session_id=session_id)
         try:
             self.audio.play_pcm_owned(handle,replace(audio,token=token,

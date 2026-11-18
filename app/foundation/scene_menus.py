@@ -1,8 +1,11 @@
 """Canonical chooser ownership; menu text is derived only from public catalogues."""
+import re
 from .menu_content import build_menu_page
 
 MENU_PCM_MODES = {'MENU_FIXED_STORY': 'fixed_story_menu', 'MENU_GAME': 'game_menu', 'MENU_STORY_THEMES': 'personal_story_theme', 'MENU_DAY': 'schedule_weather'}
 SCENE_AUDIO = {mode: audio for audio, mode in MENU_PCM_MODES.items()}
+CATALOGUE_CLARIFY = 'CATALOGUE_CLARIFY'
+CATALOGUE_CLARIFY_TEXT = 'Выбери один вариант из меню. Скажи название или нажми кнопку.'
 
 class SceneMenuMixin:
     def _menu_page(self, state):
@@ -135,6 +138,15 @@ class SceneMenuMixin:
 
     def _scene_menu_audio(self,state,event,response_id):
         if state.mode not in SCENE_AUDIO:return None
+        if response_id == CATALOGUE_CLARIFY:
+            if (state.mode not in {'game_menu','fixed_story_menu'}
+                    or state.active_audio_id != response_id or not state.playback_lease
+                    or event.payload.get('playback_lease') != state.playback_lease):
+                return self._decision(state, [], 'scene_menu_stale_audio')
+            state.state_version += 1
+            state.audio_status = 'failed' if event.event_type == 'AudioFailed' else 'finished'
+            return self._decision(state, [{'type':'capture_open'}],
+                                  'scene_menu_clarification_finished', clear_audio=True)
         if state.scene_menu_phase not in {'invite','narrating','repeat_prompt'}:return None
         expected=('PHRASE_019' if state.scene_menu_phase=='invite' else
                   SCENE_AUDIO[state.mode] if state.scene_menu_phase=='narrating' else 'PHRASE_009')
@@ -189,6 +201,22 @@ class SceneMenuMixin:
                         else self._start_fixed_story(state, selected))
             if str(text or '').casefold().strip(' .!?') in {'назад','отмена','вернись назад','выйти'}:
                 return self._activity_back(state, 'scene_menu_back_by_voice')
+            if re.fullmatch(r'(?:я )?(?:ничего не хочу|не хочу (?:играть|поиграть|игру|игры|сказку|сказки|слушать сказку|слушать сказки))',
+                    str(text or '').casefold().strip(' .!?…')):
+                return self._activity_back(state, 'scene_menu_declined')
+            # A title containing "хочу" is not consent to repeat the menu.
+            repeat_atom = r'(?:да|давай|ага|угу|конечно|хорошо|ладно|хочу|повтори|повторить|ещ[её] раз|пожалуйста|спасибо|нет|неа|не хочу|не надо|не нужно|не повторяй|достаточно|понятно)'
+            repeat = re.fullmatch(repeat_atom + rf'(?:[\s,]+{repeat_atom}){{0,5}}',
+                str(text or '').casefold().strip(' .!?…'))
+            if not repeat:
+                if state.active_audio_id == CATALOGUE_CLARIFY:
+                    return self._decision(state, [], 'scene_menu_choice_clarification_waiting')
+                state.scene_menu_answers[state.mode] = 'skipped'
+                state.scene_menu_phase = 'ready'
+                state.state_version += 1
+                return self._decision(state, [{'type':'audio_stop'}, {'type':'capture_close'}, {'type':'capture_open'},
+                    self._dialogue_prompt(CATALOGUE_CLARIFY, CATALOGUE_CLARIFY_TEXT)],
+                    'scene_menu_choice_clarification', clear_audio=True)
         if state.scene_menu_phase in {'narrating','repeat_prompt'}:
             return self._decision(state,[],'scene_menu_not_listening')
         if state.scene_menu_refresh_required:
