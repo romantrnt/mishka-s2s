@@ -32,6 +32,9 @@ def story_messages(theme,band,constraints):
               f'estimated_duration_sec must be a JSON integer from {lower} to {upper}, never float, string, boolean or null. '
               'ending_state must be safe_resolved. Full text at most 6000 characters; no markup. '
               f'Each spoken sentence at most {POLICIES[band].max_words} words (engineering age adaptation, not clinical assurance). '
+              f'Aim for at most {max(4,POLICIES[band].max_words//2)} words per sentence. Use simple sentences without long subordinate clauses. '
+              'Write more distinct short sentences to develop all four plot paragraphs and reach the full spoken duration; do not shorten the plot, repeat content or add padding. '
+              f'As an approximate drafting guide, aim for about {7*(lower+upper)} Russian characters in the joined plot text, excluding title and JSON syntax. '
               f'Natural spoken duration {lower} to {upper} seconds, never silence/padding. Brief: {json.dumps(brief,ensure_ascii=False)}')
     return [{'role':'system','content':prompt}]
 

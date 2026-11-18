@@ -54,6 +54,26 @@ async def test_non_integer_duration_rejected_before_semantic_validation_and_tts(
     assert not semantic and not e.tts.calls
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('words,first,allowed',[
+    (18,'Зайчик нашёл у старого дуба маленькое семечко и решил вместе с друзьями посадить его рядом со своим домом',True),
+    (24,'Зайчик нашёл у старого дуба маленькое семечко и решил вместе с друзьями посадить его рядом с домом чтобы летом там вырос красивый душистый цветок',False),
+])
+async def test_sentence_budget_keeps_full_content_and_measured_story_duration(words,first,allowed):
+    assert len(first.split())==words
+    text=TEXT.replace('Зайчик нашёл семечко.',first+'.',1)
+    e=engine(text=text);semantic=[];validate=e.response_validator.validate_story
+    async def observe(*args):
+        semantic.append(True)
+        return await validate(*args)
+    e.response_validator.validate_story=observe
+    audio=await PersonalStoryService(e).render('лес','3-5',(),1,lambda:True)
+    if allowed:
+        assert semantic and audio and audio.duration_ms==60000
+        assert ' '.join(e.tts.calls)==text, 'accepted words remain whole and in order'
+    else:
+        assert audio is None and not semantic and not e.tts.calls
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('band',list(DURATION_BOUNDS))
 async def test_full_story_validated_then_measured_all_age_bands(band):
     e=engine(band);audio=await PersonalStoryService(e).render('лес',band,(),1,lambda:True)
@@ -64,6 +84,30 @@ async def test_full_story_validated_then_measured_all_age_bands(band):
 @pytest.mark.parametrize('duration',[1,59,101,200])
 async def test_metadata_does_not_replace_actual_pcm_duration(duration):
     assert await PersonalStoryService(engine(duration=duration)).render('лес','3-5',(),1,lambda:True) is None
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('duration_ms,allowed',[(57450,False),(80000,True)])
+async def test_declared_midpoint_still_requires_measured_pcm_after_semantic_validation(duration_ms,allowed):
+    e=engine();original=e.llm.stream_story;validate=e.response_validator.validate_story;semantic=[]
+    async def candidate(*args):
+        async for raw in original(*args):
+            value=json.loads(raw);value['estimated_duration_sec']=80
+            yield json.dumps(value)
+    async def observe(*args):
+        semantic.append(True)
+        return await validate(*args)
+    samples_per_sentence=duration_ms  # Eight sentences at 8kHz represent these milliseconds exactly.
+    async def synthesize(text,token,cancelled):
+        e.tts.calls.append(text)
+        return AudioChunk((.01,)*samples_per_sentence,8000,token,'')
+    e.llm.stream_story=candidate;e.response_validator.validate_story=observe;e.tts.synthesize=synthesize
+    audio=await PersonalStoryService(e).render('лес','3-5',(),1,lambda:True)
+    assert semantic and ' '.join(e.tts.calls)==TEXT
+    assert len(e.tts.calls)*samples_per_sentence/8000==duration_ms/1000
+    if allowed:
+        assert audio and audio.duration_ms==duration_ms
+    else:
+        assert audio is None
 
 @pytest.mark.asyncio
 async def test_threat_entire_story_rejected_before_tts():

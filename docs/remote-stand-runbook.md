@@ -160,9 +160,54 @@ decorative TTS chunks. A wholly nonverbal model reply still takes the honest
 fallback. Two native probes after the word fix produced valid meaningful PCM
 and no Silero failure. Exact three-file hashes and backups are under
 `/workspace/mishka-artifacts/story-buffer-receipt-20261118`. Readiness and the
-served console hash passed; actual browser reuse, word turns and personal
-generation/play/cancel are assigned to Chief. The separate browser personal
-PCM pause repair is still local and is excluded from this bundle.
+served console hash passed. Actual browser public pause/resume and Max expiry
+passed with zero repeat WAV fetches and a 229 ms stop-to-start gap, against
+7.779 seconds previously. The pause idle boundary passed at 120.155 seconds,
+followed by a new word game; both «Кот» and «Мяч» completed actual PCM with
+zero native TTS failures, and voice exit returned to the root menu. Evidence:
+`runtime/local-integration-20261117/runpod-batch-10134.json`.
+Personal themes became available but generation still failed after about
+13 seconds without personal PCM. A separate native synthetic 3–5/dinosaurs
+request reproduced a non-integer duration contract rejection before semantic
+validation or TTS. Its exact other field type and the original browser age
+were not retained, so that native probe does not establish an identical
+browser failure cause. Source fixes `cfbca9a` (private browser PCM pause and
+three reproduced races) and `0e5914b` (typed story-only JSON plus the integer
+prompt) are independently reviewed and pushed. The strict semantic and actual
+PCM-duration checks remain intact. The combined native after probe confirmed
+the actual typed HTTP format, integer duration 80 and matching age, then failed
+the next existing sentence gate: 24 words against the 3–5 limit of 18. Semantic
+validation and TTS were not reached, so no personal PCM success is established.
+A short-sentence correction subsequently passed the age gate and full semantic
+validation. All 13 real Silero chunks were valid (peak 0.96044), but their
+2,757,600 samples at 48 kHz totalled 57.45 seconds, below the unchanged 60-second
+minimum. No silence, rate change or metadata override was used. The next drafting
+volume guide is approximate and still requires actual duration acceptance.
+The volume guide subsequently passed a complete real native request: 16 Silero
+chunks, 3,134,400 samples at 48 kHz = 65.3 seconds, peak 0.99784; generation and
+validation took 29.195 seconds within the 60-second deadline. This proves the
+synthetic 3–5/dinosaurs service path, not physical hearing or other ages.
+Evidence: operator scratch `work/personal-native-probe-20261118/after-volume-result.json`.
+A separate actual-code test found browser button 7 queued behind personal
+generation while the generating state was unpublished. Early state publication
+and a scoped urgent cancel now preserve the queued releases and reject late
+HTTP/provider work; ASGI-to-Node tests and independent review passed.
+The exact five-file bundle is deployed in application PID 12428, with readiness
+`READY` and served console SHA `4b3c30aeac2fdc29990b0793650a0f304a16d84e4ac2ac1f8fec687648f90e49`.
+Hashes, prior files and deployment metadata are in
+`/workspace/mishka-artifacts/personal-pcm-pause-20261118`. Pod/providers were not
+restarted. Actual browser personal generation/play/pause/resume/cancel is assigned
+to Chief and remains pending; no second live WS or restart during that check.
+
+On PID 10134, actual support and wellbeing paths passed, including local support
+recording, declined assistance, and requested adult help. After an injected input
+fault, reconnect alone did not clear the safety latch; a full handset placement
+and subsequent lift restored a clean welcome. Use handset placement/reset for
+operator recovery rather than treating transport reconnect as recovery. The UI
+does not persist a distinct technical cause for that latch; do not infer it from
+the last event. Authenticated Jupyter login and workspace reopening also passed
+in Chief's actual browser; this does not claim personal observation of Roman's
+login or physical hearing.
 
 Pinned protocol source: [Ollama v0.40.16 API](https://github.com/ollama/ollama/blob/v0.40.16/api/types.go), [runner scheduling](https://github.com/ollama/ollama/blob/v0.40.16/server/sched.go), and [llamacpp execution](https://github.com/ollama/ollama/blob/v0.40.16/llm/llama_server.go). Native probe results are retained beside the four-file deployment evidence.
 
