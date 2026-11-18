@@ -17,7 +17,7 @@ from app.foundation.validation import AsyncResponseValidator, OllamaMiniLLMValid
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('text', ['Кто мой врач?', 'Когда мой следующий приём?', 'Куда мне сейчас идти?'])
+@pytest.mark.parametrize('text', ['Кто мой врач?', 'Какие у меня сегодня врачи?'])
 async def test_actual_card_resolution_uses_personalize_only_for_qualified_partial_reply(text):
     h = Harness(doctor_card())
     spoken = []
