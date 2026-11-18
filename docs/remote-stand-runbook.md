@@ -231,8 +231,29 @@ error classes reach local WARNING logs; story text, PCM, identities and raw
 exceptions do not. Generation conditions remain unchanged. The coordinated
 restart intentionally interrupted Chief's public story to check remote recovery.
 Evidence: `/workspace/mishka-artifacts/personal-story-diagnostics-20261118`.
-Chief owns the sole browser/audio slot for reload/new-visit recovery and one
-actual personal request to locate the rejecting stage. That result is pending.
+The live control request without prior cancellation passed: 64.85 seconds of
+personal PCM, pause checkpoint 25.898 seconds, and resume at the exact offset
+with a new lease. It then finished naturally; active button-7 exit was not
+observed in that run. Remote restart/reload and the subsequent clean guest visit
+also passed. The repeated generation-cancel path still failed at generation
+with `StoryContextError/story_backend_changed`, after admission/jobs/budget
+had passed. A read-only Ollama check found zero running models with a matching
+server version and unexpired receipt; the scheduler recorded a load failure
+whose bounded error classification mentioned cancellation, not memory failure.
+Pinned scheduler source reloads for differing `num_ctx` or `shift`.
+The candidate aligns the shared model's context at 16384 through the
+existing two environment settings and pins `shift=false` for its receipt-bound
+warmup, ordinary generation, story generation and both validator paths. Story
+`truncate=false`, fresh verification and budgets remain unchanged. This avoids
+the demonstrated reload trigger; automatic recovery from unrelated external
+model eviction or a failed runner ping is not claimed. The exact three-file
+candidate is deployed as PID 14544 with readiness `READY`. Both process context
+settings are 16384; read-only `/api/ps` found one running model at context 16384
+with the generator and validator receipt digests/runners matching. GPU memory
+was 14,041 MiB used and 10,084 MiB free out of 24,576 MiB. Pod/providers were not
+restarted. Deployment evidence is in
+`/workspace/mishka-artifacts/stable-shared-runner-20261118`.
+Chief owns real repeated-cancel acceptance; that result remains pending.
 
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input
@@ -260,7 +281,12 @@ existing verified receipt explicitly on a manual relaunch:
 
 ```bash
 export MISHKA_STORY_BACKEND_RECEIPT_PATH=/workspace/private/story-backend-receipt.json
+export LLM_NUM_CTX=16384
+export VALIDATION_NUM_CTX=16384
 ```
+
+The two context settings apply to this verified shared Qwen3:14b deployment.
+Keep them equal to avoid reloading its runner between generation and validation.
 
 The short operator path `/workspace/mishka` points to the existing application
 checkout. It is an alias, not a migration of active process paths. The pod name

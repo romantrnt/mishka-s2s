@@ -50,7 +50,7 @@ async def test_validation_full_payload_dynamic_context_and_no_shared_mutation():
     assert mini.num_ctx==1024
     await mini.validate('Привет')
     assert sent[-1]['options']['num_ctx']==1024
-    assert 'truncate' not in sent[-1] and 'shift' not in sent[-1]
+    assert 'truncate' not in sent[-1] and sent[-1]['shift'] is False
 
 @pytest.mark.asyncio
 async def test_large_unicode_fails_budget_before_even_metadata_io():
@@ -112,7 +112,7 @@ async def test_generator_actual_payload_bounded_and_dialogue_unchanged(monkeypat
     assert sent[-1]['truncate'] is False and sent[-1]['shift'] is False
     _=[v async for v in llm.stream(messages,'dialogue',lambda:False)]
     assert sent[-1]['options']['num_ctx']==4096 and sent[-1]['options']['num_predict']==96
-    assert 'truncate' not in sent[-1] and 'shift' not in sent[-1]
+    assert 'truncate' not in sent[-1] and sent[-1]['shift'] is False
     assert llm.num_ctx==4096 and llm.max_tokens==96
 
 @pytest.mark.asyncio

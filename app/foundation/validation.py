@@ -138,6 +138,14 @@ class OllamaMiniLLMValidator:
         self.story_backend_contract=story_backend_contract
         self._http_slots = asyncio.Semaphore(2)
 
+    @property
+    def story_backend_contract(self):return self._story_backend_contract
+
+    @story_backend_contract.setter
+    def story_backend_contract(self,contract):
+        self._story_backend_contract=contract
+        self._story_runner_pinned=bool(contract and contract.matches(self.base_url,self.model))
+
     MAX_RESPONSE_BYTES = 64 * 1024
     DECISION_SCHEMA = {
         "type": "object",
@@ -210,12 +218,14 @@ class OllamaMiniLLMValidator:
         keep_alive = self.keep_alive.strip()
         if keep_alive.lstrip("-").isdigit():
             keep_alive = int(keep_alive)
-        payload = json.dumps({"model": self.model, "stream": False, "think": False, "format": self.DECISION_SCHEMA,
+        request = {"model": self.model, "stream": False, "think": False, "format": self.DECISION_SCHEMA,
                               "keep_alive": keep_alive,
                               "messages": [{"role": "system", "content": prompt},
                                            {"role": "user", "content": json.dumps({"candidate": text,
                                                "context": str(context)[-800:]}, ensure_ascii=False)}],
-                              "options": {"temperature": 0, "num_predict": 96, "num_ctx": self.num_ctx}}, ensure_ascii=False).encode("utf-8")
+                              "options": {"temperature": 0, "num_predict": 96, "num_ctx": self.num_ctx}}
+        if self._story_runner_pinned:request['shift']=False
+        payload=json.dumps(request,ensure_ascii=False).encode('utf-8')
         if story:
             from .story_context import StoryContextError
             contract=self.story_backend_contract

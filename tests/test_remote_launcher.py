@@ -63,9 +63,13 @@ def test_real_max_lifespan_private_http_honest_readiness_and_owned_shutdown(tmp_
         receipt = tmp_path / "operator-story-receipt.json"
         receipt.write_text("{}")
         monkeypatch.setenv("MISHKA_STORY_BACKEND_RECEIPT_PATH", str(receipt))
+        monkeypatch.setenv("LLM_NUM_CTX", "16384")
+        monkeypatch.setenv("VALIDATION_NUM_CTX", "16384")
         async with remote_session(max_source=MAX_SRC, state_dir=directory, whisper_model=model) as runtime:
             assert runtime.api.state.stand.settings.stt_model == str(model)
             assert runtime.api.state.stand.settings.story_backend_receipt_path == str(receipt)
+            assert runtime.api.state.stand.settings.llm_num_ctx == 16384
+            assert runtime.api.state.stand.settings.validation_num_ctx == 16384
             assert runtime.api.state.stand.application.bounded_s2s.story_backend_contracts == {}, "path binding does not approve an invalid receipt"
             assert runtime.manifest["whisper_local_assets"] is True
             assert runtime.manifest["whisper_model"] == str(model)
@@ -95,7 +99,11 @@ def test_real_max_lifespan_private_http_honest_readiness_and_owned_shutdown(tmp_
         assert stopped["production_ready"] is False
         # Restart must reuse, never initialize/reset the Max state.
         original_db = (directory / "max-demo/demo.sqlite3").stat().st_ino
-        async with remote_session(max_source=MAX_SRC, state_dir=directory):
+        monkeypatch.delenv("LLM_NUM_CTX")
+        monkeypatch.delenv("VALIDATION_NUM_CTX")
+        async with remote_session(max_source=MAX_SRC, state_dir=directory) as restarted:
+            assert restarted.api.state.stand.settings.llm_num_ctx == 4096
+            assert restarted.api.state.stand.settings.validation_num_ctx == 4096
             assert (directory / "max-demo/demo.sqlite3").stat().st_ino == original_db
             assert (directory / "stand-token").read_text().strip() == token
         # Existing state is validated, never silently repaired/reinitialized.

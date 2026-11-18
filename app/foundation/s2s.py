@@ -1069,11 +1069,23 @@ class OllamaLLMProvider:
         self.max_tokens=max_tokens; self.keep_alive=keep_alive; self.think=think; self.warmup_timeout_s=warmup_timeout_s; self.last_stats: dict[str, Any]={}
         self.story_backend_contract=story_backend_contract
 
+    @property
+    def story_backend_contract(self):return self._story_backend_contract
+
+    @story_backend_contract.setter
+    def story_backend_contract(self,contract):
+        self._story_backend_contract=contract
+        # Pin a launch option at configuration time; receipt expiry still
+        # blocks story I/O without switching an already loaded runner's mode.
+        self._story_runner_pinned=bool(contract and contract.matches(self.base_url,self.model))
+
     def _payload(self, messages: list[dict[str, str]], stream: bool, max_tokens: int | None = None) -> dict[str, Any]:
         keep_alive: Any = self.keep_alive
         if isinstance(keep_alive, str) and keep_alive.strip().lstrip("-").isdigit():
             keep_alive = int(keep_alive.strip())
-        return {"model":self.model,"messages":messages,"stream":stream,"think":self.think,"keep_alive":keep_alive,"options":{"temperature":self.temperature,"top_p":0.85,"top_k":40,"repeat_penalty":1.05,"num_predict":max_tokens or self.max_tokens,"num_ctx":self.num_ctx}}
+        payload={"model":self.model,"messages":messages,"stream":stream,"think":self.think,"keep_alive":keep_alive,"options":{"temperature":self.temperature,"top_p":0.85,"top_k":40,"repeat_penalty":1.05,"num_predict":max_tokens or self.max_tokens,"num_ctx":self.num_ctx}}
+        if self._story_runner_pinned:payload['shift']=False
+        return payload
 
     async def stream(self,messages,request_id,cancelled):
         async for part in self._stream_bounded(messages,request_id,cancelled):
