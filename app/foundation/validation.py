@@ -13,6 +13,7 @@ import os
 import re
 import time
 import inspect
+import unicodedata
 
 import httpx
 from dataclasses import dataclass
@@ -41,6 +42,54 @@ class MiniLLMValidator(Protocol):
 
 class RegexSafetyFilter:
     """Fast deterministic filter; never generates or rewrites a response."""
+
+    # Device/story nouns are not private data. Match collection requests and
+    # identifiers instead; every other model response still needs semantics.
+    _contact_fields = (
+        r"(?:адрес\w*|номер\w*\W+(?:(?:сво\w*|тво\w*|ваш\w*|мобильн\w*|домашн\w*)\W+){0,3}телефон\w*|"
+        r"телефон\w*\W+(?:родител\w*|мам\w*|пап\w*)|координат\w*|геолокаци\w*|"
+        r"местоположени\w*|контакт\w*|(?:электронн\w*\W+)?почт\w*|"
+        r"phone\W+number|address|coordinates?|e-?mail|location)"
+    )
+    _contact_modifiers = (
+        r"(?:пожалуйста|мне|нам|сво\w*|тво\w*|ваш\w*|домашн\w*|личн\w*|точн\w*|"
+        r"настоящ\w*|реальн\w*|почтов\w*|контактн\w*|мобильн\w*|текущ\w*|"
+        r"please|me|us|your|home|private|exact|current|e-?mail)"
+    )
+    _trusted_private_terms = re.compile(r"адрес|телефон|координат|\baddress\b|\bphone number\b", re.I)
+    _street_terms = r"(?:улиц\w*|ул\.|проспект\w*|пр-т|переул\w*|пер\.|бульвар\w*|шоссе|набережн\w*)"
+    _personal_data = re.compile(
+        r"пароль|код.*доступ|\bpassword\b"
+        r"|\b(?:скажи(?:те)?|сказать|назови(?:те)?|назвать|сообщи(?:те|ть)?|напиши(?:те)?|написать|пришли(?:те)?|прислать|"
+        r"отправь(?:те)?|отправить|покажи(?:те)?|показать|продиктуй(?:те)?|продиктовать|укажи(?:те)?|указать|введи(?:те)?|ввести|"
+        r"дай(?:те)?|дать|оставь(?:те)?|оставить|поделись|поделитесь|поделиться|запиши(?:те)?|записать|запомни(?:те)?|запомнить|"
+        r"tell|give|send|share|provide|enter|write|show)\b"
+        rf"(?:\W+{_contact_modifiers}){{0,6}}\W+{_contact_fields}\b"
+        r"|\b(?:скажи(?:те)?|назови(?:те)?|сообщи(?:те)?|напиши(?:те)?|пришли(?:те)?|"
+        r"отправь(?:те)?|продиктуй(?:те)?|дай(?:те)?|можно)\b"
+        rf"(?:\W+{_contact_modifiers}){{0,6}}\W+телефон\w*\b"
+        r"|\b(?:сво\w*|тво\w*|ваш\w*)(?:\W+(?:домашн\w*|личн\w*|точн\w*|реальн\w*|мобильн\w*)){0,3}"
+        rf"\W+{_contact_fields}\b"
+        r"|\bадрес\w*\W+(?:сво\w*|тво\w*|ваш\w*|реб[её]н\w*|родител\w*)\b"
+        r"|\bномер\w*\W+(?:сво\w*|тво\w*|ваш\w*)(?:\W+(?:мобильн\w*|домашн\w*)){0,3}\W+телефон\w*\b"
+        r"|\b(?:како\w*|какие|где)\W+(?:у\W+тебя\W+|тво\w*\W+)"
+        rf"{_contact_fields}\b"
+        r"|\b(?:где\W+ты\W+(?:жив[её]шь|проживаешь|находишься)|"
+        r"(?:по\W+какому\W+адресу|на\W+какой\W+улице)\W+ты\W+жив[её]шь|"
+        r"where\W+do\W+you\W+live)\b"
+        rf"|\bwhat(?:['’]s|\W+is)\W+your\W+{_contact_fields}\b"
+        # Structured identifiers remain private even behind a fiction claim.
+        r"|\b(?:телефон\w*|phone(?:\W+number)?)\s*[:=–—-]?\s*\(?\s*\d(?:[\s()–—.-]*\d){6,14}(?!\w)"
+        rf"|\bадрес\w*\s*[:=–—-]?\s*{_street_terms}\s+[^\W\d_][^\d.!?;,]{{0,50}}\s+(?:No\s*)?\d+\b"
+        r"|(?<!\w)[\w.+-]+\s*@\s*[\w.-]+\.[a-zа-яё]{2,}\b"
+        r"|(?<!\w)\+\d(?:[\s()–—.-]*\d){6,14}(?!\w)"
+        r"|(?<!\w)\d(?:[\s()–—-]*\d){9,14}(?!\w)"
+        r"|(?<!\w)[78]\.\d{3}\.\d{3}\.\d{2}\.\d{2}(?!\w)"
+        r"|(?<!\w)\d{3}[- ]\d{2}[- ]\d{2}(?!\w)"
+        r"|(?<!\w)[+-]?\d{1,3}[.,]\d{2,}\s*[,;/ ]\s*[+-]?\d{1,3}[.,]\d{2,}(?!\w)"
+        r"|\bадрес\w*\b[^!?;]{0,80}\b(?:дом|д\.)\s*(?:No\s*)?\d+\b"
+        rf"|\b{_street_terms}"
+        r"\s+[^\W\d_][^\d.!?;,]{0,50}(?:,\s*(?:(?:дом|д\.)\s*)?|\s+(?:дом|д\.)\s+)(?:No\s*)?\d+\b", re.I)
 
     _rules = (
         # No part of the runtime contacts caregivers. Reject model claims of
@@ -91,16 +140,20 @@ class RegexSafetyFilter:
         ("medical_advice", re.compile(r"(\u0434\u0438\u0430\u0433\u043d\u043e\u0437|\u043b\u0435\u043a\u0430\u0440\u0441\u0442\u0432|\u0442\u0430\u0431\u043b\u0435\u0442|\u043b\u0435\u0447\u0438\u0442\u044c|\u043f\u0440\u0438\u043d\u0438\u043c\u0430\u0439.*\u043b\u0435\u043a\u0430\u0440\u0441\u0442\u0432|\u043a\u0430\u043a.*\u043b\u0435\u0447\u0438\u0442\u044c|\bdiagnos\w*\b|\bmedicin\w*\b|\bprescrib\w*\b|\btake.*pill\b)", re.I)),
         ("self_harm_or_violence", re.compile(r"(\u0441\u0443\u0438\u0446\u0438\u0434|\u0443\u0431\u0438\u0442\u044c|\u0437\u0430\u0440\u0435\u0437\u0430\u0442\u044c|\u043e\u0440\u0443\u0436\u0438\u0435|\u0432\u0437\u043e\u0440\u0432\u0430\u0442\u044c|\bkill\b|\bsuicide\b|\bweapon\b|\bshoot\b|\bbomb\b)", re.I)),
         ("sexual_content", re.compile(r"(\u043f\u043e\u0440\u043d\u043e|\u0441\u0435\u043a\u0441|\u043d\u0430\u0433\u043e\u0439|\bsex\b|\bporno\b|\bnude\b)", re.I)),
-        ("personal_data", re.compile(r"(\u043f\u0430\u0440\u043e\u043b\u044c|\u043a\u043e\u0434.*\u0434\u043e\u0441\u0442\u0443\u043f|\u0430\u0434\u0440\u0435\u0441|\u0442\u0435\u043b\u0435\u0444\u043e\u043d|\u043a\u043e\u043e\u0440\u0434\u0438\u043d\u0430\u0442|\bpassword\b|\baddress\b|\bphone number\b)", re.I)),
+        ("personal_data", _personal_data),
     )
 
-    def check(self, text: str) -> tuple[bool, str]:
-        normalized = " ".join(str(text or "").split())
+    def check(self, text: str, *, trusted: bool = False) -> tuple[bool, str]:
+        normalized = " ".join(unicodedata.normalize("NFKC", str(text or "")).split())
         if not normalized:
             return False, "empty_text"
         for reason, pattern in self._rules:
             if pattern.search(normalized):
                 return False, reason
+        # This path has no semantic hop: retain the existing verified catalogue
+        # exception instead of turning a noun into application approval.
+        if trusted and self._trusted_private_terms.search(normalized):
+            return False, "personal_data"
         return True, "regex_allow"
 
 
@@ -214,6 +267,12 @@ class OllamaMiniLLMValidator:
                   "a message/request, or that real help/adults are coming. The model has no external "
                   "communication capability or delivery evidence. Ordinary advice to ask a nearby trusted adult is allowed, as is "
                   "clearly fictional third-person storytelling without real-world contact claims. "
+                  "Also allow harmless first-person play by Mishka, the fictional bear persona, such as "
+                  "living in a magic forest or in the toy phone. Device words and story titles alone "
+                  "are not requests for personal data. Fiction never excuses collecting or revealing "
+                  "real private data, unsafe instructions, or real-world contact claims anywhere in the candidate. "
+                  "Keep imaginary persona details separate from real facts about a child, clinic, doctor, schedule, or current weather. "
+                  "This is a safety gate, not a factual authority; allowing text does not verify those facts. "
                   "Use review when uncertain. Never rewrite the candidate.")
         keep_alive = self.keep_alive.strip()
         if keep_alive.lstrip("-").isdigit():
@@ -294,7 +353,7 @@ class AsyncResponseValidator:
         deterministic text does not incur an avoidable MiniLLM round trip.
         """
         started = time.perf_counter()
-        allowed, reason = self.regex.check(text)
+        allowed, reason = self.regex.check(text, trusted=True)
         if not allowed:
             self.metrics.regex_blocks += 1
             self.metrics.blocked += 1
