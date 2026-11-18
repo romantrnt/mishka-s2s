@@ -38,6 +38,7 @@ const context = vm.createContext({
   window: timerWindow,
   storySpeechGeneration: 1,
   audioGeneration: 0,
+  failedPCMOwner: null,
   minimumPCMGeneration: 0,
   lastSpokenCommand: 0,
   pendingPCM: [],

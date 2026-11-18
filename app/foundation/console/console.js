@@ -60,6 +60,9 @@ const MIC_DUCK_ATTACK = 0.75;
 const MIC_DUCK_RELEASE = 0.35;
 let micInputGain = 1;
 let audioGeneration = 0;
+let failedPCMOwner = null;
+let pcmPlaybackError = null;
+let pcmTextAttempt = 0;
 let minimumPCMGeneration = 0;
 let suppressPhoneAudio = false;
 let audioReconnectPending = false;
@@ -174,7 +177,17 @@ function cancelOrdinaryPosts() {
   dispatchNextPost();
 }
 
+function clearPCMPlaybackError() {
+  const text = pcmPlaybackError?.text;
+  if (!text) return;
+  const fallback = $('fallback'), phoneError = $('phone-error');
+  if (fallback?.textContent === text) { fallback.textContent = ''; fallback.classList.add('hidden'); }
+  if (phoneError?.textContent === text) { phoneError.textContent = ''; phoneError.hidden = true; }
+  pcmPlaybackError = null;
+}
+
 function post(path, body = {}) {
+  if (path === '/stand/text') { pcmTextAttempt += 1; clearPCMPlaybackError(); }
   // Capture both the selected session and the wire payload before waiting.
   const wireBody = JSON.stringify(path.startsWith('/stand/simulator/') ? body : { session_id: session(), ...body });
   const payload = JSON.parse(wireBody);
@@ -908,6 +921,12 @@ function render(state, { fromWebSocket = false } = {}) {
   // Check before touching media fences, current state or any projected control.
   // Poll responses, WS snapshots and POST responses all enter here.
   if (!simulatorSnapshotIsCurrent(state)) return;
+  if (!state.session.handset_up
+    || state.simulator?.session?.session_id !== current?.simulator?.session?.session_id
+    || state.simulator?.epoch !== current?.simulator?.epoch) {
+    failedPCMOwner = null;
+    clearPCMPlaybackError();
+  }
   if (audioRetry && (!state.session.handset_up || audioRetry.sessionId !== (state.simulator?.session?.session_id || session())
     || audioRetry.epoch !== state.simulator?.epoch || audioRetry.node !== state.session.node)) audioRetry = null;
   // Recover transport-only suppression from an accepted snapshot on the new
@@ -1255,6 +1274,7 @@ function handleAudioStop(message) {
   freezeStoryCheckpoint();
   checkpointPublicStoryTransfer(message.checkpoint_request);
   minimumPCMGeneration = Math.max(minimumPCMGeneration, Number(message.generation) || 0);
+  failedPCMOwner = null;
   audioGeneration += 1; storySpeechGeneration += 1; pendingPCM.length = 0;
   for (const source of activeSources) { try { source.stop(); } catch (_) {} }
   activeSources.clear(); nextAudioTime = audioContext ? audioContext.currentTime : 0;
@@ -1658,11 +1678,35 @@ function updateGuide(state, contract = validateButtonContract(state.button_contr
 }
 
 function enqueuePCM(message, generation = audioGeneration) {
+  const textAttempt = pcmTextAttempt;
   audioQueueTail = audioQueueTail.catch(() => {}).then(() => playPCM(message, generation));
   // WebSocket handlers do not await playback. Report errors without leaving an
   // unhandled rejection; callers can still observe the returned failed task.
-  audioQueueTail.catch(error => showError(error));
+  audioQueueTail.catch(error => {
+    if (generation !== audioGeneration) return;
+    if (message.private === true) { showError(error); return; }
+    if (textAttempt !== pcmTextAttempt) return;
+    const action = micStarting ? 'Разреши микрофон в окне браузера и спроси ещё раз.'
+      : !mic ? 'Включи микрофон и спроси ещё раз.'
+        : microphoneAccepting() ? 'Спроси ещё раз через микрофон.' : 'Сейчас приём речи на паузе.';
+    const text = 'Не получилось воспроизвести ответ. ' + action
+      + ' Можно написать в «Инструментах». Чтобы закончить, положи трубку.';
+    pcmPlaybackError = {text, owner: ordinaryPCMOwner(message)};
+    showError(new Error(text));
+  });
   return audioQueueTail;
+}
+
+function ordinaryPCMOwner(message) {
+  if (message.private === true || typeof message.session_id !== 'string' || !message.session_id
+    || !Number.isSafeInteger(message.generation) || message.generation < 0
+    || !(Number.isSafeInteger(message.token) || (typeof message.token === 'string' && message.token.length > 0 && message.token.length <= 256))) return null;
+  return {sessionId: message.session_id, generation: message.generation, token: message.token};
+}
+
+function samePCMOwner(left, right) {
+  return Boolean(left && right && left.sessionId === right.sessionId
+    && left.generation === right.generation && left.token === right.token);
 }
 
 function privatePCMIdentity(message) {
@@ -1681,11 +1725,14 @@ function privatePCMIdentity(message) {
 }
 
 async function playPCM(message, generation = audioGeneration) {
+  if (generation !== audioGeneration) return;
+  const owner = ordinaryPCMOwner(message);
+  if (samePCMOwner(owner, failedPCMOwner)) return;
   const identity = privatePCMIdentity(message);
   let source;
   try {
     const context = await unlockAudio();
-    if (generation !== audioGeneration) return;
+    if (generation !== audioGeneration || samePCMOwner(owner, failedPCMOwner)) return;
     if (context.state !== 'running') {
       if (pendingPCM.length >= 32) pendingPCM.shift();
       pendingPCM.push({message, generation});
@@ -1727,6 +1774,7 @@ async function playPCM(message, generation = audioGeneration) {
       for (let index = 0; index < sampleCount; index++) channel[index] = view.getInt16(index * 2, true) / 32768;
     }
     source = context.createBufferSource();
+    if (owner) source.pcmOwner = owner;
     source.buffer = buffer;
     source.connect(context.destination);
     activeSources.add(source);
@@ -1757,6 +1805,7 @@ async function playPCM(message, generation = audioGeneration) {
     };
     nextAudioTime = Math.max(context.currentTime, nextAudioTime);
     source.start(nextAudioTime);
+    if (owner && pcmPlaybackError?.owner && !samePCMOwner(owner, pcmPlaybackError.owner)) clearPCMPlaybackError();
     if (personal) { segment = {start: nextAudioTime, duration: buffer.duration}; personal.segments.add(segment); }
     nextAudioTime += buffer.duration;
     if (identity && message.first === true) {
@@ -1768,6 +1817,22 @@ async function playPCM(message, generation = audioGeneration) {
       source.onended = null;
       activeSources.delete(source);
       try { source.stop(); } catch (_) {}
+    }
+    if (owner && generation === audioGeneration) {
+      failedPCMOwner = owner;
+      for (let index = pendingPCM.length - 1; index >= 0; index--) {
+        if (samePCMOwner(ordinaryPCMOwner(pendingPCM[index].message), owner)) pendingPCM.splice(index, 1);
+      }
+      for (const active of activeSources) {
+        if (!samePCMOwner(active.pcmOwner, owner)) continue;
+        active.onended = null;
+        activeSources.delete(active);
+        try { active.stop(); } catch (_) {}
+      }
+      if (!activeSources.size) {
+        nextAudioTime = audioContext ? audioContext.currentTime : 0;
+        $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
+      }
     }
     if (identity && generation === audioGeneration) {
       post('/stand/audio/failed', {...identity, error_code: 'browser_private_pcm_failed'}).catch(() => {});
@@ -1858,12 +1923,13 @@ const handsetDownButton = $('handset-down');
 if (handsetDownButton) handsetDownButton.onclick = () => { clearMic(); return post('/stand/handset', { state: 'down' }); };
 const resetButton = $('reset');
 if (resetButton) resetButton.onclick = () => { clearMic(); return post('/stand/reset'); };
-function interruptAudioForInput({preserveStoryCheckpoint = false} = {}) {
+function interruptAudioForInput({preserveStoryCheckpoint = false, preservePCMFailure = false} = {}) {
   if (!preserveStoryCheckpoint) { discardStoppedStoryCheckpoint(); publicStoryBuffer = null; }
   if (preserveStoryCheckpoint) freezePersonalStoryPosition();
   else discardPersonalStoryPlayback();
   micInputGain = 1;
   audioGeneration += 1;
+  if (!preservePCMFailure) { failedPCMOwner = null; clearPCMPlaybackError(); }
   storySpeechGeneration += 1;
   pendingPCM.length = 0;
   for (const source of activeSources) {
@@ -1880,7 +1946,8 @@ $('text-form').onsubmit = event => {
   event.preventDefault();
   const text = $('text').value.trim();
   if (!text) return;
-  interruptAudioForInput();
+  // Late chunks from the failed server turn stay fenced until its audio_stop.
+  interruptAudioForInput({preservePCMFailure: true});
   post('/stand/text', { text });
   $('text').value = '';
 };

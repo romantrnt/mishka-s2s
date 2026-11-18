@@ -9,7 +9,7 @@ Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
 Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
-`16069`, runtime source checkpoint `2704632` on
+`16858`, runtime source checkpoint `1f9bc6c` on
 `codex/remote-device-simulator`. Open
 `https://fihihgl91rnwu4-8000.proxy.runpod.net/console` and use the protected
 credentials described below. Real browser cancellation, repeated personal
@@ -345,7 +345,7 @@ samples at 48,000 Hz, or 71.9375 seconds, completed in 20.962 seconds within the
 unchanged 60-second request deadline. It used one generation, no revision,
 and a 1,006-character body with at most 16 words per sentence. Cleanup passed.
 This is native software evidence, not a browser or physical-hearing pass.
-The correction is now live as PID 16069, readiness `READY`, one resident model,
+The correction was deployed as PID 16069, readiness `READY`, one resident model,
 with exact `personal_story.py` SHA-256
 `229c12f3bc82d76a3fe439034c05b93f660dc18649e0532bbe4174eaba569384`.
 Manifest, backups, deployment metadata and the native result are under
@@ -393,9 +393,15 @@ per sentence. It completed in 18.532 seconds without a revision or deadline
 expiry; cleanup completed. This measures full-story preparation, not ordinary
 conversation latency or browser hearing. The candidate's 114 focused tests and
 canonical acceptance passed; browser lighting and final mixed acceptance remain
-pending. Live PID 16069 still uses `229c12f3`, with its accepted
-middle-age browser controls. Physical microphone/hearing and final whole-demo
-acceptance remain unverified.
+pending. The reviewed candidate was then deployed as PID 16858, readiness
+`READY`, with unchanged providers, receipt and both 16,384-token contexts.
+Its manifest and rollback sources are in the same artifact directory. Actual
+young guest game → personal story → pause/resume → active exit passed with
+53.625 seconds of browser PCM. Initial wave movement and pause hold were
+observed; two samples over a three-second resumed window did not differ, so
+resumed visible wave movement remains unverified. Evidence:
+`runtime/local-integration-20261117/runpod-young-mixed-16858.json`.
+Physical microphone/hearing and final whole-demo acceptance remain unverified.
 
 A one-shot browser `AudioBufferSourceNode.start` failure was injected during
 ordinary PCM playback on PID 16069. The panel exposed an error and subsequent
@@ -407,7 +413,24 @@ unverified: the first follow-up arrived after the separate 120-second profile
 expiry and cannot establish audio recovery success or failure. Evidence:
 `runtime/local-integration-20261117/runpod-controlled-audio-failure-16069.json`.
 This is a browser playback-fault check, not a provider, physical microphone or
-hearing check.
+hearing check. A subsequent guest control on PID 16858 passed the same-visit
+functional boundary: controlled start failure, a bounded fallback prompt,
+then a completed new ordinary answer with an actual source and drained audio.
+It exposed a concrete UI defect: the raw playback error persisted after that
+successful answer. The focused client correction was independently reviewed
+and applied without restarting PID 16858; authenticated HTTP serves
+`console.js` SHA-256 `c28ed3fc6e63e95897b82c71e7ecb685e6726095bca9ffc7c3715cc45e82377a`.
+It stops only chunks of the failed ordinary turn, preserves private playback
+and the next turn, gives Russian retry/exit guidance, and clears the matching
+old message at a new text attempt or successful new ordinary playback. Separate
+attempt and cleanup fences suppress late ordinary errors, including the real
+phone text bridge path; server stop cannot discard the displayed-error marker.
+Eight affected Node suites and independent focused review passed. Real rendered
+retry/recapture acceptance remains pending. The prior successful typed retry
+started browser audio 4.394 seconds after input; this excludes STT and physical
+hearing. Background scheduler diagnostics also passed both cancellation orders
+through multiple full lighting cycles; no engine defect was reproduced, and
+`lighting.py` was preserved.
 
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input

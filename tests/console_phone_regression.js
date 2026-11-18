@@ -113,7 +113,7 @@ async function microphoneWireFlow(){
 function snapshotFences(){
  const fields={},updates=[],speeches=[];
  const field=id=>(fields[id]||={value:'stand',textContent:'',dataset:{},classList:{add:()=>{},remove:()=>{},toggle:()=>{},contains:()=>true},setAttribute:()=>{},addEventListener:()=>{},replaceChildren:()=>{},style:{removeProperty:()=>{}},focus:()=>{}});
- const context=vm.createContext({current:null,suppressPhoneAudio:false,audioReconnectPending:false,authBlocked:false,wsSnapshotReady:true,wsReloadRequired:false,mic:null,micStarting:false,audioRetry:null,firstSnapshotRendered:false,lastSpokenCommand:0,audioReady:true,
+ const context=vm.createContext({current:null,suppressPhoneAudio:false,audioReconnectPending:false,authBlocked:false,wsSnapshotReady:true,wsReloadRequired:false,mic:null,micStarting:false,audioRetry:null,failedPCMOwner:null,pcmPlaybackError:null,pcmTextAttempt:0,clearPCMPlaybackError:()=>{},firstSnapshotRendered:false,lastSpokenCommand:0,audioReady:true,
   normalizeState:value=>value,showError:error=>{throw error;},$:field,document:{getElementById:field,querySelector:()=>null},
   window:{mishkaPhoneUpdate:value=>updates.push(value)},validateButtonContract:()=>({valid:true}),
   renderButtonLegend:()=>{},clearMic:()=>{},syncMicAdmission:()=>{},buttonLegendSummary:()=>'',microphoneAccepting:()=>false,cardStatusProjection:()=>({label:'',tone:''}),setRuntimeValue:()=>{},

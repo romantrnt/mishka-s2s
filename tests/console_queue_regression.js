@@ -25,7 +25,7 @@ function harness() {
   let sessionId = 'first-session';
   let timerId = 0, elapsed = 0;
   const context = vm.createContext({
-    AbortController, FETCH_TIMEOUT_MS: 7000, current: null,
+    AbortController, FETCH_TIMEOUT_MS: 7000, current: null, failedPCMOwner: null, pcmPlaybackError: null, pcmTextAttempt: 0,
     session: () => sessionId, apiPath: path => path,
     recordLiveInput: (path, body) => inputs.push({path, body}),
     recordLiveResult: value => results.push(value),

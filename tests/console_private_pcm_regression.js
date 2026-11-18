@@ -21,7 +21,7 @@ function harness() {
     },
   };
   const context = vm.createContext({
-    audioQueueTail: Promise.resolve(), audioGeneration: 0, storySpeechGeneration: 0,
+    audioQueueTail: Promise.resolve(), audioGeneration: 0, storySpeechGeneration: 0, failedPCMOwner: null, pcmTextAttempt: 0, clearPCMPlaybackError: () => {},
     pendingPCM: [], audioContext, nextAudioTime: 0, activeSources: new Set(),
     stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null, window: {clearTimeout() {},setTimeout() {}},
     activeStoryPlayback: null, publicStoryBuffer: null, personalStoryPlayback: null, personalStoryReceiptTimer: null, audioReady: true, micInputGain: 1,
