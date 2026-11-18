@@ -90,8 +90,10 @@ async def test_loss_recloses_hid_json_and_http_without_waiting_for_health_poll(r
     client.event = {"kind": "patient_ready"}
     boundary = stand.application._max_client_boundary
     assert (await boundary.step())["reason"] == "runtime_unavailable"
-    assert client.clears == 1
+    assert client.clears == 0  # An automatic rejection cannot erase a concurrent Max scan.
     assert not stand.application._canonical_profiles
+    assert not stand.application._identity_requests and boundary.facts is None
+    assert await boundary.step() is None  # No silent reauthorization from Max's retained card.
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as http:
         response = await http.post("/stand/handset", headers=HEADERS, json={"state": "up"})
         assert response.status_code == 503

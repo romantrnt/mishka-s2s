@@ -125,6 +125,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self.optional_identity = self.max_json
         self._identity_deadline_tasks: dict[str, asyncio.Task[Any]] = {}
         self._identity_requests: dict[str, dict[str, Any]] = {}
+        self._identity_replacements: dict[str, tuple[Any, asyncio.Task[Any] | None]] = {}
         self._identity_shutdown = False
         profile = str(getattr(settings, "profile", None) or "mock").strip().lower()
         self.display = display
@@ -270,6 +271,96 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._game_callers.pop(session_id, None)
         self._drop_dialogue_context(session_id)
 
+    def _has_private_identity_context(self, session_id: str) -> bool:
+        state = self.canonical_runtime.sessions.get(session_id)
+        return bool((state is not None and self.canonical_runtime.has_private_context(state))
+                    or session_id in self.conversation_contexts or session_id in self._game_callers
+                    or session_id in self._personal_stories
+                    or any(key[0] == session_id and count for key, count in self._engagement_ingress.items())
+                    or any(getattr(task, '_mishka_session_id', None) == session_id and not task.done()
+                           for task in self._owned_text_jobs))
+
+    async def _prepare_fresh_profile(self, event: Event, identity_current=None) -> str | None:
+        """Retire the old scenario before making any new profile readable."""
+        sid = event.session_id
+        runtime = self.canonical_runtime
+        old = runtime.sessions.get(sid)
+        fresh = runtime._new_state(sid, None)
+        if old is not None:
+            fresh.handset = old.handset
+            fresh.state_version = old.state_version + 1
+            fresh.last_sequence_by_source = dict(old.last_sequence_by_source)
+            fresh.seen_correlations = set(old.seen_correlations)
+            fresh.accepted_buttons_down = list(old.accepted_buttons_down)
+            fresh.readiness_held_buttons = list(dict.fromkeys(old.readiness_held_buttons + old.accepted_buttons_down))
+            runtime.clear_identity(old)
+        fresh.substate = 'profile_replacing'
+        runtime.sessions[sid] = fresh
+        self._session_epochs[sid] = self._session_epochs.get(sid, 0) + 1
+        self._session_revisions[sid] = self._session_revisions.get(sid, 0) + 1
+        epoch, revision = self._session_epochs[sid], self._session_revisions[sid]
+        boundary = self._max_client_boundary
+        generation = event.payload['client_generation']
+
+        def current():
+            return (runtime.sessions.get(sid) is fresh and self._session_epochs.get(sid) == epoch
+                    and self._session_revisions.get(sid) == revision
+                    and self._max_client_boundary is boundary and boundary.generation == generation)
+
+        self._drop_identity_owner(sid)
+        self._identity_replacements[sid] = (fresh, asyncio.current_task())
+        self._paused_story_playback.pop(sid, None)
+        self.last_canonical_state = fresh.snapshot()
+        record = self.sessions.get(sid)
+        failed = False
+        try:
+            if record is not None:
+                record.child_id, record.anonymous = None, True
+                record.current_node = fresh.mode
+                record.cancellation_token += 1
+                self.sessions.save(record)
+                self.audio.cancel(record.cancellation_token)
+            close_capture = getattr(self.s2s_audio, 'close_capture', None)
+            if callable(close_capture):
+                close_capture(sid)
+            cancel_effects = getattr(self.led, 'cancel_effects', None)
+            cancel_effects(clear=True) if callable(cancel_effects) else self.led.clear_all()
+        except Exception:
+            failed = True
+        try:
+            cleanup = await self._cleanup_session_resources(sid)
+            completion = cleanup.get('audio_completion_cleanup', {})
+            failed = failed or not completion.get('cleanup_completed', False) or bool(completion.get('failed'))
+            failed = failed or cleanup.get('audio_owner_cleanup', {}).get('status') != 'completed'
+        except (asyncio.CancelledError, Exception):
+            if current():
+                fresh.mode, fresh.substate = 'session_closed', 'profile_cleanup_failed'
+                self._identity_replacements[sid] = (fresh, None)
+                self.last_canonical_state = fresh.snapshot()
+            raise
+        if not current() or cleanup.get('cleanup_stale'):
+            return 'stale_profile_context'
+        if failed:
+            fresh.mode, fresh.substate = 'session_closed', 'profile_cleanup_failed'
+            self._identity_replacements[sid] = (fresh, None)
+            self.last_canonical_state = fresh.snapshot()
+            return 'profile_cleanup_failed'
+        if identity_current is not None and not identity_current():
+            self._identity_replacements.pop(sid, None)
+            return 'stale_profile_context'
+        if (self.monotonic_now() >= float(event.payload['expires_monotonic'])
+                or (fresh.handset == 'down' and self.monotonic_now() >= float(event.payload['ready_deadline']))):
+            self._identity_replacements.pop(sid, None)
+            return 'invalid_client_profile'
+        fresh.readiness_held_buttons = list(dict.fromkeys(fresh.readiness_held_buttons + fresh.accepted_buttons_down))
+        self._identity_replacements.pop(sid, None)
+        return None
+
+    def _profile_replacing(self, session_id):
+        owner = self._identity_replacements.get(session_id)
+        return bool(owner and owner[0] is self.canonical_runtime.sessions.get(session_id)
+                    and owner[1] is not None and not owner[1].done())
+
     def _revoke_local_profile(self, session_id: str) -> None:
         """Fence an app-owned termination before any cleanup await.
 
@@ -338,12 +429,26 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return True
         state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
         request = self._identity_requests.get(session_id)
-        return bool(state is not None and request is not None
-                    and state.identity_request_id == request["request_id"]
-                    and state.identity_expires_monotonic is not None
-                    and self.monotonic_now() < state.identity_expires_monotonic
-                    and (state.identity_ready_deadline is None or self.monotonic_now() < state.identity_ready_deadline)
-                    and (capability is None or capability in state.identity_capabilities))
+        if not (state is not None and request is not None
+                and state.identity_request_id == request["request_id"]
+                and state.identity_expires_monotonic is not None
+                and self.monotonic_now() < state.identity_expires_monotonic
+                and (state.identity_ready_deadline is None or self.monotonic_now() < state.identity_ready_deadline)
+                and (capability is None or capability in state.identity_capabilities)):
+            return False
+        if request.get('revoked'):
+            return False
+        current = request.get('current')
+        if current is None:
+            return True
+        try:
+            live = bool(current())
+        except Exception:
+            live = False
+        if not live:
+            # A failed source check cannot revive this receipt on a later poll.
+            request['revoked'] = True
+        return live
 
     def _schedule_identity_deadline(self, session_id: str) -> None:
         old = self._identity_deadline_tasks.pop(session_id, None)
@@ -928,14 +1033,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         completion_cleanup = await self._cancel_audio_completions(session_id, operation="session_cleanup")
         if not still_current():
             return {"session_id": session_id, "cleanup_stale": True, "audio_completion_cleanup": completion_cleanup}
+        owner_cleanup = {"status": "completed"}
         if audio_owner is not None:
-            await self._cancel_audio_owner(audio_owner, session_id, operation="session_cleanup",
+            owner_cleanup = await self._cancel_audio_owner(audio_owner, session_id, operation="session_cleanup",
                                            ownership_guard=still_current, cleanup_tasks=cleanup_tasks)
             if not still_current():
                 return {"session_id": session_id, "cleanup_stale": True, "audio_completion_cleanup": completion_cleanup}
         snapshot = self.resource_snapshot()
         snapshot["session_id"] = session_id
         snapshot["audio_completion_cleanup"] = completion_cleanup
+        snapshot["audio_owner_cleanup"] = owner_cleanup
         return snapshot
 
     async def expire_idle_sessions(self, now: float | None = None) -> list[dict[str, Any]]:
@@ -1395,7 +1502,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
 
-    async def _fire_exhibition_welcome(self, session_id: str, deadline: float) -> dict[str, Any] | None:
+    async def _fire_exhibition_welcome(self, session_id: str, deadline: float, *, epoch=None) -> dict[str, Any] | None:
+        if epoch is not None and self._session_epochs.get(session_id, 0) != epoch:
+            return None
         state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
         if state is None or state.welcome_deadline_monotonic != deadline or state.welcome_status != "pending":
             return None
@@ -1403,17 +1512,18 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._welcome_timer_sequences[session_id] = sequence
         return await self._receive_canonical_event(Event(
             "WelcomeTimerFired", session_id, sequence, self.now(),
-            "canonical_welcome_timer", {"deadline_monotonic": deadline},
+            "canonical_welcome_timer", {"deadline_monotonic": deadline,
+                "generation": self._session_epochs.get(session_id, 0)},
             f"welcome:{session_id}:{deadline}", self.monotonic_now(),
         ))
 
-    async def _wait_for_exhibition_welcome(self, session_id: str, deadline: float) -> None:
+    async def _wait_for_exhibition_welcome(self, session_id: str, deadline: float, *, epoch=None) -> None:
         try:
             # Production wakeup only; fake-clock tests call
             # flush_welcome_timers() to advance this canonical deadline
             # without waiting on wall time.
             await asyncio.sleep(max(0.0, deadline - self.monotonic_now()))
-            await self._fire_exhibition_welcome(session_id, deadline)
+            await self._fire_exhibition_welcome(session_id, deadline, epoch=epoch)
         except asyncio.CancelledError:
             return
         except Exception:
@@ -1427,7 +1537,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if not self.background_scheduler:
             return
         self._welcome_timers[session_id] = asyncio.create_task(
-            self._wait_for_exhibition_welcome(session_id, deadline),
+            self._wait_for_exhibition_welcome(session_id, deadline,
+                epoch=self._session_epochs.get(session_id, 0)),
             name=f"mishka-exhibition-welcome-{session_id}",
         )
 
@@ -1454,6 +1565,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        _interaction_nonce: str | None = None,
                                        _game_timer_scope: tuple | None = None,
                                        identity_profile: dict[str, Any] | None = None,
+                                       identity_current=None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None,
                                        _weather_scope: str | None = None, _weather_origin_current=None,
                                        _story_checkpoint_guard=None) -> dict[str, Any]:
@@ -1470,6 +1582,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 await asyncio.shield(waiter[1])
             if self.optional_identity and not event.event_type.startswith("Identity") and event.event_type not in {"ClientProfileReady", "ClientProfileCleared"}:
                 await self.expire_identity_leases()
+                state = self.canonical_runtime.sessions.get(event.session_id)
+                if (event.event_type == 'HandsetLifted' and state is not None and state.identity_request_id
+                        and not self._identity_scope_live(event.session_id)):
+                    await self._receive_canonical_event(self._identity_event(event.session_id,
+                        'ClientProfileCleared', {'request_id':state.identity_request_id,
+                            'reason_code':'source_context_changed'}), identity_event_authorized=True)
             if _weather_scope is not None and (not dialogue_fallback_authorized
                     or event.event_type != 'DialogueFallback' or _weather_origin_current is None
                     or not _weather_origin_current()):
@@ -1483,6 +1601,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 game_timer_authorized=game_timer_authorized, _game_timer_scope=_game_timer_scope,
                 interaction_idle_authorized=interaction_idle_authorized, _interaction_nonce=_interaction_nonce,
                 identity_profile=identity_profile,
+                identity_current=identity_current,
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
                 _weather_scope=_weather_scope,
@@ -1520,6 +1639,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              _interaction_nonce: str | None = None,
                                              _game_timer_scope: tuple | None = None,
                                              identity_profile: dict[str, Any] | None = None,
+                                             identity_current=None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
                                              _weather_scope: str | None = None,
                                              _story_checkpoint_guard=None,
@@ -1531,8 +1651,57 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         """
         profile = None
         profile_request = None
+        fresh_profile_prepared = False
         verified_voice_activity = False
         current = self.canonical_runtime.sessions.get(event.session_id)
+        if (current is not None and current.identity_request_id
+                and event.event_type not in {'ClientProfileReady','ClientProfileCleared',
+                    'IdentityReadyExpired','IdentityAuthorizationExpired','HandsetLifted','HandsetPlaced',
+                    'SessionCancel','SessionReset','AnonymousStart','HardwareDisconnected','HardwareReconnected',
+                    'ButtonReleased','SpeechReceived'} and not self._identity_scope_live(event.session_id)):
+            urgent = (event.event_type == 'VoiceIntentReady' and
+                (event.payload.get('safety_severity', 'none') != 'none' or event.payload.get('intent') == 'help_request'))
+            public_story_callback = (event.event_type in {'AudioStarted','AudioCompleted','AudioFailed','StoryPositionUpdated'}
+                and current.mode in {'fixed_story_playing','story_paused','story_pause_announcement','story_resume_announcement'}
+                and current.active_story_id and current.active_story_id != STORY_ID)
+            if not urgent and not public_story_callback:
+                return self._identity_result(event.session_id, 'stale_profile_context')
+        if (event.event_type == 'WelcomeTimerFired' and event.source == 'canonical_welcome_timer'
+                and event.payload.get('generation') != self._session_epochs.get(event.session_id, 0)):
+            return self._identity_result(event.session_id, 'stale_session_generation')
+        if self._profile_replacing(event.session_id) and event.event_type in {'ButtonPressed','ButtonHeld','ButtonLongHeld','HandsetLifted'}:
+            candidate = CanonicalEvent(event.event_type, event.session_id, event.sequence,
+                current.state_version, event.source, dict(event.payload), event.correlation_id,
+                event.timestamp, event.monotonic_timestamp)
+            candidate.validate()
+            rejected = self.canonical_runtime._admit(candidate, current)
+            if not rejected and event.event_type == 'HandsetLifted':
+                # The real hook changes during cleanup without replacing its
+                # owner. Verified ready starts the welcome after the barrier.
+                current.handset = 'up'
+                record = self.sessions.get(event.session_id)
+                if record is None:
+                    record = SessionRecord(event.session_id, self.installation_id,
+                        event.correlation_id or str(uuid.uuid4()), anonymous=True,
+                        current_node=current.mode, started_at=self.now(),
+                        cancellation_token=self._session_epochs.get(event.session_id, 0))
+                record.handset_up = True
+                record.last_sequence, record.last_activity_at = event.sequence, self.now()
+                self.sessions.save(record)
+                self.last_canonical_state = current.snapshot()
+                self.last_canonical_effects = []
+                self.publisher.publish(event)
+            if not rejected and event.event_type == 'ButtonPressed':
+                button = event.payload['button_id']
+                if button not in current.accepted_buttons_down:
+                    current.accepted_buttons_down.append(button)
+                if button not in current.readiness_held_buttons:
+                    current.readiness_held_buttons.append(button)
+            return self._identity_result(event.session_id, rejected or 'profile_replacing')
+        if (self._profile_replacing(event.session_id) and event.event_type == 'VoiceIntentReady'
+                and event.payload.get('safety_severity', 'none') == 'none'
+                and event.payload.get('intent') != 'help_request'):
+            return self._identity_result(event.session_id, 'profile_replacing')
         if event.event_type == "InteractionIdleExpired":
             if not interaction_idle_authorized:
                 return self._identity_result(event.session_id, "interaction_idle_untrusted")
@@ -1555,14 +1724,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared"}:
             if not self.max_json or not identity_event_authorized:
                 return self._identity_result(event.session_id, "client_profile_untrusted")
-            if (event.event_type == "ClientProfileCleared" and event.payload.get("reason_code") == "session_expired"
-                    and (current is None or not current.identity_request_id
-                         or event.payload.get("request_id") != current.identity_request_id)):
+            if (event.event_type == "ClientProfileCleared" and 'request_id' in event.payload
+                    and event.payload['request_id'] != getattr(current, 'identity_request_id', None)):
                 return self._identity_result(event.session_id, "stale_profile_context")
             if event.event_type == "ClientProfileReady":
                 if self._max_client_boundary is None or event.payload.get("client_generation") != self._max_client_boundary.generation:
                     return self._identity_result(event.session_id, "stale_client_generation")
-                if current is not None and (current.handset == "up" or current.mode not in {"idle", "profile_ready"}):
+                if current is not None and (current.mode == 'safety_stop' or current.safety_severity == 'urgent'
+                        or (current.mode in {'soft_end', 'session_closed'}
+                            and self._identity_replacements.get(event.session_id, (None,))[0] is not current)):
                     return self._identity_result(event.session_id, "profile_active_session_ignored")
                 checked = validate_identity_decision(IdentityDecision("authorized", identity_profile,
                     frozenset({"personalize"}), event.payload.get("expires_monotonic", 0)), self.monotonic_now())
@@ -1570,6 +1740,21 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     return self._identity_result(event.session_id, "invalid_client_profile")
                 profile = checked.profile
                 profile_request = {"request_id": event.payload["request_id"]}
+                if identity_current is not None:
+                    profile_request['current'] = lambda: identity_current(False)
+                admission_state = copy.deepcopy(current) if current is not None else self.canonical_runtime._new_state(event.session_id, None)
+                candidate = CanonicalEvent(event.event_type, event.session_id, event.sequence,
+                    event.payload.get('state_version', admission_state.state_version), event.source,
+                    dict(event.payload), event.correlation_id, event.timestamp, event.monotonic_timestamp)
+                candidate.validate()
+                rejected = self.canonical_runtime._admit(candidate, admission_state)
+                if rejected:
+                    return self._identity_result(event.session_id, rejected)
+                rejected = await self._prepare_fresh_profile(event, identity_current)
+                if rejected:
+                    return self._identity_result(event.session_id, rejected)
+                current = self.canonical_runtime.sessions[event.session_id]
+                fresh_profile_prepared = True
         if event.event_type in {"IdentityReadyExpired", "IdentityAuthorizationExpired"}:
             request = self._identity_requests.get(event.session_id)
             if not identity_event_authorized:
@@ -1579,7 +1764,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     or current.identity_request_id != request["request_id"]):
                 return self._identity_result(event.session_id, "stale_profile_context")
         requested_version = event.payload.get("state_version") if isinstance(event.payload, dict) else None
-        state_version = int(requested_version) if isinstance(requested_version, int) else (current.state_version if current else 0)
+        state_version = (current.state_version if fresh_profile_prepared else
+            int(requested_version) if isinstance(requested_version, int) else (current.state_version if current else 0))
         previous_state = copy.deepcopy(current)
         public_story = self._public_story_expiry(event, current, authorized=identity_event_authorized)
         public_engagement = dict(self._engagement_owners[event.session_id]) if public_story and event.session_id in self._engagement_owners else None
@@ -1656,6 +1842,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 # a possible disclosure from the same physical session.
             # Every await may change dedup state even without a transition.
             # Rollback must never restore a pre-await snapshot.
+            if safety.severity == 'none' and not explicit_help_request:
+                if self._profile_replacing(event.session_id):
+                    return self._identity_result(event.session_id, 'profile_replacing')
+                if current.identity_request_id and not self._identity_scope_live(event.session_id):
+                    return self._identity_result(event.session_id, 'stale_profile_context')
             previous_state = copy.deepcopy(current)
             state_version = current.state_version
             uncertain_stt = payload.pop("_stt_untrusted", False)
@@ -1739,6 +1930,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
            dialogue_fallback_authorized=dialogue_fallback_authorized,
            personal_story_authorized=personal_story_authorized,
            identity_event_authorized=identity_event_authorized,
+           identity_context_present=self._has_private_identity_context(event.session_id),
            public_story_expiry=public_story,
            public_story_checkpoint_authorized=public_story_checkpoint_authorized,
            game_timer_authorized=game_timer_authorized, interaction_idle_authorized=interaction_idle_authorized)
@@ -1792,6 +1984,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         # replacement for the response triggered by its preceding press.
         semantic_effects = [item for item in effects if item.get("type") != "button_edge_ack"]
         takes_ownership = bool(semantic_effects) or snapshot.get("state_version") != previous_version or exhibition_reset
+        if takes_ownership:
+            if event.event_type == 'ClientProfileCleared' and decision['reason'] == 'profile_cleared':
+                self._identity_replacements[event.session_id] = (self.canonical_runtime.sessions[event.session_id], None)
+            elif event.event_type in {'HandsetLifted', 'HandsetPlaced', 'SessionCancel', 'SessionReset', 'AnonymousStart',
+                                      'HardwareDisconnected', 'InteractionIdleExpired'}:
+                self._identity_replacements.pop(event.session_id, None)
         if (previous_state is not None and previous_state.mode == "safety_stop"
                 and snapshot.get("mode") == "safety_stop" and not effects and not exhibition_reset):
             # Telemetry and a severity upgrade do not replace the initial
@@ -1799,8 +1997,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             takes_ownership = False
         if (takes_ownership and self.max_json and self._max_client_boundary is not None
                 and event.session_id == self._max_client_boundary.session_id
-                and (event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart"}
-                     or (event.event_type == "HandsetLifted" and snapshot.get("profile_status") != "identified"))):
+                and event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart"}):
             # Fence Max only after canonical acceptance. Duplicate/stale handset
             # edges must not clear one side while the other retains its context.
             self._max_client_boundary.clear_client()
@@ -1922,6 +2119,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 self._session_revisions.get(event.session_id) == revision
                 and self._session_epochs.get(event.session_id, 0) == epoch
                 and self.canonical_runtime.sessions.get(event.session_id) is state_owner
+                and (not fresh_profile_prepared or identity_current is None or identity_current(False))
             )
 
         def stale_result() -> dict[str, Any]:
@@ -1937,7 +2135,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             _safety_guidance.update(owner=state_owner, epoch=epoch,
                                    lease=guidance.get("playback_lease"), effect=guidance)
 
-        if identity_cleanup:
+        if identity_cleanup and not fresh_profile_prepared:
             # Fence all private context/audio before any provider cleanup await.
             # The replacement profile context is installed only after this event commits.
             self._drop_identity_owner(event.session_id)
@@ -2016,7 +2214,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if event.event_type == "ClientProfileReady" and decision["reason"] == "profile_ready":
             self._canonical_profiles[event.session_id] = dict(profile or {})
             self._canonical_schedule_refs[event.session_id] = (profile or {}).get("schedule_ref")
-        if decision["reason"] == "exhibition_handset_lifted":
+        if decision["reason"] == "exhibition_handset_lifted" or (fresh_profile_prepared
+                and decision['reason'] == 'profile_ready' and snapshot.get('handset') == 'up'):
             self._prepare_private_welcome(event.session_id)
         if snapshot.get("mode") != "voice_welcome":
             self._discard_private_welcome(event.session_id)
@@ -3186,7 +3385,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
 
     async def _receive_canonical_audio(self, session_id: str, samples: tuple[float, ...], sequence: int, *, wait_for_turn: bool, _ingress_guard=None) -> dict[str, Any]:
         await self.expire_engagement_sessions()
+        if self._profile_replacing(session_id):
+            return {'session_id':session_id, 'reason':'profile_replacing', 'outputs':[], 'pending':False}
         state = self.canonical_runtime.sessions.get(session_id)
+        if state is not None and state.identity_request_id and not self._identity_scope_live(session_id):
+            return {'session_id':session_id, 'reason':'stale_profile_context', 'outputs':[], 'pending':False}
         if state is not None and state.interaction_idle:
             return {"session_id": session_id, "reason": "interaction_idle_button_required", "outputs": [], "pending": False}
         if _ingress_guard is not None and not _ingress_guard():
@@ -3577,6 +3780,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     completion.set_result(None)
 
     async def _reset_session_inner(self, session_id: str) -> dict[str, Any]:
+        self._identity_replacements.pop(session_id, None)
         self._drop_public_story_transfer(session_id)
         self._drop_identity_owner(session_id)
         self._discard_private_welcome(session_id)

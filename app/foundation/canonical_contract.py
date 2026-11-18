@@ -1004,6 +1004,28 @@ class CanonicalRuntime(SceneMenuMixin):
         state.identity_expires_monotonic = None
         state.identity_capabilities = []
 
+    @staticmethod
+    def has_private_context(state: CanonicalState) -> bool:
+        return bool(state.profile_ref or state.display_name or state.onboarding_name_collected
+                    or state.history_tail or state.dialogue_memory.bounded_turns
+                    or state.dialogue_memory.story_checkpoint or state.active_story_id
+                    or state.active_game_id or state.pending_game_offer or state.game_progress)
+
+    def _start_exhibition_welcome(self, state, monotonic_now, *, reason, preserve_lighting=False):
+        state.mode = "voice_welcome"
+        state.expected_inputs = ["handset_down"]
+        state.welcome_t0_monotonic = monotonic_now
+        state.welcome_deadline_monotonic = monotonic_now + EXHIBITION_WELCOME_DELAY_SECONDS
+        state.welcome_status = "pending"
+        return self._decision(state, [
+            {"type": "lighting_wave_intent", "pattern": "handset_lift_wave", "source": "canonical", **({"preserve_current": True} if preserve_lighting else {})},
+            {"type": "play_asset", "asset_id": "assets/sounds/ringtone.wav", "content_id": "RINGTONE"},
+            {"type": "welcome_timer_scheduled", "phrase_id": "PHRASE_001",
+             "delay_seconds": EXHIBITION_WELCOME_DELAY_SECONDS,
+             "t0_monotonic": state.welcome_t0_monotonic,
+             "deadline_monotonic": state.welcome_deadline_monotonic},
+        ], reason)
+
     def _enter_local_safety(self, state: CanonicalState, *, severity: str,
                             reason: str, guidance: bool = True) -> dict[str, Any]:
         state.mode = "safety_stop"
@@ -1412,6 +1434,7 @@ class CanonicalRuntime(SceneMenuMixin):
                dialogue_fallback_authorized: bool = False,
                personal_story_authorized: bool = False,
                identity_event_authorized: bool = False,
+               identity_context_present: bool = False,
                public_story_expiry: dict | None = None,
                public_story_checkpoint_authorized: bool = False,
                game_timer_authorized: bool = False,
@@ -1528,6 +1551,9 @@ class CanonicalRuntime(SceneMenuMixin):
             if button in state.readiness_held_buttons:
                 state.readiness_held_buttons.remove(button)
                 return self._decision(state, [], "readiness_button_released")
+        if (event.event_type in {"ButtonHeld", "ButtonLongHeld"}
+                and int(event.payload['button_id']) in state.readiness_held_buttons):
+            return self._decision(state, [], "readiness_button_held")
         if event.event_type == "ButtonPressed":
             button = int(event.payload["button_id"])
             if button in state.readiness_held_buttons:
@@ -1547,7 +1573,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.interaction_idle = False
             state.mode = "idle"
         if self.optional_identity and event.event_type == "ClientProfileReady":
-            if state.handset == "up" or state.mode not in {"idle", "profile_ready"}:
+            if state.mode not in {"idle", "profile_ready"}:
                 return self._decision(state, [], "profile_active_session_ignored")
             if not profile or float(event.payload.get("expires_monotonic") or 0) <= monotonic_now:
                 return self._decision(state, [], "profile_expired")
@@ -1562,9 +1588,12 @@ class CanonicalRuntime(SceneMenuMixin):
 
             state.mode, state.expected_inputs = "profile_ready", ["handset_up"]
             state.state_version += 1
+            if state.handset == "up":
+                state.identity_ready_deadline = None
+                return self._start_exhibition_welcome(state, monotonic_now, reason="profile_ready")
             return self._decision(state, [{"type": "profile_ready_lighting"}], "profile_ready")
         if self.optional_identity and event.event_type == "ClientProfileCleared":
-            if not state.profile_ref and not state.active_story_id:
+            if not self.has_private_context(state) and not identity_context_present:
                 return self._decision(state, [], "profile_already_clear")
             self.clear_identity(state)
             state.state_version += 1
@@ -2292,19 +2321,8 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.mode = "idle"
             state.handset = "up"; state.state_version += 1
             if state.mode == "idle":
-                state.mode = "voice_welcome"
-                state.expected_inputs = ["handset_down"]
-                state.welcome_t0_monotonic = monotonic_now
-                state.welcome_deadline_monotonic = monotonic_now + EXHIBITION_WELCOME_DELAY_SECONDS
-                state.welcome_status = "pending"
-                return self._decision(state, [
-                    {"type": "lighting_wave_intent", "pattern": "handset_lift_wave", "source": "canonical", **({"preserve_current": True} if preserve_lighting else {})},
-                    {"type": "play_asset", "asset_id": "assets/sounds/ringtone.wav", "content_id": "RINGTONE"},
-                    {"type": "welcome_timer_scheduled", "phrase_id": "PHRASE_001",
-                     "delay_seconds": EXHIBITION_WELCOME_DELAY_SECONDS,
-                     "t0_monotonic": state.welcome_t0_monotonic,
-                     "deadline_monotonic": state.welcome_deadline_monotonic},
-                ], "exhibition_handset_lifted")
+                return self._start_exhibition_welcome(state, monotonic_now,
+                    reason="exhibition_handset_lifted", preserve_lighting=preserve_lighting)
             if state.mode == "schedule_weather":
                 state.expected_inputs = ["button", "speech", "handset_down"]
                 return self._decision(state, [{"type": "capture_open"},

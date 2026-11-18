@@ -81,7 +81,7 @@ def test_retired_ingress_never_reaches_session_or_publisher(name):
 
 
 @pytest.mark.parametrize("first_name", ["x" * 161, 42])
-def test_rejected_profile_mapping_clears_client_and_all_local_context(first_name):
+def test_rejected_profile_mapping_retires_app_without_reusing_max_card(first_name):
     class Client:
         def __init__(self):
             self.card = {
@@ -93,7 +93,12 @@ def test_rejected_profile_mapping_clears_client_and_all_local_context(first_name
                 "adaptation": {"wheelchair_access": False, "participation_mode": "seated"},
             }
         def start(self): return True
-        def poll(self): return {"kind": "patient_ready"}
+        ready = True
+        def poll(self):
+            if self.ready:
+                self.ready = False
+                return {"kind": "patient_ready"}
+            return None
         def patient(self): return self.card
         def clear(self): self.card = None
         def close(self): self.clear(); return True
@@ -103,8 +108,11 @@ def test_rejected_profile_mapping_clears_client_and_all_local_context(first_name
         boundary = MaxJsonBoundary(app, client)
         boundary.start(background=False)
         assert (await boundary.step())["reason"] == "invalid_client_profile"
-        assert client.card is None and boundary.facts is None
+        assert client.card is not None and boundary.facts is None
         assert not app._canonical_profiles
+        assert not app._identity_requests
+        assert await boundary.step() is None
+        assert not app._canonical_profiles and not app._identity_requests
         assert not app.identity_status()["identity_ready"]
         await app.shutdown_identity()
     asyncio.run(run())

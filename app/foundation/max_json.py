@@ -90,12 +90,66 @@ class MaxJsonBoundary:
         self._stepping = False
         self._task = None
         self.facts = None
+        self._deferred_event = None
         application._max_client_boundary = self
 
     def clear_client(self):
         self.generation += 1
         self.facts = None
+        self._deferred_event = None
         self.client.clear()
+
+    def _observe_metadata(self, event):
+        if event.get('kind') == 'reader_state':
+            self._reader_ready = event.get('state') in {'connected', 'ready'}
+            if self._reader_ready:
+                self._healthy = True
+
+    def _ready_current(self, generation, ready_event, *, retry_pending=True):
+        if self._closed or generation != self.generation:
+            return False
+        if self.admits_users is not None and not self.admits_users():
+            self.generation += 1
+            self.facts = None
+            return False
+        # Same serialized poll owner; the supplied Max bridge has an 8-event
+        # nonblocking queue. A producer can refill it, so retain a bounded retry.
+        for _ in range(9):
+            try:
+                event = self.client.poll()
+            except Exception:
+                self.generation += 1
+                self.facts = None
+                self._healthy = self._reader_ready = False
+                return False
+            if event is None:
+                return True
+            if event.get('kind') in {'clear', 'patient_ready'}:
+                self._deferred_event = event
+                break
+            self._observe_metadata(event)
+        else:
+            if retry_pending:
+                self._deferred_event = ready_event
+        self.generation += 1
+        self.facts = None
+        return False
+
+    async def _retire_ready(self, generation, payload, prior_request):
+        current = self.app.canonical_runtime.sessions.get(self.session_id)
+        request_id = current.identity_request_id if current is not None else None
+        captured_request = (payload or {}).get('request_id')
+        if request_id not in {None, prior_request, captured_request}:
+            return False
+        if generation != self.generation and (not captured_request or request_id != captured_request):
+            return False
+        # Max capture runs on another thread: poll(None) is not compare-and-clear.
+        # Only explicit session end/close may invalidate Max's source context.
+        if generation == self.generation:
+            self.generation += 1
+            self.facts = None
+        await self._clear_context(expected_request_id=request_id)
+        return True
 
     def start(self, *, background=True):
         if self._closed:
@@ -119,7 +173,7 @@ class MaxJsonBoundary:
         self.facts = None
         if state is not None and not state.profile_ref and reason_code == "session_expired":
             return {"reason": "profile_already_clear"}
-        if state is None or (not state.profile_ref and not state.active_story_id):
+        if state is None or not self.app._has_private_identity_context(self.session_id):
             return {"reason": "profile_already_clear"}
         event = self.app._identity_event(self.session_id, "ClientProfileCleared", {
             "reason_code": reason_code, "request_id": state.identity_request_id,
@@ -132,13 +186,24 @@ class MaxJsonBoundary:
         if self._stepping:
             raise RuntimeError("concurrent_client_poll_forbidden")
         self._stepping = True
+        generation = None
+        prior_request = None
+        payload = None
+        def owns_ready():
+            current = self.app.canonical_runtime.sessions.get(self.session_id)
+            captured_request = (payload or {}).get('request_id')
+            return bool((generation == self.generation and
+                    (current is None or current.identity_request_id is None
+                     or current.identity_request_id in {prior_request, captured_request}))
+                or (captured_request and current is not None and current.identity_request_id == captured_request))
         try:
             # Follow Max's public ordering: poll first, patient only on ready.
-            event = self.client.poll()
+            event, self._deferred_event = self._deferred_event, None
+            if event is None:
+                event = self.client.poll()
             if event is None:
                 return None
-            if event.get("kind") == "reader_state":
-                self._reader_ready = event.get("state") in {"connected", "ready"}
+            self._observe_metadata(event)
             if event.get("kind") == "clear":
                 reason = event.get("reason_code")
                 if reason not in {"scan_started", "session_expired", "no_personalization"}:
@@ -154,7 +219,8 @@ class MaxJsonBoundary:
                     self._healthy = True
                 return {"reason": "client_metadata"}
             if self.admits_users is not None and not self.admits_users():
-                self.clear_client()
+                self.generation += 1
+                self.facts = None
                 await self._clear_context()
                 return {"reason": "runtime_unavailable"}
             # A fresh validated card proves capture and API completed, but never
@@ -165,16 +231,16 @@ class MaxJsonBoundary:
             # A bounded source queue may drop scan_started before ready. Each
             # ready still denotes a new local context, never a patient identity.
             self.generation += 1
+            self.facts = None
+            generation = self.generation
             card = self.client.patient()
             try:
-                generation = self.generation
                 profile, expiry, facts = _map_card(card,
                     f"max-context:{self._context_namespace}:{generation}",
                     self.now(), self.app.monotonic_now())
             except (KeyError, TypeError, ValueError, OverflowError):
                 self._healthy = False
-                self.clear_client()
-                await self._clear_context()
+                await self._retire_ready(generation, payload, prior_request)
                 return {"reason": "invalid_client_profile"}
             finally:
                 card = None
@@ -184,7 +250,8 @@ class MaxJsonBoundary:
                        "ready_deadline": min(expiry, self.app.monotonic_now() + self.app.settings.profile_ready_ttl_s)}
             result = await self.app._receive_canonical_event(
                 self.app._identity_event(self.session_id, "ClientProfileReady", payload),
-                identity_event_authorized=True, identity_profile=profile)
+                identity_event_authorized=True, identity_profile=profile,
+                identity_current=lambda pending=True: self._ready_current(generation, event, retry_pending=pending))
             # The application may yield after committing the card. A valid
             # handset lift can then own a newer scenario revision while the
             # exact same profile request is still live. The return reason of
@@ -199,23 +266,28 @@ class MaxJsonBoundary:
                     self.facts = facts
                 elif (current is None or not current.profile_ref or request_matches
                       or current.identity_request_id == prior_request):
-                    # A rejected new card cannot coexist with the prior card.
-                    # Preserve only a genuinely later request, not the owner
-                    # that was already present before this ready was handled.
-                    revoke_request = current.identity_request_id if current is not None else payload["request_id"]
-                    self.clear_client()
-                    await self._clear_context(expected_request_id=revoke_request)
+                    # Retire prior app authority on a rejected ready; Max
+                    # retains its own source context until an intentional end.
+                    await self._retire_ready(generation, payload, prior_request)
+            elif request_matches:
+                # Retire only the captured app grant after source revocation;
+                # the deferred event belongs to the newer source context.
+                await self._retire_ready(generation, payload, prior_request)
             return result
         except asyncio.CancelledError:
+            if generation is not None and owns_ready():
+                await self._retire_ready(generation, payload, prior_request)
             raise
         except Exception:
+            if generation is not None and not owns_ready():
+                return {'reason': 'stale_profile_context'}
             self._reader_ready = False
             self._healthy = False
+            if generation is not None:
+                await self._retire_ready(generation, payload, prior_request)
+                return {"reason": "client_unavailable"}
             self.generation += 1
-            try:
-                self.clear_client()
-            except Exception:
-                pass
+            self.facts = None
             await self._clear_context()
             return {"reason": "client_unavailable"}
         finally:

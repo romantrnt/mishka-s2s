@@ -112,7 +112,7 @@ def test_ready_json_to_real_effect_engine_handoff_lift_and_hangup():
             ready = await boundary.step()
             assert ready["reason"] == "profile_ready"
             assert ready["canonical_state"]["mode"] == "profile_ready"
-            assert client.calls[-2:] == ["poll", "patient"]
+            assert client.calls[:4] == ["start", "poll", "patient", "poll"]
             generation = led.exhibition_effects.generation
             for stage in range(1, 8):
                 clock.value = stage * 0.12

@@ -136,7 +136,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
     if event_type == "InteractionIdleExpired":
         return target == "root_menu"
     if event_type == "ClientProfileReady":
-        return current in {"idle", "profile_ready"} and target == "profile_ready"
+        return (current in {"idle", "profile_ready"} and target == "profile_ready"
+                or current == "idle" and target == "voice_welcome")
     if event_type == "ClientProfileCleared":
         return (target in {"idle", "session_closed", "safety_stop"}
                 or (current in {"fixed_story_playing", "story_paused", "story_pause_announcement", "story_resume_announcement"}

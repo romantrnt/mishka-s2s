@@ -250,13 +250,15 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.app._engagement_owners[sid]["deadline"], idle_deadline)
         self.assertEqual(self.client._deadline, None)
 
-    async def test_queued_ready_cannot_survive_guest_lift(self):
+    async def test_queued_ready_survives_real_guest_lift(self):
         await self.capture.scan("demo-1")
         await self.send("HandsetLifted")
         await self.drain()
-        self.assertEqual(self.state().profile_status, "anonymous")
-        self.assertFalse(self.app._canonical_profiles)
-        self.assertIsNone(self.client.patient())
+        self.assertEqual(self.state().profile_status, "identified")
+        self.assertEqual(self.state().handset, "up")
+        self.assertEqual(self.state().mode, "voice_welcome")
+        self.assertTrue(self.app._identity_scope_live(self.boundary.session_id))
+        self.assertIsNotNone(self.client.patient())
 
     async def test_existing_duplicate_bug_is_exposed_not_hidden(self):
         await self.scan("demo-1")
@@ -265,13 +267,15 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.client.patient())
         self.assertIsNone(self.state().profile_ref)
 
-    async def test_scan_during_call_exposes_conservative_policy_change(self):
+    async def test_scan_during_call_installs_a_fresh_authorized_context(self):
         await self.scan("demo-1")
         await self.send("HandsetLifted")
+        old_request = self.state().identity_request_id
         await self.scan("demo-2")
-        self.assertEqual(self.state().mode, "session_closed")
-        self.assertIsNone(self.state().profile_ref)
-        self.assertFalse(self.app._canonical_profiles)
+        self.assertEqual(self.state().mode, "voice_welcome")
+        self.assertEqual(self.state().handset, "up")
+        self.assertNotEqual(self.state().identity_request_id, old_request)
+        self.assertTrue(self.app._identity_scope_live(self.boundary.session_id))
 
     async def test_local_urgent_stop_survives_new_scan_while_private_context_is_cleared(self):
         await self.scan("demo-1")
@@ -286,7 +290,10 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.state().profile_ref)
         self.assertFalse(self.app._canonical_profiles)
         self.assertIsNone(self.boundary.facts)
-        self.assertIsNone(self.client.patient())
+        # Rejected ready retires only app authority; Max owns its source TTL.
+        self.assertIsNotNone(self.client.patient())
+        self.assertIsNone(await self.boundary.step())
+        self.assertFalse(self.app._identity_scope_live(self.boundary.session_id))
 
     async def _interleave_ready_hook(self, kind):
         entered, release = asyncio.Event(), asyncio.Event()
@@ -392,19 +399,21 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.client.patient())
         self.assertNotIn("different-session", self.app._canonical_profiles)
 
-    async def test_ready_without_dropped_clear_cannot_keep_previous_active_profile(self):
+    async def test_ready_without_scan_clear_replaces_previous_active_profile(self):
         await self.scan("demo-1")
         await self.send("HandsetLifted")
+        old_request = self.state().identity_request_id
         await self.capture.scan("demo-2")
         for _ in range(7):
             self.capture.devices("connected")
         results = await self.drain()
-        self.assertIn("profile_active_session_ignored", [item["reason"] for item in results])
-        self.assertIsNone(self.state().profile_ref)
-        self.assertFalse(self.app._canonical_profiles)
-        self.assertIsNone(self.boundary.facts)
-        self.assertIsNone(self.client.patient())
-        self.assertFalse(self.app._identity_scope_live(self.boundary.session_id))
+        self.assertIn("profile_ready", [item["reason"] for item in results])
+        self.assertNotEqual(self.state().identity_request_id, old_request)
+        self.assertEqual(self.state().mode, "voice_welcome")
+        self.assertTrue(self.app._canonical_profiles)
+        self.assertIsNotNone(self.boundary.facts)
+        self.assertIsNotNone(self.client.patient())
+        self.assertTrue(self.app._identity_scope_live(self.boundary.session_id))
 
     async def test_ready_without_dropped_clear_has_a_fresh_context_generation(self):
         await self.scan("demo-1")
