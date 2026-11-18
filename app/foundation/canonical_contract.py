@@ -1051,12 +1051,13 @@ class CanonicalRuntime(SceneMenuMixin):
             effects.append({"type": "speak", "phrase_id": "PHRASE_091"})
         return self._decision(state, effects, reason, clear_audio=True)
 
-    def _finish_local_safety(self, state: CanonicalState, event: CanonicalEvent) -> dict[str, Any]:
+    def _finish_local_safety(self, state: CanonicalState, event: CanonicalEvent,
+                             *, panel_end: bool = False) -> dict[str, Any]:
         prior_deadline = state.welcome_deadline_monotonic
         fresh = self._new_state(state.session_id, None)
         fresh.handset = "down" if event.event_type == "HandsetPlaced" else state.handset
         fresh.interaction_route = None
-        fresh.mode = "idle" if fresh.handset == "down" else "session_closed"
+        fresh.mode = "session_closed" if panel_end or fresh.handset == "up" else "idle"
         fresh.expected_inputs = ["handset_up"] if fresh.handset == "down" else ["handset_down"]
         fresh.state_version = state.state_version + 1
         fresh.last_sequence_by_source = dict(state.last_sequence_by_source)
@@ -1067,7 +1068,8 @@ class CanonicalRuntime(SceneMenuMixin):
             {"type": "welcome_timer_cancelled", "deadline_monotonic": prior_deadline},
             {"type": "exhibition_effects_cancelled"}, {"type": "identity_cleared"},
             {"type": "lighting_dark"},
-        ], "local_safety_closed", reset_session=True, clear_audio=True)
+        ], "soft_end" if panel_end else "local_safety_closed",
+            reset_session=not panel_end, clear_audio=True)
 
     def _support_no(self, state):
         if state.support_question_kind != "fear":
@@ -1493,7 +1495,8 @@ class CanonicalRuntime(SceneMenuMixin):
             _voice_admission.consumed = True
         if state.mode == "safety_stop":
             if event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset"}:
-                return self._finish_local_safety(state, event)
+                return self._finish_local_safety(state, event,
+                    panel_end=session_action_authorized and event.event_type == "SessionCancel")
             if event.event_type == "VoiceIntentReady":
                 severity = str(event.payload.get("safety_severity", "none"))
                 if severity == "urgent" and state.safety_severity != "urgent":
