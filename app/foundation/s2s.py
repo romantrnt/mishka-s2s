@@ -3102,13 +3102,22 @@ class BoundedConversationEngine:
         topic_instruction = ("Open developer dialogue: accept any topic unless it violates the safety rules. "
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
-        policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + f'. NON_NEGOTIABLE_RUNTIME_OUTPUT: start immediately; emit only complete <say>...</say> blocks, plus at most the allowlisted <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/>. Never emit JSON, markdown, analysis, tool calls, URLs, hardware commands, unclosed tags, or plain text outside tags. Use one or two short Russian spoken sentences, at most {age_words} words total, and stop.'
+        policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + '.'
+        speech_form = 'SPEECH_FORM: complete <say>...</say> blocks, optionally followed by one <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/> when required by the current scenario. '
         if context.node_id == "bear_dialogue":
-            policy += ' CATALOGUE OUTPUT EXCEPTION: only for a meaningful request to use an available activity or sourced information, emit one exact allowlisted catalogue action from the system instructions without say or other actions. An unspecified game/story uses open_catalog; a named game uses offer_game; a known named recording uses play_story; explicit factual date/weather/child appointment questions use request_information. Ordinary conversation, including fictional Mishka home, uses say only. Never guess a story ID or private fact.'
+            output_format = ('Choose exactly ONE output form. ' + speech_form
+                + 'CATALOGUE_FORM: exactly one allowlisted offer_game, open_catalog, play_story or request_information action with current catalogue IDs, without say, led, return_to_scenario or other actions. Use this form only for a meaningful request to use an available activity or sourced information. An unspecified game/story uses open_catalog; a named game uses offer_game; a known named recording uses play_story; explicit factual date/weather/child appointment questions use request_information. Ordinary conversation, including fictional Mishka home, uses SPEECH_FORM. Never guess a story ID or private fact. ')
+        else:
+            output_format = speech_form + 'Catalogue control actions are forbidden in this mode. '
+        output_format += f'Never emit JSON, markdown, analysis, tool calls, URLs, hardware commands, unclosed tags, or plain text outside tags. Spoken text must use at most {age_words} words total; start immediately and stop after the complete response. '
+        if context.profile.age_band == '1-3':
+            output_format += 'YOUNG_SPEECH: one complete thought in one Russian sentence and one say block; aim for 3-6 words, strict maximum 8. Do not add a follow-up question unless the current scenario requires it. '
+        else:
+            output_format += 'Use one or two short Russian spoken sentences. '
         native_streaming = _native_audio_stream_method(self.tts) is not None
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
-        messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}"},{"role":"user","content":text}]
+        messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}\nNON_NEGOTIABLE_RUNTIME_OUTPUT: "+output_format},{"role":"user","content":text}]
         llm_started=time.perf_counter(); llm_completed=False
         # Canonical runtime owns intent routing; no demo quick-reply
         # table is allowed to bypass the bounded provider contract.
