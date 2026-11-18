@@ -9,14 +9,25 @@ Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
 Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
-`22776`, source `209c3f81034673d5a37bcff551f75fe0ac7c52e7` on
-`codex/remote-device-simulator`, instance `e64ad25fc72cf3d9`.
+`23547`, source `45bb465db25395697b08a868743dfbf1ac2a0172` on
+`codex/remote-device-simulator`, instance `42d641725b792ede`.
 Open `https://fihihgl91rnwu4-8000.proxy.runpod.net/console` with the protected
-credentials below. V12 passed strict **READY**, real PCM/VAD/STT/LLM/mandatory
-validation/Silero/queue/silent playback, all27 runtime hashes and the served
+credentials below. V13 passed strict **READY**, real PCM/VAD/STT/LLM/mandatory
+validation/Silero/queue/silent playback, all30 runtime hashes and the served
 console, phone and phone-model clients. Initial state: no browser owner, handset down, no held buttons, all
 18 channels dark. Actual browser/provider acceptance is in progress;
 software readiness is not whole-product, human-hearing or physical acceptance.
+
+V13 helper23542 ran once, replacing the application only. The143578-byte
+archive SHA-256 is45e5808c68e415f093bccfd02935646e5f1ffb0ca75a8089c09196d54655a338;
+all30 baseline files, including the three newly tracked maintenance paths,
+were checked before launch. New E2E82337612-82c0-4576-abb3-d43413dadfc7
+passed8/8: STT361.4ms, LLM874.2ms, Mini1036.19ms, Silero98.38ms and
+bounded queue2064.37ms. Final playback is silent; these are server startup
+timings. No rollback, Pod/Ollama restart, Max or user-asset change occurred.
+Remote receipts: /workspace/mishka-artifacts/product-integrity-20261118-v13-maintenance;
+local copies are in the corresponding PM recovery directory/remote-receipts.
+Pagination, auth/hook and new nonvoice controls are not included in this source.
 
 Historical V11 native model quality was on HOLD: both actual youngest-profile generator
 probes returned formally valid eight-word JSON with unnatural glued words.
@@ -39,6 +50,27 @@ quality=valid/allow1.0/clean terminal, in6.613s in a separate cold process.
 The V12 launcher startup also passed all8 stages on the actual app. Youngest
 natural conversational quality and linked browser acceptance remain pending;
 these bounded checks do not establish universal language quality.
+
+The first V12 native follow-up still has two open failures. Early known-fake
+microphone input produced an owned catalogue clarification instead of selecting
+Aibolit; unlike V11, its completion no longer reported transition_rejected.
+The same-browser first-frame→clarification interval was4.326s, not a
+cross-clock STT measurement. A bounded known synthetic PCM capture is retained
+privately for causal ASR investigation; no human microphone recording was made.
+A fresh young-profile ordinary persona question also fell back with
+provider_or_validation_failure, correlated to mini_llm_review. The lost raw
+candidate and Mini response do not establish whether this was a false refusal.
+The controlled semantic examples and startup pass do not close this live case.
+
+One bounded causal replay of the retained synthetic capture found incorrect
+Whisper text both with and without the VAD window, while the original fixture
+decoded as the requested title. Three isolated local browser captures then
+localized waveform alteration before the JS resampler: input correlation was
+0.53942 with AEC/NS/AGC, 0.87159 with AEC alone, and 0.999924 with all three
+disabled. The actual resampler preserved the sampled input exactly. This is
+fake-device capture qualification, not evidence to disable echo cancellation
+for real microphones; the hosted capture also had menu playback, unlike the
+silent local comparison. Early production-route selection remains on HOLD.
 
 Guarded V12 helper `22771` ran once, gracefully replacing PID22134 and six
 reviewed runtime files. Its111,891-byte archive SHA-256 is
@@ -111,7 +143,9 @@ proof. Human microphone/hearing and physical HID/optics remain unverified.
 
 The same pass found held3D caps occluded by their base; the one-float local
 pressed-travel correction is reviewed with real local WebGL before/after and
-all-seven geometry/reduced-motion checks, and is now deployed in V12; native rendered verification is pending. Early
+all-seven geometry/reduced-motion checks, and is now deployed in V12. The native
+held-seven screenshot confirms visible caps, digits and emblems; physical
+rendering remains unverified. Early
 catalogue speech did not select a story within20seconds despite one actual
 STT completion; its cause is under investigation. A47.6second browser/server
 comparison was withdrawn: a paired receipt measured server clock ahead by
@@ -138,9 +172,39 @@ probe, including its cancellation cleanup, stays silent while preadmitted user
 tasks retain their actual playback controller. Four reproduced run_now/recover
 races, cleanup failure, timeout/late children, nested engines and the next user
 turn are covered by88 local checks plus3 mock-wire terminal controls. This is
-audio isolation only: manual maintenance admission/provider/VAD concurrency
-remains a separate open boundary. No actual physical/audio acceptance follows
-from these local checks.
+audio isolation only. Source45bb465 separately adds task-owned manual-maintenance
+admission and tracks cancelled native worker occupancy until actual completion.
+The busy409 guards, cancellation/recovery ownership and unchanged idle policy
+passed134 affected checks,51 follow-up checks and independent source review.
+The reviewer additionally exercised actual local ASGI admission during native
+Silero completion and a private profile entry. That source is deployed in V13;
+V12 lacked this guard. Remote model termination after a
+transport cancellation and actual physical/audio acceptance remain unproven.
+
+V12's older-profile browser pass accepted a synthetic microphone game request,
+an owned offer and a separate spoken consent, then entered the quiz through
+real STT/LLM/validation/Silero without a typed launch. Free-light, repeat-light
+and odd-one-out linked entries returned to the same dialogue. Short-seven
+scoring is NOT_PROVEN: the QA question map became stale. The final word-game
+response reported completion while the immediate browser state was still the
+game. The server had already returned to dialogue: QA's next7 produced
+activity_back, and the queued bear frame arrived before the QA-induced root
+frame. A pinned-source local Application→Stand→Hub replay confirmed the
+committed state and projection were bear while delivery waited. QA must await
+that returned owner before the next input; live delivery latency remains
+unexplained, and no product state patch was justified by this evidence.
+
+The next local inventory found real nonvoice gaps: Stand disables the next-page
+button offered by story and DAY descriptors, and DAY omits the supported
+card_doctors action title. Source389751b fixes both via the current committed
+descriptor and a fixed public action label:58 local checks, independent review,
+16 independent boundary controls and two targeted tests passed. It is not yet
+deployed. Separately, auth-before-lift works but auth-after-lift is rejected,
+and a guest's private name/history can survive scan_started; its candidate
+is in progress. All four auth/hook combinations, visual
+on-hook use, new-identity fencing and no-microphone guidance remain acceptance
+work, not completed features. Max data remain provisional; no Max source or
+database changes are authorized by these findings.
 
 
 The historical successful V7 application-only rollout retained the existing environment, model assets,

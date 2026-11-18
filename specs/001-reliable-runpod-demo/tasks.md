@@ -122,7 +122,7 @@ selected asset verification and invalidation retained. Local causal replay
 reduced twenty frames to 0.03 seconds with zero repeated verification; actual
 early browser voice/Whisper acceptance after deployment remains open.
 
-Current recovery state: V11 PID `22134`/instance `57242870c1ddf223` runs
+Historical recovery state: V11 PID `22134`/instance `57242870c1ddf223` ran
 source `db0a744` with strict READY and all eight real startup stages passed,
 correlation `b62ccf09-b758-4263-8395-bec3ebe4b384`. All27 runtime hashes and
 served console/phone clients match the reviewed Git source. Helper `22129`
@@ -130,7 +130,7 @@ ran once; no rollback or Pod/Ollama restart occurred. Chief owns the active
 native browser/provider pass; the actual slot is explicitly serialized. Human hearing,
 physical board and real external data remain separate open acceptance.
 
-Current V12 checkpoint: source209c3f81034673d5a37bcff551f75fe0ac7c52e7,
+Previous V12 checkpoint: source209c3f81034673d5a37bcff551f75fe0ac7c52e7,
 PID22776, instancee64ad25fc72cf3d9. Guarded helper22771 ran once with the
 strict-ready V11 baseline, six reviewed runtime replacements/full27, archive
 111891B/SHA95303178b3cdff27212379a44207f273f768cb48f61744ae4b18acffbe8a5b25.
@@ -141,6 +141,23 @@ Startup E2Ea901903c-3062-4ed8-9274-34bcf7e8d8bb all8PASS, server bounded queue
 silent, not browser/acoustic latency. The separate
 cold public-WAV core probe93b8ec10 also passed8/8 in6.613s with the exact new
 quality parser. Chief owns the native slot; PM actual/browser/provider0.
+
+Current live V13: source45bb465db25395697b08a868743dfbf1ac2a0172/PID23547/
+instance42d641725b792ede. Helper23542 ran once; archive143578B/SHA45e5808c68e415f093bccfd02935646e5f1ffb0ca75a8089c09196d54655a338,
+six runtime replacements/full30 verified before and after launch. StrictREADY
+and actual E2E82337612-82c0-4576-abb3-d43413dadfc7 passed8/8; silent startup
+queue2064.37ms is not browser latency. Silero/VCoff, served3JS, owner0/down/
+keys[]/18dark were independently checked, then actual slot released to Chief.
+No rollback or Pod/Ollama restart. Pagination/auth/nonvoice candidates remain
+local work; they are not in V13.
+
+First V12 native follow-up remains HOLD: early known synthetic microphone
+input yielded catalogue clarification rather than Aibolit (no longer
+transition_rejected), and a fresh harmless young persona question produced
+provider_or_validation_failure, correlated to mini_llm_review. Its lost raw
+candidate/verdict do not prove a false block. Exact causes are being traced; neither the
+source tests nor startup/controlled model examples replace these live failures.
+No human microphone capture or physical acceptance is claimed.
 
 Historical V8/V9 timeouts have no retained candidate body and no exact cause.
 The instrumented V10 candidate `21653` captured a clean JSON terminal followed
@@ -186,11 +203,25 @@ remains open until replay with actual updated source and causal receipts.
 Task-local warmup playback isolation passed independent review and is deployed in V12:88 local
 checks plus3 mock-wire terminal controls. It prevents preadmitted user queues
 or empty probe cleanup from capturing/stopping the wrong audio sink. Full
-manual maintenance provider/admission/VAD concurrency remains OPEN separately.
+manual maintenance provider/admission/VAD concurrency has a source-cleared
+candidate in45bb465, now deployed inV13:134 affected checks plus51 follow-up,
+independent review and two independent local ASGI occupancy/entry controls.
+Cancelled native worker occupancy remains busy until actual completion;
+remote model termination after HTTP cancellation is not established.
 V11 native hold early restore/latched owner-release/mixed-pointer/hangup cleanup
-and two long-source stop receipts passed. Older short7, V12 native3D rendered fix,
-linked catalogue capture/ASR choice and full new conversation/game flow remain
-open. The cross-clock47.6second latency claim was withdrawn with paired clock
+and two long-source stop receipts passed. V12 native held3D visibility passed.
+Older short7 scoring remains NOT_PROVEN because the QA question map was stale.
+Actual synthetic-mic request→offer→voice consent→quiz passed; free-light,
+repeat-light and odd-one-out returned to the same dialogue. Final word-game
+completion versus immediate public projection was traced to premature QA input:
+the server had returned to bear before QA7, and the queued bear frame arrived
+before root. Pinned-source local publication replay was clear; QA must wait
+for returned-owner publication. Actual delivery latency remains unexplained.
+Linked catalogue capture/ASR choice and full conversation/game acceptance
+remain open. Three local capture comparisons localized known-fake waveform
+alteration before the JS resampler; this does not justify a global microphone
+processing change or establish human microphone behavior.
+The cross-clock47.6second latency claim was withdrawn with paired clock
 bounds; same-server STT was141.6ms. Root investigates actual transition reasons.
 
 Roman's next addition extends the same investigation. The preceding inventory:
@@ -247,6 +278,7 @@ fetch; it must preserve ordinary/current requests and existing safety/ownership.
 | T039 Weather configuration, location and freshness | Bind existing canonical/legacy weather settings without replacing explicit voice/private configuration. Current/no-key/error/stale observations are distinguished; no paid calls or fake facts. Missing/fault local checks pass; actual API/city naming remain unverified. Preserve an explicit requested-location scope so fixed configured coordinates cannot silently stand for a named other city. | console_recovery_fix: request-local scope, DAY availability and aliases independently reviewed and deployed in V11; real API/city data remains unavailable / Chief native |
 | T040 Natural safe dialogue | Establish precise native fallback reasons; align actual age caps and final-word instructions; remove reproduced harmless-noun/persona false refusals while preserving real privacy, medical and safety checks. Validation 82cb42f4 and final prompts/core are independently cleared and deployed in V6; actual persona/model behavior remains a native gate. | contextual_game_flow: prompts/coupled routes; menu_guidance_design_review: validation.py and dedicated tests; Chief / independent review |
 | T041 Hold-seven feedback | Implementation `990d394` and independent core/UI review passed; included in V11, actual browser acceptance remains open. Distinguish short answer from intentional hold; show protocol-supported progress, latch readiness until a valid release and restore the current game on early release/cancel. Reject stale timers/PCM, pointer-cancel exits and double scoring; explain the gesture without relying on sight. Preserve other contextual 7 roles and the existing inactivity policy. | menu_guidance_design_review: game state/timers, owned presentation, input cancel schema and client guide; Chief / independent review and actual browser |
+| T042 Nonvoice paths and independent auth/hook | Preserve real hook state while accepting verified fresh authorization, fencing all previous private RAM/work. Cover guest/auth × down/up, both orders, reauthorization, expiry/end/next visit. Fix descriptor-to-button pagination and supported DAY labels. Provide explicit panel/button start, skip, contextual choice and exit; explain unavailable microphone honestly. No autolift, fake authorization, new Max data or unverified physical audio claims. | PM integration; story_idle_review: identity boundary; contextual_game_flow: Stand projection; menu_guidance_design_review: nonvoice design; independent review and Chief native acceptance |
 
 The new matrix is another investigation aid. Native coverage must include
 different actual games, exact story assets and interruptions, source failure
