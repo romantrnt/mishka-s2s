@@ -54,6 +54,9 @@ def test_prompt_blocks_scoring_and_inherited_keys_must_be_released(kind):
     assert edge(state, answer).state.round == 0
     state = edge(state, answer, released=True).state
     result = edge(state, answer)
+    if answer == 7:
+        assert result.state.round == 0
+        result = edge(result.state, answer, released=True)
     assert result.state.round == 1
     assert result.state.phase == 'awaiting_prompt'
     assert result.speech_text == current_challenge(result.state).prompt
@@ -71,6 +74,8 @@ def test_offered_seven_and_five_are_answers_not_reserved_controls():
     assert desired_buttons(state) == (5, 7)
     state = finish_prompt(state, 0.).state
     result = edge(state, 7)
+    assert result.state.round == 0
+    result = edge(result.state, 7, released=True)
     assert result.state.round == 1 and result.status == 'progress'
     assert not result.completed
 

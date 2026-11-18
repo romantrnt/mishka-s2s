@@ -34,6 +34,6 @@ assert(context.interactionGuide(offered(true),media)[0].includes('Вопросы
 assert(context.interactionGuide(offered(true),media)[1].includes('1 — начать; 7 — продолжить разговор'));
 for(const stage of ['prompt','playing']) {
  const quiz={session:{node:'game_active',handset_up:true},canonical_state:{active_game_id:'quiz',game_audio_stage:stage}};
- assert(context.interactionGuide(quiz,media)[1].includes('удерживай 7 пять секунд и отпусти'));
+ assert(context.interactionGuide(quiz,media)[1].includes('держи 7 до подсказки «Теперь отпускай», затем отпусти'));
 }
 console.log('console guide regression: contextual offer, nonvoice exit and existing guidance passed');

@@ -10,6 +10,8 @@ import random
 from .game_content import GameChallenge, build_deck, normalize_band
 
 BUTTONS = (1, 2, 3, 4)
+EXIT_RECOGNITION_S = .6
+EXIT_READY_S = 5.
 
 @dataclass(frozen=True)
 class GameSpec:
@@ -78,6 +80,9 @@ class GameState:
     challenge_attempts: int = 0
     seven_answer_generation: int | None = None
     seven_exit_down_at: float | None = None
+    seven_exit_phase: str = 'idle'
+    seven_exit_step: int = 0
+    seven_gesture_generation: int = 0
 
 @dataclass(frozen=True)
 class GameTransition:
@@ -199,7 +204,19 @@ def _answer_challenge(state: GameState, button: int) -> GameTransition:
                           feedback_id='PHRASE_022', speech_text=current_challenge(state).prompt)
 
 
-def advance(state: GameState, *, edge: str, button: int, sequence: int, now: float, paused: bool = False) -> GameTransition:
+def hold_exit_policy(state: GameState) -> bool:
+    return state.game_id == 'quiz' or 7 in game_answer_buttons(state)
+
+
+def cancel_exit_gesture(state: GameState) -> GameState:
+    return replace(state, seven_exit_down_at=None, seven_answer_generation=None,
+        seven_exit_phase='idle', seven_exit_step=0,
+        seven_gesture_generation=state.seven_gesture_generation + 1,
+        timer_generation=state.timer_generation + 1)
+
+
+def advance(state: GameState, *, edge: str, button: int, sequence: int, now: float, paused: bool = False,
+            cancelled: bool = False) -> GameTransition:
     if (not math.isfinite(now) or now < state.last_time or sequence <= state.last_sequence
             or edge not in {'ButtonPressed', 'ButtonReleased', 'ButtonHeld', 'ButtonLongHeld'}):
         return GameTransition(state, desired_buttons(state), 'stale')
@@ -209,19 +226,42 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
         return GameTransition(state, desired_buttons(state), 'ignored')
     paused = paused or state.phase != 'playing'
     held, down = set(state.held), dict(state.down_times)
+    if state.seven_exit_phase != 'idle' and button != 7 and edge == 'ButtonPressed':
+        held.add(button)
+        state = cancel_exit_gesture(replace(state, held=tuple(sorted(held))))
+        return GameTransition(state, desired_buttons(state), 'exit_aborted')
+    if button == 7 and hold_exit_policy(state):
+        if edge == 'ButtonPressed':
+            if button in held:
+                return GameTransition(state, desired_buttons(state), 'held')
+            held.add(button)
+            state = replace(state, held=tuple(sorted(held)), seven_exit_down_at=now,
+                seven_answer_generation=state.round_generation if not paused and 7 in game_answer_buttons(state) else None,
+                seven_exit_phase='pending', seven_exit_step=0,
+                seven_gesture_generation=state.seven_gesture_generation + 1,
+                timer_generation=state.timer_generation + 1)
+            return GameTransition(state, desired_buttons(state), 'exit_pending')
+        if edge != 'ButtonReleased':
+            return GameTransition(state, desired_buttons(state), 'held')
+        started, answer_generation, phase = state.seven_exit_down_at, state.seven_answer_generation, state.seven_exit_phase
+        held.discard(button); down.pop(button, None)
+        state = replace(state, held=tuple(sorted(held)), down_times=tuple(sorted(down.items())))
+        if started is None:
+            return GameTransition(state, desired_buttons(state), 'released')
+        state = cancel_exit_gesture(state)
+        if cancelled:
+            return GameTransition(state, desired_buttons(state), 'exit_aborted')
+        if phase == 'ready' or now >= started + EXIT_READY_S:
+            return GameTransition(state, desired_buttons(state), 'exit_requested')
+        if phase == 'pending' and now < started + EXIT_RECOGNITION_S and not paused and answer_generation == state.round_generation and 7 in game_answer_buttons(state):
+            return _answer_challenge(state, 7)
+        return GameTransition(state, desired_buttons(state), 'exit_aborted')
     if edge == 'ButtonReleased':
         started = down.pop(button, None)
         held.discard(button)
-        pending_generation = state.seven_answer_generation
-        exit_started = state.seven_exit_down_at
-        state = replace(state, held=tuple(sorted(held)), down_times=tuple(sorted(down.items())),
-                        seven_answer_generation=None if button == 7 else pending_generation,
-                        seven_exit_down_at=None if button == 7 else exit_started)
-        if button == 7 and exit_started is not None and now - exit_started >= 5.:
-            return GameTransition(state, desired_buttons(state), 'exit_requested')
-        if button == 7 and started is not None and pending_generation is not None:
-            if not paused and pending_generation == state.round_generation and 7 in game_answer_buttons(state):
-                return _answer_challenge(state, 7)
+        state = replace(state, held=tuple(sorted(held)), down_times=tuple(sorted(down.items())))
+        if cancelled:
+            return GameTransition(state, desired_buttons(state), 'released_cancelled')
         if not paused and state.game_id == 'hold_light' and button == state.target and started is not None:
             if now - started >= state.hold_seconds:
                 return _progress(state)
@@ -230,10 +270,6 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
         return GameTransition(state, desired_buttons(state), 'released')
     if edge != 'ButtonPressed':
         started = down.get(button)
-        if (edge == 'ButtonLongHeld' and button == 7 and state.seven_exit_down_at is not None
-                and now - state.seven_exit_down_at >= 5.):
-            return GameTransition(replace(state, seven_answer_generation=None, seven_exit_down_at=None),
-                                  desired_buttons(state), 'exit_requested')
         if (not paused and state.game_id == 'hold_light' and button == state.target
                 and started is not None and now - started >= state.hold_seconds and not state.hold_ready):
             state = replace(state, hold_ready=True)
@@ -242,17 +278,12 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
     if button in held:
         return GameTransition(state, desired_buttons(state), 'held')
     held.add(button)
-    if button == 7:
-        state = replace(state, seven_exit_down_at=now)
     if not paused:
         down[button] = now
     state = replace(state, held=tuple(sorted(held)), down_times=tuple(sorted(down.items())))
     if paused:
         # Pause is not part of an active hold; no fabricated duration on resume.
         return GameTransition(replace(state, down_times=(), hold_ready=False), desired_buttons(state), 'paused')
-    if button == 7 and state.game_id in {'quiz', 'odd_one_out'} and button in game_answer_buttons(state):
-        return GameTransition(replace(state, seven_answer_generation=state.round_generation),
-                              desired_buttons(state), 'answer_pending_release')
     if button not in game_answer_buttons(state):
         return GameTransition(state, desired_buttons(state), 'ignored')
     if state.game_id == 'free_lights':
@@ -319,6 +350,12 @@ def finish_prompt(state: GameState, now: float) -> GameTransition:
 
 
 def next_deadline(state: GameState) -> float | None:
+    if state.seven_exit_phase != 'idle':
+        if state.seven_exit_phase == 'ready':
+            return None
+        if state.seven_exit_step == 6:
+            return state.seven_exit_down_at + EXIT_READY_S
+        return state.seven_exit_down_at + EXIT_RECOGNITION_S + state.seven_exit_step * (EXIT_READY_S - EXIT_RECOGNITION_S) / 6
     due = [x for x in (state.response_deadline, state.hint_deadline, state.demonstration_deadline) if x is not None]
     if state.game_id == 'hold_light' and state.phase == 'playing' and not state.hold_ready:
         started = dict(state.down_times).get(state.target)
@@ -332,6 +369,13 @@ def timer_step(state: GameState, now: float) -> GameTransition:
     if deadline is None or now < deadline or now < state.last_time or not math.isfinite(now):
         return GameTransition(state, desired_buttons(state), 'timer_not_due')
     state = replace(state, last_time=max(state.last_time, now))
+    if state.seven_exit_phase != 'idle':
+        elapsed = now - state.seven_exit_down_at
+        ready = now >= state.seven_exit_down_at + EXIT_READY_S
+        step = 7 if ready else min(6, 1 + int((elapsed - EXIT_RECOGNITION_S) * 6 / (EXIT_READY_S - EXIT_RECOGNITION_S) + 1e-8))
+        state = replace(state, seven_exit_phase='ready' if ready else 'progress', seven_exit_step=step,
+                        timer_generation=state.timer_generation + 1)
+        return GameTransition(state, (), 'exit_ready' if ready else 'exit_progress', 'PHRASE_036' if ready else None)
     if state.phase == 'demonstrate':
         if state.demonstration_on:
             state = replace(state, demonstration_on=False, demonstration_deadline=now + .3,

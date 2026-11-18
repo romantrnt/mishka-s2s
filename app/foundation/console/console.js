@@ -70,6 +70,7 @@ let audioQueueTail = Promise.resolve();
 const pendingPCM = [];
 const pendingTextInputs = [];
 const buttonInputs = Object.fromEntries(BUTTON_IDS.map(id => [id, 'released']));
+const buttonInputOwners = new Map();
 const buttonRefs = new Map();
 let liveClientEntries = [];
 let liveSessionId = null;
@@ -1574,10 +1575,12 @@ function interactionGuide(state, media) {
     if (game.substate === 'game_exit_confirmation') return ['Закончить игру?', '6 — продолжить; 7 — закончить; 5 — помощь.'];
     const title = {free_lights: 'Живой свет', quiz: 'Вопросы Мишки', repeat_pattern: 'Повтори огоньки',
       odd_one_out: 'Выбери лишнее', word_game: 'Игра в слова'}[game.active_game_id] || 'Игра';
+    if (game.game_exit_hold?.phase === 'ready') return [title, 'Теперь отпускай 7, чтобы выйти из игры.'];
+    if (['pending','progress'].includes(game.game_exit_hold?.phase)) return [title, 'Держи 7. Огоньки заполняются. Когда они заполнятся, можно отпустить.'];
     if (['starting', 'prompt'].includes(game.game_audio_stage)
       || ['instruction', 'awaiting_prompt'].includes(game.game_phase)) return [title,
         'Дослушай Мишку. Потом можно будет ответить. ' + (game.active_game_id === 'quiz'
-          ? 'Для выхода удерживай 7 пять секунд и отпусти.' : '7 — выйти из игры.')];
+          ? 'Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.' : '7 — выйти из игры.')];
     if (game.active_game_id === 'repeat_pattern' && game.game_phase === 'demonstrate') return [title, 'Посмотри, как загораются огоньки. Потом повтори последовательность. 7 — выйти из игры.'];
     if (game.active_game_id === 'word_game') {
       const hint = media.pending ? 'Разреши микрофон в окне браузера и назови слово.'
@@ -1589,7 +1592,7 @@ function interactionGuide(state, media) {
       free_lights: 'Нажимай кнопки 1–6 и играй с огоньками. 7 — выйти из игры.',
       repeat_pattern: 'Повтори подсвеченные кнопки в том же порядке. 7 — выйти из игры.',
       odd_one_out: 'Нажми подсвеченную кнопку с лишним предметом. 7 — выйти из игры.',
-      quiz: 'Нажми подсвеченную кнопку с ответом. Для ответа 7 нажми и отпусти. Для выхода удерживай 7 пять секунд и отпусти.',
+      quiz: 'Нажми подсвеченную кнопку с ответом. Для ответа 7 коротко нажми и отпусти. Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.',
     }[game.active_game_id] || 'Следуй текущей подсветке и подсказке Мишки.'];
   }
   if (node === 'support_intake') {
@@ -1874,11 +1877,13 @@ function initDiagnostics() {
   }
 }
 
-function releaseButton(id, sessionId = session()) {
+function releaseButton(id, sessionId = session(), cancelled = false, owner = null) {
+  if (buttonInputs[id] !== 'pressed' || (owner !== null && buttonInputOwners.get(id) !== owner)) return Promise.resolve(null);
   buttonInputs[id] = 'released';
+  buttonInputOwners.delete(id);
   const button = buttonRefs.get(id);
   if (button) button.classList.remove('pressed');
-  return post('/stand/button-released', { session_id: sessionId, button_id: Number(id), state: 'released' });
+  return post('/stand/button-released', { session_id: sessionId, button_id: Number(id), state: 'released', ...(cancelled ? {cancelled:true} : {}) });
 }
 
 function createButtons() {
@@ -1896,25 +1901,31 @@ function createButtons() {
     let down = 0;
     button.onpointerdown = async event => {
       event.preventDefault();
+      if (buttonInputs[id] === 'pressed') return;
       down = performance.now();
       buttonInputs[id] = 'pressed';
+      buttonInputOwners.set(id,event.pointerId);
       button.classList.add('pressed');
       button.setPointerCapture(event.pointerId);
       try { await post('/stand/button', { button_id: Number(id), state: 'pressed' }); } catch (_) { /* shown in the error panel */ }
     };
     button.onpointerup = async event => {
       event.preventDefault();
+      if (buttonInputs[id] !== 'pressed' || buttonInputOwners.get(id) !== event.pointerId) return;
+      if (Number(id) === 7) {
+        await releaseButton(id,session(),false,event.pointerId).catch(() => {});
+        return;
+      }
       button.classList.remove('pressed');
       const duration = Math.round(performance.now() - down);
       const sessionId = session();
-      try {
-        if (duration >= 5000) await post('/stand/button-long-hold', { session_id: sessionId, button_id: Number(id), duration_ms: duration });
-        else if (duration >= 600) await post('/stand/button-hold', { session_id: sessionId, button_id: Number(id), duration_ms: duration });
-      } catch (_) { /* shown in the error panel */ } finally {
-        await releaseButton(id, sessionId).catch(() => {});
-      }
+      if (duration >= 5000) post('/stand/button-long-hold', { session_id: sessionId, button_id: Number(id), duration_ms: duration }).catch(() => {});
+      else if (duration >= 600) post('/stand/button-hold', { session_id: sessionId, button_id: Number(id), duration_ms: duration }).catch(() => {});
+      await releaseButton(id, sessionId,false,event.pointerId).catch(() => {});
     };
-    button.onpointercancel = () => releaseButton(id).catch(() => {});
+    button.onpointercancel = event => releaseButton(id,session(),true,event.pointerId).catch(() => {});
+    button.onlostpointercapture = event => releaseButton(id,session(),true,event.pointerId).catch(() => {});
+    button.onblur = () => releaseButton(id,session(),true).catch(() => {});
     buttonRefs.set(id, button);
     $('buttons').append(button);
   }
@@ -2179,7 +2190,9 @@ window.addEventListener('keydown', event => {
     event.preventDefault();
     const button = buttonRefs.get(id);
     if (button && !button.disabled) {
+      if (buttonInputs[id] === 'pressed') return;
       buttonInputs[id] = 'pressed';
+      buttonInputOwners.set(id,event.code);
       button.classList.add('pressed');
       post('/stand/button', { button_id: id, state: 'pressed' }).catch(() => {});
     }
@@ -2189,12 +2202,17 @@ window.addEventListener('keydown', event => {
     post('/stand/handset', { state: up ? 'down' : 'up' }).catch(() => {});
   }
 });
+
+window.addEventListener('blur', () => {
+  if (document.body.dataset.phone) return;
+  for (const id of BUTTON_IDS) releaseButton(id,session(),true).catch(() => {});
+});
 window.addEventListener('keyup', event => {
   if (document.body.dataset.phone) return;
   const id = Number(event.key);
-  if (!BUTTON_IDS.includes(id) || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+  if (!BUTTON_IDS.includes(id) || buttonInputs[id] !== 'pressed' || buttonInputOwners.get(id) !== event.code) return;
   event.preventDefault();
-  releaseButton(id).catch(() => {});
+  releaseButton(id,session(),false,event.code).catch(() => {});
 });
 
 // Narrow bridge: retain the proven observer, PCM, playback ownership and FIFO.

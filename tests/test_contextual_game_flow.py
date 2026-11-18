@@ -345,12 +345,13 @@ async def test_game_timer_cannot_consume_seven_hold_as_answer_after_round_change
         h.state.game_engine_state = replace(engine, challenge_index=index)
         await h.send('ButtonPressed', {'button_id': 7})
         before = h.state.game_engine_state.round
-        # An owned hint may replace the round prompt during the gesture.
+        # Gesture progress owns this deadline; no round hint or answer may fire.
         scope = h.app._game_timer_scopes[h.state.session_id]
         h.clock = scope[-1]
         await h.app.flush_game_timers()
-        await h.send('ButtonReleased', {'button_id': 7})
-        assert h.state.mode == 'bear_dialogue'  # Long real edge exits, never scores.
+        released = await h.send('ButtonReleased', {'button_id': 7})
+        assert released['reason'] == 'game_exit_aborted'
+        assert h.state.mode == 'game_active' and h.state.game_engine_state.round == before
         assert h.state.game_progress.get('quiz', 0) == engine.level
     finally:
         await h.close()
@@ -369,10 +370,12 @@ async def test_quiz_long_seven_real_press_release_exits_even_during_prompt(stage
         engine = h.state.game_engine_state
         index = next(i for i, c in enumerate(engine.deck) if 7 in dict(c.options))
         h.state.game_engine_state = replace(engine, challenge_index=index)
+        old = dict(h.app._active_audio[h.state.session_id])
         await h.send('ButtonPressed', {'button_id': 7})
         if stage == 'cross_to_playing':
             h.clock += .1
-            await h.done()
+            await h.send('AudioCompleted', {**old,'response_id':old['content_id']})
+            assert h.state.game_engine_state.seven_exit_phase == 'pending'
         h.clock += 5.1
         await h.send('ButtonReleased', {'button_id': 7})
         assert h.state.mode == 'bear_dialogue'
@@ -489,7 +492,7 @@ def test_first_quiz_prompt_explains_hold_exit_even_when_first_answer_has_no_seve
     state = CanonicalState('quiz-exit', mode='game_active', handset='up', age_band='1-3',
         active_game_id='quiz', game_engine_state=engine)
     assert 7 not in game_answer_buttons(engine)
-    assert CanonicalRuntime()._game_prompt(state)['exit_hint'] == 'Чтобы выйти, удержи семь пять секунд и отпусти.'
+    assert CanonicalRuntime()._game_prompt(state)['exit_hint'] == 'Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти.'
 
 
 @pytest.mark.asyncio
@@ -532,7 +535,7 @@ async def test_actual_bear_prompt_limits_action_only_exception_to_meaningful_cap
         result = await h.send('SpeechReceived', text='Почему облака белые?')
         prompt = h.model.calls[0][0]['content']
         assert 'only for a meaningful request to use an available activity or sourced information' in prompt
-        assert 'Ordinary conversation, including fictional Mishka home, uses say only.' in prompt
+        assert 'Ordinary conversation, including fictional Mishka home, uses SPEECH_FORM.' in prompt
         assert 'quiz здесь только пример' in prompt
         assert 'кроме одного описанного выше действия по просьбе ребёнка' in prompt
         assert result['reason'] == 'dialogue_turn'

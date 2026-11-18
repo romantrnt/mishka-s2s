@@ -216,12 +216,16 @@ class RemoteDeviceSimulator:
                 return _error("validation_error", "handset requires state up or down")
             return await self.stand.inject("handset", {"state": payload["state"]}, wait_for_audio=False)
         if action == "button":
-            if (set(payload) - {"action", "button_id", "press", "duration_ms", "epoch"}
+            if (set(payload) - {"action", "button_id", "press", "duration_ms", "epoch",'cancelled'}
                     or type(payload.get("button_id")) is not int or payload["button_id"] not in range(1, 8)
                     or not isinstance(payload.get("press", "press"), str) or payload.get("press", "press") not in PRESS_TYPES):
                 return _error("validation_error", "button requires id 1..7 and a supported press kind")
             press = payload.get("press", "press")
             outgoing = {"button_id": payload["button_id"]}
+            if 'cancelled' in payload:
+                if press != 'release' or type(payload['cancelled']) is not bool:
+                    return _error('validation_error','cancelled must be a boolean on button release')
+                outgoing['cancelled'] = payload['cancelled']
             if press in {"hold", "long_hold"}:
                 duration = payload.get("duration_ms")
                 if type(duration) is not int or not 0 <= duration <= 120000:

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo
 
-from .game_engine import GameState, AVAILABLE_GAME_SPECS, start as start_game, advance as advance_game, desired_buttons, pause as pause_game, arm_wait, next_deadline, timer_step, begin_demonstration, IMMERSIVE_GAME_SPECS, current_challenge, game_answer_buttons, finish_prompt
+from .game_engine import GameState, AVAILABLE_GAME_SPECS, start as start_game, advance as advance_game, desired_buttons, pause as pause_game, arm_wait, next_deadline, timer_step, begin_demonstration, IMMERSIVE_GAME_SPECS, current_challenge, game_answer_buttons, finish_prompt, hold_exit_policy, cancel_exit_gesture
 from .age_policy import age_details, policy_for, policy_for_band
 from .voice_catalog import load_phrase_catalog
 
@@ -178,6 +178,8 @@ class CanonicalEvent:
     monotonic_timestamp: float | None = None
 
     def validate(self) -> None:
+        if 'cancelled' in self.payload and (self.event_type != 'ButtonReleased' or type(self.payload['cancelled']) is not bool):
+            raise ValueError('cancelled must be a boolean on button release')
         if self.event_type not in ALLOWED_EVENTS:
             raise ValueError("event type is not allowlisted")
         if not self.session_id or self.sequence < 0 or self.state_version < 0:
@@ -1196,7 +1198,7 @@ class CanonicalRuntime(SceneMenuMixin):
             "phrase_id":(challenge.phrase_id if challenge else spec.instruction_phrase_id
                          if engine.game_id in {'free_lights','repeat_pattern'} else None) if text is None else None,
             "answer_buttons":list(game_answer_buttons(engine)),
-            "exit_hint": ("Чтобы выйти, удержи семь пять секунд и отпусти." if engine.game_id == 'quiz' or 7 in game_answer_buttons(engine)
+            "exit_hint": ("Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." if hold_exit_policy(engine)
                           else "Чтобы выйти, нажми семь.") if engine.round == 0 and text is None else None,
             "display":getattr(challenge, "display", "digits") if challenge else "colors"}
 
@@ -1207,10 +1209,30 @@ class CanonicalRuntime(SceneMenuMixin):
         immersive = getattr(engine, 'immersive', False)
         staged = immersive and state.game_audio_stage in {'starting', 'prompt'}
         outcome = advance_game(engine, edge=event.event_type, button=int(event.payload["button_id"]),
-                               sequence=engine.last_sequence + 1, now=now, paused=staged)
+                               sequence=engine.last_sequence + 1, now=now, paused=staged,
+                               cancelled=event.payload.get('cancelled') is True)
         state.game_engine_state = outcome.state
         if outcome.status == "exit_requested":
             return self._game_exit(state, "game_exited_by_long_button")
+        if outcome.status == 'exit_pending':
+            state.game_audio_stage = 'idle'
+            state.state_version += 1
+            return self._decision(state, [{'type':'audio_stop'}, {'type':'capture_close'},
+                {'type':'lighting_preset','preset':'GAME_EXIT_HOLD','step':0}], 'game_exit_pending', clear_audio=True)
+        if outcome.status == 'exit_aborted':
+            state.game_engine_state = replace(pause_game(outcome.state), phase='awaiting_prompt')
+            state.state_version += 1
+            effects = [{'type':'audio_stop'}, {'type':'capture_close'}, self._game_lighting(state.game_engine_state)]
+            if state.handset == 'up':
+                prompt = self._game_prompt(state)
+                prompt.update(prompt='Продолжаем игру. ' + prompt['prompt'], phrase_id=None, exit_hint=None)
+                effects.append(prompt)
+            else:
+                state.game_engine_state = finish_prompt(state.game_engine_state, now).state
+                state.game_audio_stage = 'playing'
+            return self._decision(state, effects, 'game_exit_aborted', clear_audio=True)
+        if outcome.state.seven_exit_phase != 'idle':
+            return self._decision(state, [], 'game_exit_gesture_held')
         if (immersive and state.handset != "up" and outcome.speech_text
                 and outcome.state.phase == "awaiting_prompt"):
             outcome = replace(outcome, state=finish_prompt(outcome.state, now).state)
@@ -1296,6 +1318,9 @@ class CanonicalRuntime(SceneMenuMixin):
             state.game_offer_ready = False
         if state.mode != "game_active" or state.handset != "up" or state.safety_severity != "none":
             state.game_return_mode = None
+            if (state.game_engine_state is not None and state.game_engine_state.seven_exit_phase != 'idle'
+                    and (state.mode != 'game_active' or state.safety_severity != 'none')):
+                state.game_engine_state = cancel_exit_gesture(state.game_engine_state)
         if state.mode != "story_paused":
             state.public_story_checkpoint_pending = False
         if state.mode != "game_active":
@@ -1700,6 +1725,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     or event.payload.get("run_id") != engine.run_id
                     or event.payload.get("round_generation") != engine.round_generation
                     or event.payload.get("timer_generation") != engine.timer_generation
+                    or event.payload.get('gesture_generation', 0) != engine.seven_gesture_generation
                     or event.payload.get("deadline") != next_deadline(engine)):
                 return self._decision(state, [], "game_timer_stale")
             outcome = timer_step(engine, monotonic_now)
@@ -1709,6 +1735,11 @@ class CanonicalRuntime(SceneMenuMixin):
                 outcome = replace(outcome, state=replace(outcome.state, phase="instruction", demonstration_deadline=None))
             state.game_engine_state = outcome.state
             state.state_version += 1
+            if outcome.status in {'exit_progress','exit_ready'}:
+                effects = [{'type':'lighting_preset','preset':'GAME_EXIT_HOLD','step':outcome.state.seven_exit_step}]
+                if outcome.status == 'exit_ready' and state.handset == 'up':
+                    effects.append({'type':'speak','phrase_id':'PHRASE_036'})
+                return self._decision(state, effects, 'game_' + outcome.status)
             effects = [{"type": "game_wait", "reason": outcome.status,
                         "hints_emitted": outcome.state.hints_emitted}]
             if getattr(engine, 'immersive', False) and outcome.speech_text and state.handset == 'up':
@@ -2231,6 +2262,10 @@ class CanonicalRuntime(SceneMenuMixin):
             state.dialogue_memory.suspend(now)
             if state.mode == "game_active":
                 effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "game_continue_visual"}]
+                if state.game_engine_state is not None and state.game_engine_state.seven_exit_phase != 'idle':
+                    state.game_engine_state = cancel_exit_gesture(state.game_engine_state)
+                    state.game_audio_stage = 'prompt' if state.game_engine_state.phase == 'awaiting_prompt' else 'playing'
+                    effects.append(self._game_lighting(state.game_engine_state))
                 if (state.substate != "game_exit_confirmation" and state.game_engine_state is not None
                         and state.game_engine_state.phase == "instruction"):
                     state.game_engine_state = begin_demonstration(state.game_engine_state, monotonic_now)
@@ -2626,7 +2661,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._start_game(state, game_id, monotonic_now, button)
             if (state.mode == "game_active" and state.game_engine_state is not None
                     and getattr(state.game_engine_state, 'immersive', False) and button == 7
-                    and button not in game_answer_buttons(state.game_engine_state)):
+                    and not hold_exit_policy(state.game_engine_state)):
                 return self._game_exit(state, 'game_exited_by_button')
             if state.mode == "game_active" and state.substate == "game_exit_confirmation":
                 if button == 7:

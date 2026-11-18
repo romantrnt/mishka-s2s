@@ -5,24 +5,24 @@ class DeviceInput {
     Object.assign(this,{send,snapshot,enabled,change,error,clock});
     this.active=new Map();
   }
-  press(id) {
+  press(id,owner=null) {
     if(this.active.has(id)||!this.enabled(id))return false;
-    const record={at:this.clock(),epoch:this.snapshot()?.epoch};
+    const record={at:this.clock(),epoch:this.snapshot()?.epoch,owner};
     this.active.set(id,record);this.change();
     this.send({action:'button',button_id:id,press:'press',epoch:record.epoch}).catch(error=>{
       this.error(error);if(this.active.get(id)===record)this.release(id,true);
     });
     return true;
   }
-  release(id,cancelled=false) {
-    const record=this.active.get(id);if(!record)return Promise.resolve();
+  release(id,cancelled=false,owner=null) {
+    const record=this.active.get(id);if(!record||(owner!==null&&record.owner!==owner))return Promise.resolve();
     this.active.delete(id);this.change();
     const duration=Math.min(120000,Math.max(0,Math.round(this.clock()-record.at)));
     const send=press=>this.send({action:'button',button_id:id,press,epoch:record.epoch,...(press==='hold'||press==='long_hold'?{duration_ms:duration}:{})});
     return (async()=>{
-      try {if(!cancelled&&duration>=600)await send(duration>=5000?'long_hold':'hold');}
+      try {if(!cancelled&&id!==7&&duration>=600)await send(duration>=5000?'long_hold':'hold');}
       catch(error){this.error(error);}
-      finally {await send('release').catch(this.error);}
+      finally {await this.send({action:'button',button_id:id,press:'release',epoch:record.epoch,...(cancelled?{cancelled:true}:{})}).catch(this.error);}
     })();
   }
   cancel() {for(const id of [...this.active.keys()])this.release(id,true);}
@@ -66,7 +66,7 @@ function mountPhone() {
       key.dataset.symbol=String(simulator?.devices?.lighting?.[channels[id][2]]===1);
     }
   }
-  function cleanup(options) {handsetGeneration++;handsetPending=null;input.cancel();bridge.cleanup(options);}
+  function cleanup(options) {handsetGeneration++;handsetPending=null;input.cancel();pointers.clear();bridge.cleanup(options);}
   async function handset() {
     if(handsetPending==='down' || !simulator)return;
     const down=handsetPending==='up'||simulator.devices.handset.state==='up';
@@ -169,24 +169,24 @@ function mountPhone() {
     renderMedia();
   };
   for(const [id,key] of keys) {
-    key.addEventListener('pointerdown',event=>{if(event.button!==0)return;event.preventDefault();if(input.press(id)){pointers.set(event.pointerId,id);key.setPointerCapture(event.pointerId);}});
-    key.addEventListener('pointerup',event=>{event.preventDefault();input.release(id);});
-    key.addEventListener('pointercancel',()=>input.release(id,true));
-    key.addEventListener('lostpointercapture',()=>input.release(id,true));
-    key.addEventListener('keydown',event=>{if(['Space','Enter'].includes(event.code)){event.preventDefault();if(!event.repeat)input.press(id);}});
-    key.addEventListener('keyup',event=>{if(['Space','Enter'].includes(event.code)){event.preventDefault();input.release(id);}});
+    key.addEventListener('pointerdown',event=>{if(event.button!==0)return;event.preventDefault();if(input.press(id,event.pointerId)){pointers.set(event.pointerId,id);key.setPointerCapture(event.pointerId);}});
+    key.addEventListener('pointerup',event=>{event.preventDefault();pointers.delete(event.pointerId);input.release(id,false,event.pointerId);});
+    key.addEventListener('pointercancel',event=>{pointers.delete(event.pointerId);input.release(id,true,event.pointerId);});
+    key.addEventListener('lostpointercapture',event=>{pointers.delete(event.pointerId);input.release(id,true,event.pointerId);});
+    key.addEventListener('keydown',event=>{if(['Space','Enter'].includes(event.code)){event.preventDefault();if(!event.repeat)input.press(id,event.code);}});
+    key.addEventListener('keyup',event=>{if(['Space','Enter'].includes(event.code)){event.preventDefault();input.release(id,false,event.code);}});
     key.addEventListener('blur',()=>input.release(id,true));
     key.addEventListener('click',event=>{event.preventDefault();if(event.detail===0&&!input.active.has(id)){input.press(id);input.release(id);}});
   }
-  window.addEventListener('pointerup',event=>{const id=pointers.get(event.pointerId);pointers.delete(event.pointerId);if(id)input.release(id);});
-  window.addEventListener('pointercancel',event=>{const id=pointers.get(event.pointerId);pointers.delete(event.pointerId);if(id)input.release(id,true);});
+  window.addEventListener('pointerup',event=>{const id=pointers.get(event.pointerId);pointers.delete(event.pointerId);if(id)input.release(id,false,event.pointerId);});
+  window.addEventListener('pointercancel',event=>{const id=pointers.get(event.pointerId);pointers.delete(event.pointerId);if(id)input.release(id,true,event.pointerId);});
   window.addEventListener('keydown',event=>{
     if(event.defaultPrevented||event.repeat||tools.open||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;
     const id=Number(event.key);
-    if(keys.has(id)){event.preventDefault();input.press(id);}
+    if(keys.has(id)){event.preventDefault();input.press(id,event.code);}
     else if(event.code==='Space'&&document.activeElement?.tagName!=='BUTTON'){event.preventDefault();handset();}
   });
-  window.addEventListener('keyup',event=>{const id=Number(event.key);if(input.active.has(id)){event.preventDefault();input.release(id);}});
+  window.addEventListener('keyup',event=>{const id=Number(event.key);if(input.active.has(id)){event.preventDefault();input.release(id,false,event.code);}});
   window.addEventListener('blur',()=>input.cancel());
   document.addEventListener('visibilitychange',()=>{if(document.hidden){cleanup();clearTimeout(mediaTimer);}else if(!stopped)tickMedia();});
   window.addEventListener('pagehide',()=>{stopped=true;cleanup();clearTimeout(mediaTimer);rendererGeneration++;model?.destroy();model=null;});
@@ -212,7 +212,7 @@ function mountPhone() {
     try {
       const {createPhoneModel}=await import('./phone-model.js?v=3-fill-channel-fix');
       if(generation!==rendererGeneration||stopped)return;
-      model=createPhoneModel(stage,{press:id=>input.press(id),release:(id,cancel)=>input.release(id,cancel),handset,project:(id,x,y,w,ratio)=>{const key=keys.get(id);key.style.left=`${x*100}%`;key.style.top=`${y*100}%`;key.style.width=`${w*stage.clientWidth}px`;key.style.height=`${w*stage.clientWidth*ratio}px`;},onFailure:message=>flatView(message)});
+      model=createPhoneModel(stage,{press:id=>input.press(id,'model'),release:(id,cancel)=>input.release(id,cancel,'model'),handset,project:(id,x,y,w,ratio)=>{const key=keys.get(id);key.style.left=`${x*100}%`;key.style.top=`${y*100}%`;key.style.width=`${w*stage.clientWidth}px`;key.style.height=`${w*stage.clientWidth*ratio}px`;},onFailure:message=>flatView(message)});
       stage.dataset.renderer='three';model.update(simulator,input.pressed());$('phone-render-mode').textContent='Плоский вид';$('phone-render-mode').setAttribute('aria-pressed','false');$('phone-render-notice').textContent='';
     } catch(error){if(generation===rendererGeneration)flatView('3D недоступен: плоское управление работает с тем же телефоном.');}
   }

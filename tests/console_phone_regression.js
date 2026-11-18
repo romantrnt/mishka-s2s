@@ -66,6 +66,15 @@ function lightingProjection(){
   check(id,false,false,false,true); // Compensation is a distinct physical channel, not another emblem.
   for(const [digit,symbol] of [[true,true],[false,true],[true,false],[false,false],[true,true],[false,false]])check(id,true,digit,symbol);
  }
+ const fillOrder=[14,13,10,9,6,3,1];
+ for(let step=0;step<=7;step++){
+  snapshot.devices.lighting=Object.fromEntries(fillOrder.slice(0,step).map(channel=>[channel,1]));
+  context.renderMechanical();model.update(snapshot);
+  for(const [id,key] of keys){
+   assert.strictEqual(key.material.emissiveIntensity,id<=step?.32:0,'cumulative hold fills existing button '+id);
+   assert.strictEqual(key.labelMaterial.color.value,off);assert.strictEqual(key.symbolMaterial.color.value,off);
+  }
+ }
  context.simulator=null;context.renderMechanical();model.update(null);
  for(const id of [6,7]){
   const key=keys.get(id),control=controls.get(id);
@@ -83,14 +92,66 @@ async function gestures(){
  now+=601;await input.release(3);
  assert.deepStrictEqual(sent.map(v=>v.press),['press','hold','release']);assert.strictEqual(sent[1].duration_ms,601);
  sent.length=0;input.press(7);now+=5001;await input.release(7);
- assert.deepStrictEqual(sent.map(v=>v.press),['press','long_hold','release']);
+ assert.deepStrictEqual(sent.map(v=>v.press),['press','release'],'7 relies on actual edges and the owned timer, never delayed held metadata');
+ assert(!('cancelled' in sent[1]));
  sent.length=0;input.press(2);now+=7000;epoch=4;input.cancel();await tick();
  assert.deepStrictEqual(sent.map(v=>v.press),['press','release'],'cancel never produces a held action');
+ assert.strictEqual(sent[1].cancelled,true,'blur/pointer abort is an explicit cancelled release');
  assert(sent.every(v=>v.epoch===3),'release retains the original input epoch');
  allow=false;assert(!input.press(1));assert.strictEqual(input.active.size,0);
  allow=true;sent.length=0;input.send=async body=>{sent.push(body);if(body.press==='hold')throw new Error('hold rejected');};
  input.press(1);now+=800;await input.release(1);
  assert.deepStrictEqual(sent.map(v=>v.press),['press','hold','release'],'release survives a rejected hold');assert.strictEqual(errors.length,1);
+ sent.length=0;input.send=async body=>sent.push(body);
+ input.press(7,'first-pointer');now+=7000;
+ assert(!input.press(7,'second-pointer'));
+ await input.release(7,false,'second-pointer');await input.release(7,false,'unaccepted-key');
+ assert.deepStrictEqual(sent.map(v=>v.press),['press'],'an unaccepted pointer/key release cannot finish another input owner');
+ await input.release(7,false,'first-pointer');
+ assert.deepStrictEqual(sent.map(v=>v.press),['press','release']);
+}
+async function workbenchCancelledRelease(){
+ const sent=[],buttonInputs={},buttonRefs=new Map(),listeners=new Map();let now=0;
+ const context=vm.createContext({Promise,BUTTON_IDS:[1,7],buttonInputs,buttonRefs,buttonInputOwners:new Map(),session:()=> 'same-session',performance:{now:()=>now},
+  post:async(path,body)=>sent.push({path,...body}),$:()=>({append(){}}),
+  document:{body:{dataset:{}},activeElement:null,createElement:()=>({classList:{add(){},remove(){}},setAttribute(){},setPointerCapture(){}})},
+  window:{addEventListener:(type,handler)=>listeners.set(type,handler)},
+ });
+ vm.runInContext(source.slice(source.indexOf('function releaseButton('),source.indexOf("$('enable-audio').onclick")),context);
+ context.createButtons();const button=buttonRefs.get(7),event={preventDefault(){},pointerId:1};
+ await button.onpointerdown(event);now=7000;
+ const other={preventDefault(){},pointerId:2};await button.onpointerdown(other);await button.onpointerup(other);await button.onpointercancel(other);
+ assert.deepStrictEqual(sent.map(item=>item.path),['/stand/button'],'unaccepted second pointer cannot release or cancel the first');
+ await button.onpointercancel(event);await button.onpointerup(event);await button.onlostpointercapture(event);
+ assert.deepStrictEqual(sent.map(item=>item.path),['/stand/button','/stand/button-released']);
+ assert.strictEqual(sent[1].cancelled,true,'late pointerup cannot turn an abort into exit');
+ sent.length=0;await button.onpointerdown(event);now+=7000;
+ const released=button.onpointerup(event);await button.onlostpointercapture(event);await released;
+ assert.deepStrictEqual(sent.map(item=>item.path),['/stand/button','/stand/button-released']);
+ assert(!('cancelled' in sent[1]),'actual pointerup releases before capture-loss cleanup');
+ sent.length=0;const legacy=buttonRefs.get(1);await legacy.onpointerdown(event);now+=7000;
+ const legacyRelease=legacy.onpointerup(event);await legacy.onlostpointercapture(event);await legacyRelease;
+ assert.deepStrictEqual(sent.map(item=>item.path),['/stand/button','/stand/button-long-hold','/stand/button-released']);
+ assert(!('cancelled' in sent[2]),'legacy held metadata retains FIFO without turning a real pointerup into cancel');
+ vm.runInContext(source.slice(source.indexOf("window.addEventListener('keydown', event => {"),source.indexOf('// Narrow bridge:')),context);
+ button.disabled=false;
+ const key={preventDefault(){},key:'7',code:'Digit7',repeat:false};
+ sent.length=0;await button.onpointerdown(event);now+=6000;
+ listeners.get('keydown')(key);listeners.get('keyup')(key);await tick();
+ assert.deepStrictEqual(sent.map(item=>item.path),['/stand/button'],'keyboard up cannot release an accepted pointer hold');
+ await button.onpointerup(event);assert.strictEqual(sent.length,2);
+ sent.length=0;listeners.get('keydown')(key);listeners.get('keydown')(key);now+=6000;
+ await button.onpointerdown(other);await button.onpointerup(other);listeners.get('keyup')({...key,code:'Numpad7'});await tick();
+ assert.deepStrictEqual(sent.map(item=>item.path),['/stand/button'],'pointer/numpad release cannot finish a different accepted keyboard hold');
+ listeners.get('keyup')(key);await tick();assert.strictEqual(sent.length,2);assert(!('cancelled' in sent[1]));
+ sent.length=0;listeners.get('keydown')(key);now+=6000;listeners.get('blur')();listeners.get('keyup')(key);await tick();
+ assert.strictEqual(sent.length,2);assert.strictEqual(sent[1].cancelled,true,'keyboard blur aborts once and a late keyup cannot exit');
+ sent.length=0;listeners.get('keydown')(key);context.document.activeElement={tagName:'INPUT'};now+=6000;
+ listeners.get('keyup')(key);await tick();
+ assert.strictEqual(sent.length,2,'matching accepted keyboard release survives focus moving into a text field');
+ sent.length=0;listeners.get('keydown')(key);let prevented=false;
+ listeners.get('keyup')({...key,preventDefault(){prevented=true;}});await tick();
+ assert.strictEqual(sent.length,0,'new text-field keydown remains native');assert.strictEqual(prevented,false,'unowned text-field keyup remains native');
 }
 async function latePermission(){
  let permission,trackStopped=0,created=0,flushed=0;
@@ -369,9 +430,15 @@ function gameGuidance(){
  show('repeat_pattern','playing','demonstrate');check(/Посмотри.*Потом повтори/);
  show('repeat_pattern');check(/Повтори подсвеченные кнопки.*7 — выйти/);
  show('odd_one_out');check(/подсвеченную кнопку.*7 — выйти/);
- show('quiz');check(/подсвеченную кнопку.*ответа 7 нажми и отпусти.*удерживай 7 пять секунд и отпусти/);
- show('quiz','playing','demonstrate');check(/подсвеченную кнопку.*удерживай 7 пять секунд и отпусти/);
+ show('quiz');check(/подсвеченную кнопку.*ответа 7 коротко нажми и отпусти.*держи 7.*Теперь отпускай/);
+ show('quiz','playing','demonstrate');check(/подсвеченную кнопку.*держи 7.*Теперь отпускай/);
  assert.doesNotMatch(fields['guide-text'].textContent,/7 —/,'quiz 7 may be an answer');
+ for(const phase of ['pending','progress','ready']){
+  const state=show('quiz','idle');state.canonical_state.game_exit_hold={phase,step:phase==='ready'?7:3};context.render(state);
+  check(phase==='ready'?/Теперь отпускай 7/:/Держи 7.*Огоньки заполняются/);
+  state.simulator.prompt={text:'Теперь отпускай'};context.window.mishkaPhoneMedia();
+  assert.strictEqual(fields['phone-instruction'].textContent,'Теперь отпускай','owned transcript keeps priority over hold guide');
+ }
  const word=show('word_game');check(/Включи микрофон и назови слово/);
  context.micStarting=true;context.window.mishkaPhoneMedia();check(/Разреши микрофон/);
  context.micStarting=false;context.mic={};context.microphoneAccepting=()=>true;context.window.mishkaPhoneMedia();check(/Назови слово для игры/);
@@ -584,4 +651,4 @@ async function legacyObserverFallback(){
  requests[1].resolve();assert.strictEqual((await second).order,2);
  assert.deepStrictEqual(results,[1,2],'both legacy HTTP results complete in order without a WebSocket');
 }
-(async()=>{lightingProjection();serverInstanceRecovery();await gestures();await latePermission();await microphoneWireFlow();await handsetGeneration();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{lightingProjection();serverInstanceRecovery();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});

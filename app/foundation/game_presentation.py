@@ -40,7 +40,7 @@ class GamePresentationMixin:
         state = self.canonical_runtime.sessions.get(session_id)
         engine = getattr(state, "game_engine_state", None)
         if (state is None or state.mode != "game_active" or state.handset != "up"
-                or state.game_audio_stage != "playing" or engine is None):
+                or state.game_audio_stage != "playing" or engine is None or engine.seven_exit_phase != 'idle'):
             return None
         return (id(state), self._session_epochs.get(session_id, 0), state.active_game_id,
                 engine.run_id, state.game_audio_stage, state.active_audio_id, state.playback_lease)
@@ -290,6 +290,7 @@ class GamePresentationMixin:
             return bool(self._game_prompt_cues.get(session_id) is owner
                 and self.canonical_runtime.sessions.get(session_id) is state
                 and state is not None and state.mode == "game_active" and state.handset == "up"
+                and state.game_engine_state is not None and state.game_engine_state.seven_exit_phase == 'idle'
                 and state.playback_lease == playback_lease
                 and self._session_epochs.get(session_id, 0) == generation
                 and lease and lease.get("playback_id") == playback_id

@@ -12,6 +12,7 @@ _PLAYBACK_FIELDS = frozenset({"response_id", "content_id", "token", "generation"
 _EVENT_FIELDS = {
     "SpeechReceived": frozenset({"text"}),
     **{name: frozenset({"button_id", "duration_ms"}) for name in _BUTTON_EVENTS},
+    'ButtonReleased': frozenset({'button_id','duration_ms','cancelled'}),
     **{name: _PLAYBACK_FIELDS for name in ("AudioStarted", "AudioCompleted")},
     "AudioFailed": _PLAYBACK_FIELDS | {"error_code", "code"},
     "StoryPositionUpdated": _PLAYBACK_FIELDS | {"story_id", "offset_ms"},
@@ -31,6 +32,8 @@ _ALIASES = {"anonymous":"AnonymousStart", "anonymous_start":"AnonymousStart", "h
 
 
 def _safe_field(name: str, value: Any) -> bool:
+    if name == 'cancelled':
+        return type(value) is bool
     if name in _INTEGER_FIELDS:
         return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 2**63 - 1
     if name == "status":
@@ -75,6 +78,8 @@ def parse_event(payload: dict[str, Any], session_id: str, sequence: int, source:
     name = _ALIASES.get(event_name, event_name)
     if name not in EVENT_TYPES:
         raise EventValidationError("unknown event type")
+    if 'cancelled' in payload and (name != 'ButtonReleased' or type(payload['cancelled']) is not bool):
+        raise EventValidationError('cancelled must be a boolean on button release')
     if name in {"DialogueFallback"} | IDENTITY_INTERNAL_EVENT_TYPES:
         # Generic API/UART frames have no authority to assert internal
         # resolution or provider outcomes, regardless of payload/source.

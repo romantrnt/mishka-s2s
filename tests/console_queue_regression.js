@@ -68,7 +68,7 @@ function installBrowserHandlers(h) {
     },
   };
   Object.assign(h.context, {
-    BUTTON_IDS: [1], buttonInputs: {}, buttonRefs: new Map(),
+    BUTTON_IDS: [1], buttonInputs: {}, buttonRefs: new Map(), buttonInputOwners: new Map(),
     performance: {now: () => 700},
     document: {createElement: () => ({
       setAttribute: () => {}, setPointerCapture: () => {},
@@ -91,7 +91,9 @@ async function lifecycleUnderNormalBacklog() {
   const active = h.context.post('/stand/button', {button_id: 1, state: 'pressed'});
   const normal = Array.from({length: 16}, () => h.context.post('/stand/button', {button_id: 2}));
   const browser = installBrowserHandlers(h);
-  const released = browser.button.onpointerup({preventDefault: () => {}});
+  h.context.buttonInputs[1] = 'pressed'; // The admitted press above owns this release.
+  h.context.buttonInputOwners.set(1,1);
+  const released = browser.button.onpointerup({preventDefault: () => {},pointerId:1});
   await tick(); // The rejected hold must still enqueue its finally release.
   const identity = id => ({
     session_id: 'audio-owner', response_id: id, playback_id: id,

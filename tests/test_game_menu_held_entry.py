@@ -82,12 +82,15 @@ def test_inherited_hold_has_no_elapsed_duration_until_fresh_press():
 @pytest.mark.asyncio
 async def test_held_key_survives_game_exit_root_and_second_game_entry():
     h = Harness('3-5')
+    clock = [100.]
+    h.app.monotonic_now = lambda: clock[0]
     try:
         await h.button(1); await h.release(1)
         assert (await h.button(6))['reason'] == 'scene_menu_skipped'
         await select_quiz(h)
-        assert (await h.button(7))['reason'] == 'game_exited_by_button'
-        await h.release(7)
+        assert (await h.button(7))['reason'] == 'game_exit_pending'
+        clock[0] += 6.
+        assert (await h.release(7))['reason'] == 'game_exited_by_long_button'
         assert h.state.mode == 'root_menu'
         assert h.state.game_engine_state is None and h.sid not in h.app._active_audio
         assert 6 in h.state.accepted_buttons_down

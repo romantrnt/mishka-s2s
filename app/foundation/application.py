@@ -15,7 +15,7 @@ from dataclasses import replace
 from typing import Any, Callable
 from weakref import WeakSet
 
-from .game_engine import next_deadline as game_deadline
+from .game_engine import next_deadline as game_deadline, cancel_exit_gesture
 from .engagement_idle import EngagementIdleMixin
 from .domain import AudioOutput, DisplayController, Event, EventPublisher, IntentClassifier, LEDController, Lifecycle, PlaybackHandle, ScenarioRepository, SessionRecord, SessionRepository
 from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, LightingCommand, EXHIBITION_DIGIT_WAVE_GROUPS, EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS, READINESS_WAVE_DURATION_MS, READINESS_WAVE_GROUPS, PICTOGRAM_ELEMENTS
@@ -828,6 +828,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self._identity_requests[session_id] = identity_request
         self._discard_private_welcome(session_id)
         self._drop_engagement(session_id, keys=True)
+        if state is not None and state.game_engine_state is not None and state.game_engine_state.seven_exit_phase != 'idle':
+            state.game_engine_state = cancel_exit_gesture(state.game_engine_state)
         self._cancel_game_timer(session_id)
         self._drop_game_audio_waits(session_id)
         # Resource cleanup can retain canonical admission history. Keep its
@@ -1226,6 +1228,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return None
         deadline = game_deadline(engine)
         wakeup = deadline
+        if engine.seven_exit_phase != 'idle':
+            return (self._session_epochs.get(session_id, 0), engine.run_id, engine.round_generation,
+                    engine.timer_generation, deadline, engine.seven_gesture_generation, wakeup)
         speech_wait = owner is not None and owner in self._game_speech_checks.values()
         if speech_wait or audio_wait is not None:
             mechanics = []
@@ -1244,7 +1249,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if engine.game_id == "word_game" and state.active_audio_id:
             return None
         return (self._session_epochs.get(session_id, 0), engine.run_id, engine.round_generation,
-                engine.timer_generation, deadline, wakeup)
+                engine.timer_generation, deadline, engine.seven_gesture_generation, wakeup)
 
     def _cancel_game_timer(self, session_id: str) -> None:
         self._game_timer_scopes.pop(session_id, None)
@@ -1285,7 +1290,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._game_timer_sequences[session_id] = sequence
         return await self._receive_canonical_event(Event(
             "GameTimer", session_id, sequence, self.now(), "canonical_game_timer",
-            {"run_id": scope[1], "round_generation": scope[2], "timer_generation": scope[3], "deadline": scope[4]},
+            {"run_id": scope[1], "round_generation": scope[2], "timer_generation": scope[3], "deadline": scope[4], 'gesture_generation':scope[5]},
             f"game-timer:{scope[1]}:{scope[2]}:{scope[3]}", self.monotonic_now(),
         ), game_timer_authorized=True, _game_timer_scope=scope)
 
@@ -2289,13 +2294,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     commands = LED_PRESETS.get(preset, ())
                 if preset == "GAME_OUTPUT":
                     commands = game_light_commands(effect.get("buttons", ()), effect.get("display", "digits"))
+                if preset == 'GAME_EXIT_HOLD':
+                    commands = tuple((element, 1) for element in (14,13,10,9,6,3,1)[:int(effect['step'])])
                 if preset == "TARGET":
                     commands = tuple((element_id, 1) for element_id in BUTTON_ELEMENTS.get(int(effect.get("target_button", 0)), ()))
                 desired = {element_id: 0 for element_id in LIGHTING_ELEMENT_IDS}
                 for element_id, state in commands:
                     desired[int(element_id)] = int(state)
                 self.led.set_elements(tuple(
-                    LightingCommand(element_id, state, 140 if preset == "GAME_OUTPUT" else 0)
+                    LightingCommand(element_id, state, 140 if preset in {"GAME_OUTPUT",'GAME_EXIT_HOLD'} else 0)
                     for element_id, state in desired.items()
                 ))
             elif kind == "resume_fixed_story":

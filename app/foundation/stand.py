@@ -3279,6 +3279,9 @@ class HardwareIntegrationStand:
             phase = game.get("phase") if isinstance(game, dict) else None
             if phase in ("instruction", "awaiting_prompt", "demonstrate", "playing", "completed"):
                 canonical_safe["game_phase"] = phase
+            if (isinstance(game, dict) and game.get('seven_exit_phase') in ('pending','progress','ready')
+                    and type(game.get('seven_exit_step')) is int and 0 <= game['seven_exit_step'] <= 7):
+                canonical_safe['game_exit_hold'] = {'phase':game['seven_exit_phase'],'step':game['seven_exit_step']}
         # The operator guide needs the actual exit choice, not arbitrary
         # internal substate strings or private model/profile metadata.
         if (canonical.get("mode") == "game_active"
@@ -3864,7 +3867,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
     @api.post("/stand/button")
     async def button(payload:dict): return transport_response(await stand.inject("button",{"button_id":payload.get("button_id"),"state":"pressed"},payload.get("session_id")))
     @api.post("/stand/button-released")
-    async def button_released(payload:dict): return transport_response(await stand.inject("button_released",{"button_id":payload.get("button_id"),"state":"released"},payload.get("session_id")))
+    async def button_released(payload:dict): return transport_response(await stand.inject("button_released",{"button_id":payload.get("button_id"),"state":"released",**({'cancelled':payload['cancelled']} if 'cancelled' in payload else {})},payload.get("session_id")))
     @api.post("/stand/button-hold")
     async def button_hold(payload:dict): return transport_response(await stand.inject("button_hold",{"button_id":payload.get("button_id"),"duration_ms":payload.get("duration_ms")},payload.get("session_id")))
     @api.post("/stand/button-long-hold")
