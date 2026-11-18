@@ -177,17 +177,11 @@ class ProductionE2EWarmupProbe:
                     "reason": None if failed is None else failed.get("reason", "stage_failed"),
                     "diagnostic": validation_failure}
 
-        engine = getattr(self.manager, "engine", None)
-        original_playback = getattr(engine, "playback", None)
-        silent_playback = _SilentWarmupPlayback()
-        if engine is not None:
-            engine.playback = silent_playback
-        try:
-            return await asyncio.wait_for(run_inner(), total_timeout)
-        except asyncio.TimeoutError:
-            stages.append(self._stage("e2e", (time.perf_counter() - started) * 1000, False, "overall_timeout"))
-            return {"ok": False, "correlation_id": correlation_id, "stages": stages, "reason": "e2e_overall_timeout", "metrics_snapshot": self._metric_snapshot()}
-        finally:
-            await self.audio_pipeline.cancel_session(session_id)
-            if engine is not None and engine.playback is silent_playback:
-                engine.playback = original_playback
+        with self.manager.engine.scoped_playback(_SilentWarmupPlayback()):
+            try:
+                return await asyncio.wait_for(run_inner(), total_timeout)
+            except asyncio.TimeoutError:
+                stages.append(self._stage("e2e", (time.perf_counter() - started) * 1000, False, "overall_timeout"))
+                return {"ok": False, "correlation_id": correlation_id, "stages": stages, "reason": "e2e_overall_timeout", "metrics_snapshot": self._metric_snapshot()}
+            finally:
+                await self.audio_pipeline.cancel_session(session_id)

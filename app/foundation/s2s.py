@@ -24,6 +24,7 @@ import uuid
 import wave
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -31,6 +32,7 @@ from typing import Any, Protocol
 
 logger = logging.getLogger("uvicorn.error")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_playback_bindings: ContextVar[tuple[tuple[Any, Any], ...]] = ContextVar("mishka_playback_bindings", default=())
 
 
 def _project_path(value: str | Path) -> Path:
@@ -3123,6 +3125,26 @@ class LocalS2SPipeline:
             self.generations.pop(session_id, None)
 
 class BoundedConversationEngine:
+    @property
+    def playback(self):
+        for owner, playback in reversed(_playback_bindings.get()):
+            if owner is self:
+                return playback
+        return self._default_playback
+
+    @playback.setter
+    def playback(self, playback):
+        self._default_playback = playback
+
+    @contextlib.contextmanager
+    def scoped_playback(self, playback):
+        # Child tasks retain their sink even after their caller times out.
+        token = _playback_bindings.set(_playback_bindings.get() + ((self, playback),))
+        try:
+            yield
+        finally:
+            _playback_bindings.reset(token)
+
     def __init__(self,llm,tts,voice,playback,config=None,metrics=None,*,allow_quick_replies=None,profile=None,settings=None,lifecycle_hook=None):
         if settings is None:
             from .config import Settings, SettingsError
@@ -3306,7 +3328,7 @@ class BoundedConversationEngine:
                 + ('CATALOGUE_FORM: exactly one offer_game/game_id, open_catalog/catalog, play_story/story_id or request_information/kind without text or other actions, only for a meaningful child request. Ordinary conversation uses SPEECH_FORM. '
                    if response_contract.catalogue else 'Catalogue control actions are forbidden in this mode. ')
                 + f'Spoken text must use at most {age_words} words total. Express a shorter complete thought with normal separate words; never glue words or invent abbreviations to fit. '
-                + ('YOUNG_SPEECH: one complete thought in one Russian sentence; aim for 3-6 words, strict maximum 8. Do not add a follow-up question unless the current scenario requires it. '
+                + ('YOUNG_SPEECH: Сначала выбери одну простую законченную мысль на 3–6 слов. Вырази её сразу одним коротким русским предложением с обычными границами слов; не уплотняй длинную фразу склейкой или сокращениями. Strict maximum 8 words. Do not add a follow-up question unless the current scenario requires it. '
                    if response_contract.young else 'Use one or two short Russian sentences. '))
         native_streaming = _native_audio_stream_method(self.tts) is not None
         profile_context=context.profile.prompt_fields()

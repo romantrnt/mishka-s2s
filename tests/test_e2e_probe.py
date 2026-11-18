@@ -9,7 +9,7 @@ import pytest
 from app.foundation.e2e_probe import ProductionE2EWarmupProbe
 from app.foundation.validation import AsyncResponseValidator
 from app.foundation.observability import Metrics as ObservabilityMetrics
-from app.foundation.s2s import AudioTurnResult, PipelineMetrics, TurnResult
+from app.foundation.s2s import AudioTurnResult, BoundedConversationEngine, PipelineMetrics, TurnResult
 
 
 class Trace:
@@ -61,9 +61,18 @@ class Pipeline:
         self.cancelled.append(session_id)
 
 
+class ProbeEngine:
+    playback = BoundedConversationEngine.playback
+    scoped_playback = BoundedConversationEngine.scoped_playback
+
+    def __init__(self, metrics):
+        self.metrics = metrics
+        self.playback = None
+
+
 def manager(profile="production_candidate", report=None):
     metrics = Metrics(report)
-    engine = SimpleNamespace(metrics=metrics)
+    engine = ProbeEngine(metrics)
     return SimpleNamespace(settings=SimpleNamespace(profile=profile), engine=engine)
 
 
