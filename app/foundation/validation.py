@@ -54,6 +54,14 @@ class SpokenResponseRequirement:
             "used to fit the word limit. Do not confuse normal Russian inflections, proper names, accepted hyphenation "
             "or a valid short word-game answer with corruption. Harmless fictional Mishka persona is allowed. "
             f"The total word limit is {policy.max_words}. "
+            "Обязательная проверка русской речи дополняет все правила безопасности. "
+            "Оцени буквальный текст candidate; не исправляй его мысленно и не оценивай исправленный вариант. "
+            "Безопасный смысл сам по себе недостаточен для allow: нужны одновременно безопасность и корректная речь. "
+            "Проверь границы всех самостоятельных слов: искусственная склейка двух слов — ошибка, включая сочетание прилагательного с существительным, а также предлога, частицы или местоимения с соседним словом, "
+            "даже если фраза понятна и укладывается в лимит. При явной ошибке или обрывке выбери block; при сомнении review. "
+            "Нормативные словоформы и слитные написания, имена собственные, принятые дефисные формы и корректное "
+            "отдельное слово в словесной игре не являются ошибкой. Не оправдывай склейку сказочностью, возрастом "
+            "ребёнка или лимитом слов; не дописывай, не разделяй и не заменяй candidate. "
         )
         if policy.band == "1-3":
             prompt += "Require one complete thought in one sentence; do not require an extra question. "
@@ -238,6 +246,33 @@ class OllamaMiniLLMValidator:
         "required": ["decision", "confidence"],
         "additionalProperties": False,
     }
+    SPOKEN_DECISION_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "quality": {"type": "string", "enum": ["valid", "invalid", "review"]},
+            "decision": {"type": "string", "enum": ["allow", "block", "review"]},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": ["quality", "decision", "confidence"],
+        "additionalProperties": False,
+    }
+    SPOKEN_QUALITY_INSTRUCTION = (
+        " Дополнительное обязательное поле quality оценивает буквальную русскую речь отдельно от безопасности: "
+        "valid — все слова написаны раздельно или слитно по нормам русского языка, речь корректна; "
+        "invalid — есть искусственная склейка самостоятельных слов, обрывок или испорченная грамматика; review — не уверен. "
+        "Сначала заполни quality по тексту как он написан, затем decision и confidence по всем правилам. "
+        "Добрый или сказочный смысл не устраняет ошибку написания. Не исправляй текст и не подменяй его предполагаемым смыслом. "
+        "Allow возможно только при quality=valid и соблюдении всех предшествующих правил безопасности."
+    )
+
+    @staticmethod
+    def _quality_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate_spoken_quality_field")
+            value[key] = item
+        return value
 
     async def _request(self, payload: bytes) -> bytes:
         async with httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=False) as client:
@@ -306,11 +341,12 @@ class OllamaMiniLLMValidator:
         if spoken_requirement is not None:
             if story or not isinstance(spoken_requirement, SpokenResponseRequirement):
                 raise ValueError("invalid_spoken_requirement")
-            prompt += spoken_requirement.instruction()
+            prompt += spoken_requirement.instruction() + self.SPOKEN_QUALITY_INSTRUCTION
         keep_alive = self.keep_alive.strip()
         if keep_alive.lstrip("-").isdigit():
             keep_alive = int(keep_alive)
-        request = {"model": self.model, "stream": False, "think": False, "format": self.DECISION_SCHEMA,
+        request = {"model": self.model, "stream": False, "think": False,
+                              "format": self.SPOKEN_DECISION_SCHEMA if spoken_requirement is not None else self.DECISION_SCHEMA,
                               "keep_alive": keep_alive,
                               "messages": [{"role": "system", "content": prompt},
                                            {"role": "user", "content": json.dumps({"candidate": text,
@@ -340,13 +376,21 @@ class OllamaMiniLLMValidator:
             if story and (outer.get("done") is not True or outer.get("done_reason") != "stop"):
                 return ValidationDecision("block",False,"story_incomplete_terminal",0.,"story_context")
             content = outer.get("message", {}).get("content", "")
-            parsed = json.loads(content)
+            parsed = (json.loads(content, object_pairs_hook=self._quality_object) if spoken_requirement is not None
+                      else json.loads(content))
+            if spoken_requirement is not None:
+                if (not isinstance(parsed, dict) or set(parsed) != {"quality", "decision", "confidence"}
+                        or type(parsed["quality"]) is not str or parsed["quality"] not in {"valid", "invalid", "review"}):
+                    raise ValueError("invalid_spoken_quality_decision")
             action = parsed.get("decision", "review")
             confidence = parsed.get("confidence", 0.0)
             if (type(confidence) not in (int, float) or not math.isfinite(confidence)
                     or not 0 <= confidence <= 1 or action not in {"allow", "block", "review"}):
                 raise ValueError("invalid validation decision")
             allowed = action == "allow" and confidence >= 0.75
+            if spoken_requirement is not None and parsed["quality"] != "valid" and action == "allow":
+                return ValidationDecision("block", False, "mini_llm_quality_" + parsed["quality"], confidence,
+                    "ollama_mini_llm", (time.perf_counter() - started) * 1000)
             return ValidationDecision(action, allowed, "mini_llm_" + action, confidence, "ollama_mini_llm", (time.perf_counter() - started) * 1000)
         except Exception as exc:
             return ValidationDecision("block" if self.fail_closed else "review", False, "mini_llm_error:" + type(exc).__name__, 0.0, "ollama_mini_llm", (time.perf_counter() - started) * 1000)

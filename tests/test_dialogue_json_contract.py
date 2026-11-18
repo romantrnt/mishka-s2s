@@ -155,14 +155,18 @@ def test_request_scope_is_frozen_and_schema_never_leaks_between_ages_or_catalogu
         original.to_xml('{"type":"play_story","story_id":"fixed_neznayka_v1"}')
 
 
-def semantic(e, *, verdict="allow", confidence=.99, before_reply=None):
+def semantic(e, *, verdict="allow", confidence=.99, before_reply=None, quality="valid"):
     requests = []
     mini = OllamaMiniLLMValidator()
     async def request(raw):
-        requests.append(json.loads(raw))
+        payload=json.loads(raw)
+        requests.append(payload)
         if before_reply:
             await before_reply()
-        return json.dumps({"message":{"content":json.dumps({"decision":verdict,"confidence":confidence})}}).encode()
+        reply={"decision":verdict,"confidence":confidence}
+        if "quality" in payload["format"]["properties"]:
+            reply={"quality":quality,**reply}
+        return json.dumps({"message":{"content":json.dumps(reply)}}).encode()
     mini._request = request
     e.response_validator = AsyncResponseValidator(mini)
     return requests
@@ -365,3 +369,57 @@ async def test_actual_older_wire_validates_two_sentences_but_rejects_three_befor
     assert second.fallback_reason and not second.chunks and not second.actions
     assert len(semantic_requests)==1 and len(requests)==2
     assert not e.playback.played
+
+
+@pytest.mark.asyncio
+async def test_production_shaped_quality_request_judges_literal_word_boundaries_without_repair():
+    """Request composition only; the controlled verdict does not prove model quality."""
+    requests=[]
+    mini=OllamaMiniLLMValidator(model='qwen3:14b',num_ctx=16384,keep_alive='-1')
+    mini._story_runner_pinned=True  # Same already-pinned launch option as the observed production request.
+    async def request(raw):
+        requests.append(json.loads(raw))
+        return b'{"message":{"content":"{\\"quality\\":\\"invalid\\",\\"decision\\":\\"block\\",\\"confidence\\":1.0}"}}'
+    mini._request=request
+    validator=AsyncResponseValidator(mini)
+    text='Я живу в добром волшебном лесу рядом срекой.'
+    decision=await validator.validate(text,spoken_requirement=SpokenResponseRequirement('1-3','bear_dialogue'))
+    assert decision.blocked and len(requests)==1
+    payload=requests[0]
+    assert payload['model']=='qwen3:14b' and payload['options']=={'temperature':0,'num_predict':96,'num_ctx':16384}
+    assert payload['stream'] is False and payload['think'] is False and payload['shift'] is False
+    assert payload['format']==mini.SPOKEN_DECISION_SCHEMA and payload['keep_alive']==-1
+    assert json.loads(payload['messages'][1]['content'])=={'candidate':text,'context':'()'}
+    policy=payload['messages'][0]['content']
+    assert 'Оцени буквальный текст candidate' in policy
+    assert 'Безопасный смысл сам по себе недостаточен для allow' in policy
+    assert 'не исправляй его мысленно' in policy
+    assert 'предлог' in policy and 'местоимени' in policy
+    assert 'срекой' not in policy and 'стобой' not in policy
+
+
+@pytest.mark.asyncio
+async def test_new_quality_rubric_stays_out_of_trusted_unscoped_and_full_story_requests():
+    from test_story_backend_context import contract, URL, MODEL, response
+    requests=[]
+    mini=OllamaMiniLLMValidator(URL,MODEL,story_backend_contract=await contract())
+    async def request(raw):
+        payload=json.loads(raw)
+        requests.append(payload)
+        if 'quality' in payload['format']['properties']:
+            return b'{"message":{"content":"{\\"quality\\":\\"valid\\",\\"decision\\":\\"allow\\",\\"confidence\\":0.99}"}}'
+        return response()
+    mini._request=request
+    validator=AsyncResponseValidator(mini)
+    assert (await validator.validate_trusted('Выбери кнопку.')).allowed and not requests
+    assert (await validator.validate('Я живу в лесу.')).allowed
+    assert (await validator.validate_story('Лиса вернулась домой. '*30)).allowed
+    base_policy=requests[0]['messages'][0]['content']
+    assert requests[1]['messages'][0]['content']==base_policy
+    assert 'проверка русской речи' not in base_policy
+    assert (await validator.validate('Лиса, теперь ты.',spoken_requirement=
+        SpokenResponseRequirement('1-3','game_active'))).allowed
+    assert requests[2]['messages'][0]['content'].startswith(base_policy)
+    assert 'Оцени буквальный текст candidate' in requests[2]['messages'][0]['content']
+    assert 'valid short word-game answer' in requests[2]['messages'][0]['content']
+    assert len(requests)==3
