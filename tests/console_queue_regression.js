@@ -23,7 +23,7 @@ const response = (value = {}, status = 200) => ({
 function harness() {
   const requests = [], inputs = [], results = [], errors = [], timers = new Map();
   let sessionId = 'first-session';
-  let timerId = 0;
+  let timerId = 0, elapsed = 0;
   const context = vm.createContext({
     AbortController, FETCH_TIMEOUT_MS: 7000, current: null,
     session: () => sessionId, apiPath: path => path,
@@ -31,7 +31,7 @@ function harness() {
     recordLiveResult: value => results.push(value),
     showError: error => errors.push(error),
     window: {
-      setTimeout: callback => { const id = ++timerId; timers.set(id, callback); return id; },
+      setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, {callback, due: elapsed + delay}); return id; },
       clearTimeout: id => timers.delete(id),
     },
     // Deliberately ignore AbortSignal: late network work must be fenced even
@@ -48,7 +48,8 @@ function harness() {
   return {
     context, requests, inputs, results, errors, timers,
     selectSession: value => { sessionId = value; },
-    expire: () => { for (const callback of [...timers.values()]) callback(); },
+    expire: () => { for (const timer of [...timers.values()]) timer.callback(); },
+    advance: milliseconds => { elapsed += milliseconds; for (const timer of [...timers.values()]) if (timer.due <= elapsed) timer.callback(); },
   };
 }
 
@@ -75,12 +76,12 @@ function installBrowserHandlers(h) {
     })},
     $: id => id === 'buttons' ? {append: button => buttons.push(button)} : (fields[id] ||= {}),
     audioContext, unlockAudio: async () => audioContext,
-    activeSources: new Set(), activeStoryPlayback: null,
+    activeSources: new Set(), activeStoryPlayback: null, stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null,
     storySpeechGeneration: 1, audioReady: true,
     current: {session: {node: 'fixed_story_playing'}},
   });
   vm.runInContext(source.slice(source.indexOf('function releaseButton('), source.indexOf("$('enable-audio').onclick")), h.context);
-  vm.runInContext(source.slice(source.indexOf('function audioIdentity('), source.indexOf('function speakCommands(')), h.context);
+  vm.runInContext(source.slice(source.indexOf('function handleAudioStop('), source.indexOf('function speakCommands(')), h.context);
   h.context.createButtons();
   return {sources, button: buttons[0]};
 }
@@ -313,6 +314,61 @@ async function resetAndCleanupPressure() {
   assert.strictEqual(h.timers.size, 0);
 }
 
+async function inferenceDeadline() {
+  const h = harness();
+  const body = deferred();
+  const text = h.context.post('/stand/text', {text: 'slow trained voice'});
+  await tick();
+  h.advance(7001);
+  await tick();
+  assert(!h.requests[0].options.signal.aborted, 'trained text generation survives the metadata deadline');
+  h.requests[0].resolve({ok: true, status: 200, text: () => body.promise});
+  await tick();
+  h.advance(7001);
+  await tick();
+  assert(!h.requests[0].options.signal.aborted, 'text response body retains the longer total deadline');
+  body.resolve('{"turn":"completed"}');
+  assert.strictEqual((await text).turn, 'completed');
+  await tick();
+  assert.strictEqual(h.timers.size, 0);
+
+  const metadata = h.context.fetchWithTimeout('/ready').catch(error => error);
+  h.advance(7001);
+  assert.strictEqual((await metadata).name, 'AbortError', 'metadata keeps its short bounded deadline');
+  h.context.audioReconnectPending = true;
+  const cleanup = h.context.post('/stand/reset').catch(error => error);
+  assert.strictEqual(h.context.audioReconnectPending, false, 'urgent cleanup revokes reconnect recovery');
+  await tick();
+  h.advance(7001);
+  assert.strictEqual((await cleanup).name, 'AbortError', 'cleanup keeps its short bounded deadline');
+  await tick();
+  assert.strictEqual(h.timers.size, 0);
+}
+
+async function modelProducingDeadlines() {
+  for (const [path, body] of [
+    ['/stand/simulator/action', {action: 'button', button_id: 1, press: 'press', epoch: 3}],
+    ['/stand/simulator/action', {action: 'handset', state: 'up', epoch: 3}],
+    ['/stand/button', {button_id: 1}], ['/stand/handset', {state: 'up'}],
+    ['/stand/audio/completed', {response_id: 'PERSONAL_WELCOME'}],
+    ['/stand/audio/failed', {response_id: 'PERSONAL_WELCOME'}],
+  ]) {
+    const h = harness();
+    const task = h.context.post(path, body);
+    await tick(); h.advance(7001); await tick();
+    assert(!h.requests[0].options.signal.aborted, path + ' can await model output beyond metadata timeout');
+    const down = h.context.post('/stand/simulator/action', {action: 'handset', state: 'down', epoch: 3});
+    await tick();
+    assert.strictEqual(await task, null, path + ' remains immediately cancellable by hangup');
+    assert(h.requests[0].options.signal.aborted);
+    h.requests[1].resolve(response()); await down;
+  }
+  const h = harness();
+  const release = h.context.post('/stand/simulator/action', {action: 'button', button_id: 1, press: 'release', epoch: 3}).catch(error => error);
+  h.advance(7001);
+  assert.strictEqual((await release).name, 'AbortError', 'release-only callback keeps short deadline');
+}
+
 async function totalPostDeadline() {
   const h = harness();
   const body = deferred();
@@ -370,6 +426,8 @@ async function run() {
   await cleanupOrdering();
   await orderedRecoveryAndAudioIdentity();
   await resetAndCleanupPressure();
+  await inferenceDeadline();
+  await modelProducingDeadlines();
   await totalPostDeadline();
   await ignoredCallerErrors();
   console.log('console queue regression: backlog, urgent cleanup, stale fences, FIFO, audio identity and total deadlines passed');

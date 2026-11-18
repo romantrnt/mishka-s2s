@@ -23,7 +23,6 @@ class GameHarness:
     async def start(self,slot=1,voice=True):
         if voice:await self.send('HandsetLifted')
         await self.press(1)
-        if voice:assert (await self.press(1))['reason']=='scene_menu_skipped'
         return await self.press(slot)
     async def terminal(self,kind='AudioCompleted',owner=None):
         owner=owner or dict(self.app._active_audio[self.sid])

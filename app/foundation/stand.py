@@ -30,7 +30,8 @@ from .domain import EVENT_TYPES, Event, Lifecycle, PlaybackHandle
 from .hardware import (HardwareFrame, PTYUARTSimulator, PosixSerialTransport,
                        SerialHardwareAdapter, decode_frame, encode_frame)
 from .canonical_contract import FixedStoryManifest, canonical_state_nodes
-from .s2s import AudioChunk, SoundDeviceCaptureController, SoundDevicePlaybackController
+from .s2s import (AudioChunk, SoundDeviceCaptureController, SoundDevicePlaybackController,
+                  AUDIO_FAILURE_STAGES, AUDIO_FAILURE_EXCEPTION_CLASSES, AUDIO_FAILURE_CODES)
 from .input_adapters import KeyboardHIDInputAdapter, NormalizedInputEvent
 from .led_contract import BUTTON_LED_COLORS, button_contract, canonical_led_state, canonical_led_state_from_lighting, fixed_button_colors
 from .lighting import (
@@ -42,6 +43,8 @@ from .lighting import (
     LightingCommand,
     LightingController,
     ExhibitionLightingEngine,
+    EXHIBITION_WAVE_GROUPS,
+    EXHIBITION_DIGIT_WAVE_GROUPS,
     READINESS_WAVE_DURATION_MS,
     READINESS_WAVE_GROUPS,
     LIGHTING_ELEMENT_IDS,
@@ -92,7 +95,7 @@ _PARSER_REASON_CODES = {
     "unsafe or oversized model output": "unsafe_model_output",
 }
 _PIPELINE_EVENTS = frozenset({
-    "audio_cancelled", "audio_dropped", "audio_ready", "barge_in", "chunk_closed",
+    "audio_cancelled", "audio_dropped", "audio_ready", "audio_generation_failed", "barge_in", "chunk_closed",
     "first_audio_gate_entered", "first_audio_gate_released", "input_completed",
     "playback_cancelled", "playback_finished", "playback_started", "rvc_v2_fallback",
     "speech_end", "token_received", "tts_started", "turn_started", "vad_failure",
@@ -273,6 +276,37 @@ class StandHub:
     def is_owner(self, websocket) -> bool:
         return self._owner is websocket
 
+    def owner_binding(self):
+        if self._closed or self._owner not in self.clients:
+            return None
+        return self._owner, self._lease_generation
+
+    def owner_binding_current(self, binding) -> bool:
+        return bool(binding is not None and self.owner_binding() == binding)
+
+    async def send_private(self, payload, binding, current) -> bool:
+        """Send ephemeral PCM to its original authenticated write lease only."""
+        if not self.owner_binding_current(binding) or not current():
+            return False
+        websocket = binding[0]
+        lock = self._send_locks.get(websocket)
+        if lock is None:
+            return False
+        try:
+            async with lock:
+                if not self.owner_binding_current(binding) or not current():
+                    return False
+                await asyncio.wait_for(websocket.send_json(payload), timeout=self.SEND_TIMEOUT_S)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A private send exception may retain the PCM envelope. Never
+            # serialize its message, or retry on a replacement connection.
+            self._send_failures += 1
+            await self._evict_clients((websocket,))
+            raise RuntimeError("private_pcm_transport_failed") from None
+
     def lease_snapshot(self) -> dict[str, Any]:
         return {
             "owner_connected": self._owner is not None,
@@ -437,7 +471,9 @@ async def _reject_websocket_admission(websocket, *, code: int, error_code: str, 
 
 class BrowserPlaybackController:
     """Streams real provider PCM to the browser console; no child audio is stored."""
-    def __init__(self, hub: StandHub): self.hub=hub; self.active_token=0; self._generation=0; self.metrics=None
+    def __init__(self, hub: StandHub, checkpoint_request=None):
+        self.hub=hub; self.active_token=0; self._generation=0; self.metrics=None
+        self.checkpoint_request = checkpoint_request
     async def play(self, audio: AudioChunk):
         generation=self._generation
         if audio.token!=self.active_token: return
@@ -448,10 +484,13 @@ class BrowserPlaybackController:
             if self.metrics is not None:
                 self.metrics.mark_voice(audio.session_id, "proxy_send", generation_id=audio.generation_id)
             await self.hub.publish({"type":"audio_pcm_output","sample_rate":audio.sample_rate,
-                                    "token":audio.token,"data_b64":base64.b64encode(pcm).decode()})
+                                    "token":audio.token,"session_id":audio.session_id,"generation":generation,
+                                    "data_b64":base64.b64encode(pcm).decode()})
     async def stop(self):
         self._generation+=1
-        await self.hub.publish({"type":"audio_stop","generation":self._generation})
+        request = self.checkpoint_request() if callable(self.checkpoint_request) else None
+        await self.hub.publish({"type":"audio_stop","generation":self._generation,
+                                "checkpoint_request": request})
     def readiness(self): return {"ready":True,"provider":"browser_web_audio"}
 
 
@@ -610,6 +649,25 @@ class UARTAudioOutput:
     def resume(self): self.adapter.send({"type":"audio_resume","payload":{}})
     def cancel(self, token): self.adapter.send({"type":"audio_stop","payload":{"token":token}})
 
+
+class BrowserUARTAudioOutput(UARTAudioOutput):
+    """Keep public UART assets, with a separate lease-bound private PCM port."""
+
+    def __init__(self, adapter, available, play_pcm, *, owned_render_timeout_s=8.,
+                 owned_voice_timeout_s=1.5):
+        super().__init__(adapter)
+        self._private_available = available
+        self._private_play = play_pcm
+        self.owned_render_timeout_s = owned_render_timeout_s
+        self.owned_voice_timeout_s = owned_voice_timeout_s
+
+    @property
+    def private_pcm_supported(self):
+        return self._private_available()
+
+    def play_pcm_owned(self, handle: PlaybackHandle, audio: AudioChunk):
+        self._private_play(handle, audio)
+
 class UARTDisplayController:
     def __init__(self, adapter: SerialHardwareAdapter): self.adapter=adapter
     def show(self, asset_id, text, token):
@@ -726,6 +784,9 @@ class HardwareIntegrationStand:
         self._startup_diagnostics: deque[dict[str, Any]] = deque(maxlen=50)
         self._input_start_error: dict[str, Any] | None = None
         self._closed = False
+        self._browser_pcm_binding = None
+        self._browser_pcm_playback = None
+        self._browser_capture_owners = {}
         self._audio_event_sequence = 0
         self._lighting_wave = {'active': False, 'stage': 0, 'total_stages': len(READINESS_WAVE_GROUPS), 'elements': []}
         # PTY writes/reads are a transport transaction.  Audio inference is
@@ -778,8 +839,15 @@ class HardwareIntegrationStand:
             self.lighting_output = FakeLightingOutput()
             self._lighting_status = {"state": "simulated", "backend": "fake_lighting"}
             self.audio_input = None
-            self.playback=BrowserPlaybackController(self.hub)
-            self.audio_output = UARTAudioOutput(self.adapter)
+            self.playback=BrowserPlaybackController(self.hub, self._browser_story_checkpoint_request)
+            # Native Vox renders a full spoken menu before returning PCM.
+            # Its configured budget applies only to this browser voice route.
+            trained_voice = self.settings.tts_provider == "voxcpm765"
+            self.audio_output = BrowserUARTAudioOutput(
+                self.adapter, self._browser_private_pcm_available, self._browser_pcm_play,
+                owned_render_timeout_s=(self.settings.tts_timeout_s + self.settings.rvc_timeout_s
+                                        if trained_voice else 8.),
+                owned_voice_timeout_s=(self.settings.rvc_timeout_s if trained_voice else 1.5))
         self.application,self.scenarios,self.metrics,self.publisher=build_application(
             content_root,self.settings,audio_output=self.audio_output,
             led_controller=UARTLEDController(self.adapter, self.lighting_output, legacy_sink=self._record_legacy_led, stage_hook=self._publish_lighting_wave_stage, effect_hook=self._publish_lighting_effect_frame, monotonic_now=self.monotonic_now, background_scheduler=self.background_scheduler),display_controller=UARTDisplayController(self.adapter),playback_override=self.playback,monotonic_now=self.monotonic_now,background_scheduler=self.background_scheduler)
@@ -1233,6 +1301,115 @@ class HardwareIntegrationStand:
                 "content_id": handle.response_id, "token": handle.token,
                 "generation": handle.generation, "playback_id": handle.playback_id,
                 "playback_lease": handle.playback_lease}.items()))
+
+    def _browser_private_pcm_available(self) -> bool:
+        app = getattr(self, "application", None)
+        if app is None or self._closed:
+            return False
+        scope = (self.active_session_id, app._session_epochs.get(self.active_session_id, 0))
+        saved = self._browser_pcm_binding
+        if saved is None or saved[0] != scope:
+            binding = self.hub.owner_binding()
+            if binding is None:
+                return False
+            self._browser_pcm_binding = (scope, binding)
+            saved = self._browser_pcm_binding
+        # Reconnecting cannot claim a previous session's prepared greeting.
+        return self.hub.owner_binding_current(saved[1])
+
+    def _browser_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
+        from .owned_speech import OWNED_PCM_IDS
+        from .private_welcome import valid_pcm
+        saved = self._browser_pcm_binding
+        if (handle.response_id not in OWNED_PCM_IDS or not valid_pcm(audio)
+                or not 8000 <= audio.sample_rate <= 96000
+                or len(audio.samples) > 300 * audio.sample_rate
+                or audio.token != handle.token or audio.session_id != handle.session_id
+                or saved is None or saved[0] != (handle.session_id, handle.generation)
+                or not self.hub.owner_binding_current(saved[1])):
+            raise RuntimeError("private_pcm_invalid_owner")
+        state = self.application.canonical_runtime.sessions.get(handle.session_id)
+        identity_binding = (state.profile_ref, state.identity_request_id) if state is not None else None
+        # The pending welcome must survive draining its preceding ring-stop
+        # UART command. It joins cancellable output tasks after that drain.
+        self._schedule_notification(
+            self._play_browser_pcm_audio(handle, audio, saved[1], identity_binding),
+            operation="browser_private_pcm", session_id=handle.session_id)
+
+    def _browser_pcm_callback_current(self, payload) -> bool:
+        from .owned_speech import OWNED_PCM_IDS
+        if self.hardware_mode == "physical" or payload.get("response_id") not in OWNED_PCM_IDS:
+            return True
+        saved = self._browser_pcm_playback
+        if saved is None:
+            return False
+        handle, binding, identity_binding = saved
+        identity = {"session_id": handle.session_id, "response_id": handle.response_id,
+                    "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
+                    "generation": handle.generation, "token": handle.token}
+        return bool(all(payload.get(key) == value for key, value in identity.items())
+                    and self.hub.owner_binding_current(binding)
+                    and self._pcm_owner_current(handle, identity_binding))
+
+    async def _play_browser_pcm_audio(self, handle, audio, binding, identity_binding):
+        task = asyncio.current_task()
+        def current():
+            return bool(not self._closed and self.hub.owner_binding_current(binding)
+                        and self._pcm_owner_current(handle, identity_binding))
+        try:
+            if not current():
+                return
+            async with self._transport_lock:
+                await self._flush_device_commands(timeout=1.0)
+            if not current():
+                return
+            previous = tuple(self._response_audio_tasks)
+            for previous_task in previous:
+                previous_task.cancel()
+            if previous:
+                await asyncio.gather(*previous, return_exceptions=True)
+            if not current():
+                return
+            self._response_audio_tasks.add(task)
+            self._browser_pcm_playback = (handle, binding, identity_binding)
+            self.playback.active_token = handle.token
+            transport_generation = self.playback._generation
+            playback = {"session_id": handle.session_id, "response_id": handle.response_id,
+                        "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
+                        "generation": handle.generation, "token": handle.token}
+            # The owner consumes preceding UART stops before accepting PCM.
+            if not await self.hub.send_private(
+                    {"type": "stand_state", "state": self.panel_snapshot()}, binding, current):
+                return
+            for offset in range(0, len(audio.samples), 4096):
+                if not current() or transport_generation != self.playback._generation:
+                    return
+                values = audio.samples[offset:offset + 4096]
+                pcm = struct.pack("<" + "h" * len(values), *(round(value * 32767) for value in values))
+                if not await self.hub.send_private({
+                    "type": "audio_pcm_output", "private": True, "playback": playback,
+                    "sample_rate": audio.sample_rate, "token": handle.token,
+                    "session_id": handle.session_id, "generation": transport_generation,
+                    "first": offset == 0, "final": offset + len(values) == len(audio.samples),
+                    "data_b64": base64.b64encode(pcm).decode("ascii"),
+                }, binding, current):
+                    return
+            # Delivery is not playback completion. Only the browser's final
+            # source.onended may submit the immutable AudioCompleted identity.
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if current():
+                self._audio_event_sequence += 1
+                await self.application.receive_async(Event("AudioFailed", handle.session_id,
+                    self._audio_event_sequence, time.time(), "browser_private_pcm", {
+                        "response_id": handle.response_id, "token": handle.token,
+                        "generation": handle.generation, "playback_id": handle.playback_id,
+                        "playback_lease": handle.playback_lease, "error_code": "private_pcm_failed",
+                    }, "private-pcm:" + handle.playback_id))
+        finally:
+            self._response_audio_tasks.discard(task)
+            audio = None
 
     def _headless_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
         from .owned_speech import OWNED_PCM_IDS
@@ -2047,6 +2224,13 @@ class HardwareIntegrationStand:
             time.sleep(.001)
         return []
 
+    def _browser_story_checkpoint_request(self):
+        transfer = self.application._public_story_transfer(self.active_session_id)
+        if transfer is None:
+            return None
+        return {"session_id": self.active_session_id, "story_id": transfer["story_id"],
+                **transfer["old"], "target_generation": transfer["epoch"]}
+
     def _drain_device_commands(self):
         data=self.pty.read_device_available()
         if data: self._device_buffer+=data
@@ -2092,18 +2276,27 @@ class HardwareIntegrationStand:
                         operation=f"{frame.type}_notification", session_id=self.active_session_id,
                     )
                 if frame.type=="audio_stop":
+                    request = self._browser_story_checkpoint_request()
+                    if request is not None:
+                        payload["checkpoint_request"] = request
                     self._cancel_story_audio()
                     self._cancel_response_audio()
                     self.playback._generation += 1
                     self._schedule_notification(
-                        self.hub.publish({"type":"audio_stop","generation":self.playback._generation}),
+                        self.hub.publish({"type":"audio_stop","generation":self.playback._generation,
+                                          "command_sequence":frame.sequence,
+                                          "checkpoint_request":payload.get("checkpoint_request")}),
                         operation="audio_stop_notification", session_id=self.active_session_id,
                     )
                 # Story playback has one browser-owned path: the console fetches
                 # the allowlisted WAV endpoint for the audio_play command.  Do not
                 # also synthesize and publish the same story as PCM here; that
                 # created deterministic double playback in child mode.
-                self.commands.append({"at":time.time(),"type":frame.type,"sequence":frame.sequence,"payload":payload})
+                command = {"at":time.time(),"type":frame.type,"sequence":frame.sequence,"payload":payload}
+                self.commands.append(command)
+                remote = getattr(self, "remote_devices", None)
+                if remote is not None:
+                    remote.record_command(command)
             except ValueError as exc: self.errors.append({"at":time.time(),"stage":"device_command","error":str(exc)})
 
     async def _flush_device_commands(self, timeout=1.0):
@@ -2153,6 +2346,19 @@ class HardwareIntegrationStand:
         sid = session_id or self.active_session_id
         if message_type == "audio_pcm":
             _ingress_guard = _ingress_guard or self._audio_owner_guard(sid)
+        remote = getattr(self, "remote_devices", None)
+        if remote is not None:
+            blocked = await remote.before_input(message_type, payload)
+            if blocked is not None:
+                return blocked
+            from .remote_devices import is_cleanup
+            if not is_cleanup(message_type, payload):
+                remote_epoch = remote.epoch
+                prior_guard = _ingress_guard
+                _ingress_guard = lambda: (remote.epoch == remote_epoch and remote.connected
+                                          and (prior_guard is None or prior_guard()))
+        if message_type == "audio_pcm":
+            _ingress_guard = _ingress_guard or self._audio_owner_guard(sid)
             if not _ingress_guard():
                 return {"reason": "stale_session_generation", "outputs": []}
         if self.application.max_json:
@@ -2177,7 +2383,10 @@ class HardwareIntegrationStand:
                 await self._offload_uart(self._device_write, message_type, payload)
                 frames=await self._offload_uart(self._receive_frames_sync)
             if not frames: raise RuntimeError("serial adapter received no frame from PTY")
-            for frame in frames: result=await self._dispatch(frame, sid, wait_for_audio=wait_for_audio, _ingress_guard=_ingress_guard)
+            for frame in frames:
+                if _ingress_guard is not None and not _ingress_guard():
+                    return {"reason": "stale_session_generation", "outputs": []}
+                result=await self._dispatch(frame, sid, wait_for_audio=wait_for_audio, _ingress_guard=_ingress_guard)
             if _ingress_guard is not None and not _ingress_guard():
                 return {"reason": "stale_session_generation", "outputs": []}
             # Do not let a rejected concurrent session steal the stand's
@@ -2221,12 +2430,34 @@ class HardwareIntegrationStand:
         sid = self.active_session_id
         ingress_guard = self._audio_owner_guard(sid)
         if not raw.endswith(b"\n"): raw+=b"\n"
+        remote = getattr(self, "remote_devices", None)
+        if remote is not None:
+            try:
+                frame = decode_frame(raw)
+            except ValueError:
+                return {"error": {"code": "invalid_frame", "message": "raw UART frame is invalid"}}
+            blocked = await remote.before_input(frame.type, frame.payload)
+            if blocked is not None:
+                return blocked
+            from .remote_devices import is_cleanup
+            if is_cleanup(frame.type, frame.payload):
+                ingress_guard = lambda: True
+            else:
+                remote_epoch = remote.epoch
+                audio_guard = ingress_guard
+                ingress_guard = lambda: (remote.epoch == remote_epoch and remote.connected and audio_guard())
         started=time.perf_counter()
         try:
             async with self._transport_lock:
+                if not ingress_guard() and remote is not None:
+                    return {"reason": "stale_session_generation", "outputs": []}
                 await self._offload_uart(self.pty.write_device, raw)
                 frames=await self._offload_uart(self._receive_frames_sync)
-            results=[await self._dispatch(frame, sid, _ingress_guard=ingress_guard) for frame in frames]
+            results=[]
+            for frame in frames:
+                if not ingress_guard() and remote is not None:
+                    return {"reason": "stale_session_generation", "outputs": []}
+                results.append(await self._dispatch(frame, sid, _ingress_guard=ingress_guard))
             if frames: self.device_sequence=max(self.device_sequence,max(frame.sequence for frame in frames))
             if not frames: raise RuntimeError("no complete UART frame")
             result=results[-1] if results else None
@@ -2319,6 +2550,10 @@ class HardwareIntegrationStand:
         return result
 
     def _collect_events(self):
+        remote = getattr(self, "remote_devices", None)
+        if remote is not None:
+            for event in self.publisher.events[self._event_cursor:]:
+                remote.record_event(event)
         self._event_cursor=len(self.publisher.events)
 
     async def _publish_lighting_effect_frame(self, _frame: dict[str, Any]) -> None:
@@ -2336,6 +2571,9 @@ class HardwareIntegrationStand:
             session_id = boundary.session_id
             # Fence before the Stand's own playback cleanup can yield.
             self.application._revoke_local_profile(session_id)
+        remote = getattr(self, "remote_devices", None)
+        if remote is not None:
+            remote.invalidate("reset")
         self._cancel_story_audio()
         self._cancel_response_audio()
         await self.playback.stop()
@@ -2375,6 +2613,7 @@ class HardwareIntegrationStand:
         else:
             self.lighting_output.clear_all()
         self.application.publisher.clear()
+        self._event_cursor = 0
         metrics=getattr(getattr(self.application, "runtime_manager", None), "engine", None)
         if metrics is not None and hasattr(metrics, "metrics"):
             metrics.metrics.clear()
@@ -2799,6 +3038,12 @@ class HardwareIntegrationStand:
             "action", "type", "resolution", "targets", "pcm_bytes",
         }
         result = {key: item for key, item in value.items() if key in allowed}
+        request = value.get("checkpoint_request")
+        if isinstance(request, dict):
+            result["checkpoint_request"] = {key: request[key] for key in (
+                "session_id", "story_id", "generation", "token", "playback_id",
+                "playback_lease", "target_generation",
+            ) if key in request}
         fallback = value.get("fallback_reason")
         if isinstance(fallback, str) and fallback in _DIALOGUE_FALLBACK_CODES:
             result["fallback_reason"] = fallback
@@ -2809,6 +3054,18 @@ class HardwareIntegrationStand:
         if not isinstance(value, dict):
             return {}
         result: dict[str, Any] = {}
+        pipeline = value.get("pipeline")
+        if isinstance(pipeline, dict):
+            safe_pipeline = {}
+            for field, allowed in (
+                ("tts_provider", {"silero", "voxcpm765", "mock"}),
+                ("voice_conversion", {"rvc_v2", "off", "disabled"}),
+            ):
+                item = pipeline.get(field)
+                if isinstance(item, str) and item in allowed:
+                    safe_pipeline[field] = item
+            if safe_pipeline:
+                result["pipeline"] = safe_pipeline
         stages = {"llm", "stt", "queue", "silero_tts", "rvc_v2", "playback",
                   "warmup_silero_vad", "warmup_faster_whisper", "warmup_llm",
                   "warmup_silero", "warmup_rvc_v2"}
@@ -2834,6 +3091,15 @@ class HardwareIntegrationStand:
                 for field in ("at", "timestamp", "token_index", "chunk_index"):
                     if _diagnostic_number(event.get(field)):
                         projected[field] = event[field]
+                if name == "audio_generation_failed":
+                    for field, allowed in (("stage", AUDIO_FAILURE_STAGES),
+                                           ("exception_class", AUDIO_FAILURE_EXCEPTION_CLASSES),
+                                           ("cause_class", AUDIO_FAILURE_EXCEPTION_CLASSES),
+                                           ("code", AUDIO_FAILURE_CODES)):
+                        if isinstance(event.get(field), str) and event[field] in allowed:
+                            projected[field] = event[field]
+                    if _diagnostic_number(event.get("text_chars")):
+                        projected["text_chars"] = event["text_chars"]
                 if name in {"validation_block", "validation_error", "validation_failure"}:
                     projected["reason"] = _validation_reason_code(event.get("reason"))
                     source = event.get("source")
@@ -2903,6 +3169,41 @@ class HardwareIntegrationStand:
                                  if (projection := cls._panel_fallback_effect(output))]
         return result
 
+    def _panel_scene_menu(self, canonical):
+        """Expose only chooser labels from public catalogues, never context."""
+        from .menu_content import STORY_THEME_ITEMS
+        from .game_engine import IMMERSIVE_GAME_SPECS
+        mode = canonical.get("mode")
+        page = canonical.get("scene_menu_descriptor")
+        if not isinstance(page, dict) or page.get("scene") != mode:
+            return None
+        if mode == "game_menu":
+            titles = {item.game_id: item.display_title for item in IMMERSIVE_GAME_SPECS if item.available}
+        elif mode == "fixed_story_menu":
+            titles = {key: item.get("display_title") for key, item in self.application.canonical_runtime.stories.stories.items()
+                      if isinstance(item, dict)}
+        elif mode == "personal_story_theme":
+            titles = dict(STORY_THEME_ITEMS)
+        elif mode == "schedule_weather":
+            titles = {"date": "Дата", "weather": "Погода", "what_next": "Следующее занятие", "where_now": "Текущее занятие"}
+        else:
+            return None
+        items, buttons = page.get("items"), page.get("buttons")
+        if not isinstance(items, list) or len(items) > 5 or not isinstance(buttons, list):
+            return None
+        if any(type(button) is not int or not 1 <= button <= 7 for button in buttons):
+            return None
+        safe = []
+        for item in items:
+            if (not isinstance(item, dict) or type(item.get("slot")) is not int
+                    or not 1 <= item["slot"] <= 5 or item["slot"] not in buttons
+                    or not isinstance(item.get("id"), str)
+                    or not isinstance(item.get("title"), str)
+                    or titles.get(item["id"]) != item["title"]):
+                return None
+            safe.append({"slot": item["slot"], "title": item["title"]})
+        return {"scene": mode, "items": safe, "buttons": list(buttons)}
+
     def panel_snapshot(self) -> dict[str, Any]:
         """Bounded/redacted state projection for WebPanel observers."""
         source = self.snapshot()
@@ -2911,7 +3212,21 @@ class HardwareIntegrationStand:
         canonical_safe = {key: canonical[key] for key in (
             "mode", "handset", "expected_inputs", "node", "onboarding_step",
             "menu_tutorial_step", "active_effect", "lighting_effect",
+            "public_story_checkpoint_pending",
         ) if key in canonical}
+        menu = self._panel_scene_menu(canonical)
+        if menu is not None:
+            canonical_safe["scene_menu_descriptor"] = menu
+        if canonical.get("mode") == "game_active":
+            from .game_engine import IMMERSIVE_GAME_SPECS
+            if canonical.get("active_game_id") in tuple(spec.game_id for spec in IMMERSIVE_GAME_SPECS):
+                canonical_safe["active_game_id"] = canonical["active_game_id"]
+            if canonical.get("game_audio_stage") in ("idle", "starting", "prompt", "playing"):
+                canonical_safe["game_audio_stage"] = canonical["game_audio_stage"]
+            game = canonical.get("game_engine_state")
+            phase = game.get("phase") if isinstance(game, dict) else None
+            if phase in ("instruction", "awaiting_prompt", "demonstrate", "playing", "completed"):
+                canonical_safe["game_phase"] = phase
         # The operator guide needs the actual exit choice, not arbitrary
         # internal substate strings or private model/profile metadata.
         if (canonical.get("mode") == "game_active"
@@ -2935,14 +3250,14 @@ class HardwareIntegrationStand:
             if isinstance(payload, dict):
                 allowed = {"response_id", "session_id", "playback_lease",
                            "generation", "playback_id", "token", "offset_ms", "duration_ms", "content_kind", "asset_id", "asset_path",
-                           "audio_status", "asset_status", "story_audio_mode"}
+                           "audio_status", "asset_status", "story_audio_mode", "checkpoint_request"}
                 result["payload"] = {key: payload[key] for key in allowed if key in payload}
             return result
 
         def result_item(item):
             return self._panel_result_item(item)
 
-        return {
+        panel = {
             "identity": dict(source.get("identity") or {}),
             "identity_ready": bool(source.get("identity_ready")),
             "reader_ready": bool(source.get("reader_ready")),
@@ -2972,12 +3287,25 @@ class HardwareIntegrationStand:
             "canonical_trace": [self._safe_trace_item(item) for item in source.get("canonical_trace", [])[-50:] if isinstance(item, dict)],
             "audio_status": source.get("audio_status", "idle"),
         }
+        remote = getattr(self, "remote_devices", None)
+        if remote is not None:
+            panel["simulator"] = remote.projection(source)
+        return panel
 
     async def aclose(self, *, hardware_stopped: bool = False):
         """Revoke loop-owned work; attempt every independent resource cleanup."""
         if getattr(self, "_closed", False):
             return
+        remote = getattr(self, "remote_devices", None)
+        if remote is not None:
+            remote.connected = False
+            remote.invalidate("shutdown_started")
         failures = []
+        if remote is not None:
+            try:
+                await remote.aclose()
+            except BaseException as exc:
+                failures.append(exc)
         self._hid_generation = getattr(self, "_hid_generation", 0) + 1
         self._physical_loop = None
         physical_tasks = self._cancel_pending_physical_inputs(include_cleanup=True)
@@ -3022,6 +3350,9 @@ class HardwareIntegrationStand:
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        remote = getattr(self, "remote_devices", None)
+        if remote is not None:
+            remote.invalidate("shutdown")
         failures = []
         def attempt(operation, action):
             try:
@@ -3116,7 +3447,7 @@ def resample(samples: tuple[float, ...], source_rate: int, target_rate: int) -> 
     return tuple(float(value) for value in result)
 
 
-def create_stand_app(settings: Settings | None = None, *, phone_client=None):
+def create_stand_app(settings: Settings | None = None, *, phone_client=None, simulator_scan=None):
     from fastapi import HTTPException, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import FileResponse, JSONResponse, Response
     globals()["WebSocket"] = WebSocket
@@ -3137,6 +3468,10 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         from .max_json import MaxJsonBoundary
         MaxJsonBoundary(stand.application, phone_client, session_id=stand.active_session_id,
                         admits_users=api.state.lifecycle.admits_users)
+    from .remote_devices import install_remote_devices
+    install_remote_devices(api, stand, scan_callback=simulator_scan,
+                           admits_users=lambda: (api.state.lifecycle.admits_users()
+                                                  or _software_runtime_usable(stand, api.state.lifecycle)))
     console_root=Path(__file__).with_name("console")
     access_token=stand.settings.stand_access_token
     mutation_policy=stand.settings.mutation_auth_policy
@@ -3153,7 +3488,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
             return result
         error = result["error"]
         code = str(error.get("code") or "")
-        status = {"validation_error":422,"invalid_frame":422,"empty_audio":400,"invalid_format":400,"unsupported_format":400,"decode_error":400,"oversized_audio":413,"runtime_unavailable":503,"conflict":409,"internal_error":500}.get(code, 500)
+        status = {"validation_error":422,"invalid_frame":422,"empty_audio":400,"invalid_format":400,"unsupported_format":400,"decode_error":400,"oversized_audio":413,"runtime_unavailable":503,"conflict":409,"internal_error":500,"simulated_input_disconnected":409,"stale_simulator_epoch":409,"simulator_backpressure":409}.get(code, 500)
         if code == "validation_error":
             message = str(error.get("message") or "invalid stand event")
         elif code == "invalid_frame":
@@ -3203,6 +3538,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
                 and request.url.path not in {
                     "/stand/reset", "/stand/state", "/stand/graph",
                     "/stand/health", "/stand/diagnostics", "/stand/trace",
+                    "/stand/simulator/state", "/stand/simulator/journal",
+                    "/stand/simulator/action", "/stand/simulator/fault",
                 }
                 and lifecycle is not None
                 and not lifecycle.admits_users()
@@ -3221,6 +3558,19 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         def console_css(): return FileResponse(console_root/"console.css",media_type="text/css", headers={"Cache-Control": "no-store"})
         @api.get("/console/button-cap.svg",include_in_schema=False)
         def console_button_cap(): return FileResponse(console_root/"button-cap.svg",media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
+        # Exact build-owned assets only; never expose the console directory.
+        def phone_asset_endpoint(name, content_type):
+            def serve():
+                return FileResponse(console_root/name, media_type=content_type, headers={"Cache-Control": "no-store"})
+            return serve
+        for asset_name, media_type in (
+            ("phone.js", "application/javascript"), ("phone.css", "text/css"),
+            ("phone-model.js", "application/javascript"),
+            ("vendor/three.module.min.js", "application/javascript"),
+            ("vendor/three.core.min.js", "application/javascript"),
+            ("vendor/LICENSE.three", "text/plain"),
+        ):
+            api.add_api_route("/console/" + asset_name, phone_asset_endpoint(asset_name, media_type), methods=["GET"], include_in_schema=False)
     @api.get("/stand/state")
     def state(): return stand.panel_snapshot()
     @api.get("/stand/health")
@@ -3274,6 +3624,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
                 or generation is None
                 or status not in {"queued", "playing", "paused", "finished", "cancelled", "failed", "unavailable"}):
             return JSONResponse({"error": {"code": "validation_error", "message": "playback identity and valid audio status are required"}}, status_code=422)
+        if not stand._browser_pcm_callback_current(payload):
+            return {"response_id": response_id, "reason": "stale_audio_lifecycle"}
         projected = stand.application._mark_audio_effect_lifecycle(
             response_id, status, session_id=sid, generation=generation,
             playback_id=playback_id, playback_lease=playback_lease,
@@ -3295,6 +3647,11 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         except (KeyError, TypeError, ValueError, OverflowError):
             return JSONResponse({"error": {"code": "validation_error", "message": "complete story checkpoint is required"}}, status_code=422)
         app = stand.application
+        if "target_generation" in payload:
+            result = await app.accept_public_story_checkpoint(sid, payload)
+            stand._collect_events()
+            await stand.hub.publish({"type": "stand_state", "state": stand.panel_snapshot()})
+            return result
         owner = app._paused_story_playback.get(sid)
         state = app.canonical_runtime.sessions.get(sid)
         if (not owner or not state or not story_id or not playback_id or not playback_lease
@@ -3348,6 +3705,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         if (not sid or not response_id or not playback_id or callback_token is None
                 or playback_lease is None or generation is None):
             return JSONResponse({"error": {"code": "validation_error", "message": "complete playback identity is required"}}, status_code=422)
+        if not stand._browser_pcm_callback_current(payload):
+            return {"reason": "stale_private_pcm_callback"}
         stand._audio_event_sequence += 1
         result = await stand.application.receive_async(
             Event("AudioFailed", sid, stand._audio_event_sequence, time.time(), "browser_audio",
@@ -3388,6 +3747,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         if (not sid or not response_id or not playback_id or callback_token is None
                 or playback_lease is None or generation is None):
             return JSONResponse({"error": {"code": "validation_error", "message": "complete playback identity is required"}}, status_code=422)
+        if not stand._browser_pcm_callback_current(payload):
+            return {"reason": "stale_private_pcm_callback"}
         stand._audio_event_sequence += 1
         result = await stand.application.receive_async(
             Event("AudioCompleted", sid, stand._audio_event_sequence, time.time(), "browser_audio",
@@ -3466,6 +3827,34 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         # processed only after the old response finished.
         audio_tasks: set[asyncio.Task[Any]] = set()
         max_pending_audio = 16  # includes both PCM frames and flush requests
+        capture_owners = {}
+
+        def capture_current(sid, owned):
+            return stand._browser_capture_owners.get(sid) is owned and owned[1]()
+
+        async def browser_audio(samples, sample_rate, sid, flush_silence, binding, session_guard):
+            # Serialize replacement cleanup with PCM admission, not the control loop.
+            lock = stand._audio_ingress_locks.setdefault(sid, asyncio.Lock())
+            async with lock:
+                if not stand.hub.owner_binding_current(binding) or not session_guard():
+                    return
+                owned = stand._browser_capture_owners.get(sid)
+                if owned is None or owned[0] != binding or not owned[1]():
+                    previous = owned
+                    owned = (binding, session_guard)
+                    stand._browser_capture_owners[sid] = owned
+                    capture_owners[sid] = owned
+                    if previous is not None and previous[1]():
+                        stand.application.s2s_audio.close_capture(sid)
+                        await stand.application._cancel_audio_owner(
+                            stand.application.s2s_audio, sid, operation="browser_capture_replaced",
+                            ownership_guard=lambda: capture_current(sid, owned))
+                capture_owners[sid] = owned
+            def current():
+                return capture_current(sid, owned) and stand.hub.owner_binding_current(binding)
+            if current():
+                return await stand.inject_pcm(samples, sample_rate, sid, flush_silence,
+                                              wait_for_turn=False, _ingress_guard=current)
 
         def forget_audio_task(task: asyncio.Task[Any]) -> None:
             audio_tasks.discard(task)
@@ -3542,14 +3931,14 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
                         samples=struct.unpack("<"+"f"*(len(raw)//4),raw)
                         if not all(math.isfinite(value) and -1.0<=value<=1.0 for value in samples):
                             raise ValueError("audio samples must be finite -1..1")
-                        schedule_audio(stand.inject_pcm(tuple(samples),sample_rate,sid,False,wait_for_turn=False,
-                                                       _ingress_guard=stand._audio_owner_guard(sid)))
+                        schedule_audio(browser_audio(tuple(samples), sample_rate, sid, False,
+                                                     stand.hub.owner_binding(), stand._audio_owner_guard(sid)))
                     elif kind=="flush_audio":
                         # Flush the VAD boundary with one bounded silence frame;
                         # empty payloads remain invalid for the PCM contract.
                         sid = str(session_id or stand.active_session_id)
-                        schedule_audio(stand.inject_pcm(tuple(0.0 for _ in range(320)),16000,sid,True,wait_for_turn=False,
-                                                       _ingress_guard=stand._audio_owner_guard(sid)))
+                        schedule_audio(browser_audio(tuple(0.0 for _ in range(320)), 16000, sid, True,
+                                                     stand.hub.owner_binding(), stand._audio_owner_guard(sid)))
                     elif kind in {"handset","button","button_released","button_hold","button_long_hold","text"}:
                         result = await stand.inject(kind,{k:v for k,v in message.items() if k not in {"type","session_id"}},message.get("session_id"))
                         if isinstance(result, dict) and result.get("error"):
@@ -3570,6 +3959,11 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
         except WebSocketDisconnect: pass
         finally:
             stand.hub.disconnect(websocket)
+            # Finished collecting tasks no longer exist in audio_tasks, but
+            # their RAM capture still belongs to this write lease.
+            for sid, owned in capture_owners.items():
+                if capture_current(sid, owned):
+                    stand.application.s2s_audio.close_capture(sid)
             owned_audio_tasks = tuple(audio_tasks)
             for task in owned_audio_tasks:
                 task.cancel()
@@ -3596,6 +3990,15 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None):
                         recorder("stand_audio_task_error", session_id=cleanup["session_id"],
                                  operation="disconnect", exception_type=type(error).__name__)
                     recorder("stand_audio_cleanup", **cleanup)
+            for sid, owned in capture_owners.items():
+                try:
+                    if capture_current(sid, owned):
+                        await stand.application._cancel_audio_owner(
+                            stand.application.s2s_audio, sid, operation="browser_capture_disconnect",
+                            ownership_guard=lambda sid=sid, owned=owned: capture_current(sid, owned))
+                finally:
+                    if stand._browser_capture_owners.get(sid) is owned:
+                        stand._browser_capture_owners.pop(sid, None)
             # WebPanel is an observer. Its disconnect is not a physical
             # handset-down event and must never reset the exhibition session.
             # Per-connection audio ingress tasks are cancelled above; the

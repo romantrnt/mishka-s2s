@@ -26,7 +26,9 @@ class EngagementIdleMixin:
         for registry in ('pending_tasks','active_tasks'):
             task=getattr(bounded,registry,{}).get(sid)
             response_busy=response_busy or bool(task is not None and not task.done())
+        transfer = self._public_story_transfer(sid)
         return bool(self._active_audio.get(sid) or response_busy
+            or (transfer is not None and transfer['resume'])
             or (engine is not None and engine.phase in {'instruction','demonstrate'})
             or any(not task.done() and getattr(task,'_mishka_session_id',None)==sid
                    and callable(getattr(task,'_mishka_owner_current',None))
@@ -98,7 +100,7 @@ class EngagementIdleMixin:
             owner['completed_work']=True
         # End the meaningful-work clock at its own completion, even while
         # unrelated input occupancy is still draining.
-        if not work_busy and owner.get('completed_work',False):
+        if not work_busy and owner.get('completed_work',False) and not owner.get('preserve_deadline',False):
             owner['deadline']=now+self.engagement_wait_seconds
             owner['nonce']=uuid.uuid4().hex
         if not work_busy:

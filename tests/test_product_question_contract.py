@@ -108,8 +108,7 @@ async def test_onhook_help_is_deferred_not_failed_and_question_is_spoken_after_l
         seq+=1
         return await app.receive_async(Event(kind,'onhook-help',seq,1.,'test',payload or {},f'h:{seq}',1.))
     try:
-        await send('ButtonPressed',{'button_id':1})
-        await send('ButtonPressed',{'button_id':1})
+        await send('ButtonPressed',{'button_id':2})
         result=await send('ButtonPressed',{'button_id':5})
         state=app.canonical_runtime.sessions['onhook-help']
         assert result['reason']=='help_priority' and state.mode=='wellbeing_check'

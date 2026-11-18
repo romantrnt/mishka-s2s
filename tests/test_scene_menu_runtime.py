@@ -119,7 +119,9 @@ async def test_help_during_narration_is_immediate_not_skip_only():
 async def test_repeat_yes_reads_once_and_does_not_ask_again():
     h=Harness()
     try:
-        await h.button(1);await h.complete();await h.complete()
+        await h.button(1)
+        await h.complete()  # Recorded invitation precedes menu narration.
+        await h.complete();await h.complete()
         await h.send('SpeechReceived',text='Да')
         assert h.state.scene_menu_answers['game_menu']=='yes'
         assert len(h.render.texts)==2
@@ -152,19 +154,14 @@ async def test_menu_entry_button_repeat_does_not_skip_or_select():
     finally:await h.close()
 
 @pytest.mark.asyncio
-async def test_actual_fifth_game_selected_on_third_page():
+async def test_actual_fifth_game_selected_directly_from_current_page():
     h=Harness()
     try:
         await h.button(1);await h.release(1)
-        await h.button(1);await h.release(1)
-        for _ in range(2):
-            await h.button(6);await h.release(6)
-            assert h.state.scene_menu_phase=='narrating'
-            await h.button(1);await h.release(1)
-        assert h.state.scene_menu_descriptor['items'][0]['id']=='hold_light'
-        await h.button(1)
+        assert h.state.scene_menu_descriptor['items'][4]['id']=='word_game'
+        assert (await h.button(5))['reason']=='game_started'
         assert h.state.mode=='game_active'
-        assert h.state.game_engine_state.game_id=='hold_light'
+        assert h.state.game_engine_state.game_id=='word_game'
     finally:await h.close()
 
 

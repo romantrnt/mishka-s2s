@@ -3,15 +3,15 @@
   "status": "ready",
   "stories": {
     "fixed_aibolit_v1": {
-      "display_title": "Про Бегемота, который боялся прививок",
+      "display_title": "Айболит",
       "author": "operator-provided recording",
       "rights_status": "operator_approved",
       "version": 1,
       "availability": "available",
       "content_status": "approved_audio",
       "audio_status": "approved",
-      "audio_file": "assets/stories/01_Про Бегемота, который боялся прививок_prepared.wav",
-      "audio_sha256": "d1fc38389c88551e7eb32ee37c448f0b678a2c0b359c9ad00dcb8b259be61063",
+      "audio_file": "assets/stories/original/Сказка Айболит.wav",
+      "audio_sha256": "e37f5455c0391ddf1facb1715be987cfab950fbfec67c0e6c78ca8082698884c",
       "eligible_age_bands": [
         "1-3",
         "3-5",
@@ -27,8 +27,8 @@
       "availability": "available",
       "content_status": "approved_audio",
       "audio_status": "approved",
-      "audio_file": "assets/stories/02_Как бельчонок страх преодолел_prepared.wav",
-      "audio_sha256": "6022f216c22ba23af07d58752e03c30b9ef65c9e36cb0414d0e944db568f9506",
+      "audio_file": "assets/stories/original/Сказка_Как_бельчонок_страх_преодолел.wav",
+      "audio_sha256": "61da60f3fa159cb4d9a62bb723080d2414cd9363045956978b2f329822b7b94c",
       "eligible_age_bands": [
         "1-3",
         "3-5",
@@ -44,8 +44,8 @@
       "availability": "available",
       "content_status": "approved_audio",
       "audio_status": "approved",
-      "audio_file": "assets/stories/03_У лукоморья дуб зелёный_prepared.wav",
-      "audio_sha256": "02d93e5e82c4bdcda129e03f4de16cf0c07f70bcb09e7f04826ac40840c21cb4",
+      "audio_file": "assets/stories/original/Сказка У лукоморья дуб зелёный.wav",
+      "audio_sha256": "7078363daf0ebd76893587bdc6a253ee0ae5268dca37d98916e5dc3290e5ee7e",
       "eligible_age_bands": [
         "1-3",
         "3-5",
@@ -61,8 +61,8 @@
       "availability": "available",
       "content_status": "approved_audio",
       "audio_status": "approved",
-      "audio_file": "assets/stories/04_Кролик Мягкие Лапки и Звезда_prepared.wav",
-      "audio_sha256": "4c35bf456850b3e5cfd5008a37b60b81da90288a12fbfce6c2c22150f6e2c993",
+      "audio_file": "assets/stories/original/Сказка_Кролик_Мягкие_Лапки_и_Звезда.wav",
+      "audio_sha256": "f52bcd019f600425003f0160563d650e9e5eaedc68f94aa0b15a4b98fc6ac077",
       "eligible_age_bands": [
         "1-3",
         "3-5",
@@ -78,8 +78,8 @@
       "availability": "available",
       "content_status": "approved_audio",
       "audio_status": "approved",
-      "audio_file": "assets/stories/05_Телефон_prepared.wav",
-      "audio_sha256": "239c1c3d0308d2a20693c8818dfd5c77a04a1d030f0e69554b2c3cd4971637db",
+      "audio_file": "assets/stories/original/Сказка Телефон.wav",
+      "audio_sha256": "21a29500591e0e085b4d78a6e715167e92e7e3fa87594cee617d39793e9574ec",
       "eligible_age_bands": [
         "1-3",
         "3-5",

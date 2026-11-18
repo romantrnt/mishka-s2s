@@ -95,15 +95,19 @@ class MaxJsonBoundary:
             self._task = asyncio.create_task(self.run(), name="mishka-max-json")
         return True
 
-    async def _clear_context(self, *, expected_request_id=None):
+    async def _clear_context(self, *, expected_request_id=None, reason_code=None):
         state = self.app.canonical_runtime.sessions.get(self.session_id)
         if (expected_request_id is not None and state is not None
                 and state.identity_request_id != expected_request_id):
             return {"reason": "newer_profile_owner_preserved"}
         self.facts = None
-        if state is None or not state.profile_ref:
+        if state is not None and not state.profile_ref and reason_code == "session_expired":
             return {"reason": "profile_already_clear"}
-        event = self.app._identity_event(self.session_id, "ClientProfileCleared", {})
+        if state is None or (not state.profile_ref and not state.active_story_id):
+            return {"reason": "profile_already_clear"}
+        event = self.app._identity_event(self.session_id, "ClientProfileCleared", {
+            "reason_code": reason_code, "request_id": state.identity_request_id,
+        })
         return await self.app._receive_canonical_event(event, identity_event_authorized=True)
 
     async def step(self):
@@ -128,7 +132,7 @@ class MaxJsonBoundary:
                 elif reason not in {"scan_started", "session_expired"}:
                     self._healthy = False
                 self.generation += 1
-                return await self._clear_context()
+                return await self._clear_context(reason_code=reason)
             if event.get("kind") != "patient_ready":
                 if event.get("kind") == "reader_state" and event.get("state") in {"connected", "ready"}:
                     self._healthy = True

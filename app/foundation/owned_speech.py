@@ -15,34 +15,13 @@ OWNED_PCM_IDS = TYPED_AUDIO_IDS | MENU_AUDIO_IDS | {'PERSONAL_WELCOME', 'PERSONA
 class OwnedSpeechMixin:
     async def _menu_validation_text(self, session_id, text):
         """Only the exact verified public page may use the catalogue exception."""
-        state = self.canonical_runtime.sessions.get(session_id)
-        if state is None or state.mode not in MENU_PCM_MODES.values():
-            return None
-        page = self.canonical_runtime._menu_page(state)
-        normalizer = self.bounded_s2s.normalizer
-        if text != normalizer.normalize(page.spoken_text) or state.scene_menu_descriptor != page.as_dict():
-            return None
-        validation_text = page.spoken_text
-        validator = self.bounded_s2s.response_validator
-        for item in page.items:
-            decision = await validator.validate_trusted(item.title)
-            if decision.allowed:
-                continue
-            verified = (self.canonical_runtime.stories.get_verified(item.id)
-                        if page.scene == 'fixed_story_menu' else None)
-            if not (decision.reason == 'personal_data' and item.id == 'fixed_neznayka_v1'
-                    and item.title == 'Телефон' and verified
-                    and verified.get('display_title') == 'Телефон'
-                    and verified.get('audio_sha256') == '239c1c3d0308d2a20693c8818dfd5c77a04a1d030f0e69554b2c3cd4971637db'):
-                return None
-            # The descriptor is constructed locally, so this is one exact title
-            # span, not arbitrary model text or a blanket catalogue bypass.
-            words = {1:'один',2:'два',3:'три',4:'четыре'}
-            span = f'Кнопка {words[item.slot]}: Телефон.'
-            if validation_text.count(span) != 1:
-                return None
-            validation_text = validation_text.replace(span, f'Кнопка {words[item.slot]}: Сказка.', 1)
-        return normalizer.normalize(validation_text)
+        from .public_menu_audio import current_menu_page, menu_validation_text
+        page = current_menu_page(self, session_id, text)
+        return await menu_validation_text(self, page, text) if page is not None else None
+
+    async def warm_public_menu_audio(self, *, progress=None):
+        from .public_menu_audio import warm_public_menu_audio
+        return await warm_public_menu_audio(self, progress=progress)
 
     def _owned_menu_voice_capable(self):
         engine = self.bounded_s2s
@@ -90,19 +69,50 @@ class OwnedSpeechMixin:
         cancelled = lambda: not current()
         async def render():
             if cancelled():return None
+            render_tts, render_convert = tts, convert
             validation_text = text
+            page = key = cache = None
             if effect.get('content_id') in MENU_AUDIO_IDS:
+                from .public_menu_audio import PublicMenuAudioCache, current_menu_page
+                page = current_menu_page(self, session_id, text)
+                if page is None or MENU_PCM_MODES[effect['content_id']] != page.scene:
+                    return None
                 validation_text = await self._menu_validation_text(session_id, text)
                 if validation_text is None:
                     return None
                 validation = await engine.response_validator.validate_trusted(validation_text)
+                if current_menu_page(self, session_id, text) != page:
+                    return None
+                # Capture the same live provider pair whose identity keys the
+                # cache, after all awaited descriptor validation has finished.
+                from .public_menu_audio import providers
+                render_tts, render_voice = providers(self)
+                render_convert = getattr(render_voice, 'convert_private', None)
+                if not callable(render_convert):
+                    return None
+                candidate = getattr(self, '_public_menu_audio_cache', None)
+                if isinstance(candidate, PublicMenuAudioCache):
+                    cache = candidate
+                    key = cache.key(self, page, text)
             else:
                 validation = await engine.response_validator.validate(text)
             if cancelled() or not validation.allowed:return None
-            audio = await tts.synthesize(text, token, cancelled)
+            if cache is not None:
+                cached = cache.get(key, token, session_id)
+                if cached is not None:
+                    return cached
+            audio = await render_tts.synthesize(text, token, cancelled)
             if cancelled() or not valid_pcm(audio):return None
-            audio = await convert(audio, cancelled)
+            audio = await render_convert(audio, cancelled)
             if cancelled() or not valid_pcm(audio):return None
+            if cache is not None:
+                # A cancellation-resistant provider cannot populate a menu
+                # after a timeout, remapping or revoked semantic owner.
+                if (asyncio.current_task().cancelling()
+                        or current_menu_page(self, session_id, text) != page
+                        or cache.key(self, page, text) != key):
+                    return None
+                cache.put(key, audio)
             return audio
         task = asyncio.create_task(render(),name='mishka-typed-audio')
         task._mishka_session_id = session_id
@@ -113,7 +123,8 @@ class OwnedSpeechMixin:
             if not done.cancelled():done.exception()
         task.add_done_callback(observe)
         try:
-            done,_ = await asyncio.wait({task},timeout=min(8.,engine.config.max_turn_seconds))
+            done,_ = await asyncio.wait({task},timeout=min(
+                getattr(self.audio, 'owned_render_timeout_s', 8.), engine.config.max_turn_seconds))
             if not done:
                 task.cancel()
                 return None

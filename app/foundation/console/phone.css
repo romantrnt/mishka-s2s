@@ -1,0 +1,121 @@
+/* Surrounding panels use the original console.css tokens and workbench layout.
+   Phone geometry, projected key targets and input behavior stay independent. */
+body[data-phone] { --phone-ink:var(--ink); }
+.phone-top-actions,.phone-main-actions,.phone-rfid-options,.phone-fault-actions,.phone-journal-actions {display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.phone-top-actions {padding-left:8px;border-left:1px solid var(--line);}
+.phone-top-actions button {min-height:36px;border-color:var(--line);}
+.phone-top-actions #phone-open-tools span {margin-left:7px;}
+.phone-mic-indicator {font-size:11px;color:var(--muted);display:flex;align-items:center;gap:7px;}
+.phone-mic-indicator::before {content:"";width:7px;height:7px;border:1px solid currentColor;border-radius:50%;}
+.phone-mic-indicator[data-live="true"] {color:var(--bad);font-weight:700;}
+.phone-mic-indicator[data-live="true"]::before {background:currentColor;}
+body[data-phone] button:disabled {cursor:default;opacity:.54;}
+body[data-phone] button:focus-visible,body[data-phone] summary:focus-visible,body[data-phone] a:focus-visible,body[data-phone] input:focus-visible {outline:3px solid #08778b;outline-offset:4px;}
+.phone-experience {position:relative;min-width:0;}
+.phone-experience button,.phone-tools button {min-height:44px;touch-action:manipulation;}
+.phone-connection-line {display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 7px 8px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--soft);}
+#phone-connection::before {content:"";display:inline-block;margin-right:7px;width:6px;height:6px;border-radius:50%;background:var(--warn);vertical-align:1px;}
+#phone-connection[data-live="true"]::before {background:var(--ok);}
+#phone-render-mode {border-color:var(--line);min-height:36px;font-size:11px;padding:6px 10px;}
+.phone-stage {height:clamp(360px,45svh,470px);min-height:330px;position:relative;isolation:isolate;overflow:hidden;touch-action:pan-y;}
+.phone-canvas {position:absolute;inset:0;width:100%;height:100%;touch-action:none;}
+.phone-flat-body {position:absolute;left:50%;top:55%;width:min(72%,450px);height:75%;max-height:340px;transform:translate(-50%,-50%);border-radius:40% 40% 18% 18% / 55% 55% 20% 20%;background:#198c9d;box-shadow:inset 8px 9px 15px #5bc0c94f,inset -9px -10px 14px #0e5f7170,0 25px 20px -16px #41697470;border-bottom:8px solid #176e7d;}
+.phone-flat-plate {position:absolute;inset:18% 11% 8%;background:#697780;clip-path:polygon(0 65%,5% 57%,20% 55%,22% 47%,17% 25%,18% 15%,25% 9%,34% 13%,39% 26%,42% 10%,47% 0,56% 0,62% 12%,62% 25%,69% 12%,78% 10%,85% 18%,84% 36%,90% 30%,97% 33%,100% 43%,97% 58%,94% 63%,91% 79%,85% 90%,75% 97%,57% 100%,39% 97%,26% 84%,11% 85%,3% 78%);}
+body[data-phone] .phone-flat-handset {position:absolute;left:50%;top:11%;width:min(77%,465px);height:20%;max-height:82px;min-height:62px;border:0;border-radius:48% 48% 40% 40% / 63% 63% 40% 40%;background:#198c9d;box-shadow:inset 2px 6px 9px #6ac5c94f,inset -3px -8px 9px #12637670,0 8px 6px #0e536040;transform:translateX(-50%) rotate(-3deg);transition:transform .45s ease;z-index:2;}
+body[data-phone] .phone-flat-handset:hover {background:#2098a8;}
+body[data-phone] .phone-flat-handset[data-up="true"] {transform:translate(-51%,-35%) rotate(-7deg);}
+.phone-paw {position:absolute;left:50%;top:55%;width:min(62%,380px);height:58%;max-height:270px;transform:translate(-50%,-44%);z-index:3;pointer-events:none;}
+body[data-phone] .phone-key {position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;justify-content:center;align-items:center;color:#f3f7f6;padding:0;border:3px solid #344c56;border-radius:48%;background:var(--key-color);box-shadow:inset 3px 4px 6px #ffffff30,inset -3px -4px 4px #16323e3d,0 3px 1px #334b55;min-width:44px;min-height:44px;line-height:1;pointer-events:auto;touch-action:none;transition:filter .1s,transform .1s;}
+body[data-phone] .phone-key:disabled {opacity:1;cursor:default;}
+body[data-phone] .phone-key span {font:600 clamp(24px,3.5vh,39px)/1 Arial,sans-serif;}
+body[data-phone] .phone-key svg {width:65%;height:auto;margin-bottom:8%;}
+body[data-phone] .phone-key[data-pressed="true"] {transform:translate(-50%,calc(-50% + 4px));filter:brightness(.92);box-shadow:inset 2px 3px 4px #183a4366;}
+body[data-phone] .phone-key[data-fill="true"] {filter:brightness(1.16);}
+body[data-phone] .phone-key:not([data-fill="true"]) {background:#8b8b8b;}
+body[data-phone] .key-1 {left:17.4%;top:68.1%;width:17.7%;height:22.4%;--key-color:#ff100b;}
+body[data-phone] .key-2 {left:32%;top:25.2%;width:13.4%;height:19.8%;--key-color:#ffad00;}
+body[data-phone] .key-3 {left:51.9%;top:15.5%;width:13%;height:20%;--key-color:#ffe600;}
+body[data-phone] .key-4 {left:72.4%;top:25%;width:13.1%;height:20%;--key-color:#12eb00;}
+body[data-phone] .key-5 {left:86.8%;top:42.6%;width:12.6%;height:19%;--key-color:#00d5e3;}
+body[data-phone] .key-6 {left:44.2%;top:71.1%;width:20.9%;height:51%;--key-color:#0739ef;border-radius:55% 30% 20% 75% / 28% 15% 12% 72%;}
+body[data-phone] .key-7 {left:67.7%;top:70.9%;width:21%;height:51.1%;--key-color:#ee22e8;border-radius:30% 55% 75% 20% / 15% 28% 72% 12%;}
+.phone-stage[data-renderer="three"] .phone-flat-body,.phone-stage[data-renderer="three"] .phone-flat-handset {display:none;}
+.phone-stage[data-renderer="three"] .phone-paw {inset:0;width:100%;height:100%;max-height:none;transform:none;}
+body[data-phone] .phone-stage[data-renderer="three"] .phone-key {background:transparent!important;border:0!important;color:transparent;box-shadow:none!important;filter:none!important;min-width:44px;min-height:44px;}
+.phone-stage[data-renderer="three"] .phone-key svg,.phone-stage[data-renderer="three"] .phone-key span {visibility:hidden;}
+body[data-phone] .phone-stage[data-renderer="three"] .phone-key:focus-visible {outline:3px solid #fff;box-shadow:0 0 0 5px #08778b!important;}
+.phone-render-notice {position:absolute;bottom:2px;left:0;right:0;margin:0;text-align:center;color:#52717a;font-size:12px;pointer-events:none;}
+
+.phone-render-notice {color:var(--muted);}
+.phone-conversation {position:relative;text-align:center;padding:0 7px 18px;max-width:800px;margin:0 auto;}
+.phone-conversation h1 {font-size:20px;font-weight:620;line-height:1.35;min-height:27px;margin:0 0 5px;overflow-wrap:anywhere;}
+.phone-conversation #phone-context {font-size:12px;margin:0 0 15px;color:var(--muted);}
+.phone-main-actions {justify-content:center;gap:10px;}
+body[data-phone] .phone-primary {background:var(--ink);color:white;border-color:var(--ink);min-width:172px;}
+body[data-phone] .phone-primary:hover {background:#343a3a;}
+.phone-media-status {font-size:12px;margin:10px 0 0;min-height:18px;}
+.phone-media-status[data-live="true"] {color:var(--bad);font-weight:700;}
+.phone-shortcuts {font-size:11px;color:var(--muted);margin:8px 0;}
+.phone-shortcuts span {padding:0 7px;}
+.phone-transcript {font-size:12px;color:var(--muted);margin:10px auto 0;max-width:640px;}
+.phone-transcript summary {cursor:pointer;}
+.phone-transcript p {font-size:14px;line-height:1.6;color:var(--ink);}
+.phone-error {font-size:13px;line-height:1.4;color:var(--bad);background:#fff4f1;padding:10px 12px;border-left:3px solid var(--bad);margin:9px auto 14px;max-width:640px;overflow-wrap:anywhere;}
+.phone-tools {position:fixed;inset:0 0 0 auto;max-height:100svh;height:100svh;width:min(590px,100%);max-width:100%;margin:0;padding:24px;border:0;border-left:1px solid var(--line);background:var(--panel);color:var(--ink);font:inherit;overflow-y:auto;overscroll-behavior:contain;}
+.phone-tools::backdrop {background:#15191a4d;}
+.phone-tools-header {display:flex;justify-content:space-between;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--soft);}
+.phone-tools-header h2 {font-size:20px;font-weight:620;margin:0;}
+.phone-tools-header button {font-size:12px;border-color:var(--line);}
+.phone-tools-intro {font-size:13px;max-width:55ch;color:var(--muted);}
+.phone-tool-section {padding:18px 0;border-top:1px solid var(--line);margin-top:18px;}
+.phone-tool-section h3 {font-size:14px;font-weight:620;margin:0 0 10px;}
+.phone-tool-section p {font-size:12px;color:var(--muted);}
+.phone-tool-section button {font-size:12px;}
+.phone-rfid-options button {font-family:ui-monospace,monospace;min-width:94px;}
+.phone-tool-section dl {display:grid;grid-template-columns:140px minmax(0,1fr);font-size:12px;gap:8px;margin:12px 0 20px;}
+.phone-tool-section dt {color:var(--muted);}
+.phone-tool-section dd {margin:0;overflow-wrap:anywhere;}
+.phone-tool-section form {display:flex;flex-wrap:wrap;gap:8px;margin:15px 0;}
+.phone-tool-section form label {width:100%;font-size:13px;}
+.phone-tool-section input {font:inherit;min-height:44px;max-width:100%;border:1px solid var(--line);background:white;color:var(--ink);padding:8px 12px;}
+#phone-delay {width:110px;margin-right:8px;}
+#phone-text {width:100%;}
+.phone-file-label {font-size:13px;display:flex;flex-direction:column;gap:9px;}
+.phone-file-label input {font-size:12px;}
+.phone-journal {font-size:12px;padding-left:0;list-style:none;max-height:320px;overflow:auto;margin:15px 0 0;}
+.phone-journal li {padding:10px 0;border-top:1px solid var(--soft);overflow-wrap:anywhere;}
+.phone-journal time {color:var(--muted);margin-right:10px;}
+#phone-journal-status {font-size:12px;}
+/* Legacy input surfaces remain hidden; the shared phone adapter owns mutations. */
+#engineer-root .phone-shell,#engineer-root .device-actions,#engineer-root .input-panel {display:none;}
+#engineer-root .guide-map {flex-wrap:wrap;white-space:normal;}
+.phone-console .workbench>.stage,.phone-console .workbench>.sidebar,.phone-console .workbench>.debug {min-width:0;}
+@media(max-width:1080px) {
+ .phone-console>.toolbar {flex-wrap:wrap;}
+}
+@media(max-width:680px) {
+ .phone-top-actions {padding-left:0;border-left:0;}
+ .phone-mic-indicator {font-size:10px;}
+ .phone-connection-line {gap:8px;font-size:11px;padding-left:0;padding-right:0;}
+ .phone-stage {height:390px;min-height:310px;max-height:480px;}
+ .phone-conversation {padding:0 0 16px;}
+ .phone-conversation h1 {font-size:18px;}
+ .phone-conversation #phone-context {font-size:11px;}
+ .phone-main-actions {gap:8px;}
+ .phone-main-actions button {padding:10px 12px;font-size:12px;min-width:0;}
+ .phone-shortcuts {font-size:10px;}
+ .phone-tools {padding:20px;}
+ .phone-flat-body {width:83%;}
+ body[data-phone] .phone-flat-handset {width:87%;}
+ .phone-paw {width:72%;}
+ .phone-tool-section dl {grid-template-columns:110px minmax(0,1fr);}
+}
+@media(prefers-reduced-motion:reduce) {body[data-phone] *,body[data-phone] *::before {transition:none!important;scroll-behavior:auto!important;}}
+body[data-phone] .phone-key[data-digit="true"] span {text-shadow:0 0 8px #fff7;}
+body[data-phone] .phone-key[data-symbol="true"] svg {filter:drop-shadow(0 0 6px #fff8);}
+/* A continuous curved receiver in the functional WebGL fallback. */
+body[data-phone] .phone-flat-handset {
+ border-radius:0;
+ -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 90'%3E%3Cpath fill='white' d='M2 61C-5 29 70 5 140 5S285 28 298 58C307 80 284 92 263 76C217 48 85 46 36 78C18 89 5 83 2 61Z'/%3E%3C/svg%3E") center/100% 100% no-repeat;
+ mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 90'%3E%3Cpath fill='white' d='M2 61C-5 29 70 5 140 5S285 28 298 58C307 80 284 92 263 76C217 48 85 46 36 78C18 89 5 83 2 61Z'/%3E%3C/svg%3E") center/100% 100% no-repeat;
+}

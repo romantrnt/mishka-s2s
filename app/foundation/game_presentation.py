@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+import math
 from pathlib import Path
 import struct
 import uuid
@@ -85,11 +86,11 @@ class GamePresentationMixin:
 
     async def _assemble_game_audio(self, chunks, token, current):
         from .s2s import AudioChunk
-        from .voice_pipeline import resample_mono
+        from .voice_pipeline import peak_normalize, resample_mono
         samples, cues = [], []
         rate = 24000
         for audio, buttons in chunks:
-            if not current():
+            if not current() or not valid_pcm(audio):
                 return None
             converted = (audio.samples if audio.sample_rate == rate else
                          await asyncio.to_thread(resample_mono, audio.samples, audio.sample_rate, rate))
@@ -100,14 +101,36 @@ class GamePresentationMixin:
             samples.extend((0.,) * int(rate * .14))
             if len(samples) > rate * 60:
                 return None
-        return (AudioChunk(tuple(samples), rate, token), tuple(cues)) if samples else None
+        values = tuple(samples)
+        # Sinc resampling can overshoot an otherwise valid source waveform.
+        if values and all(math.isfinite(value) for value in values) and max(map(abs, values)) > 1.:
+            values = peak_normalize(values, safe_peak=1.)
+        audio = AudioChunk(values, rate, token)
+        return (audio, tuple(cues)) if valid_pcm(audio) else None
 
     async def _render_game_prompt(self, session_id, effect, token, current):
-        engine = self.bounded_s2s
-        if (engine is None or not getattr(self.audio, "private_pcm_supported", False)
-                or not callable(getattr(self.audio, "play_pcm_owned", None))
-                or len(self._owned_text_jobs) >= 2):
+        started = asyncio.get_running_loop().time()
+        stage, segment_index, failure_reason = "admission", None, "empty_prompt"
+        def failed(reason, exception=None):
+            self._record_audio_completion_diagnostic(
+                "game_prompt_render_failed", session_id=session_id,
+                operation="game_prompt_render", generation=self._session_epochs.get(session_id, 0),
+                reason=reason, stage=stage, chunk_index=segment_index,
+                elapsed_ms=round((asyncio.get_running_loop().time() - started) * 1000),
+                exception_type=type(exception).__name__ if exception is not None else None)
+            self.record_audio_diagnostic("game_prompt_render_failed", code=reason, stage=stage,
+                generation=self._session_epochs.get(session_id, 0))
             return None
+
+        engine = self.bounded_s2s
+        if engine is None:
+            return failed("engine_unavailable")
+        if not getattr(self.audio, "private_pcm_supported", False):
+            return failed("private_pcm_unavailable")
+        if not callable(getattr(self.audio, "play_pcm_owned", None)):
+            return failed("pcm_dispatch_unavailable")
+        if len(self._owned_text_jobs) >= 2:
+            return failed("render_capacity")
         from .s2s import CachedTTSProvider, ResilientVoiceProvider
         tts, voice = engine.tts, engine.voice
         while isinstance(tts, CachedTTSProvider):
@@ -119,26 +142,39 @@ class GamePresentationMixin:
         cancelled = lambda: not current()
 
         async def render():
+            nonlocal stage, segment_index, failure_reason
             chunks = []
-            for text, buttons, phrase_id in self._game_prompt_segments(effect):
+            for segment_index, (text, buttons, phrase_id) in enumerate(self._game_prompt_segments(effect)):
                 if not current():
                     return None
+                stage = "normalization"
                 text = engine.normalizer.normalize(text)
                 if not text or len(text) > engine.config.max_response_chars:
+                    failure_reason = "invalid_text"
                     return None
+                stage = "validation"
                 validation = await engine.response_validator.validate_trusted(text)
-                if not current() or not validation.allowed:
+                if not current():
                     return None
+                if not validation.allowed:
+                    failure_reason = "validation_blocked"
+                    return None
+                stage = "asset_load"
                 try:
                     audio = await asyncio.to_thread(self._load_game_asset, phrase_id, token) if phrase_id else None
                 except Exception:
                     audio = None
                 recorded = audio is not None
                 if audio is None:
+                    stage = "synthesis"
                     audio = await tts.synthesize(text, token, cancelled)
-                if not current() or not valid_pcm(audio):
+                if not current():
+                    return None
+                if not valid_pcm(audio):
+                    failure_reason = "invalid_recorded_pcm" if recorded else "invalid_tts_pcm"
                     return None
                 chunks.append((audio, buttons, recorded))
+            stage, failure_reason = "baseline_assembly", "baseline_unavailable"
             baseline["audio"] = await self._assemble_game_audio(
                 [(audio, buttons) for audio, buttons, _ in chunks], token, current)
             if not current() or not callable(convert):
@@ -147,7 +183,8 @@ class GamePresentationMixin:
             if callable(readiness) and not readiness().get("ready", False):
                 return baseline.get("audio")
             enhanced = []
-            enhancement_deadline = asyncio.get_running_loop().time() + 1.5
+            enhancement_deadline = asyncio.get_running_loop().time() + min(
+                getattr(self.audio, "owned_voice_timeout_s", 1.5), engine.config.max_turn_seconds)
             try:
                 for audio, buttons, recorded in chunks:
                     if recorded:
@@ -156,6 +193,7 @@ class GamePresentationMixin:
                     remaining = enhancement_deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
                         return baseline.get("audio")
+                    stage = "voice_conversion"
                     async with asyncio.timeout(remaining):
                         converted = await convert(audio, cancelled)
                     if not current():
@@ -163,6 +201,7 @@ class GamePresentationMixin:
                     if not valid_pcm(converted):
                         return baseline.get("audio")
                     enhanced.append((converted, buttons))
+                stage, failure_reason = "enhanced_assembly", "enhanced_assembly_unavailable"
                 return await self._assemble_game_audio(enhanced, token, current)
             except asyncio.CancelledError:
                 raise
@@ -179,16 +218,27 @@ class GamePresentationMixin:
                 done.exception()
         task.add_done_callback(observe)
         try:
-            done, _ = await asyncio.wait({task}, timeout=min(8., engine.config.max_turn_seconds))
+            done, _ = await asyncio.wait({task}, timeout=min(
+                getattr(self.audio, "owned_render_timeout_s", 8.), engine.config.max_turn_seconds))
             if not done:
                 task.cancel()
-                return baseline.get("audio") if current() else None
-            return task.result() if current() and not task.cancelled() else None
+                if not current():
+                    return None
+                return baseline.get("audio") or failed("render_timeout")
+            if not current():
+                return None
+            if task.cancelled():
+                return failed("render_cancelled")
+            return task.result() or failed(failure_reason)
         except asyncio.CancelledError:
             task.cancel()
             raise
-        except Exception:
-            return baseline.get("audio") if current() else None
+        except Exception as exc:
+            if not current():
+                return None
+            reason = ("native_queue_full" if stage == "synthesis" and isinstance(exc, RuntimeError)
+                      and exc.args == ("Silero TTS worker queue is full",) else "render_exception")
+            return baseline.get("audio") or failed(reason, exc)
 
     def _play_game_prompt(self, session_id, rendered, effect, token):
         audio, cues = rendered
@@ -203,8 +253,14 @@ class GamePresentationMixin:
         try:
             self.audio.play_pcm_owned(handle, replace(audio, token=token, session_id=session_id,
                 generation_id=handle.generation))
-        except Exception:
+        except Exception as exc:
             self._invalidate_audio_lease(session_id, "failed")
+            self._record_audio_completion_diagnostic(
+                "game_prompt_dispatch_failed", session_id=session_id,
+                operation="game_prompt_dispatch", generation=handle.generation,
+                reason="pcm_dispatch_exception", exception_type=type(exc).__name__)
+            self.record_audio_diagnostic("game_prompt_dispatch_failed", code="pcm_dispatch_exception",
+                stage="dispatch", generation=handle.generation)
             raise
 
     def _cancel_game_cues(self, session_id):

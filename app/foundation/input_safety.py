@@ -29,6 +29,10 @@ class OllamaInputClassifier(OllamaMiniLLMValidator):
             "immediate danger, breathing difficulty, or threats to another person. "
             "Concern: distress, fear, pain, coercion, secrecy, or uncertain safeguarding concerns. "
             "None: ordinary harmless conversation. Interpret meaning and paraphrases, not just keywords. "
+            "Confidence means certainty that the chosen severity label is correct, NOT the probability of danger. "
+            "A clearly harmless utterance should have severity none and HIGH confidence. "
+            "Declining an introduction or an offered activity is ordinary autonomy, not by itself distress, coercion or danger. "
+            "Distinguish refusal of an activity from not wanting to live or disclosure of harm. "
             "When uncertain use concern with low confidence. Never produce child-facing advice."
         )
         keep_alive = self.keep_alive.strip()

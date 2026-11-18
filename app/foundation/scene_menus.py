@@ -22,6 +22,11 @@ class SceneMenuMixin:
 
     def _prepare_scene_menu(self, state, effects, reason):
         if state.mode not in SCENE_AUDIO:
+            if (reason == 'game_started' and state.scene_menu_active == 'game_menu'
+                    and state.scene_menu_phase in {'invite','narrating','repeat_prompt','repeat_listen'}):
+                # A fresh, verified choice owns this edge. Stop the old menu
+                # before its replacement game-start recording is dispatched.
+                effects = [{'type':'audio_stop'}, {'type':'capture_close'}] + effects
             if state.scene_menu_refresh_required and state.scene_menu_active in state.scene_menu_seen:
                 state.scene_menu_seen.remove(state.scene_menu_active)
             state.scene_menu_refresh_required = False
@@ -98,6 +103,12 @@ class SceneMenuMixin:
             return self._decision(state, [], 'scene_menu_release_required')
         state.scene_menu_held.append(button)
         if state.scene_menu_phase in {'invite','narrating','repeat_prompt','repeat_listen'}:
+            if (state.mode == 'game_menu' and not state.scene_menu_refresh_required
+                    and self._menu_selection(state, button) is not None):
+                # Valid game choices interrupt and select on the same fresh
+                # press. Held keys and obsolete mappings cannot enter here.
+                state.scene_menu_answers[state.mode]='skipped'
+                return None
             state.scene_menu_phase='ready'
             state.scene_menu_answers[state.mode]='skipped'
             state.state_version+=1

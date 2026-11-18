@@ -150,6 +150,59 @@ def test_webpanel_audio_completion_uses_current_canonical_path():
     asyncio.run(run())
 
 
+def test_age_hint_completion_starts_real_stand_age_digit_wave():
+    from app.foundation.stand import HardwareIntegrationStand, UARTLEDController
+
+    async def run():
+        clock = [10.0]
+        stand = HardwareIntegrationStand(
+            Settings(profile="mock"), monotonic_now=lambda: clock[0], background_scheduler=False,
+        )
+        app = stand.application
+        sid = "gr03-age-stand"
+        sequence = 0
+
+        async def send(kind, payload=None, text=None):
+            nonlocal sequence
+            sequence += 1
+            return await app.receive_async(
+                Event(kind, sid, sequence, 100.0, "stand-age-test", payload or {},
+                      f"age-{sequence}", clock[0]), text,
+            )
+
+        async def complete(phrase):
+            lease = app._active_audio[sid]
+            assert lease["content_id"] == phrase
+            return await send("AudioCompleted", {
+                "response_id": phrase,
+                **{key: lease[key] for key in ("token", "generation", "playback_id", "playback_lease")},
+            })
+
+        try:
+            assert isinstance(app.led, UARTLEDController)
+            await send("HandsetLifted")
+            clock[0] = 15.0
+            await app.flush_welcome_timers()
+            await complete("PHRASE_001")
+            await complete("PHRASE_078")
+            await complete("PHRASE_099")
+            result = await send("SpeechReceived", text="Меня зовут Аня")
+            assert result["reason"] == "exhibition_age_question_started"
+            assert (await complete("PHRASE_108"))["reason"] == "exhibition_age_hint_started"
+            result = await complete("PHRASE_075")
+            assert result["reason"] == "exhibition_age_selection_started"
+            assert app.canonical_runtime.sessions[sid].mode == "exhibition_age_selection"
+            assert app.led.effect_snapshot()["effect"] == "wave"
+            app.led.advance_effects(16.0)
+            app.led.advance_effects(17.0)
+            assert app.led.effect_snapshot()["effect"] == "wave_hold"
+            assert {int(key) for key, value in app.led.output.snapshot().items() if value} == {0, 2, 7, 8, 11, 12, 15}
+        finally:
+            await stand.aclose()
+
+    asyncio.run(run())
+
+
 def test_button_before_welcome_cannot_enter_age_flow():
     runtime = CanonicalRuntime(exhibition_mode=True, monotonic_now=lambda: 10.0)
     runtime.handle(ce("HandsetLifted", 1, 0, "hid"))

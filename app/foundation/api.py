@@ -45,7 +45,7 @@ def _project_path(value: str, *, keep_bare_command: bool = False) -> str:
 
 def _normalize_paths(settings: Settings) -> Settings:
     values = asdict(settings)
-    for field in ("content_root", "history_db", "silero_cache_path", "rvc_project_root", "rvc_model", "rvc_index", "rvc_tmp_dir", "warmup_pcm_path"):
+    for field in ("content_root", "history_db", "silero_cache_path", "rvc_project_root", "rvc_model", "rvc_index", "rvc_tmp_dir", "warmup_pcm_path", "experimental_voice_manifest", "rvc_worker_script"):
         if values.get(field):
             values[field] = _project_path(str(values[field]))
     if values.get("rvc_python"):
@@ -123,7 +123,11 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
     playback=playback_override or SoundDevicePlaybackController(settings.audio_output_device or None)
     def resolved(value: str) -> str:
         return _project_path(value, keep_bare_command=True)
-    tts=SileroTTSProvider(SileroTTSEngine(language=settings.silero_language, model_name=settings.silero_model, speaker=settings.silero_speaker, sample_rate=settings.silero_sample_rate, cache_path=settings.silero_cache_path, leading_silence_ms=settings.silero_leading_silence_ms))
+    if settings.tts_provider == "voxcpm765":
+        from .experimental_voice import create_experimental_tts_provider
+        tts = create_experimental_tts_provider(settings.tts_provider, settings.experimental_voice_manifest)
+    else:
+        tts=SileroTTSProvider(SileroTTSEngine(language=settings.silero_language, model_name=settings.silero_model, speaker=settings.silero_speaker, sample_rate=settings.silero_sample_rate, cache_path=settings.silero_cache_path, leading_silence_ms=settings.silero_leading_silence_ms))
     voice_mode = settings.voice_conversion
     if voice_mode in {"off", "disabled"}:
         voice = PassthroughVoiceProvider()
@@ -140,17 +144,18 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
             protect=settings.rvc_protect,
             tmp_dir=settings.rvc_tmp_dir,
             startup_timeout_s=settings.rvc_startup_timeout_s,
+            worker_script=settings.rvc_worker_script,
         )
         status = primary_voice.configuration_readiness()
         if not status.get("configuration_ready"):
             raise RuntimeError(
                 "RVC v2 requested but its pinned runtime/model/index configuration is unavailable"
             )
-        voice = ResilientVoiceProvider(primary_voice)
+        voice = primary_voice if settings.rvc_fallback_mode == "fail_closed" else ResilientVoiceProvider(primary_voice)
     else:
         raise ValueError(f"unsupported MISHKA_VOICE_CONVERSION: {voice_mode}")
     engine=BoundedConversationEngine(
-        llm,CachedTTSProvider(tts),voice,playback,config,allow_quick_replies=False,profile=settings.profile,settings=settings,
+        llm,CachedTTSProvider(tts) if settings.tts_provider == "silero" else tts,voice,playback,config,allow_quick_replies=False,profile=settings.profile,settings=settings,
     )
     vad=SileroVADAdapter(lambda: _silero_loader(settings))
     stt=FasterWhisperRecognizer(lambda:_whisper_loader(settings),config,settings.stt_model)
@@ -444,7 +449,9 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
         identity_status = application.identity_status() if hasattr(application, "identity_status") else {"identity_ready": False, "reader_ready": False, "synthetic": False}
         software_runtime_usable = bool(
             lifecycle_admission
-            and (not local_demo or physical_hardware_ready)
+            and (not local_demo or physical_hardware_ready
+                 or (simulated_hardware and getattr(settings, "max_synthetic_data", False)
+                     and getattr(settings, "hardware_mode", "") == "simulator"))
             and (optional_identity or bool(profile_status.get("ready")))
             and bool(history_status.get("ready"))
             and bool(graph_status.get("ready"))
@@ -545,6 +552,13 @@ def create_app(application=None, *, include_test_routes: bool = False, admission
             return
         if not secrets.compare_digest(supplied, access_token):
             await websocket.close(code=1008, reason="auth_failure")
+            return
+        if getattr(getattr(api.state, "stand", None), "remote_devices", None) is not None:
+            # An attached simulator has one peripheral receiver (/stand/ws or
+            # its HTTP routes). Generic canonical dispatch skips that adapter's
+            # disconnect, epoch and owned-session barriers, so it is unavailable
+            # here. Standalone and physical applications retain their transport.
+            await websocket.close(code=1008, reason="stand_ingress_required")
             return
         if not lifecycle.admits_users():
             snapshot = lifecycle.snapshot()

@@ -66,7 +66,9 @@ async def test_stale_idle_nonce_cannot_end_new_button_activity():
         await h.send('ButtonPressed',{'button_id':1});await h.send('ButtonReleased',{'button_id':1})
         old=h.app._engagement_owners['memory']['nonce']
         h.clock[0]=200
-        await h.send('ButtonPressed',{'button_id':6});await h.send('ButtonReleased',{'button_id':6})
+        result=await h.send('ButtonPressed',{'button_id':7});await h.send('ButtonReleased',{'button_id':7})
+        assert result['reason']=='game_menu_back'
+        assert h.app._engagement_owners['memory']['nonce']!=old
         h.clock[0]=220
         event=Event('InteractionIdleExpired','memory',1,220,'internal_interaction_idle',{},'old-idle',220)
         result=await h.app._receive_canonical_event(event,interaction_idle_authorized=True,_interaction_nonce=old)

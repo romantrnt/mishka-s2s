@@ -33,8 +33,16 @@ let lastSpokenCommand = 0;
 let lastResultCount = 0;
 let storySpeechGeneration = 0;
 let activeStoryPlayback = null;
+let stoppedStoryCheckpoint = null;
+let stoppedStoryCheckpointTimer = null;
 let mic = null;
+let micGeneration = 0;
+let micStarting = false;
+let micOwner = null;
+let audioRetry = null;
 let ws = null;
+let wsSnapshotReady = false;
+let wsReloadRequired = false;
 let wsHeartbeatTimer = null;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
@@ -49,6 +57,9 @@ const MIC_DUCK_ATTACK = 0.75;
 const MIC_DUCK_RELEASE = 0.35;
 let micInputGain = 1;
 let audioGeneration = 0;
+let minimumPCMGeneration = 0;
+let suppressPhoneAudio = false;
+let audioReconnectPending = false;
 let audioQueueTail = Promise.resolve();
 const pendingPCM = [];
 const pendingTextInputs = [];
@@ -109,6 +120,13 @@ function apiPath(path) {
 }
 
 const MAX_PENDING_POSTS = 16;
+// Input and terminal audio callbacks can await the real LLM/voice route.
+// Urgent handset/reset requests keep a short deadline and cancel these tasks.
+const TURN_REQUEST_TIMEOUT_MS = 240000;
+const MODEL_POST_PATHS = new Set([
+  '/stand/text', '/stand/handset', '/stand/button', '/stand/button-hold',
+  '/stand/button-long-hold', '/stand/raw', '/stand/audio/completed', '/stand/audio/failed',
+]);
 const MAX_PENDING_LIFECYCLE_POSTS = 32;
 const LIFECYCLE_POST_PATHS = new Set([
   '/stand/button-released', '/stand/audio/lifecycle', '/stand/audio/completed',
@@ -118,19 +136,53 @@ let postQueue = [];
 let activePost = null;
 let postGeneration = 0;
 
+function postAdmissionAvailable() {
+  return !current?.simulator || (wsSnapshotReady && !wsReloadRequired && !authBlocked);
+}
+
+function cancelOrdinaryPosts() {
+  // Legacy panels retain their HTTP fallback when the observer socket drops.
+  if (!current?.simulator) return;
+  postQueue = postQueue.filter(item => {
+    if (item.urgent || item.lifecycle) return true;
+    item.resolve(null);
+    return false;
+  });
+  if (activePost && !activePost.urgent && !activePost.lifecycle) {
+    const obsolete = activePost;
+    activePost = null;
+    obsolete.resolve(null);
+    obsolete.controller.abort();
+  }
+  dispatchNextPost();
+}
+
 function post(path, body = {}) {
   // Capture both the selected session and the wire payload before waiting.
-  const wireBody = JSON.stringify({ session_id: session(), ...body });
+  const wireBody = JSON.stringify(path.startsWith('/stand/simulator/') ? body : { session_id: session(), ...body });
   const payload = JSON.parse(wireBody);
-  const urgent = path === '/stand/reset' || (path === '/stand/handset' && body.state === 'down');
-  const lifecycle = LIFECYCLE_POST_PATHS.has(path);
-  const owner = path.startsWith('/stand/button')
+  const simulated = path === '/stand/simulator/action';
+  const urgent = path === '/stand/reset' || (path === '/stand/handset' && body.state === 'down')
+    || (simulated && (body.action === 'reset' || (body.action === 'handset' && body.state === 'down')))
+    || (path === '/stand/simulator/fault' && body.mode === 'disconnect');
+  const lifecycle = LIFECYCLE_POST_PATHS.has(path) || (simulated && body.action === 'button' && body.press === 'release');
+  // Keep terminal cleanup available, but an open transport alone cannot
+  // authorize input against a snapshot retained from an earlier connection.
+  if (!urgent && !lifecycle && !postAdmissionAvailable()) {
+    const error = new Error(wsReloadRequired ? 'Сервис перезапущен. Обновите страницу, чтобы продолжить.' : 'Дождитесь актуального состояния телефона.');
+    showError(error);
+    const rejected = Promise.reject(error);
+    rejected.catch(() => {});
+    return rejected;
+  }
+  const owner = path.startsWith('/stand/button') || (simulated && body.action === 'button')
     ? JSON.stringify(['button', payload.session_id, payload.button_id])
     : path.startsWith('/stand/audio/')
       ? JSON.stringify(['audio', payload.session_id, payload.response_id, payload.playback_id,
         payload.playback_lease, payload.generation, payload.token])
       : null;
   if (urgent) {
+    audioReconnectPending = false;
     postGeneration += 1;
     postQueue = postQueue.filter(item => {
       if (item.urgent) return true;
@@ -168,7 +220,9 @@ function post(path, body = {}) {
     rejected.catch(() => {});
     return rejected;
   }
-  const item = { path, wireBody, owner, lifecycle, urgent, generation: postGeneration, controller: new AbortController() };
+  const timeoutMs = !urgent && (MODEL_POST_PATHS.has(path) || (simulated && !lifecycle))
+    ? TURN_REQUEST_TIMEOUT_MS : undefined;
+  const item = { path, wireBody, owner, lifecycle, urgent, timeoutMs, generation: postGeneration, controller: new AbortController() };
   item.promise = new Promise((resolve, reject) => { item.resolve = resolve; item.reject = reject; });
   // Some DOM handlers ignore the return value; errors are already shown here.
   item.promise.catch(() => {});
@@ -179,7 +233,14 @@ function post(path, body = {}) {
 
 function dispatchNextPost() {
   if (activePost || !postQueue.length) return;
-  const item = postQueue.shift();
+  let item;
+  while (postQueue.length) {
+    item = postQueue.shift();
+    if (item.urgent || item.lifecycle || postAdmissionAvailable()) break;
+    item.resolve(null);
+    item = null;
+  }
+  if (!item) return;
   activePost = item;
   runPost(item).then(item.resolve, item.reject).finally(() => {
     // An urgent request may already have replaced this cancelled request.
@@ -191,6 +252,7 @@ function dispatchNextPost() {
 
 async function runPost(item) {
   try {
+    if (item.controller.signal.aborted || (!item.urgent && !item.lifecycle && !postAdmissionAvailable())) return null;
     recordLiveInput(item.path, JSON.parse(item.wireBody));
     const value = await fetchWithTimeout(item.path, {
       method: 'POST',
@@ -210,12 +272,22 @@ async function runPost(item) {
         }
         return value;
       },
-    });
-    if (item.generation !== postGeneration) return null;
+    }, item.timeoutMs);
+    if (item.generation !== postGeneration || item.controller.signal.aborted
+      || (!item.urgent && !item.lifecycle && !postAdmissionAvailable())) return null;
     recordLiveResult(value);
     return value;
   } catch (error) {
     if (item.generation !== postGeneration || item.controller.signal.aborted) return null;
+    if ([401, 403].includes(Number(error?.status))) {
+      authBlocked = true;
+      audioReconnectPending = false;
+      suppressPhoneAudio = true;
+      clearMic();
+      interruptAudioForInput();
+      stopPolling();
+      window.mishkaPhoneConnection?.(false);
+    }
     showError(error);
     throw error;
   }
@@ -408,6 +480,7 @@ function renderLiveDialogue(state) {
 function showError(error) {
   $('fallback').classList.remove('hidden');
   $('fallback').textContent = String(error.message || error);
+  window.mishkaPhoneError?.(String(error.message || error));
 }
 
 function scheduleReconnect(delayOverrideMs = 0) {
@@ -461,23 +534,33 @@ function connect() {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${location.host}${apiPath("/stand/ws")}`);
   ws = socket;
+  wsSnapshotReady = false;
+  cancelOrdinaryPosts();
   socket.onopen = () => {
     if (ws !== socket) return;
     reconnectAttempt = 0;
     reconnectDelayOverride = 0;
     liveClientEntries = [];
-    $("connection").textContent = "CONNECTED";
+    $("connection").textContent = wsReloadRequired ? "RELOAD REQUIRED" : "SYNCING";
     $("connection").classList.remove("offline");
     $("connection").classList.add("online");
     startWebsocketHeartbeat(socket);
     renderRuntimeStatus();
+    window.mishkaPhoneConnection?.(true);
     refresh({ includeStatus: true, includeState: false }).finally(schedulePolling);
   };
   socket.onclose = () => {
     if (ws !== socket) return;
     stopWebsocketHeartbeat();
     ws = null;
+    wsSnapshotReady = false;
+    cancelOrdinaryPosts();
     clearMic();
+    audioReconnectPending = !authBlocked && (audioReconnectPending
+      || Boolean(current?.simulator && current.session.handset_up && !suppressPhoneAudio));
+    if (current?.simulator) suppressPhoneAudio = true;
+    interruptAudioForInput();
+    window.mishkaPhoneConnection?.(false);
     $("connection").textContent = document.hidden ? "PAUSED" : "RECONNECTING";
     $("connection").classList.remove("online");
     $("connection").classList.add("offline");
@@ -493,13 +576,18 @@ function connect() {
     try { socket.close(); } catch (_) {}
   };
   socket.onmessage = event => {
+    if (ws !== socket) return;
     try {
       const message = parseMessage(event.data);
       if (!message) { showError("WebSocket sent invalid JSON"); return; }
       if (message.type === "admission_error") {
+        wsSnapshotReady = false;
+        cancelOrdinaryPosts();
+        clearMic();
         const error = message.error || {};
         if (["auth_failure", "unauthorized", "forbidden"].includes(String(error.code || "").toLowerCase())) {
           authBlocked = true;
+          audioReconnectPending = false;
           stopPolling();
         }
         reconnectDelayOverride = Math.min(60000, Math.max(5000, Number(error.retry_after_ms) || 30000));
@@ -509,26 +597,62 @@ function connect() {
       if (message.type === "stand_state") {
         const state = normalizeState(message.state);
         if (!state) { showError("WebSocket sent invalid stand state"); return; }
+        if (!simulatorSnapshotIsCurrent(state)) {
+          if (!wsSnapshotReady && Number.isSafeInteger(state.simulator?.epoch)
+            && Number.isSafeInteger(state.simulator?.journal_cursor)
+            && (state.simulator.epoch < current?.simulator?.epoch
+              || (state.simulator.epoch === current?.simulator?.epoch
+                && state.simulator.journal_cursor < current.simulator.journal_cursor))) {
+            wsReloadRequired = true;
+            cancelOrdinaryPosts();
+            audioReconnectPending = false;
+            suppressPhoneAudio = true;
+            clearMic();
+            interruptAudioForInput();
+            $("connection").textContent = "RELOAD REQUIRED";
+            showError('Сервис перезапущен. Обновите страницу, чтобы продолжить.');
+            window.mishkaPhoneConnection?.(false);
+          }
+          return;
+        }
+        wsSnapshotReady = !wsReloadRequired && !authBlocked;
+        $("connection").textContent = wsReloadRequired ? "RELOAD REQUIRED" : "CONNECTED";
+        const completion = message.audio_completion;
+        const completionSessionId = state.simulator?.session?.session_id || session();
+        // Canonical retries omit session_id; their public state must match this snapshot.
+        const completionOwnsSnapshot = completion?.session_id === completionSessionId
+          || (completion?.session_id === undefined && Number.isSafeInteger(completion?.canonical_state?.state_version)
+            && completion.canonical_state.state_version === (state.simulator?.session?.state_version ?? state.canonical_state?.state_version)
+            && completion.canonical_state.mode === state.session.node && completion.canonical_state.handset === 'up');
+        const completionCurrent = completionOwnsSnapshot
+          && state.session.handset_up && !authBlocked && !wsReloadRequired
+          && (!state.simulator || (!suppressPhoneAudio && state.simulator.epoch === current?.simulator?.epoch
+            && state.simulator.session.session_id === current?.simulator?.session?.session_id));
+        if (completionCurrent) {
+          if (completion.reason === 'audio_retry') audioRetry = {sessionId: completionSessionId, epoch: state.simulator?.epoch, node: state.session.node};
+          else if (!completion.pending && !completion.error) audioRetry = null;
+        }
         try {
           if (message.lighting_wave) state.lighting_wave = message.lighting_wave;
-          render(state);
+          render(state, { fromWebSocket: true });
         } catch (error) {
           console.warn('Invalid stand snapshot', error);
           showError('Invalid stand snapshot: ' + (error.message || error));
         }
-        if (mic && message.audio_completion) {
-          const failed = message.audio_completion.reason === "audio_retry";
-          $("mic-state").textContent = failed ? "Речь не распознана · попробуйте ещё раз" : "Ответ получен · микрофон слушает";
+        if (mic && completionCurrent && !completion.pending) {
+          $("mic-state").textContent = audioRetry ? "Речь не распознана · попробуйте ещё раз"
+            : microphoneAccepting() ? "Ответ получен · Мишка слушает" : "Ответ получен · приём на паузе";
         }
       }
       if (message.type === "audio_pcm_output") {
         if (typeof message.data_b64 !== "string" || !Number.isFinite(Number(message.sample_rate))) { showError("WebSocket sent invalid audio frame"); return; }
+        if (current?.simulator && (!wsSnapshotReady || wsReloadRequired || suppressPhoneAudio || message.session_id !== current.simulator.session.session_id
+          || Number(message.generation) < minimumPCMGeneration
+          || Number(message.generation) < Number(current.simulator.devices.audio.browser_generation))) return;
         enqueuePCM(message);
       }
-      if (message.type === "audio_stop" && audioContext) {
-        audioGeneration += 1; storySpeechGeneration += 1; pendingPCM.length = 0;
-        for (const source of activeSources) { try { source.stop(); } catch (_) {} }
-        activeSources.clear(); nextAudioTime = audioContext.currentTime;
+      if (message.type === "audio_stop") {
+        handleAudioStop(message);
       }
     } catch (error) {
       console.warn('WebSocket message handling failed', error);
@@ -592,12 +716,17 @@ async function refresh({ includeStatus = true, includeState = true } = {}) {
       }
       if (includeState && !authBlocked) {
         try {
-          const state = await (await fetchWithTimeout('/stand/state', { signal: controller.signal })).json();
+          const path = document.body.dataset.phone ? '/stand/simulator/state' : '/stand/state';
+          const state = await (await fetchWithTimeout(path, { signal: controller.signal })).json();
           render(state);
           stateSnapshotAvailable = true;
         } catch (error) {
           if ([401, 403].includes(Number(error?.status))) {
             authBlocked = true;
+            audioReconnectPending = false;
+            suppressPhoneAudio = true;
+            clearMic();
+            interruptAudioForInput();
             stopPolling();
             showError(new Error("WebPanel access denied. Refresh with a valid token."));
           } else {
@@ -733,10 +862,38 @@ function cardStatusProjection(state) {
   }
 }
 
-function render(state) {
+function simulatorSnapshotIsCurrent(nextState, previousState = current) {
+  const next = nextState?.simulator;
+  const previous = previousState?.simulator;
+  if (!next) return !previous;
+  if (!Number.isSafeInteger(next.epoch) || next.epoch < 0
+    || !Number.isSafeInteger(next.journal_cursor) || next.journal_cursor < 0) return false;
+  if (!previous) return true;
+  // Epoch owns cleanup boundaries; the journal orders changes within one
+  // boundary. Session state_version can restart after a clean relift.
+  return next.epoch > previous.epoch || (next.epoch === previous.epoch
+    && next.journal_cursor >= previous.journal_cursor);
+}
+
+function render(state, { fromWebSocket = false } = {}) {
   state = normalizeState(state);
   if (!state) { showError("Invalid stand state"); return; }
+  // Check before touching media fences, current state or any projected control.
+  // Poll responses, WS snapshots and POST responses all enter here.
+  if (!simulatorSnapshotIsCurrent(state)) return;
+  if (audioRetry && (!state.session.handset_up || audioRetry.sessionId !== (state.simulator?.session?.session_id || session())
+    || audioRetry.epoch !== state.simulator?.epoch || audioRetry.node !== state.session.node)) audioRetry = null;
+  // Recover transport-only suppression from an accepted snapshot on the new
+  // socket. Polling and a pending local cleanup cannot reopen this boundary.
+  if (fromWebSocket && audioReconnectPending) {
+    audioReconnectPending = false;
+    if (!authBlocked && wsSnapshotReady && !wsReloadRequired && state.simulator && state.session.handset_up) suppressPhoneAudio = false;
+  }
+  if (state.simulator && wsSnapshotReady && !wsReloadRequired && state.session.handset_up && current?.simulator && !current.session.handset_up) suppressPhoneAudio = false;
+  if (state.simulator && !state.session.handset_up) suppressPhoneAudio = true;
   current = state;
+  if (state.simulator?.session?.session_id) $('session').value = state.simulator.session.session_id;
+  syncMicAdmission();
   if (!firstSnapshotRendered) {
     lastSpokenCommand = Math.max(0, ...(state.commands || []).map(item => Number(item.sequence) || 0));
     firstSnapshotRendered = true;
@@ -746,10 +903,12 @@ function render(state) {
   const pipeline = state.pipeline_metrics?.pipeline || {};
   const fallbackEvent = (state.pipeline_metrics?.events || []).some(item => item?.event === 'rvc_v2_fallback');
   const conversion = String(pipeline.voice_conversion || 'rvc_v2').toLowerCase();
+  const ttsProvider = String(pipeline.tts_provider || 'silero').toLowerCase();
+  const ttsLabel = { silero: 'SILERO', voxcpm765: 'VOXCPM765', mock: 'MOCK' }[ttsProvider] || ttsProvider.toUpperCase();
   const mode = conversion === 'off' || conversion === 'disabled'
-    ? 'silero+off'
-    : fallbackEvent ? 'passthrough' : 'silero+rvc';
-  const modeLabel = { 'silero+rvc': 'SILERO + RVC', 'silero+off': 'SILERO + OFF', passthrough: 'PASSTHROUGH' }[mode] || mode.toUpperCase();
+    ? `${ttsProvider}+off`
+    : fallbackEvent ? 'passthrough' : `${ttsProvider}+rvc`;
+  const modeLabel = mode === 'passthrough' ? 'PASSTHROUGH' : `${ttsLabel} + ${mode.endsWith('+off') ? 'OFF' : 'RVC'}`;
   $('pipeline-mode').textContent = modeLabel;
   $('pipeline-mode').dataset.mode = mode;
   const sessionState = String(state.session?.state || '').trim().toUpperCase();
@@ -823,6 +982,7 @@ function render(state) {
     $('fallback').textContent = `${String(result.reason || 'runtime fallback').replaceAll('_', ' ')}${detail ? ` · ${String(detail).replaceAll('_', ' ')}` : ''}`;
   }
   if (busy) $('fallback').textContent = 'Активная выставочная сессия уже запущена. Опустите трубку для полного сброса.';
+  window.mishkaPhoneUpdate?.(state);
 }
 
 function normalizeLightingState(snapshot) {
@@ -848,7 +1008,10 @@ function renderButtons(state, led, contract, lighting) {
   const sessionActive = Boolean(session.handset_up) && !guestMode;
   const enabledButtons = Array.isArray(session.enabled_buttons) ? new Set(session.enabled_buttons.map(Number)) : null;
   for (const id of BUTTON_IDS) {
-    const enabled = Boolean(session.visual_only) ? guestButtons.has(id) : (guestMode ? guestButtons.has(id) : (sessionActive && (enabledButtons === null || enabledButtons.has(id))));
+    const enabled = state.simulator
+      ? Boolean(!authBlocked && wsSnapshotReady && !wsReloadRequired && ws?.readyState === WebSocket.OPEN && state.simulator.admission?.input_ready
+        && state.simulator.admission?.connected && state.simulator.devices.buttons.find(button => button.id === id)?.enabled)
+      : Boolean(session.visual_only) ? guestButtons.has(id) : (guestMode ? guestButtons.has(id) : (sessionActive && (enabledButtons === null || enabledButtons.has(id))));
     const button = buttonRefs.get(id);
     if (!button) continue;
     const buttonElementIds = ELEMENTS_BY_BUTTON[id];
@@ -1056,6 +1219,55 @@ function renderLog(id, items, meta, value, klass) {
   }
 }
 
+function handleAudioStop(message) {
+  // UART stops also arrive in stand_state.commands. A delayed notification
+  // must not cancel a newer phrase started from that same snapshot.
+  const sequence = message.command_sequence;
+  if (Number.isSafeInteger(sequence) && sequence > 0 && sequence <= lastSpokenCommand) return;
+  freezeStoryCheckpoint();
+  checkpointPublicStoryTransfer(message.checkpoint_request);
+  minimumPCMGeneration = Math.max(minimumPCMGeneration, Number(message.generation) || 0);
+  audioGeneration += 1; storySpeechGeneration += 1; pendingPCM.length = 0;
+  for (const source of activeSources) { try { source.stop(); } catch (_) {} }
+  activeSources.clear(); nextAudioTime = audioContext ? audioContext.currentTime : 0;
+}
+
+function discardStoppedStoryCheckpoint() {
+  if (stoppedStoryCheckpointTimer !== null) window.clearTimeout(stoppedStoryCheckpointTimer);
+  stoppedStoryCheckpointTimer = null;
+  stoppedStoryCheckpoint = null;
+}
+
+function freezeStoryCheckpoint() {
+  const playback = activeStoryPlayback;
+  if (!playback || !audioContext || (!playback.paused && playback.generation !== storySpeechGeneration)) return;
+  const offset = playback.paused ? playback.offset :
+    Math.min(playback.buffer.duration, playback.offset + Math.max(0, audioContext.currentTime - playback.startedAt));
+  discardStoppedStoryCheckpoint();
+  // This receipt can only answer an exact server checkpoint request; it owns no audio.
+  const checkpoint = {identity: playback.identity, offset_ms: Math.round(offset * 1000), expires: Date.now() + 5000};
+  stoppedStoryCheckpoint = checkpoint;
+  stoppedStoryCheckpointTimer = window.setTimeout(() => {
+    if (stoppedStoryCheckpoint === checkpoint) discardStoppedStoryCheckpoint();
+  }, 5000);
+  playback.paused = true;
+  activeStoryPlayback = null;
+}
+
+function checkpointPublicStoryTransfer(request) {
+  if (!request) return;
+  freezeStoryCheckpoint();
+  const checkpoint = stoppedStoryCheckpoint;
+  if (!checkpoint) return;
+  if (Date.now() >= checkpoint.expires) { discardStoppedStoryCheckpoint(); return; }
+  const identity = checkpoint.identity;
+  if (request.story_id !== identity.response_id ||
+      ['session_id', 'generation', 'token', 'playback_id', 'playback_lease'].some(key => request[key] !== identity[key])) return;
+  // Consume locally before stop/onended, including duplicate wire commands.
+  discardStoppedStoryCheckpoint();
+  post('/stand/audio/checkpoint', {...request, offset_ms: checkpoint.offset_ms}).catch(() => {});
+}
+
 function audioIdentity(command) {
   return {
     session_id: command.payload.session_id,
@@ -1116,6 +1328,7 @@ async function playGenericAsset(command, generation) {
 }
 
 async function playStoryAsset(command, generation) {
+  discardStoppedStoryCheckpoint();
   const response = await fetch(apiPath('/stand/audio/story/' + encodeURIComponent(command.payload.response_id)));
   if (!response.ok) throw new Error('story audio HTTP ' + response.status);
   const data = await response.arrayBuffer();
@@ -1170,12 +1383,18 @@ function resumeStoryAsset() {
 function speakCommands(state) {
   for (const command of state.commands) {
     if (command.sequence <= lastSpokenCommand) continue;
+    if (state.simulator && suppressPhoneAudio && command.type === 'audio_play') {
+      lastSpokenCommand = command.sequence;
+      continue;
+    }
     // Keep audio commands pending until a real user gesture unlocks the
     // browser. Autoplay policy otherwise makes the first response disappear.
     if ((command.type === 'audio_play' || command.type === 'audio_stop') && !audioReady) break;
     lastSpokenCommand = command.sequence;
     if (command.type === 'audio_stop') {
-      interruptAudioForInput();
+      freezeStoryCheckpoint();
+      checkpointPublicStoryTransfer(command.payload?.checkpoint_request);
+      interruptAudioForInput({preserveStoryCheckpoint: true});
       window.speechSynthesis?.cancel();
     }
     if (command.type === 'audio_pause') {
@@ -1219,7 +1438,82 @@ function speakCommands(state) {
   lastResultCount = state.results.length;
 }
 
-function updateGuide(state, contract) {
+function interactionGuide(state, media) {
+  if (state?.canonical_state?.public_story_checkpoint_pending) {
+    return ['Сказка приостановлена', 'Восстанавливаем место в сказке. Если она не продолжилась, нажми 7 и выбери сказку заново.'];
+  }
+  if (!state?.session?.handset_up) return null;
+  const node = state.session.node;
+  const page = state.canonical_state?.scene_menu_descriptor;
+  if (['game_menu', 'fixed_story_menu', 'personal_story_theme', 'schedule_weather'].includes(node) && page?.scene === node) {
+    const choices = (page.items || []).map(item => `${item.slot} — ${item.title}`);
+    if ((page.buttons || []).includes(5) && !(page.items || []).some(item => item.slot === 5)) choices.push('5 — помощь');
+    if ((page.buttons || []).includes(6)) choices.push('6 — следующие варианты');
+    if ((page.buttons || []).includes(7)) choices.push('7 — назад');
+    return [{game_menu: 'Игры', fixed_story_menu: 'Сказки', personal_story_theme: 'Новая сказка', schedule_weather: 'День и планы'}[node], choices.join('; ') + '.'];
+  }
+  if (node === 'game_active') {
+    const game = state.canonical_state || {};
+    if (game.substate === 'game_exit_confirmation') return ['Закончить игру?', '6 — продолжить; 7 — закончить; 5 — помощь.'];
+    const title = {free_lights: 'Живой свет', quiz: 'Вопросы Мишки', repeat_pattern: 'Повтори огоньки',
+      odd_one_out: 'Выбери лишнее', word_game: 'Игра в слова'}[game.active_game_id] || 'Игра';
+    if (['starting', 'prompt'].includes(game.game_audio_stage)
+      || ['instruction', 'awaiting_prompt'].includes(game.game_phase)) return [title, 'Дослушай Мишку. Потом можно будет ответить.'];
+    if (game.active_game_id === 'repeat_pattern' && game.game_phase === 'demonstrate') return [title, 'Посмотри, как загораются огоньки. Потом повтори последовательность. 7 — выйти из игры.'];
+    if (game.active_game_id === 'word_game') {
+      const hint = media.pending ? 'Разреши микрофон в окне браузера и назови слово.'
+        : !media.microphone ? 'Включи микрофон и назови слово.'
+          : media.microphoneAccepting ? 'Назови слово для игры.' : 'Дослушай Мишку. Потом назови слово.';
+      return [title, hint + ' Можно написать слово в «Инструментах». 7 — выйти из игры.'];
+    }
+    return [title, {
+      free_lights: 'Нажимай кнопки 1–6 и играй с огоньками. 7 — выйти из игры.',
+      repeat_pattern: 'Повтори подсвеченные кнопки в том же порядке. 7 — выйти из игры.',
+      odd_one_out: 'Нажми подсвеченную кнопку с лишним предметом. 7 — выйти из игры.',
+      quiz: 'Нажми подсвеченную кнопку с ответом. Для выхода скажи «закончить игру» через микрофон или напиши это в «Инструментах».',
+    }[game.active_game_id] || 'Следуй текущей подсветке и подсказке Мишки.'];
+  }
+  if (node === 'bear_dialogue') {
+    const text = media.pending
+      ? 'Разреши микрофон в окне браузера. Или напиши Мишке в «Инструментах».'
+      : !media.microphone
+        ? 'Включи микрофон и поговори с Мишкой. Можно написать в «Инструментах».'
+        : media.microphoneAccepting
+          ? 'Расскажи Мишке что-нибудь или задай вопрос. Можно написать в «Инструментах».'
+          : 'Дослушай Мишку. Потом расскажи что-нибудь или задай вопрос. Можно написать в «Инструментах».';
+    return ['Поговорим', (media.audioRetry ? 'Мишка не расслышал. Попробуй ещё раз. ' : '') + text];
+  }
+  if (node === 'exhibition_name_capture') {
+    const text = media.pending
+      ? 'Разреши микрофон в окне браузера. Или напиши своё имя в «Инструментах».'
+      : !media.microphone
+        ? 'Включи микрофон и назови своё имя. Можно написать его в «Инструментах».'
+        : media.microphoneAccepting
+          ? 'Назови своё имя. Можно написать его в «Инструментах».'
+          : 'Дослушай Мишку. Потом назови своё имя или напиши его в «Инструментах».';
+    return ['Как тебя зовут?', text];
+  }
+  return {
+    voice_welcome: ['Знакомство', 'Сейчас Мишка поздоровается. Подожди немного.'],
+    exhibition_introduction: ['Знакомство', 'Дослушай Мишку.'],
+    exhibition_name_question: ['Как тебя зовут?', 'Дослушай вопрос Мишки.'],
+    exhibition_age_prompt: ['Сколько тебе лет?', 'Дослушай Мишку. Потом можно будет ответить.'],
+    exhibition_age_hint: ['Сколько тебе лет?', 'Дослушай Мишку. Потом можно будет ответить.'],
+    exhibition_age_selection: ['Сколько тебе лет?', 'Нажми цифру своего возраста (1–7). Можно включить микрофон или написать возраст в «Инструментах».'],
+    exhibition_age_complete: ['Знакомство', 'Мишка завершает знакомство. Подожди немного.'],
+    exhibition_onboarding_complete: ['Знакомство завершено', 'Сейчас появится меню. Подожди немного.'],
+    fixed_story_playing: ['Сказка', 'Слушай сказку. 6 — пауза; 7 — выйти из сказки.'],
+    story_pause_announcement: ['Сказка на паузе', 'Дослушай Мишку. Затем можно будет продолжить сказку.'],
+    story_paused: ['Сказка на паузе', '6 — продолжить сказку; 7 — выйти из сказки.'],
+    story_resume_announcement: ['Сказка', 'Дослушай Мишку. Сказка скоро продолжится.'],
+    session_closed: ['Сеанс завершён', 'Сеанс завершён. Положи трубку, чтобы начать заново.'],
+    safety_stop: ['Позови взрослого', 'Позови взрослого рядом. Положи трубку, чтобы завершить разговор.'],
+    wellbeing_check: ['Нужна помощь?', 'Ответь на вопрос Мишки: 1 — нет; 7 — да, нужна помощь; 5 — повторить вопрос.'],
+  }[node] || null;
+}
+
+function updateGuide(state, contract = validateButtonContract(state.button_contract)) {
+  const skipHint = 'Нажмите любую кнопку, чтобы пропустить подсказку. Затем нажмите нужную кнопку для выбора.';
     const labels = {
     profile_ready: ['Карта принята', 'Поднимите трубку, чтобы начать.'],
     game_menu: ['Игры', 'Варианты загружаются из текущего меню.'],
@@ -1233,12 +1527,13 @@ function updateGuide(state, contract) {
     schedule_weather: ['7 · День и планы', 'Варианты загружаются из текущего меню.'],
     safety_stop: ['Разговор остановлен', 'Позови взрослого рядом. Положи трубку, чтобы завершить разговор.'],
     root_menu: ['Главное меню', 'Выберите действие кнопкой 1–7.'],
-    exhibition_onboarding_complete: ['Знакомство завершено', 'Подсветка гаснет перед меню.'],
-    exhibition_menu_tutorial_buttons: ['Меню', 'Мишка называет кнопку и подсвечивает её по записи.'],
-    exhibition_menu_wave: ['Меню · финальная волна', 'После списка все рабочие диоды проходят волну.'],
-    exhibition_menu_repeat_prompt: ['Повторить меню?', 'Ожидается завершение вопроса.'],
-    exhibition_menu_repeat_listen: ['Повторить меню?', 'Скажите «да» или «нет».'],
-    exhibition_menu_replay_buttons: ['Меню · повтор', 'Повторная синхронная подсветка без финального вопроса.'],
+    exhibition_menu_tutorial_intro: ['Меню', skipHint],
+    exhibition_menu_tutorial_prompt: ['Меню', skipHint],
+    exhibition_menu_tutorial_buttons: ['Меню', skipHint],
+    exhibition_menu_wave: ['Меню · финальная волна', skipHint],
+    exhibition_menu_repeat_prompt: ['Повторить меню?', skipHint],
+    exhibition_menu_repeat_listen: ['Повторить меню?', 'Скажите «да» или «нет». ' + skipHint],
+    exhibition_menu_replay_buttons: ['Меню · повтор', skipHint],
     menu_ready: ['Меню готово', 'Выберите действие кнопкой 1–7.']
   };
   const node = ['profile_ready'].includes(state.canonical_state?.mode)
@@ -1255,15 +1550,8 @@ function updateGuide(state, contract) {
     session_closed: ['Сессия завершена', 'Нажмите Reset, чтобы начать следующий тест.']
   };
     const normalizedState = String(state.session.state || '').trim().toUpperCase();
-  const content = normalizedState === 'ENDED' ? map.session_closed : ((labels[node] || map[node] || (['NONE', 'IDLE', 'STANDBY'].includes(normalizedState) ? ['Готов к знакомству', 'Поднимите трубку или подайте действие через симулятор.'] : ['Тест продолжается', 'Следуйте текущему состоянию.'])));
-  const page = state.canonical_state?.scene_menu_descriptor;
-  if (normalizedState !== 'ENDED' && ['fixed_story_menu', 'game_menu', 'personal_story_theme', 'schedule_weather'].includes(node) && page?.scene === node) {
-    const choices = (page.items || []).map(item => `${item.slot} — ${item.title}`);
-    const controls = ['5 — помощь'];
-    if ((page.buttons || []).includes(6)) controls.push('6 — следующие варианты');
-    controls.push('7 — назад');
-    content[1] = [...choices, ...controls].join('; ') + '.';
-  }
+  const content = interactionGuide(state, {microphone: Boolean(mic), pending: micStarting, microphoneAccepting: microphoneAccepting(), audioRetry: Boolean(audioRetry)})
+    || (normalizedState === 'ENDED' ? map.session_closed : ((labels[node] || map[node] || (['NONE', 'IDLE', 'STANDBY'].includes(normalizedState) ? ['Готов к знакомству', 'Поднимите трубку или подайте действие через симулятор.'] : ['Тест продолжается', 'Следуйте текущему состоянию.']))));
   if (normalizedState !== 'ENDED' && node === 'game_active' && state.canonical_state?.substate === 'game_exit_confirmation') {
     content[0] = 'Закончить игру?';
     content[1] = '6 — продолжить; 7 — закончить; 5 — помощь.';
@@ -1271,51 +1559,95 @@ function updateGuide(state, contract) {
   if (normalizedState !== 'ENDED' && node === 'wellbeing_check' && !state.session.handset_up) {
     content[1] = 'Поднимите трубку, чтобы услышать вопрос. 5 — помощь.';
   }
-  $('guide-title').textContent = content[0];
-  $('guide-text').textContent = content[1];
+  const unavailable = state.simulator && (!state.simulator.admission?.input_ready || !state.simulator.admission?.connected);
+  $('guide-title').textContent = unavailable ? 'Телефон пока недоступен' : content[0];
+  $('guide-text').textContent = unavailable ? (!state.simulator.admission?.input_ready
+    ? 'Сценарий ещё не готов. Дождитесь готовности сервиса.' : 'Виртуальный ввод отключён. Подключите его в инструментах.') : content[1];
 }
 
 function enqueuePCM(message, generation = audioGeneration) {
   audioQueueTail = audioQueueTail.catch(() => {}).then(() => playPCM(message, generation));
+  // WebSocket handlers do not await playback. Report errors without leaving an
+  // unhandled rejection; callers can still observe the returned failed task.
+  audioQueueTail.catch(error => showError(error));
   return audioQueueTail;
 }
 
+function privatePCMIdentity(message) {
+  if (message.private !== true) return null;
+  const identity = message.playback;
+  if (!identity || !['session_id', 'response_id', 'playback_id', 'playback_lease'].every(
+    key => typeof identity[key] === 'string' && identity[key].length > 0 && identity[key].length <= 256)
+    || identity.session_id !== message.session_id
+    || !Number.isSafeInteger(identity.generation) || identity.generation < 0
+    || !(Number.isSafeInteger(identity.token) || (typeof identity.token === 'string' && identity.token.length > 0 && identity.token.length <= 256))) {
+    throw new Error('Private audio playback identity is invalid');
+  }
+  return Object.freeze({session_id: identity.session_id, response_id: identity.response_id,
+    playback_id: identity.playback_id, playback_lease: identity.playback_lease,
+    generation: identity.generation, token: identity.token});
+}
+
 async function playPCM(message, generation = audioGeneration) {
-  const context = await unlockAudio();
-  if (generation !== audioGeneration) return;
-  if (context.state !== 'running') {
-    if (pendingPCM.length >= 32) pendingPCM.shift();
-    pendingPCM.push({message, generation});
-    $('audio-state').textContent = 'AUDIO: LOCKED';
-    return;
+  const identity = privatePCMIdentity(message);
+  let source;
+  try {
+    const context = await unlockAudio();
+    if (generation !== audioGeneration) return;
+    if (context.state !== 'running') {
+      if (pendingPCM.length >= 32) pendingPCM.shift();
+      pendingPCM.push({message, generation});
+      $('audio-state').textContent = 'AUDIO: LOCKED';
+      return;
+    }
+    if (generation !== audioGeneration) return;
+    const raw = Uint8Array.from(atob(message.data_b64), character => character.charCodeAt(0));
+    const encoding = String(message.encoding || "s16le").toLowerCase();
+    const isFloat32 = encoding === "f32le";
+    const bytesPerSample = isFloat32 ? 4 : 2;
+    const sampleCount = Math.floor(raw.byteLength / bytesPerSample);
+    const buffer = context.createBuffer(1, sampleCount, message.sample_rate);
+    const channel = buffer.getChannelData(0);
+    if (isFloat32) {
+      const view = new DataView(raw.buffer, raw.byteOffset, sampleCount * 4);
+      for (let index = 0; index < sampleCount; index++) channel[index] = Math.max(-1, Math.min(1, view.getFloat32(index * 4, true)));
+    } else {
+      const view = new DataView(raw.buffer, raw.byteOffset, sampleCount * 2);
+      for (let index = 0; index < sampleCount; index++) channel[index] = view.getInt16(index * 2, true) / 32768;
+    }
+    source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(context.destination);
+    activeSources.add(source);
+    let ended = false;
+    source.onended = () => {
+      activeSources.delete(source);
+      if (ended || generation !== audioGeneration) return;
+      ended = true;
+      if (!activeSources.size) $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
+      if (identity && message.final === true) {
+        post('/stand/audio/lifecycle', {...identity, status: 'finished'}).catch(() => {});
+        post('/stand/audio/completed', identity).catch(() => {});
+      }
+    };
+    nextAudioTime = Math.max(context.currentTime, nextAudioTime);
+    source.start(nextAudioTime);
+    nextAudioTime += buffer.duration;
+    if (identity && message.first === true) {
+      post('/stand/audio/lifecycle', {...identity, status: 'playing'}).catch(() => {});
+    }
+    $('audio-state').textContent = 'AUDIO: PLAYING';
+  } catch (error) {
+    if (source) {
+      source.onended = null;
+      activeSources.delete(source);
+      try { source.stop(); } catch (_) {}
+    }
+    if (identity && generation === audioGeneration) {
+      post('/stand/audio/failed', {...identity, error_code: 'browser_private_pcm_failed'}).catch(() => {});
+    }
+    throw error;
   }
-  if (generation !== audioGeneration) return;
-  const raw = Uint8Array.from(atob(message.data_b64), character => character.charCodeAt(0));
-  const encoding = String(message.encoding || "s16le").toLowerCase();
-  const isFloat32 = encoding === "f32le";
-  const bytesPerSample = isFloat32 ? 4 : 2;
-  const sampleCount = Math.floor(raw.byteLength / bytesPerSample);
-  const buffer = context.createBuffer(1, sampleCount, message.sample_rate);
-  const channel = buffer.getChannelData(0);
-  if (isFloat32) {
-    const view = new DataView(raw.buffer, raw.byteOffset, sampleCount * 4);
-    for (let index = 0; index < sampleCount; index++) channel[index] = Math.max(-1, Math.min(1, view.getFloat32(index * 4, true)));
-  } else {
-    const view = new DataView(raw.buffer, raw.byteOffset, sampleCount * 2);
-    for (let index = 0; index < sampleCount; index++) channel[index] = view.getInt16(index * 2, true) / 32768;
-  }
-  const source = audioContext.createBufferSource();
-  source.buffer = buffer;
-  source.connect(audioContext.destination);
-  activeSources.add(source);
-  source.onended = () => {
-  activeSources.delete(source);
-  if (!activeSources.size) $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
-};
-  nextAudioTime = Math.max(context.currentTime, nextAudioTime);
-  source.start(nextAudioTime);
-  nextAudioTime += buffer.duration;
-  $('audio-state').textContent = 'AUDIO: PLAYING';
 }
 
 function initDiagnostics() {
@@ -1400,7 +1732,8 @@ const handsetDownButton = $('handset-down');
 if (handsetDownButton) handsetDownButton.onclick = () => { clearMic(); return post('/stand/handset', { state: 'down' }); };
 const resetButton = $('reset');
 if (resetButton) resetButton.onclick = () => { clearMic(); return post('/stand/reset'); };
-function interruptAudioForInput() {
+function interruptAudioForInput({preserveStoryCheckpoint = false} = {}) {
+  if (!preserveStoryCheckpoint) discardStoppedStoryCheckpoint();
   micInputGain = 1;
   audioGeneration += 1;
   storySpeechGeneration += 1;
@@ -1437,6 +1770,10 @@ $('export').onclick = () => {
   URL.revokeObjectURL(link.href);
 };
 $('wav').onchange = async event => {
+  if (current?.simulator && (!wsSnapshotReady || wsReloadRequired)) {
+    showError(new Error(wsReloadRequired ? 'Сервис перезапущен. Обновите страницу, чтобы продолжить.' : 'Дождитесь актуального состояния телефона.'));
+    return;
+  }
   const file = event.target.files[0];
   if (!file) return;
   const response = await fetch(apiPath(`/stand/audio/wav?session_id=${encodeURIComponent(session())}`), { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: file });
@@ -1467,53 +1804,115 @@ function createMicResampler(sourceRate, sendFrame) {
         inputIndex += 1;
       }
     },
-    flush
+    flush,
+    reset() { inputIndex = 0; nextOutput = 0; previous = 0; pending = []; }
   };
+}
+function microphoneEligible() {
+  if (authBlocked) return false;
+  if (current?.simulator) return Boolean(current.simulator.microphone?.eligible);
+  const micCapableNodes = new Set(['bear_dialogue', 'support_intake', 'voice_welcome', 'exhibition_name_capture', 'exhibition_age_selection', 'personal_story_theme', 'wellbeing_check', 'schedule_weather']);
+  return Boolean(current && micCapableNodes.has(String(current.session?.node || '')));
+}
+function microphoneOwnerIsCurrent(owner = micOwner) {
+  if (!owner || authBlocked || ws !== owner.socket || ws?.readyState !== WebSocket.OPEN
+    || session() !== owner.sessionId || !current?.session?.handset_up) return false;
+  if (current.simulator) return wsSnapshotReady && !wsReloadRequired && current.simulator.session.session_id === owner.sessionId
+    && current.simulator.epoch === owner.epoch
+    && current.simulator.admission?.input_ready === true && current.simulator.admission?.connected === true;
+  return !['NONE', 'IDLE', 'ENDED'].includes(String(current.session.state).toUpperCase());
+}
+function microphoneAccepting() {
+  return Boolean(mic && microphoneOwnerIsCurrent() && microphoneEligible());
+}
+function syncMicAdmission() {
+  if (!(mic || micStarting)) return;
+  if (!microphoneOwnerIsCurrent()) { clearMic(); return; }
+  if (!microphoneEligible()) { mic?.resampler.reset(); micInputGain = 1; }
+  $('mic-state').textContent = microphoneAccepting()
+    ? 'Микрофон включён · Мишка слушает' : 'Микрофон включён · приём на паузе';
 }
 async function startMic() {
-  const micCapableNodes = new Set(['bear_dialogue', 'support_intake', 'voice_welcome', 'exhibition_name_capture', 'exhibition_age_selection', 'personal_story_theme', 'wellbeing_check', 'schedule_weather']);
-  if (!current || !micCapableNodes.has(String(current.session?.node || ''))) {
-    showError(new Error('Голосовой ввод доступен на активном голосовом шаге; для имени сначала поднимите трубку и дождитесь вопроса «Как тебя зовут?»'));
-    return;
+  if (mic || micStarting) return;
+  if (!microphoneEligible() || ws?.readyState !== WebSocket.OPEN || (current?.simulator && (!wsSnapshotReady || wsReloadRequired))) {
+    throw new Error('Микрофон доступен, когда Мишка готов слушать и соединение установлено.');
   }
-  const context = await unlockAudio();
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-  const source = context.createMediaStreamSource(stream);
-  const sessionId = session();
-  const resampler = createMicResampler(context.sampleRate, samples => {
-    if (ws?.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'audio_pcm', session_id: sessionId, sample_rate: 16000, data_b64: bytesToB64(samples.buffer) }));
-  });
-  const node = context.createScriptProcessor(1024, 1, 1);
-  node.onaudioprocess = event => {
-    const input = event.inputBuffer.getChannelData(0);
-    const playbackActive = activeSources.size > 0;
-    const targetGain = playbackActive ? MIC_DUCK_GAIN : 1;
-    const alpha = playbackActive ? MIC_DUCK_ATTACK : MIC_DUCK_RELEASE;
-    micInputGain += (targetGain - micInputGain) * alpha;
-    const ducked = new Float32Array(input.length);
-    for (let index = 0; index < input.length; index++) ducked[index] = input[index] * micInputGain;
-    resampler.feed(ducked);
-  };
-  const mute = context.createGain();
-  mute.gain.value = 0;
-  source.connect(node); node.connect(mute); mute.connect(context.destination);
-  mic = { stream, source, node, mute, resampler, sessionId };
-  $('mic').textContent = 'Stop microphone';
-  $('mic-state').textContent = `${context.sampleRate} Hz → 16 kHz UART PCM → VAD`;
+  const generation = ++micGeneration;
+  const owner = Object.freeze({sessionId: session(), epoch: current?.simulator?.epoch, socket: ws});
+  micOwner = owner;
+  micStarting = true;
+  let stream;
+  try {
+    const context = await unlockAudio();
+    if (generation !== micGeneration || !microphoneOwnerIsCurrent(owner)) return;
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('Микрофон недоступен. Откройте телефон по HTTPS и разрешите доступ в браузере.');
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    if (generation !== micGeneration || !microphoneOwnerIsCurrent(owner)) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    const source = context.createMediaStreamSource(stream);
+    const sessionId = owner.sessionId;
+    const resampler = createMicResampler(context.sampleRate, samples => {
+      if (generation !== micGeneration || !microphoneOwnerIsCurrent(owner) || !microphoneEligible()) return;
+      owner.socket.send(JSON.stringify({ type: 'audio_pcm', session_id: sessionId, sample_rate: 16000, data_b64: bytesToB64(samples.buffer) }));
+    });
+    const node = context.createScriptProcessor(1024, 1, 1);
+    node.onaudioprocess = event => {
+      if (generation !== micGeneration) return;
+      if (!microphoneOwnerIsCurrent(owner)) { clearMic(); return; }
+      if (!microphoneEligible()) { resampler.reset(); micInputGain = 1; return; }
+      const input = event.inputBuffer.getChannelData(0);
+      const playbackActive = activeSources.size > 0;
+      const targetGain = playbackActive ? MIC_DUCK_GAIN : 1;
+      const alpha = playbackActive ? MIC_DUCK_ATTACK : MIC_DUCK_RELEASE;
+      micInputGain += (targetGain - micInputGain) * alpha;
+      const ducked = new Float32Array(input.length);
+      for (let index = 0; index < input.length; index++) ducked[index] = input[index] * micInputGain;
+      resampler.feed(ducked);
+    };
+    const mute = context.createGain();
+    mute.gain.value = 0;
+    source.connect(node); node.connect(mute); mute.connect(context.destination);
+    mic = { stream, source, node, mute, resampler, sessionId };
+    $('mic').textContent = 'Stop microphone';
+    syncMicAdmission();
+    for (const track of stream.getTracks()) track.onended = () => { if (mic?.stream === stream) clearMic(); };
+  } catch (error) {
+    stream?.getTracks().forEach(track => track.stop());
+    if (generation === micGeneration) throw error;
+  } finally {
+    if (generation === micGeneration) { micStarting = false; if (!mic) micOwner = null; }
+    window.mishkaPhoneMedia?.();
+  }
 }
-function clearMic(flush = false) {
-  if (!mic) return;
-  if (flush && ws?.readyState === WebSocket.OPEN) mic.resampler.flush();
-  mic.node.disconnect(); mic.source.disconnect(); mic.mute?.disconnect(); mic.stream.getTracks().forEach(track => track.stop()); mic = null;
+function clearMic() {
+  audioRetry = null;
+  micGeneration += 1;
+  micStarting = false;
+  micOwner = null;
+  if (mic) {
+    const previous = mic;
+    mic = null;
+    previous.node.onaudioprocess = null;
+    previous.node.disconnect(); previous.source.disconnect(); previous.mute?.disconnect();
+    previous.stream.getTracks().forEach(track => { track.onended = null; track.stop(); });
+  }
   $('mic').textContent = 'Start microphone'; $('mic-state').textContent = 'idle';
+  window.mishkaPhoneMedia?.();
+}
+function stopMic() {
+  try {
+    if (microphoneAccepting()) {
+      mic.resampler.flush();
+      micOwner.socket.send(JSON.stringify({ type: 'flush_audio', session_id: micOwner.sessionId }));
+    }
+  } finally { clearMic(); }
 }
 $('mic').onclick = async () => {
   try {
-    if (!mic) { interruptAudioForInput(); return await startMic(); }
-    const sessionId = mic.sessionId;
-    clearMic(true);
-    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'flush_audio', session_id: sessionId }));
+    if (!mic && !micStarting) { interruptAudioForInput(); return await startMic(); }
+    stopMic();
   } catch (error) { showError(error); }
 };
 
@@ -1533,6 +1932,7 @@ document.addEventListener('visibilitychange', () => {
       try { ws.close(1000, 'panel hidden'); } catch (_) {}
     }
     clearMic();
+    interruptAudioForInput();
     return;
   }
   startPanelLifecycle();
@@ -1548,9 +1948,11 @@ window.addEventListener('pagehide', () => {
     try { ws.close(1000, 'page unload'); } catch (_) {}
   }
   clearMic();
+  interruptAudioForInput();
 });
 
 window.addEventListener('keydown', event => {
+  if (document.body.dataset.phone) return;
   if (event.repeat || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
   const id = Number(event.key);
   if (BUTTON_IDS.includes(id)) {
@@ -1568,8 +1970,23 @@ window.addEventListener('keydown', event => {
   }
 });
 window.addEventListener('keyup', event => {
+  if (document.body.dataset.phone) return;
   const id = Number(event.key);
   if (!BUTTON_IDS.includes(id) || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
   event.preventDefault();
   releaseButton(id).catch(() => {});
+});
+
+// Narrow bridge: retain the proven observer, PCM, playback ownership and FIFO.
+// The device surface owns presentation and gestures; the backend owns behavior.
+window.MishkaConsole = Object.freeze({
+  snapshot: () => current,
+  acceptSnapshot: simulatorSnapshotIsCurrent,
+  post, render, unlockAudio, startMic, clearMic, stopMic, interactionGuide, updateGuide,
+  cleanup: ({preserveReconnect = false} = {}) => { if (!preserveReconnect) audioReconnectPending = false; suppressPhoneAudio = true; clearMic(); interruptAudioForInput(); },
+  media: () => ({ microphone: Boolean(mic), microphoneAccepting: microphoneAccepting(), pending: micStarting, audioReady, audioRetry: Boolean(audioRetry),
+    connected: ws?.readyState === WebSocket.OPEN, authBlocked,
+    inputReady: wsSnapshotReady && !wsReloadRequired && !authBlocked, reloadRequired: wsReloadRequired,
+    playing: activeSources.size > 0, pendingPCM: pendingPCM.length,
+    queuedPosts: postQueue.length, activePost: Boolean(activePost) }),
 });

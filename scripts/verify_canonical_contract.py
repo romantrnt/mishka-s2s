@@ -34,9 +34,8 @@ def start_free_light_game(runtime):
     send("ButtonPressed", {"button_id": 1})
     assert result["state"]["mode"] == "game_menu"
     send("ButtonReleased", {"button_id": 1})
-    assert send("ButtonPressed", {"button_id": 1})["reason"] == "scene_menu_skipped"
+    assert send("ButtonPressed", {"button_id": 1})["reason"] == "game_started"
     send("ButtonReleased", {"button_id": 1})
-    send("ButtonPressed", {"button_id": 1})
     assert result["state"]["active_game_id"] == "free_lights"
     for expected_audio in ("PHRASE_020", "GAME_PROMPT"):
         assert result["state"]["active_audio_id"] == expected_audio

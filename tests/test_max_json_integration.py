@@ -203,6 +203,53 @@ class RealJsonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.state().profile_ref)
         self.assertFalse(self.app._canonical_profiles)
 
+    async def test_real_120_second_expiry_preserves_only_confirmed_public_story(self):
+        await self.scan("demo-1")
+        self.app.audio.private_pcm_supported = False
+        clock = [time.monotonic()]
+        self.app.monotonic_now = self.app.canonical_runtime.monotonic_now = lambda: clock[0]
+        async def accepted(kind, payload=None):
+            self.sequence += 1
+            return await self.app.receive_async(Event(kind, self.boundary.session_id,
+                self.sequence, time.time(), "public-story-expiry", payload or {},
+                f"public-story:{self.sequence}", clock[0]))
+        await accepted("HandsetLifted")
+        clock[0] = self.state().welcome_deadline_monotonic
+        await self.app.flush_welcome_timers()
+        owner = self.app._active_audio[self.boundary.session_id]
+        await accepted("AudioCompleted", {**owner, "response_id": owner["content_id"]})
+        for button in (1, 2, 1, 1):
+            await accepted("ButtonPressed", {"button_id": button})
+            await accepted("ButtonReleased", {"button_id": button})
+        self.assertEqual(self.state().mode, "fixed_story_playing")
+        await accepted("ButtonPressed", {"button_id": 6})
+        await accepted("ButtonReleased", {"button_id": 6})
+        await accepted("StoryPositionUpdated", {"story_id": "fixed_aibolit_v1", "offset_ms": 23000})
+        owner = self.app._active_audio[self.boundary.session_id]
+        await accepted("AudioCompleted", {**owner, "response_id": owner["content_id"]})
+        self.assertEqual(self.state().mode, "story_paused")
+        sid = self.boundary.session_id
+        deadline = self.client._deadline
+        idle_deadline = self.app._engagement_owners[sid]["deadline"]
+        epoch = self.app._session_epochs.get(sid, 0)
+        self.client._clock = lambda: deadline - .001
+        await self.drain()
+        self.assertIsNotNone(self.client.patient())
+        self.assertEqual(self.app._session_epochs.get(sid, 0), epoch)
+        self.client._clock = lambda: deadline
+        result = await self.drain()
+        self.assertIn("public_story_identity_expired", [item["reason"] for item in result])
+        self.assertIsNone(self.client.patient())
+        self.assertIsNone(self.boundary.facts)
+        self.assertFalse(self.app._canonical_profiles)
+        self.assertIsNone(self.state().identity_request_id)
+        self.assertEqual(self.app._session_epochs[sid], epoch + 1)
+        self.assertEqual(self.state().mode, "story_paused")
+        self.assertEqual(self.state().dialogue_memory.story_checkpoint,
+                         {"story_id": "fixed_aibolit_v1", "offset_ms": 23000})
+        self.assertEqual(self.app._engagement_owners[sid]["deadline"], idle_deadline)
+        self.assertEqual(self.client._deadline, None)
+
     async def test_queued_ready_cannot_survive_guest_lift(self):
         await self.capture.scan("demo-1")
         await self.send("HandsetLifted")

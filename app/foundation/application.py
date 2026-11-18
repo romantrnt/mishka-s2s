@@ -153,6 +153,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         # Browser pause reports position after the pause command is published.
         # Retain only that immutable story execution until its one checkpoint.
         self._paused_story_playback: dict[str, dict[str, Any]] = {}
+        self._public_story_checkpoint_transfers: dict[str, dict[str, Any]] = {}
         self._audio_timeout_tasks: dict[str, asyncio.Task[Any]] = {}
         self._audio_timeout_sequences: dict[str, int] = {}
         self._game_timer_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -356,6 +357,88 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 session_id, kind, {"request_id": request["request_id"]}
             ), identity_event_authorized=True))
         return results
+
+    def _public_story_expiry(self, event, state, *, authorized):
+        request = self._identity_requests.get(event.session_id)
+        boundary = self._max_client_boundary
+        if (not authorized or not self.max_json or boundary is None
+                or boundary.session_id != event.session_id or state is None
+                or not state.profile_ref or not request
+                or request["request_id"] != state.identity_request_id
+                or event.payload.get("request_id") != state.identity_request_id
+                or state.handset != "up" or state.safety_severity == "urgent"
+                or state.mode not in {"fixed_story_playing", "story_paused",
+                                      "story_pause_announcement", "story_resume_announcement"}):
+            return None
+        if event.event_type == "ClientProfileCleared":
+            if event.payload.get("reason_code") != "session_expired":
+                return None
+        elif (event.event_type != "IdentityAuthorizationExpired"
+                or state.identity_expires_monotonic is None
+                or self.monotonic_now() < state.identity_expires_monotonic):
+            return None
+        asset = self.canonical_runtime.stories.get_verified(state.active_story_id)
+        if not asset or int(asset.get("duration_ms") or 0) <= 0:
+            return None
+        offset = None
+        checkpoint = state.dialogue_memory.story_checkpoint
+        if state.mode != "fixed_story_playing" and state.story_checkpoint_confirmed and checkpoint:
+            if checkpoint.get("story_id") == state.active_story_id:
+                value = checkpoint.get("offset_ms")
+                if type(value) is int and 0 <= value <= int(asset["duration_ms"]):
+                    offset = value
+        old = (self._active_audio.get(event.session_id) if state.mode == "fixed_story_playing"
+               else self._paused_story_playback.get(event.session_id))
+        if offset is None and (not old or old.get("content_id") != state.active_story_id
+                or old.get("generation") != self._session_epochs.get(event.session_id, 0)):
+            return None
+        return {"story_id": state.active_story_id, "offset_ms": offset,
+                "duration_ms": int(asset["duration_ms"]),
+                "resume": state.mode in {"fixed_story_playing", "story_resume_announcement"},
+                "old": {key: old[key] for key in ("generation", "token", "playback_id", "playback_lease")}
+                       if offset is None else None}
+
+    def _drop_public_story_transfer(self, sid):
+        transfer = self._public_story_checkpoint_transfers.pop(sid, None)
+        if transfer is not None:
+            transfer["timer"].cancel()
+            if not transfer["ready"].done():
+                transfer["ready"].cancel()
+
+    def _public_story_transfer(self, sid):
+        transfer = self._public_story_checkpoint_transfers.get(sid)
+        state = self.canonical_runtime.sessions.get(sid)
+        if transfer is not None and (self.monotonic_now() >= transfer["expires"]
+                or self._session_epochs.get(sid, 0) != transfer["epoch"]
+                or self._session_revisions.get(sid, 0) != transfer["revision"]
+                or state is not transfer["state"] or not state.public_story_checkpoint_pending
+                or state.handset != "up" or state.profile_ref or state.active_story_id != transfer["story_id"]):
+            self._drop_public_story_transfer(sid)
+            return None
+        return transfer
+
+    async def accept_public_story_checkpoint(self, sid, payload):
+        transfer = self._public_story_transfer(sid)
+        if transfer is None:
+            return {"reason": "stale_story_checkpoint"}
+        old = transfer["old"]
+        if (any(type(payload.get(key)) is not int for key in ("generation", "token", "target_generation"))
+                or payload.get("target_generation") != transfer["epoch"]
+                or payload.get("story_id") != transfer["story_id"]
+                or any(payload.get(key) != old.get(key) for key in
+                       ("generation", "token", "playback_id", "playback_lease"))
+                or type(payload.get("offset_ms")) is not int
+                or not 0 <= payload["offset_ms"] <= transfer["duration_ms"]):
+            return {"reason": "stale_story_checkpoint"}
+        # Cleanup must finish before the new public lease can dispatch audio.
+        await asyncio.wait({transfer["ready"]})
+        if self._public_story_transfer(sid) is not transfer:
+            return {"reason": "stale_story_checkpoint"}
+        self._drop_public_story_transfer(sid)
+        return await self._receive_canonical_event(self._identity_event(sid, "StoryPositionUpdated", {
+            "story_id": transfer["story_id"], "offset_ms": payload["offset_ms"],
+            "resume": transfer["resume"],
+        }), public_story_checkpoint_authorized=True)
 
     def _identity_event(self, session_id: str, kind: str, payload: dict[str, Any]) -> Event:
         state = self.canonical_runtime.sessions.get(session_id)
@@ -566,6 +649,17 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if (status not in allowed or not session_id or generation is None
                 or not playback_id or not playback_lease):
             return False
+        owner = self._active_audio.get(session_id)
+        state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
+        if (not owner or state is None or state.handset != "up"
+                or self._session_epochs.get(session_id, 0) != generation
+                or state.active_audio_id != response_id or state.playback_lease != playback_lease
+                or any(owner.get(key) != value for key, value in {
+                    "content_id": response_id, "generation": generation,
+                    "playback_id": playback_id, "playback_lease": playback_lease,
+                }.items())):
+            return False
+        owner["status"] = state.audio_status = status
         if status == "playing" and response_id in {"GAME_PROMPT", "GAME_HINT"}:
             self._game_audio_started(session_id, playback_id, playback_lease, generation)
         for effect in self.last_canonical_effects:
@@ -591,7 +685,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if reason:
                 effect["audio_failure_reason"] = str(reason)[:80]
             return True
-        return False
+        # A release/lighting acknowledgement can replace the last effect list
+        # while this exact playback remains current.
+        return True
 
     def _iter_sessions(self) -> tuple[SessionRecord, ...]:
         iterator = getattr(self.sessions, "iter_sessions", None)
@@ -690,7 +786,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         return {"status": "completed", "operation": operation, "session_id": session_id}
 
     async def _cleanup_session_resources(self, session_id: str, *, identity_request: dict[str, Any] | None = None,
-                                         cleanup_tasks: set[asyncio.Task[Any]] | None = None) -> dict[str, Any]:
+                                         cleanup_tasks: set[asyncio.Task[Any]] | None = None,
+                                         preserve_public_story_transfer: bool = False) -> dict[str, Any]:
         """Idempotently release all application-owned resources for a session."""
         revision = self._session_revisions.get(session_id, 0)
         epoch = self._session_epochs.get(session_id, 0)
@@ -706,16 +803,18 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         # All direct mutations revoke the captured owner's resources before
         # yielding. A later accepted card/call owns whatever it installs next.
         self._cancel_owned_text(session_id)
+        if not preserve_public_story_transfer:
+            self._drop_public_story_transfer(session_id)
         self._drop_identity_owner(session_id)
         if identity_request is not None:
             self._identity_requests[session_id] = identity_request
         self._discard_private_welcome(session_id)
         self._drop_engagement(session_id, keys=True)
         self._cancel_game_timer(session_id)
+        # Resource cleanup can retain canonical admission history. Keep its
+        # producer sequences monotonic until a full canonical session reset.
         self._cancel_welcome_timer(session_id)
-        self._welcome_timer_sequences.pop(session_id, None)
         self._cancel_menu_tutorial(session_id)
-        self._menu_tutorial_sequences.pop(session_id, None)
         self._cancel_lighting_wave(session_id)
         self._invalidate_audio_lease(session_id)
         self._last_audio_ack_at.pop(session_id, None)
@@ -1138,6 +1237,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        *, dialogue_fallback_authorized: bool = False,
                                        personal_story_authorized: bool = False,
                                        identity_event_authorized: bool = False,
+                                       public_story_checkpoint_authorized: bool = False,
                                        game_timer_authorized: bool = False,
                                        interaction_idle_authorized: bool = False,
                                        _interaction_nonce: str | None = None,
@@ -1162,6 +1262,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 dialogue_fallback_authorized=dialogue_fallback_authorized,
                 personal_story_authorized=personal_story_authorized,
                 identity_event_authorized=identity_event_authorized,
+                public_story_checkpoint_authorized=public_story_checkpoint_authorized,
                 game_timer_authorized=game_timer_authorized, _game_timer_scope=_game_timer_scope,
                 interaction_idle_authorized=interaction_idle_authorized, _interaction_nonce=_interaction_nonce,
                 identity_profile=identity_profile,
@@ -1192,6 +1293,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                                                *, dialogue_fallback_authorized: bool = False,
                                        personal_story_authorized: bool = False,
                                              identity_event_authorized: bool = False,
+                                             public_story_checkpoint_authorized: bool = False,
                                              game_timer_authorized: bool = False,
                                              interaction_idle_authorized: bool = False,
                                              _interaction_nonce: str | None = None,
@@ -1230,6 +1332,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared"}:
             if not self.max_json or not identity_event_authorized:
                 return self._identity_result(event.session_id, "client_profile_untrusted")
+            if (event.event_type == "ClientProfileCleared" and event.payload.get("reason_code") == "session_expired"
+                    and (current is None or not current.identity_request_id
+                         or event.payload.get("request_id") != current.identity_request_id)):
+                return self._identity_result(event.session_id, "stale_profile_context")
             if event.event_type == "ClientProfileReady":
                 if self._max_client_boundary is None or event.payload.get("client_generation") != self._max_client_boundary.generation:
                     return self._identity_result(event.session_id, "stale_client_generation")
@@ -1252,6 +1358,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         requested_version = event.payload.get("state_version") if isinstance(event.payload, dict) else None
         state_version = int(requested_version) if isinstance(requested_version, int) else (current.state_version if current else 0)
         previous_state = copy.deepcopy(current)
+        public_story = self._public_story_expiry(event, current, authorized=identity_event_authorized)
+        public_engagement = dict(self._engagement_owners[event.session_id]) if public_story and event.session_id in self._engagement_owners else None
         event_type = "VoiceIntentReady" if event.event_type == "SpeechReceived" else event.event_type
         payload = dict(event.payload)
         accepted_monotonic = (self.monotonic_now() if event.event_type in {"GameTimer", "InteractionIdleExpired"} else
@@ -1357,10 +1465,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
            personal_welcome_answer_verified=personal_welcome_answer_verified,
            dialogue_fallback_authorized=dialogue_fallback_authorized,
            personal_story_authorized=personal_story_authorized,
-           identity_event_authorized=identity_event_authorized, game_timer_authorized=game_timer_authorized, interaction_idle_authorized=interaction_idle_authorized)
+           identity_event_authorized=identity_event_authorized,
+           public_story_expiry=public_story,
+           public_story_checkpoint_authorized=public_story_checkpoint_authorized,
+           game_timer_authorized=game_timer_authorized, interaction_idle_authorized=interaction_idle_authorized)
         if decision["reason"] in {"welcome_started", "personal_welcome_started"}:
             self._choose_private_welcome(event.session_id)
         snapshot, effects = decision["state"], decision["effects"]
+        if decision["reason"] != "public_story_identity_expired":
+            public_story = public_engagement = None
         exhibition_reset = bool(decision.get("reset_session"))
         prelift_expired = bool(event.event_type == "IdentityReadyExpired" and decision["reason"] == "identity_expired"
                               and previous_state is not None and previous_state.mode == "profile_ready")
@@ -1420,6 +1533,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         revision = self._session_revisions.get(event.session_id, 0) + (1 if takes_ownership and not child_ack else 0)
         self._session_revisions[event.session_id] = revision
         if takes_ownership and not child_ack:
+            self._drop_public_story_transfer(event.session_id)
             self._cancel_owned_text(event.session_id)
             self._cancel_game_cues(event.session_id)
         next_owner = self.canonical_runtime.sessions.get(event.session_id)
@@ -1427,11 +1541,13 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             and previous_state.identity_request_id != getattr(next_owner, "identity_request_id", None))
         identity_ended = bool(previous_state is not None and previous_state.profile_ref
                               and getattr(next_owner, "profile_ref", None) is None)
+        identity_cleanup = identity_owner_changed or identity_ended or (
+            takes_ownership and event.event_type == "ClientProfileCleared")
         if (identity_ended and self.max_json and event.event_type != "ClientProfileCleared"
                 and self._max_client_boundary is not None
                 and self._max_client_boundary.session_id == event.session_id):
             self._max_client_boundary.clear_client()
-        if (takes_ownership and event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart", "HardwareDisconnected", "InteractionIdleExpired"}) or exhibition_reset or identity_owner_changed or identity_ended:
+        if (takes_ownership and event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart", "HardwareDisconnected", "InteractionIdleExpired"}) or exhibition_reset or identity_cleanup:
             self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
             self._paused_story_playback.pop(event.session_id, None)
             self._discard_private_welcome(event.session_id)
@@ -1451,6 +1567,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             )
         epoch = self._session_epochs.get(event.session_id, 0)
         state_owner = self.canonical_runtime.sessions.get(event.session_id)
+        if public_story and public_story["offset_ms"] is None:
+            transfer = {"old": public_story["old"], "story_id": public_story["story_id"],
+                        "duration_ms": public_story["duration_ms"], "resume": public_story["resume"],
+                        "epoch": epoch, "revision": revision, "state": state_owner,
+                        "expires": self.monotonic_now() + 5.0,
+                        "ready": asyncio.get_running_loop().create_future()}
+            transfer["timer"] = asyncio.get_running_loop().call_later(
+                5.0, lambda: self._drop_public_story_transfer(event.session_id)
+                if self._public_story_checkpoint_transfers.get(event.session_id) is transfer else None)
+            self._public_story_checkpoint_transfers[event.session_id] = transfer
         story_owner = self._personal_stories.get(event.session_id)
         if story_owner and (not state_owner or state_owner.mode not in STORY_MODES or state_owner.handset != "up"
                 or self._session_epochs.get(event.session_id,0) != story_owner.epoch
@@ -1537,20 +1663,31 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             _safety_guidance.update(owner=state_owner, epoch=epoch,
                                    lease=guidance.get("playback_lease"), effect=guidance)
 
-        if identity_owner_changed or identity_ended:
+        if identity_cleanup:
             # Fence all private context/audio before any provider cleanup await.
             # The replacement profile context is installed only after this event commits.
             self._drop_identity_owner(event.session_id)
             self._invalidate_audio_lease(event.session_id)
             old_record = self.sessions.get(event.session_id)
             if old_record is not None:
+                old_record.child_id, old_record.anonymous = None, True
                 old_record.cancellation_token += 1
+                self.sessions.save(old_record)
                 if not sync_stop:
                     self.audio.cancel(old_record.cancellation_token)
             await self._cleanup_session_resources(event.session_id, identity_request=profile_request,
-                cleanup_tasks=local_safety_cleanup_tasks if local_safety_batch else None)
+                cleanup_tasks=local_safety_cleanup_tasks if local_safety_batch else None,
+                preserve_public_story_transfer=bool(public_story))
             if not still_current():
                 return stale_result()
+            if public_engagement is not None:
+                public_engagement.update(scope=self._engagement_scope(event.session_id),
+                    completed_work=False, preserve_deadline=not public_story["resume"])
+                self._engagement_owners[event.session_id] = public_engagement
+                self._start_engagement_monitor()
+            transfer = self._public_story_transfer(event.session_id)
+            if transfer is not None and not transfer["ready"].done():
+                transfer["ready"].set_result(None)
 
         if event.event_type == "ClientProfileReady" and decision["reason"] == "profile_ready":
             self._identity_requests[event.session_id] = profile_request
@@ -2012,7 +2149,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 self._register_audio_lease(event.session_id, handle.response_id, handle.token,
                     handle.playback_id, handle.playback_lease,
                     duration_ms=int(len(audio.samples) * 1000 / audio.sample_rate))
-                effect.update(playback_id=handle.playback_id, generation=handle.generation)
+                effect.update(playback_id=handle.playback_id, generation=handle.generation,
+                              session_id=handle.session_id)
                 try:
                     self.audio.play_pcm_owned(handle, replace(audio, token=handle.token,
                         session_id=event.session_id, generation_id=handle.generation))
@@ -2385,6 +2523,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if self.optional_identity and self._identity_scope_live(event.session_id):
             self._schedule_identity_deadline(event.session_id)
         self._refresh_engagement_busy(event.session_id)
+        if public_engagement is not None and self._engagement_due(event.session_id, public_engagement["nonce"]):
+            return await self._receive_canonical_event(self._identity_event(
+                event.session_id, "InteractionIdleExpired", {}), interaction_idle_authorized=True,
+                _interaction_nonce=public_engagement["nonce"])
         return {"reason": decision["reason"], "state": final_state.get("mode"),
                 "state_version": final_state.get("state_version"), "outputs": effects,
                 "canonical_state": final_state,
@@ -3031,6 +3173,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     completion.set_result(None)
 
     async def _reset_session_inner(self, session_id: str) -> dict[str, Any]:
+        self._drop_public_story_transfer(session_id)
         self._drop_identity_owner(session_id)
         self._discard_private_welcome(session_id)
         self._drop_engagement(session_id, keys=True)

@@ -112,7 +112,11 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
     if event_type == "ClientProfileReady":
         return current in {"idle", "profile_ready"} and target == "profile_ready"
     if event_type == "ClientProfileCleared":
-        return target in {"idle", "session_closed", "safety_stop"}
+        return (target in {"idle", "session_closed", "safety_stop"}
+                or (current in {"fixed_story_playing", "story_paused", "story_pause_announcement", "story_resume_announcement"}
+                    and target in {"story_paused", "fixed_story_playing"}))
+    if event_type == "StoryPositionUpdated":
+        return current == "story_paused" and target == "fixed_story_playing"
     if event_type == "ExhibitionOnboardingComplete":
         return current == "exhibition_onboarding_complete" and target == "exhibition_menu_tutorial_buttons"
     if event_type == "AudioCompleted":
@@ -142,7 +146,10 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str) -> bool:
     if event_type == "TimeoutFired":
         return current in {"dialogue_suspended_ram", "story_suspended_ram"} and target == "dialogue_memory_expired"
     if event_type in {"IdentityReadyExpired", "IdentityAuthorizationExpired"}:
-        return target in {"idle", "session_closed", "safety_stop"}
+        return (target in {"idle", "session_closed", "safety_stop"}
+                or (event_type == "IdentityAuthorizationExpired"
+                    and current in {"fixed_story_playing", "story_paused", "story_pause_announcement", "story_resume_announcement"}
+                    and target in {"story_paused", "fixed_story_playing"}))
     if event_type == "AnonymousStart":
         return target in {"anonymous_visual", "idle", "session_closed"}
     if event_type == "SessionCancel":

@@ -135,6 +135,8 @@ class S2SRuntimeManager:
         self.last_failed_warmup: dict[str,Any] | None=None
         self.active_probe_correlation_id: str | None=None
         self.e2e_probe: Any = None
+        self.public_menu_warmup: Any = None
+        self.public_menu_status: Any = None
         self._probe_lock = asyncio.Lock()
         self._recovery_lock = asyncio.Lock()
         self._recovery_running = False
@@ -148,14 +150,15 @@ class S2SRuntimeManager:
             await self.engine.cancel_all_sessions()
         except BaseException as error:
             errors.append(error)
-        closer = getattr(self.voice, "close", None)
-        if closer is not None:
-            try:
-                result = closer()
-                if inspect.isawaitable(result):
-                    await result
-            except BaseException as error:
-                errors.append(error)
+        for component in (self.voice, self.tts):
+            closer = getattr(component, "close", None)
+            if closer is not None:
+                try:
+                    result = closer()
+                    if inspect.isawaitable(result):
+                        await result
+                except BaseException as error:
+                    errors.append(error)
         if len(errors) == 1:
             raise errors[0]
         if errors:
@@ -168,7 +171,7 @@ class S2SRuntimeManager:
         voice = "mock_passthrough" if self.settings.profile=="mock" else ("passthrough" if voice_mode in {"off", "disabled"} else "rvc_v2")
         validation_provider = self.settings.validation_provider
         validation_num_ctx = self.settings.validation_num_ctx
-        return {"profile":self.settings.profile,"policy_version":self.settings.policy_version,"deployment_policy":self.settings.policy_snapshot(),"llm_provider":provider,"llm_model":model,"llm_quantization":self.settings.llm_quantization or None,"llm_context_length":self.settings.llm_context_length,"llm_num_ctx":self.settings.llm_num_ctx,"llm_temperature":self.settings.llm_temperature,"llm_max_tokens":self.settings.llm_max_tokens,"llm_keep_alive":self.settings.llm_keep_alive,"llm_warmup_timeout_s":self.settings.llm_warmup_timeout_s,"validation_provider":validation_provider,"validation_model":public_model_reference(self.settings.validation_model),"validation_timeout_ms":self.settings.validation_timeout_ms,"validation_num_ctx":validation_num_ctx,"validation_fail_closed":self.settings.validation_fail_closed,"stt_provider":"mock" if self.settings.profile=="mock" else "faster_whisper","stt_model":"mock" if self.settings.profile=="mock" else public_model_reference(self.settings.stt_model),"tts_provider":"mock" if self.settings.profile=="mock" else "silero","tts":"mock" if self.settings.profile=="mock" else "silero","voice_conversion":voice,"lazy":True,"effective_settings":self.settings.redacted_snapshot()}
+        return {"profile":self.settings.profile,"policy_version":self.settings.policy_version,"deployment_policy":self.settings.policy_snapshot(),"llm_provider":provider,"llm_model":model,"llm_quantization":self.settings.llm_quantization or None,"llm_context_length":self.settings.llm_context_length,"llm_num_ctx":self.settings.llm_num_ctx,"llm_temperature":self.settings.llm_temperature,"llm_max_tokens":self.settings.llm_max_tokens,"llm_keep_alive":self.settings.llm_keep_alive,"llm_warmup_timeout_s":self.settings.llm_warmup_timeout_s,"validation_provider":validation_provider,"validation_model":public_model_reference(self.settings.validation_model),"validation_timeout_ms":self.settings.validation_timeout_ms,"validation_num_ctx":validation_num_ctx,"validation_fail_closed":self.settings.validation_fail_closed,"stt_provider":"mock" if self.settings.profile=="mock" else "faster_whisper","stt_model":"mock" if self.settings.profile=="mock" else public_model_reference(self.settings.stt_model),"tts_provider":"mock" if self.settings.profile=="mock" else self.settings.tts_provider,"tts":"mock" if self.settings.profile=="mock" else self.settings.tts_provider,"voice_conversion":voice,"lazy":True,"effective_settings":self.settings.redacted_snapshot()}
 
     async def resource_readiness(self) -> dict[str, Any]:
         ram = ResourceProbe.available_ram_gb()
@@ -293,10 +296,16 @@ class S2SRuntimeManager:
             reason="warmup_incomplete"
         else:
             reason=None
+        menu_status = {}
+        if callable(self.public_menu_status):
+            try:
+                menu_status = {"public_menu_audio": self.public_menu_status()}
+            except Exception:
+                menu_status = {"public_menu_audio": {"ok": False}}
         return {**self.configuration(),"ready":prerequisites_ready and warmup_ready,
                 "reason":reason,"prerequisites_ready":prerequisites_ready,"warmup_required":warmup_required,"warmup_ready":warmup_ready,
                 "components":components,"resources":resources,
-                "latency_metrics":self.engine.metrics.snapshot(),"warmup":self.last_warmup}
+                "latency_metrics":self.engine.metrics.snapshot(),"warmup":self.last_warmup, **menu_status}
 
     async def warmup(self) -> dict[str,Any]:
         try:
@@ -324,7 +333,7 @@ class S2SRuntimeManager:
             for warmup_text in ("Привет!", "Расскажи сказку.", "Как дела?"):
                 audio=await asyncio.wait_for(warm_tts.synthesize(warmup_text, 0, cancelled), self.settings.e2e_stage_timeout_s)
             self.engine.metrics.observe("warmup_silero", silero_started)
-            stages["silero"]={"ok":True,"sample_rate":audio.sample_rate,"samples":len(audio.samples)}
+            stages["silero"]={"ok":True,"provider":self.settings.tts_provider,"sample_rate":audio.sample_rate,"samples":len(audio.samples)}
             voice_mode = self.settings.voice_conversion
             if voice_mode in {"off", "disabled"}:
                 converted = audio
@@ -348,6 +357,8 @@ class S2SRuntimeManager:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    if self.settings.rvc_fallback_mode == "fail_closed":
+                        raise
                     converted = audio
                     reason = f"{type(exc).__name__}: {str(exc)[:160]}"
                     logger.warning("RVC warmup unavailable; continuing with clean Silero audio: %s", reason)
@@ -376,6 +387,20 @@ class S2SRuntimeManager:
                                   "latency_ms":round((time.perf_counter()-started)*1000,2),
                                   "reason":str((e2e or {}).get("reason", "full_e2e_warmup_failed"))}
                 return self.last_warmup
+            public_menu_warmup = getattr(self, "public_menu_warmup", None)
+            if callable(public_menu_warmup):
+                menu_started = time.perf_counter()
+                try:
+                    stages["public_menus"] = await asyncio.wait_for(
+                        public_menu_warmup(), self.settings.e2e_warmup_timeout_s)
+                    if not isinstance(stages["public_menus"], dict):
+                        stages["public_menus"] = {"ok": False, "reason": "invalid_cache_status"}
+                except Exception:
+                    # A cache miss still uses the validated live speech path.
+                    # Performance preparation must not disable that path.
+                    stages["public_menus"] = {"ok": False, "reason": "public_menu_warmup_failed"}
+                self.engine.metrics.observe("warmup_public_menus", menu_started,
+                                            bool(stages["public_menus"].get("ok")))
             resources = await self.resource_readiness()
             stages["resources"] = resources
             if not resources["ready"]:

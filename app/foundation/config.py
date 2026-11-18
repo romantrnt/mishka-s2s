@@ -187,6 +187,8 @@ class Settings:
     vllm_base_url: str = "http://127.0.0.1:8001"
 
     stt_model: str = "large-v3-turbo"
+    tts_provider: str = "silero"
+    experimental_voice_manifest: str = ""
     silero_model: str = "v5_5_ru"
     silero_language: str = "ru"
     silero_speaker: str = "aidar"
@@ -199,6 +201,7 @@ class Settings:
 
     rvc_project_root: str = "vendor/rvc"
     rvc_python: str = ".venv/bin/python"
+    rvc_worker_script: str = ""
     rvc_model: str = "models/rvc/mishka-rvc.pth"
     rvc_index: str = "models/rvc/mishka-rvc.index"
     rvc_f0_method: str = "rmvpe"
@@ -320,8 +323,13 @@ class Settings:
             injected_mock = self.profile == "mock" and self.hardware_mode in {"fake", "simulator"}
             live_demo = (self.max_client_source == "local_demo" and self.max_synthetic_data
                          and self.profile in {"local_cpu", "local_gpu"} and self.hardware_mode == "physical")
-            if not (injected_mock or live_demo):
+            remote_demo = (self.max_client_source == "local_demo" and self.max_synthetic_data
+                           and self.profile in {"local_cpu", "local_gpu"} and self.hardware_mode == "simulator")
+            if not (injected_mock or live_demo or remote_demo):
                 raise SettingsError("max_json requires mock injection or explicitly synthetic live-demo hardware")
+            if remote_demo and (not self.stand_access_token or self.allow_query_token
+                                or self.mutation_auth_policy != "token_required"):
+                raise SettingsError("remote_demo requires token_required and header/cookie authentication")
             if live_demo and (self.allow_degraded_hardware or not self.hid_device or not self.lighting_device
                               or not self.stand_access_token or self.allow_query_token):
                 raise SettingsError("live_demo requires explicit devices, fail-closed hardware and header/cookie authentication")
@@ -361,8 +369,12 @@ class Settings:
             raise SettingsError("production profile cannot use demo weather")
         if self.voice_conversion not in {"rvc_v2", "off", "disabled"}:
             raise SettingsError("unsupported MISHKA_VOICE_CONVERSION")
-        if self.rvc_fallback_mode not in {"passthrough", "controlled_passthrough"}:
-            raise SettingsError("RVC_FALLBACK_MODE must be passthrough")
+        if self.tts_provider not in {"silero", "voxcpm765"}:
+            raise SettingsError("unsupported TTS provider")
+        if self.tts_provider == "voxcpm765" and (self.profile != "local_gpu" or not self.experimental_voice_manifest):
+            raise SettingsError("trained TTS requires local_gpu and explicit manifest")
+        if self.rvc_fallback_mode not in {"passthrough", "controlled_passthrough", "fail_closed"}:
+            raise SettingsError("unsupported RVC_FALLBACK_MODE")
         if not -24 <= self.rvc_f0_up_key <= 24:
             raise SettingsError("RVC_F0_UP_KEY is out of range")
         if self.rvc_f0_method != "rmvpe":
@@ -457,7 +469,7 @@ class Settings:
                    "ollama_base_url", "vllm_base_url", "weather_endpoint",
                    "yandex_weather_latitude", "yandex_weather_longitude",
                    "silero_cache_path", "rvc_project_root", "rvc_python", "rvc_model",
-                   "rvc_index", "rvc_tmp_dir", "warmup_pcm_path"}
+                   "rvc_index", "rvc_tmp_dir", "warmup_pcm_path", "experimental_voice_manifest", "rvc_worker_script"}
         data = asdict(self)
         for key in ("stt_model", "llm_model", "validation_model", "silero_model"):
             data[key] = public_model_reference(data[key])

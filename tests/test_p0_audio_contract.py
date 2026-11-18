@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import MethodType, SimpleNamespace
 
-from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest
+from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime, CanonicalState, FixedStoryManifest
 from app.foundation.config import Settings
 from app.foundation.stand import HardwareIntegrationStand, HeadlessAudioOutput, UARTAudioOutput
 
@@ -320,6 +320,11 @@ def test_late_lifecycle_for_repeated_phrase_cannot_mark_new_effect():
         "audio_status": "queued",
     }
     app.last_canonical_effects = [newer]
+    app._session_epochs['sid'] = 2
+    app._active_audio['sid'] = {'content_id': 'PHRASE_084', 'token': 7, 'generation': 2,
+                              'playback_id': 'play-B', 'playback_lease': 'lease-B'}
+    app.canonical_runtime.sessions['sid'] = CanonicalState('sid', handset='up',
+        active_audio_id='PHRASE_084', playback_lease='lease-B')
     app._mark_audio_effect_lifecycle(
         "PHRASE_084", "finished", session_id="sid", generation=2,
         playback_id="play-A", playback_lease="lease-A",
@@ -332,6 +337,10 @@ def test_late_lifecycle_for_repeated_phrase_cannot_mark_new_effect():
         playback_id="play-B", playback_lease="lease-B",
     )
     assert newer["audio_status"] == "finished"
+    app._session_epochs['sid'] = 3
+    assert not app._mark_audio_effect_lifecycle('PHRASE_084', 'playing', session_id='sid',
+        generation=2, playback_id='play-B', playback_lease='lease-B')
+    assert newer['audio_status'] == 'finished', 'historical effect is not callback authority after epoch loss'
 
 
 def test_browser_lifecycle_route_rejects_stale_and_unidentified_execution():
@@ -349,7 +358,14 @@ def test_browser_lifecycle_route_rejects_stale_and_unidentified_execution():
         "generation": 3, "playback_id": "browser-B", "playback_lease": "browser-lease-B",
         "audio_status": "queued",
     }
+    stand.remote_devices.admits_users = lambda: True  # This test assumes only callback transport readiness.
     stand.application.last_canonical_effects = [newer]
+    stand.application._session_epochs['browser-sid'] = 3
+    stand.application._active_audio['browser-sid'] = {
+        'content_id': 'PHRASE_084', 'token': 7, 'generation': 3,
+        'playback_id': 'browser-B', 'playback_lease': 'browser-lease-B'}
+    stand.application.canonical_runtime.sessions['browser-sid'] = CanonicalState('browser-sid',
+        handset='up', active_audio_id='PHRASE_084', playback_lease='browser-lease-B')
     try:
         with TestClient(api) as client:
             client.headers.update({"x-stand-token": "test-token"})
@@ -387,6 +403,7 @@ def test_browser_pause_checkpoint_route_requires_exact_paused_playback_and_gener
     ))
     api.state.lifecycle = None
     stand = api.state.stand
+    stand.remote_devices.admits_users = lambda: True  # This test assumes only callback transport readiness.
     app = stand.application
     sid = "browser-checkpoint"
     app.canonical_runtime.handle(CanonicalEvent(
@@ -440,6 +457,7 @@ def test_browser_callback_route_accepts_two_executions_of_same_phrase_once_each(
     ))
     api.state.lifecycle = None
     stand = api.state.stand
+    stand.remote_devices.admits_users = lambda: True  # This test assumes only callback transport readiness.
     app = stand.application
     sid = "browser-repeated-callback"
     app.canonical_runtime.handle(CanonicalEvent(
@@ -626,10 +644,10 @@ def test_each_declared_audio_effect_has_lease_and_support_uses_actual_phrase_id(
         "HandsetLifted", sid, 2, state.state_version, "test", {}, "lift", 1.0,
     ))
     spoken = [e for e in first["effects"] if e["type"] in {"speak", "speak_dynamic"}]
-    assert len(spoken) == 2
+    assert len(spoken) == 1
     assert all(e.get("playback_lease") for e in spoken)
-    assert spoken[0]["playback_lease"] != spoken[1]["playback_lease"]
-    assert state.active_audio_id == "PHRASE_014"
+    assert spoken[0]["type"] == "speak_dynamic" and spoken[0]["personalized"]
+    assert state.active_audio_id == "dynamic"
     state.mode = "wellbeing_check"
     second = runtime.handle(CanonicalEvent(
         "ButtonPressed", sid, 3, state.state_version, "test",
@@ -637,4 +655,5 @@ def test_each_declared_audio_effect_has_lease_and_support_uses_actual_phrase_id(
     ))
     support = next(e for e in second["effects"] if e["type"] == "support_question")
     assert support["phrase_id"] == "PHRASE_084"
+    assert support["playback_lease"] != spoken[0]["playback_lease"]
     assert state.active_audio_id == "PHRASE_084"

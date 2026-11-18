@@ -319,15 +319,15 @@ class PipelineMetrics:
         self.chunk_traces: deque[dict[str, Any]] = deque(maxlen=self.chunk_trace_limit)
         self._chunk_trace_index: dict[tuple[str, str, int], dict[str, Any]] = {}
         self.chunk_trace_evicted = 0
-        tts_provider = "mock" if getattr(settings, "profile", "mock") == "mock" else "silero"
+        tts_provider = "mock" if getattr(settings, "profile", "mock") == "mock" else getattr(settings, "tts_provider", "silero")
         voice_conversion = getattr(settings, "voice_conversion", "rvc_v2")
         self.pipeline = {
             "label": "Silero v5.5 + RVC" if tts_provider == "silero" and voice_conversion == "rvc_v2" else f"{tts_provider} + {voice_conversion}",
             "tts_provider": tts_provider,
-            "tts_model": getattr(settings, "silero_model", "v5_5_ru") if tts_provider == "silero" else "mock",
-            "tts_language": getattr(settings, "silero_language", "ru") if tts_provider == "silero" else "mock",
-            "tts_speaker": getattr(settings, "silero_speaker", "aidar") if tts_provider == "silero" else "mock",
-            "tts_sample_rate": getattr(settings, "silero_sample_rate", 48000) if tts_provider == "silero" else 24000,
+            "tts_model": getattr(settings, "silero_model", "v5_5_ru") if tts_provider == "silero" else ("VoxCPM2-step765" if tts_provider == "voxcpm765" else "mock"),
+            "tts_language": getattr(settings, "silero_language", "ru") if tts_provider == "silero" else ("ru" if tts_provider == "voxcpm765" else "mock"),
+            "tts_speaker": getattr(settings, "silero_speaker", "aidar") if tts_provider == "silero" else ("trained_narrator" if tts_provider == "voxcpm765" else "mock"),
+            "tts_sample_rate": getattr(settings, "silero_sample_rate", 48000) if tts_provider == "silero" else (48000 if tts_provider == "voxcpm765" else 24000),
             "voice_conversion": voice_conversion,
             "stream_preroll_ms": getattr(settings, "silero_leading_silence_ms", 150) if tts_provider == "silero" else 0,
         }
@@ -843,6 +843,41 @@ class ResponseTagParser:
         if "<" in residue or ">" in residue: raise ValueError("unknown or unclosed tag")
         if residue.strip(): outputs.append(ParsedOutput("say", residue.strip()))
         return outputs
+
+class _LLMGenerationBudget:
+    """Charge only provider awaits to the cumulative generation deadline.
+
+    Parsing a closed block awaits validation, queue backpressure and the
+    first-audio gate. Those have their own limits and the outer turn budget.
+    An async generator stays suspended during that work, so it must not be
+    charged to the provider's generation timeout.
+    """
+    def __init__(self, provider, timeout_s):
+        self.provider = provider
+        self.timeout_s = timeout_s
+        self.elapsed_s = 0.0
+
+    async def stream(self, messages, request_id, cancelled):
+        iterator = self.provider.stream(messages, request_id, cancelled).__aiter__()
+        try:
+            while True:
+                remaining = self.timeout_s - self.elapsed_s
+                if remaining <= 0:
+                    raise TimeoutError("LLM generation budget exceeded")
+                started = time.perf_counter()
+                try:
+                    async with asyncio.timeout(remaining):
+                        token = await anext(iterator)
+                except StopAsyncIteration:
+                    return
+                finally:
+                    self.elapsed_s += time.perf_counter() - started
+                yield token
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                await close()
+
 
 class StreamingTokenConsumer:
     def __init__(self, max_chars=2048): self.max_chars=max_chars
@@ -1387,6 +1422,7 @@ class RVCV2Provider:
         self._start_lock=asyncio.Lock(); self._job_lock=asyncio.Lock()
         self._stderr_task: asyncio.Task | None=None; self._stderr_tail: deque[str]=deque(maxlen=20)
         self._worker_info: dict[str,Any]={}; self._active=False
+        self._last_conversion_evidence: dict[str, Any] = {}
         self.jobs_submitted=0; self.jobs_completed=0; self.jobs_cancelled=0; self.jobs_failed=0; self.worker_restarts=0
         self.last_latency_ms: float | None=None
 
@@ -1394,7 +1430,10 @@ class RVCV2Provider:
         if self.converter is not None:
             return {"ready": True, "configuration_ready": True, "provider": "rvc_v2", "mode": "in_memory_callable", "worker_alive": True, "worker_pid": None}
         executable=shutil.which(self.python) if not Path(self.python).is_absolute() else (self.python if Path(self.python).is_file() else None)
-        root=bool(self.project_root and (self.project_root/"rvc/infer/infer.py").is_file())
+        trained_worker = self.worker_script.name == "rvc_trained_worker.py"
+        root=bool(self.project_root and (
+            ((self.project_root/"infer/cli.py").is_file() and (self.project_root/"infer/vc/modules.py").is_file())
+            if trained_worker else (self.project_root/"rvc/infer/infer.py").is_file()))
         model=bool(self.model_path and self.model_path.is_file()); index=bool(self.index_path and self.index_path.is_file())
         worker=self.worker_script.is_file()
         candidate=self.tmp_dir if self.tmp_dir.exists() else self.tmp_dir.parent
@@ -1407,7 +1446,8 @@ class RVCV2Provider:
                 "worker_alive":process_alive,"worker_pid":self._process.pid if process_alive else None,"worker_info":dict(self._worker_info),"ram_tmp":ram_tmp,
                 "f0_method":self.f0_method,"filter_radius":self.filter_radius,"f0_up_key":self.f0_up_key,"index_rate":self.index_rate,"protect":self.protect,"active":self._active,
                 "jobs_submitted":self.jobs_submitted,"jobs_completed":self.jobs_completed,"jobs_cancelled":self.jobs_cancelled,"jobs_failed":self.jobs_failed,
-                "worker_restarts":self.worker_restarts,"last_latency_ms":self.last_latency_ms}
+                "worker_restarts":self.worker_restarts,"last_latency_ms":self.last_latency_ms,
+                "last_conversion_evidence":dict(self._last_conversion_evidence)}
 
     def configuration_readiness(self) -> dict[str, Any]:
         return self._configuration_readiness()
@@ -1450,6 +1490,16 @@ class RVCV2Provider:
                 raw=await asyncio.wait_for(self._process.stdout.readline(),self.startup_timeout_s)
                 reply=json.loads(raw) if raw else {}
                 if reply.get("event")!="ready": raise RuntimeError("RVC worker did not become ready")
+                if self.worker_script.name == "rvc_trained_worker.py":
+                    if (reply.get("actual_route") != "rvc100"
+                            or reply.get("fallback_used") is not False
+                            or reply.get("passthrough_used") is not False
+                            or any(not isinstance(reply.get(key), str)
+                                   or re.fullmatch(pattern, reply[key]) is None
+                                   for key, pattern in (("model_sha256", r"[0-9a-f]{64}"),
+                                                        ("index_sha256", r"[0-9a-f]{64}"),
+                                                        ("source_revision", r"[0-9a-f]{40}")))):
+                        raise RuntimeError("trained_rvc_identity_unproven")
                 self._worker_info=reply; self.worker_restarts+=1
             except BaseException:
                 await self._stop_worker_drained()
@@ -1542,6 +1592,7 @@ class RVCV2Provider:
             await self._ensure_worker()
             assert self._process is not None and self._process.stdin is not None
             tmp_root.mkdir(parents=True,exist_ok=True); self.jobs_submitted+=1; self._active=True
+            self._last_conversion_evidence = {}
             request_id=uuid.uuid4().hex; started=time.perf_counter()
             folder_owner = None
             succeeded = False
@@ -1565,6 +1616,25 @@ class RVCV2Provider:
                 await self._process.stdin.drain()
                 reply=await self._read_reply(request_id,cancelled)
                 if reply.get("event")!="converted": raise RuntimeError("RVC v2 conversion failed: "+str(reply.get("message") or reply.get("error") or "worker_error")[:500])
+                if self.worker_script.name == "rvc_trained_worker.py":
+                    evidence = reply.get("route_evidence")
+                    if (reply.get("actual_route") != "rvc100"
+                            or reply.get("fallback_used") is not False
+                            or reply.get("passthrough_used") is not False
+                            or any(reply.get(key) != self._worker_info.get(key) for key in
+                                   ("model_sha256", "index_sha256", "source_revision"))
+                            or not isinstance(evidence, dict)
+                            or any(type(evidence.get(key)) is not int or not 0 <= evidence[key] <= 1_000_000
+                                   for key in ("model_calls", "index_queries", "index_failures", "full_probe_retries"))
+                            or evidence["model_calls"] < 1 or evidence["index_queries"] < 1
+                            or evidence["index_failures"] != 0):
+                        raise RuntimeError("trained_rvc_conversion_unproven")
+                    self._last_conversion_evidence = {
+                        "actual_route": "rvc100", "fallback_used": False, "passthrough_used": False,
+                        **{key: reply[key] for key in ("model_sha256", "index_sha256", "source_revision")},
+                        **{key: evidence[key] for key in ("model_calls", "index_queries", "index_failures", "full_probe_retries")},
+                        "transport_resample_hz": RVC_SAMPLE_RATE, "peak_normalization": True,
+                    }
                 if cancelled(): raise asyncio.CancelledError
                 samples,rate=self._read_wav(output_path)
                 if cancelled(): raise asyncio.CancelledError
@@ -2019,13 +2089,42 @@ class _AudioOwnership:
     active_audio_bytes: int = 0
 
 
+def _native_audio_stream_method(tts):
+    provider = tts.delegate if isinstance(tts, CachedTTSProvider) else tts
+    method = getattr(provider, "synthesize_audio_stream", None)
+    if callable(method) and getattr(provider, "provider_name", None) != "qwen765":
+        return method
+    return None
+
+
+AUDIO_FAILURE_STAGES = frozenset({"queue", "silero_tts", "rvc_v2", "playback", "other"})
+AUDIO_FAILURE_EXCEPTION_CLASSES = frozenset({
+    "RuntimeError", "ValueError", "TypeError", "AssertionError", "TimeoutError", "MemoryError",
+    "OutOfMemoryError", "OSError", "IndexError", "KeyError", "AttributeError", "OverflowError",
+    "ImportError", "ModuleNotFoundError", "other",
+})
+_AUDIO_FAILURE_MESSAGES = {
+    "Silero audio is empty": "silero_empty_audio",
+    "Silero produced no audio": "silero_empty_audio",
+    "Silero audio contains non-finite samples": "silero_nonfinite_audio",
+    "Silero audio exceeds [-1, 1]": "silero_overrange_audio",
+    "Silero cannot synthesize empty text": "silero_empty_text",
+    "Silero cannot build prosody for empty text": "silero_empty_text",
+    "Silero TTS worker queue is full": "native_queue_full",
+    "Silero v5.5 initialization failed": "silero_load_failed",
+    "Silero requested CUDA but CUDA is unavailable": "silero_cuda_unavailable",
+}
+AUDIO_FAILURE_CODES = frozenset({"provider_failure", "provider_timeout", *_AUDIO_FAILURE_MESSAGES.values()})
+
+
 class AudioSynthesisQueue:
     _TERMINAL_STATES = frozenset({"finished", "cancelled", "failed"})
 
-    def __init__(self,tts,voice,playback,cancel,config,metrics,trace_generation_id=None,voice_mode="rvc_v2",fallback_mode="passthrough",lifecycle_hook=None):
+    def __init__(self,tts,voice,playback,cancel,config,metrics,trace_generation_id=None,voice_mode="rvc_v2",fallback_mode="passthrough",lifecycle_hook=None,retire_hook=None):
         self.tts,self.voice,self.playback,self.cancel,self.config=tts,voice,playback,cancel,config
         self.metrics=metrics
         self.lifecycle_hook=lifecycle_hook
+        self._retire_hook=retire_hook
         self.trace_generation_id=trace_generation_id
         # Keep the conversion decision explicit on the queue.  The queue is
         # the actual user-turn boundary; relying on an absent ``settings``
@@ -2052,6 +2151,8 @@ class AudioSynthesisQueue:
         self.owner = ""
         self.turn_id = ""
         self._output_lifecycle_notified = False
+        self._native_pcm_queued_bytes = 0
+        self._native_producer: asyncio.Task[None] | None = None
 
     async def _notify_lifecycle(self, phase: str, **details: Any) -> None:
         hook = self.lifecycle_hook
@@ -2076,6 +2177,8 @@ class AudioSynthesisQueue:
         self.completed_chunks=0; self.failed_chunks=0; self.active_audio_bytes=0
         self._ownership={}
         self._output_lifecycle_notified = False
+        self._native_pcm_queued_bytes = 0
+        self._native_producer = None
         self.first_audio_ready=asyncio.Event(); self.failure_event=asyncio.Event()
         self.worker=asyncio.create_task(self._run(session_id,token), name=f"s2s-tts-{session_id}-{token}")
 
@@ -2209,7 +2312,9 @@ class AudioSynthesisQueue:
             "queued_chunks": self.queue.qsize(),
             "queued_bytes": max(0,self.queued_bytes),
             "active_audio_bytes": max(0,self.active_audio_bytes),
-            "pcm_bytes": max(0,self.active_audio_bytes),
+            "pcm_bytes": max(0,self.active_audio_bytes + self._native_pcm_queued_bytes),
+            "native_pcm_queued_bytes": max(0,self._native_pcm_queued_bytes),
+            "native_producer_active": bool(self._native_producer and not self._native_producer.done()),
             "cancelled_chunks": max(0,self.cancelled_chunks),
             "completed_chunks": max(0,self.completed_chunks),
             "failed_chunks": max(0,self.failed_chunks),
@@ -2226,12 +2331,23 @@ class AudioSynthesisQueue:
         if self.worker is not None and not self.worker.done():
             await self.worker
         if self.error is not None: raise self.error
+
+    def _invalidate_generation(self, session_id):
+        # Retirement and invalidation are one synchronous state transition.
+        # Native cancellation can take time; a draining queue is no longer a
+        # current-generation queue and must not look corrupt to the watchdog.
+        if (self.cancel.events.get(session_id) is self._session_event
+                and self.cancel.tokens.get(session_id) == self.token):
+            if callable(self._retire_hook):
+                self._retire_hook(session_id, self)
+            self.cancel.cancel(session_id)
+
     async def abort(self,session_id, *, invalidate=True, ownership_guard=None):
         self.metrics.event("audio_cancelled", reason="barge_in_or_reset")
         ownership_guard = ownership_guard or self._cleanup_ownership_guard
         owned = self.cancel.events.get(session_id) is self._session_event
         if invalidate and owned and not self.cancel.cancelled(session_id, self.token):
-            self.cancel.cancel(session_id)
+            self._invalidate_generation(session_id)
         generation = self.cancel.tokens.get(session_id)
         self.closed=True
         self._drain("cancelled")
@@ -2255,6 +2371,176 @@ class AudioSynthesisQueue:
                 self.queue.task_done()
             except asyncio.QueueEmpty:
                 return drained
+
+    async def _run_native_stream(self, stream_method, session_id, token, chunk_index, text, provider):
+        """Overlap one bounded native producer/RVC owner with ordered playback.
+
+        A semantic text block remains a single ownership item. The provider
+        owns its native frame bounds; this boundary additionally limits total
+        chunks/duration and holds at most two converted chunks awaiting play.
+        """
+        pcm_queue = asyncio.Queue(maxsize=2)
+        # Include an in-flight synthesis/conversion in the two buffered slots.
+        # The currently playing chunk is the only additional PCM owner.
+        slots = asyncio.Semaphore(2)
+        cancelled = lambda: self.cancel.cancelled(session_id, token)
+        iterator = stream_method(text, token, cancelled, first_chunk=(chunk_index == 0)).__aiter__()
+        rate = None
+        seconds = 0.0
+        count = 0
+        tts_elapsed = 0.0
+        limit_seconds = min(60.0, self.config.max_turn_seconds)
+
+        def check_audio(audio, *, output=False):
+            if cancelled():
+                raise asyncio.CancelledError
+            if not isinstance(audio, AudioChunk) or audio.token != token:
+                raise ValueError("native audio generation tag mismatch")
+            if audio.session_id not in (None, session_id):
+                raise ValueError("native audio session tag mismatch")
+            if (type(audio.sample_rate) is not int or not 8000 <= audio.sample_rate <= 96000
+                    or not isinstance(audio.samples, tuple) or not audio.samples
+                    or len(audio.samples) > audio.sample_rate * limit_seconds):
+                raise ValueError("native audio bounds invalid")
+            if any(type(value) not in (float, int) or not math.isfinite(value)
+                   or (output and abs(value) > 1)
+                   for value in audio.samples):
+                raise ValueError("native audio PCM invalid")
+
+        async def produce():
+            nonlocal rate, seconds, count, tts_elapsed
+            failure = None
+            try:
+                while True:
+                    if cancelled():
+                        raise asyncio.CancelledError
+                    await slots.acquire()
+                    started = time.perf_counter()
+                    remaining = self.config.tts_timeout_s - tts_elapsed
+                    if remaining <= 0:
+                        raise TimeoutError("native TTS generation deadline exceeded")
+                    try:
+                        audio = await asyncio.wait_for(anext(iterator), remaining)
+                    except StopAsyncIteration:
+                        break
+                    finally:
+                        tts_elapsed += time.perf_counter() - started
+                    check_audio(audio)
+                    count += 1
+                    seconds += len(audio.samples) / audio.sample_rate
+                    if count > self.config.max_tts_chunks_per_generation or seconds > limit_seconds:
+                        raise ValueError("native audio stream limit exceeded")
+                    self.metrics.observe("silero_tts", started)
+                    self.metrics.observe_voice_stage(session_id, "tts", started, generation_id=self.trace_generation_id)
+                    metadata = getattr(self.tts, "request_metadata", None)
+                    if metadata is None:
+                        metadata = getattr(getattr(self.tts, "delegate", None), "request_metadata", None)
+                    if metadata is not None:
+                        self.metrics.event("tts_route_evidence", **metadata())
+                    if self.voice_mode in {"off", "disabled"}:
+                        self.metrics.event("voice_conversion_bypassed", provider="passthrough", chunk_index=chunk_index, token=token)
+                    else:
+                        started = time.perf_counter()
+                        # Native trained audio never degrades to an unconverted
+                        # voice, including when an optional legacy wrapper is used.
+                        voice = self.voice.primary if isinstance(self.voice, ResilientVoiceProvider) else self.voice
+                        try:
+                            audio = await asyncio.wait_for(voice.convert(audio, cancelled), self.config.rvc_timeout_s)
+                            if getattr(voice, "last_fallback_reason", None):
+                                raise RuntimeError("native voice conversion fallback refused")
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            self.metrics.event("rvc_v2_failed_closed", provider="rvc_v2", chunk_index=chunk_index, token=token)
+                            raise
+                        self.metrics.observe("rvc_v2", started)
+                    check_audio(audio, output=True)
+                    if rate is not None and rate != audio.sample_rate:
+                        raise ValueError("native output sample rate changed")
+                    rate = audio.sample_rate
+                    await pcm_queue.put(audio)
+                    self._native_pcm_queued_bytes += audio.size_bytes
+                    audio = None
+                if not count:
+                    raise ValueError("native audio stream empty")
+            except BaseException as exc:
+                if isinstance(exc, asyncio.CancelledError) and asyncio.current_task().cancelling():
+                    raise
+                failure = exc
+            finally:
+                close = getattr(iterator, "aclose", None)
+                if close is not None:
+                    try:
+                        await close()
+                    except BaseException as exc:
+                        if isinstance(exc, asyncio.CancelledError) and asyncio.current_task().cancelling():
+                            raise
+                        failure = exc
+            # Terminal delivery happens only after explicit iterator closure.
+            # The consumer can now join this producer without interrupting
+            # the provider's release/drain handoff between yielded chunks.
+            await pcm_queue.put(failure)
+
+        producer = asyncio.create_task(produce(), name=f"s2s-native-{session_id}-{token}-{chunk_index}")
+        self._native_producer = producer
+        playing = False
+        try:
+            async with asyncio.timeout(self.config.max_turn_seconds):
+                while True:
+                    audio = await pcm_queue.get()
+                    slots.release()
+                    if audio is None:
+                        break
+                    if isinstance(audio, BaseException):
+                        raise audio
+                    self._native_pcm_queued_bytes -= audio.size_bytes
+                    check_audio(audio, output=True)
+                    audio = AudioChunk(audio.samples, audio.sample_rate, token,
+                                       session_id, self.trace_generation_id, audio.state)
+                    self.metrics.event("audio_ready", provider=provider, chunk_index=chunk_index, token=token,
+                                       sample_rate=audio.sample_rate, samples=len(audio.samples), native_streaming=True)
+                    if not playing:
+                        self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
+                        if chunk_index == 0 and self.first_audio_ready is not None:
+                            self.first_audio_ready.set()
+                        self._transition(chunk_index, "playing", audio_bytes=audio.size_bytes)
+                        playing = True
+                        self.playback.active_token = token
+                        self.metrics.event("playback_started", chunk_index=chunk_index, token=token, native_streaming=True)
+                        if not self._output_lifecycle_notified:
+                            self._output_lifecycle_notified = True
+                            await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
+                        if cancelled():
+                            raise asyncio.CancelledError
+                        self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
+                        if hasattr(self.metrics, "mark_playback_start"):
+                            self.metrics.mark_playback_start(session_id)
+                    else:
+                        ownership = self._ownership[chunk_index]
+                        self.active_audio_bytes += audio.size_bytes - ownership.active_audio_bytes
+                        ownership.active_audio_bytes = audio.size_bytes
+                    started = time.perf_counter()
+                    await asyncio.wait_for(self.playback.play(audio), self.config.playback_timeout_s)
+                    self.metrics.observe("playback", started)
+                    self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
+                    if cancelled():
+                        raise asyncio.CancelledError
+                    audio = None
+                if cancelled():
+                    raise asyncio.CancelledError
+                self._transition(chunk_index, "finished")
+                self.metrics.event("playback_finished", chunk_index=chunk_index, token=token, native_streaming=True)
+        finally:
+            if not producer.done():
+                producer.cancel()
+            await asyncio.gather(producer, return_exceptions=True)
+            self._native_producer = None
+            while not pcm_queue.empty():
+                pcm_queue.get_nowait()
+            self._native_pcm_queued_bytes = 0
+            if playing and hasattr(self.metrics, "mark_playback_finish"):
+                self.metrics.mark_playback_finish(session_id)
+
     async def _run(self,session_id,token):
         while True:
             item=await self.queue.get()
@@ -2276,10 +2562,17 @@ class AudioSynthesisQueue:
                 self.metrics.event("tts_started", provider=provider, chunk_index=chunk_index, token=token,
                                    stream_preroll_ms=150 if provider == "silero" and chunk_index == 0 else 0)
                 self.metrics.mark_voice(session_id, "tts_request", generation_id=self.trace_generation_id)
+                native_method = _native_audio_stream_method(self.tts)
+                if native_method is not None:
+                    await self._run_native_stream(native_method, session_id, token, chunk_index, text, provider)
+                    continue
                 stream_method = getattr(self.tts, "synthesize_stream_chunk", None)
                 synthesis = (stream_method(text, token, cancelled, first_chunk=(chunk_index == 0))
                              if stream_method is not None else self.tts.synthesize(text, token, cancelled))
                 audio=await asyncio.wait_for(synthesis,self.config.tts_timeout_s)
+                metadata = getattr(self.tts, "request_metadata", None)
+                if metadata is not None:
+                    self.metrics.event("tts_route_evidence", **metadata())
                 self.metrics.observe(stage,started)
                 self.metrics.observe_voice_stage(session_id, "tts", started, generation_id=self.trace_generation_id)
                 if self.voice_mode in {"off", "disabled"}:
@@ -2291,6 +2584,9 @@ class AudioSynthesisQueue:
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
+                        if self.fallback_mode == "fail_closed":
+                            self.metrics.event("rvc_v2_failed_closed", provider="rvc_v2", chunk_index=chunk_index, token=token)
+                            raise
                         self.last_fallback_reason=f"{type(exc).__name__}: {str(exc)[:160]}"
                         audio=original_audio
                         logger.warning("RVC chunk failed; returning clean Silero audio: %s", self.last_fallback_reason)
@@ -2307,14 +2603,16 @@ class AudioSynthesisQueue:
                         chunk_index=chunk_index, owner=self.owner, event="audio_ready",
                         lifecycle="processing", sample_count=len(audio.samples), byte_count=len(audio.samples) * 4,
                     )
-                self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
-                if chunk_index == 0 and self.first_audio_ready is not None:
-                    self.first_audio_ready.set()
-                if audio.token != token:
+                if audio.token != token or audio.session_id not in (None, session_id):
                     self._transition(chunk_index,"cancelled")
                     self.metrics.event("audio_dropped", reason="invalid_generation_tag", chunk_index=chunk_index, token=audio.token)
                     continue
                 if not cancelled():
+                    audio = AudioChunk(audio.samples, audio.sample_rate, token,
+                                       session_id, self.trace_generation_id, audio.state)
+                    self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
+                    if chunk_index == 0 and self.first_audio_ready is not None:
+                        self.first_audio_ready.set()
                     self._transition(chunk_index,"playing",audio_bytes=len(audio.samples)*4)
                     stage="playback"; started=time.perf_counter(); self.playback.active_token=token
                     self.metrics.event("playback_started", chunk_index=chunk_index, token=token)
@@ -2344,7 +2642,7 @@ class AudioSynthesisQueue:
                 self.closed=True
                 if self.failure_event is not None: self.failure_event.set()
                 self.metrics.observe(stage,started,False)
-                self.cancel.cancel(session_id)
+                self._invalidate_generation(session_id)
                 self._drain("cancelled")
                 return
             except Exception as exc:
@@ -2353,8 +2651,23 @@ class AudioSynthesisQueue:
                 self.error = exc
                 self.closed = True
                 if self.failure_event is not None: self.failure_event.set()
+                cause, code = exc, "provider_failure"
+                for _ in range(4):
+                    if isinstance(cause, TimeoutError):
+                        code = "provider_timeout"
+                    if len(cause.args) == 1 and type(cause.args[0]) is str:
+                        code = _AUDIO_FAILURE_MESSAGES.get(cause.args[0], code)
+                    if cause.__cause__ is None:
+                        break
+                    cause = cause.__cause__
+                exception_class, cause_class = type(exc).__name__, type(cause).__name__
+                self.metrics.event("audio_generation_failed",
+                    stage=stage if stage in AUDIO_FAILURE_STAGES else "other", chunk_index=chunk_index,
+                    text_chars=len(text) if chunk_index is not None and isinstance(text, str) else 0,
+                    exception_class=exception_class if exception_class in AUDIO_FAILURE_EXCEPTION_CLASSES else "other",
+                    cause_class=cause_class if cause_class in AUDIO_FAILURE_EXCEPTION_CLASSES else "other", code=code)
                 self.metrics.observe(stage,started,False)
-                self.cancel.cancel(session_id)
+                self._invalidate_generation(session_id)
                 self._drain("failed")
                 return
             finally:
@@ -2521,7 +2834,9 @@ class LocalS2SPipeline:
         if pending is not None and not pending.done() and pending is not asyncio.current_task():
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await pending
+                # Transport cancellation must release ingress even if STT
+                # resists its earlier barge-in cancellation.
+                await asyncio.shield(pending)
         await self._cancel_conversation_owner(session_id, conversation, scope, current)
 
     def close_capture(self, session_id: str) -> None:
@@ -2611,6 +2926,10 @@ class BoundedConversationEngine:
         task = self.active_tasks.get(session_id)
         return bool(task and not task.done())
 
+    def _retire_queue(self, session_id, queue):
+        if self.active_queues.get(session_id) is queue:
+            self.active_queues.pop(session_id, None)
+
     async def speak_text(self, session_id: str, text: str) -> TurnResult:
         """Synthesize trusted application text through the normal audio path."""
         text = self.normalizer.normalize(text)
@@ -2625,6 +2944,7 @@ class BoundedConversationEngine:
             voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"),
             fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"),
             lifecycle_hook=self.lifecycle_hook,
+            retire_hook=self._retire_queue,
         )
         await queue.start(session_id, token)
         self.active_queues[session_id] = queue
@@ -2698,7 +3018,7 @@ class BoundedConversationEngine:
             trace_generation_id = token
         self.metrics.begin_voice_turn(context.session_id, generation_id=trace_generation_id)
         self.metrics.mark_voice(context.session_id, "llm_request", generation_id=trace_generation_id)
-        queue=AudioSynthesisQueue(self.tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"), lifecycle_hook=self.lifecycle_hook)
+        queue=AudioSynthesisQueue(self.tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"), lifecycle_hook=self.lifecycle_hook,retire_hook=self._retire_queue)
         queue_started=time.perf_counter(); await queue.start(context.session_id,token)
         task = current
         if task is not None:
@@ -2711,16 +3031,18 @@ class BoundedConversationEngine:
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
         policy = ((context.system_prompt + ' ') if context.system_prompt else '') + topic_instruction + 'Forbidden: ' + ', '.join(context.forbidden_topics) + f'. NON_NEGOTIABLE_RUNTIME_OUTPUT: start immediately; emit only complete <say>...</say> blocks, plus at most the allowlisted <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/>. Never emit JSON, markdown, analysis, tool calls, URLs, hardware commands, unclosed tags, or plain text outside tags. Use one or two short Russian spoken sentences, at most {age_words} words total, and stop.'
+        native_streaming = _native_audio_stream_method(self.tts) is not None
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
         messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}"},{"role":"user","content":text}]
         llm_started=time.perf_counter(); llm_completed=False
         # Canonical runtime owns intent routing; no demo quick-reply
         # table is allowed to bypass the bounded provider contract.
-        provider = self.llm
+        provider = _LLMGenerationBudget(self.llm, self.config.llm_timeout_s)
         try:
             chunks=[]; actions=[]; spoken_chars=0; raw_spoken=""
-            chunker=SentenceChunker(self.config.max_chunk_chars, self.config.first_chunk_chars)
+            chunker=SentenceChunker(self.config.max_chunk_chars, self.config.first_chunk_chars,
+                                    **({"min_sentences": 1, "max_sentences": 1} if native_streaming else {}))
             token_index=0
 
             def token_received(value):
@@ -2794,33 +3116,33 @@ class BoundedConversationEngine:
                     if spoken_chars > self.config.max_response_chars: raise ValueError("total model speech exceeded limit")
                     await close_chunks(chunker.feed(safe))
                 else: actions.append(item)
-            async with asyncio.timeout(self.config.llm_timeout_s):
-                consume_task=asyncio.create_task(self.consumer.consume_parsed(provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,token_received,flush_closed_say), name=f"s2s-llm-{context.session_id}-{token}")
-                failure_task=asyncio.create_task(queue.failure_event.wait(), name=f"s2s-queue-failure-{{context.session_id}}-{{token}}") if queue.failure_event is not None else None
-                try:
-                    if failure_task is None:
-                        await consume_task
-                    else:
-                        done,_=await asyncio.wait((consume_task,failure_task),return_when=asyncio.FIRST_COMPLETED)
-                        if failure_task in done and queue.error is not None:
-                            consume_task.cancel()
-                            with contextlib.suppress(asyncio.CancelledError):
-                                await consume_task
-                            raise queue.error
-                        await consume_task
-                finally:
-                    if not consume_task.done():
+            consume_task=asyncio.create_task(self.consumer.consume_parsed(provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,token_received,flush_closed_say), name=f"s2s-llm-{context.session_id}-{token}")
+            failure_task=asyncio.create_task(queue.failure_event.wait(), name=f"s2s-queue-failure-{{context.session_id}}-{{token}}") if queue.failure_event is not None else None
+            try:
+                if failure_task is None:
+                    await consume_task
+                else:
+                    done,_=await asyncio.wait((consume_task,failure_task),return_when=asyncio.FIRST_COMPLETED)
+                    if failure_task in done and queue.error is not None:
                         consume_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await consume_task
-                    if failure_task is not None and not failure_task.done():
-                        failure_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await failure_task
-                await close_chunks(chunker.flush())
-                self.metrics.observe("llm",llm_started)
-                self.metrics.observe_voice_stage(context.session_id, "llm", llm_started, generation_id=trace_generation_id)
-                llm_completed=True
+                        raise queue.error
+                    await consume_task
+            finally:
+                if not consume_task.done():
+                    consume_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await consume_task
+                if failure_task is not None and not failure_task.done():
+                    failure_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await failure_task
+            await close_chunks(chunker.flush())
+            generation_started = time.perf_counter() - provider.elapsed_s
+            self.metrics.observe("llm", generation_started)
+            self.metrics.observe_voice_stage(context.session_id, "llm", generation_started, generation_id=trace_generation_id)
+            llm_completed=True
             await queue.finish(); self.metrics.observe_voice_stage(context.session_id, "queue", queue_started, generation_id=trace_generation_id); context.turns+=1; context.history=self._bound_history(context.history+[(text," ".join(chunks))], protect_last=True)
             self.metrics.mark_voice(context.session_id, "turn_complete", generation_id=trace_generation_id)
             self.metrics.finish_voice_turn(context.session_id, "completed", generation_id=trace_generation_id)
@@ -2850,7 +3172,8 @@ class BoundedConversationEngine:
             if self.cancel.cancelled(context.session_id, token) and queue.error is None:
                 await queue.abort(context.session_id, invalidate=False)
                 raise asyncio.CancelledError
-            if not llm_completed: self.metrics.observe("llm",llm_started,False)
+            if not llm_completed:
+                self.metrics.observe("llm", time.perf_counter() - provider.elapsed_s, False)
             failure_reason = "voice_generation_timeout" if isinstance(exc, TimeoutError) else "provider_or_validation_failure"
             await queue.abort(context.session_id); self.metrics.finish_voice_turn(context.session_id, failure_reason, generation_id=trace_generation_id); return TurnResult((),(),True,failure_reason)
         except asyncio.CancelledError:
@@ -2910,6 +3233,7 @@ class BoundedConversationEngine:
                 and (ownership_guard is None or ownership_guard()))
         generation = accepted_generation
         if authorized:
+            self._retire_queue(session_id, queue)
             self.cancel.cancel(session_id)
             generation = getattr(self.cancel, "tokens", {}).get(session_id)
         def current():

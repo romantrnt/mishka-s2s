@@ -287,6 +287,8 @@ class CanonicalState:
     welcome_status: str = "idle"
     safety_severity: str = "none"
     active_story_id: str | None = None
+    story_checkpoint_confirmed: bool = False
+    public_story_checkpoint_pending: bool = False
     game_engine_state: GameState | None = None
     game_target: int | None = None
     game_level: int = 0
@@ -978,6 +980,7 @@ class CanonicalRuntime(SceneMenuMixin):
         state.pending_tool = None
         state.pending_mode = None
         state.active_story_id = state.active_game_id = None
+        state.story_checkpoint_confirmed = state.public_story_checkpoint_pending = False
         state.game_level = state.game_attempts = state.game_hint_stage = state.game_success_streak = 0
         state.game_parameters = {}
         state.game_progress.clear()
@@ -1136,8 +1139,30 @@ class CanonicalRuntime(SceneMenuMixin):
                 effects.append({"type": "speak", "phrase_id": "PHRASE_028"})
         return self._decision(state, effects, "game_" + outcome.status)
 
+    def _public_story_after_expiry(self, state, effects, public):
+        # Only the application supplies this verified, private-free receipt.
+        state.active_story_id = public["story_id"]
+        offset = public["offset_ms"]
+        state.public_story_checkpoint_pending = offset is None
+        state.story_checkpoint_confirmed = offset is not None
+        state.mode = "story_paused"
+        state.expected_inputs = ["button_7", "handset_down"]
+        if offset is not None:
+            state.dialogue_memory.story_checkpoint = {"story_id": public["story_id"], "offset_ms": offset}
+            state.expected_inputs.insert(0, "button_6")
+            if public["resume"]:
+                state.mode = "fixed_story_playing"
+                effects.append({"type": "story_audio_resume", "story_id": public["story_id"],
+                                "checkpoint": state.dialogue_memory.story_checkpoint})
+        effects.extend([{"type": "lighting_dark"}, {"type": "lighting_select_button", "button": 7}])
+        if offset is not None:
+            effects.append({"type": "lighting_select_button", "button": 6})
+        return self._decision(state, effects, "public_story_identity_expired", clear_audio=True)
+
     def _decision(self, state: CanonicalState, effects: list[dict[str, Any]], reason: str, *,
                   reset_session: bool = False, clear_audio: bool = False) -> dict[str, Any]:
+        if state.mode != "story_paused":
+            state.public_story_checkpoint_pending = False
         if state.mode != "game_active":
             state.game_engine_state = None
             state.active_game_id = None
@@ -1227,6 +1252,8 @@ class CanonicalRuntime(SceneMenuMixin):
                dialogue_fallback_authorized: bool = False,
                personal_story_authorized: bool = False,
                identity_event_authorized: bool = False,
+               public_story_expiry: dict | None = None,
+               public_story_checkpoint_authorized: bool = False,
                game_timer_authorized: bool = False,
                interaction_idle_authorized: bool = False,
                private_welcome_ready: bool = False,
@@ -1373,11 +1400,13 @@ class CanonicalRuntime(SceneMenuMixin):
             state.state_version += 1
             return self._decision(state, [{"type": "profile_ready_lighting"}], "profile_ready")
         if self.optional_identity and event.event_type == "ClientProfileCleared":
-            if not state.profile_ref:
+            if not state.profile_ref and not state.active_story_id:
                 return self._decision(state, [], "profile_already_clear")
             self.clear_identity(state)
             state.state_version += 1
             effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}]
+            if public_story_expiry:
+                return self._public_story_after_expiry(state, effects, public_story_expiry)
             if state.mode == "safety_stop":
                 return self._decision(state, effects + [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "profile_cleared_safety_preserved")
             state.mode = "session_closed" if state.handset == "up" else "idle"
@@ -1392,6 +1421,8 @@ class CanonicalRuntime(SceneMenuMixin):
             self.clear_identity(state)
             state.state_version += 1
             effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}]
+            if public_story_expiry:
+                return self._public_story_after_expiry(state, effects, public_story_expiry)
             if state.mode == "safety_stop":
                 return self._decision(state, effects + [{"type": "lighting_preset", "preset": "SAFE_STOP"}], "identity_expired_safety_preserved")
             state.mode = "session_closed" if state.handset == "up" else "idle"
@@ -1610,11 +1641,21 @@ class CanonicalRuntime(SceneMenuMixin):
             return self._decision(state, [{"type": "speak", "phrase_id": phrase_id}],
                                   "dialogue_fallback", clear_audio=True)
         if event.event_type == "StoryPositionUpdated":
+            if state.public_story_checkpoint_pending and not public_story_checkpoint_authorized:
+                return self._decision(state, [], "story_checkpoint_ignored")
             if (state.mode not in {"story_pause_announcement", "story_paused"}
                     or str(event.payload.get("story_id") or "") != str(state.active_story_id or "")):
                 return self._decision(state, [], "story_checkpoint_ignored")
             state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": max(0, int(event.payload.get("offset_ms", 0)))}
+            state.story_checkpoint_confirmed = True
             state.state_version += 1
+            if state.public_story_checkpoint_pending:
+                state.public_story_checkpoint_pending = False
+                state.expected_inputs = ["button_6", "button_7", "handset_down"]
+                if event.payload.get("resume"):
+                    state.mode = "fixed_story_playing"
+                    return self._decision(state, [{"type": "story_audio_resume", "story_id": state.active_story_id,
+                        "checkpoint": state.dialogue_memory.story_checkpoint}], "public_story_checkpoint_resumed")
             return self._decision(state, [], "story_checkpoint_updated")
         if event.event_type in {"AudioCompleted", "AudioFailed"}:
             response_id = str(event.payload.get("response_id") or event.payload.get("content_id") or "")
@@ -2249,6 +2290,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.mode, state.substate = "story_pause_announcement", "story_pause_requested"
                     state.state_version += 1
                     state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": int(event.payload.get("offset_ms", 0))}
+                    state.story_checkpoint_confirmed = False
                     state.expected_inputs = ["audio_completed", "button_7", "handset_down"]
                     return self._decision(state, [
                         {"type": "story_audio_pause", "story_id": state.active_story_id},
@@ -2337,6 +2379,8 @@ class CanonicalRuntime(SceneMenuMixin):
                     brief = {"age_band": state.age_band, "theme": theme, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
                     return self._decision(state, [{"type": "generate_personal_story", "brief": brief}], "personal_story_requested_by_button")
             if state.mode == "story_paused" and button == 6:
+                if state.public_story_checkpoint_pending:
+                    return self._decision(state, [], "public_story_checkpoint_pending")
                 state.mode, state.substate, state.state_version = "story_resume_announcement", "story_resume_requested", state.state_version + 1
                 state.expected_inputs = ["audio_completed", "button_7", "handset_down"]
                 return self._decision(state, [{"type": "lighting_wave_resume"}, {"type": "speak", "phrase_id": "PHRASE_064"}], "story_resume_requested", clear_audio=True)
@@ -2567,6 +2611,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.mode, state.substate = "story_pause_announcement", "story_pause_requested"
                 state.state_version += 1
                 state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": int(event.payload.get("offset_ms", 0))}
+                state.story_checkpoint_confirmed = False
                 return self._decision(state, [{"type": "story_audio_pause", "story_id": state.active_story_id}, {"type": "lighting_wave_pause"}, {"type": "lighting_story_pause_flash"}, {"type": "speak", "phrase_id": "PHRASE_062"}], "story_pause_requested", clear_audio=True)
             if state.mode in {"fixed_story_playing", "story_speech_analysis"} and intent in {"stop", "stop_story", "exit_story"}:
                 state.mode, state.substate = "fixed_story_choice_wave", "story_stop_requested"
@@ -2625,6 +2670,8 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.state_version += 1
                 return self._decision(state, [{"type": "typed_info_request", "kind": "where_now"}], "typed_info_requested")
             if state.mode == "story_paused" and intent in {"continue", "resume", "resume_story"}:
+                if state.public_story_checkpoint_pending:
+                    return self._decision(state, [], "public_story_checkpoint_pending")
                 state.mode, state.substate, state.state_version = "story_resume_announcement", "story_resume_requested", state.state_version + 1
                 return self._decision(state, [{"type": "lighting_wave_resume"}, {"type": "speak", "phrase_id": "PHRASE_064"}], "story_resume_requested", clear_audio=True)
             if state.mode == "story_paused" and intent in {"stop", "free_speech"}:
