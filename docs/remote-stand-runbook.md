@@ -319,6 +319,33 @@ backups and manifest are under
 Actual repeated-generation, full PCM, pause/resume and active-exit acceptance
 on PID 15780 is pending; drafting character counts do not establish seconds.
 
+The PID 15780 browser run exposed an overly strict drafting guard: both draft
+outputs measured 1,045 Russian-word characters, below the 1,120-character
+target, and were rejected before semantic validation or TTS. Equal lengths do
+not establish equal text. The target had incorrectly become a hard floor.
+The reviewed correction separates a lower drafting floor (630/840/1260 by age
+group) from the unchanged desired target (805/1120/1680). The actual two-request
+HTTP regression confirms that the revision includes the original system
+message and measured feedback, with strict schema and context options intact.
+The 794-character/779-normalized regression still requires revision; sufficient
+text with 57.4375 seconds of PCM still fails. All 18 final targeted cases and
+Chief's independent 18-case run passed.
+
+One native synthetic anonymous 4–5/dinosaurs request on this exact correction
+passed whole semantic validation and all 17 real Silero chunks: 3,453,000
+samples at 48,000 Hz, or 71.9375 seconds, completed in 20.962 seconds within the
+unchanged 60-second request deadline. It used one generation, no revision,
+and a 1,006-character body with at most 16 words per sentence. Cleanup passed.
+This is native software evidence, not a browser or physical-hearing pass.
+The correction is now live as PID 16069, readiness `READY`, one resident model,
+with exact `personal_story.py` SHA-256
+`229c12f3bc82d76a3fe439034c05b93f660dc18649e0532bbe4174eaba569384`.
+Manifest, backups, deployment metadata and the native result are under
+`/workspace/mishka-artifacts/story-volume-floor-20261118`.
+Real browser cancel/reentry, PCM pause/resume and active exit on this version
+remain pending. Other ages have not gained actual duration evidence from this
+single native control.
+
 On PID 10134, actual support and wellbeing paths passed, including local support
 recording, declined assistance, and requested adult help. After an injected input
 fault, reconnect alone did not clear the safety latch; a full handset placement

@@ -34,6 +34,56 @@ def wire(parts,band='4-5'):
 
 
 @pytest.mark.asyncio
+async def test_balanced_1045_character_draft_reaches_measured_pcm_without_repair():
+    parts=[' '.join(part[:count]) for part,count in zip(PLOT_SENTENCES,(6,6,6,4))]
+    parts[0]=parts[0].replace('нашёл семечко','нашёл жёлтое семечко')
+    text=' '.join(parts)
+    assert len(' '.join(re.findall(r'[а-яё]+',text,re.I)))==1045
+    e=engine('4-5',duration=75,text=text);calls=[]
+    async def generate(*args):calls.append(True);yield wire(parts)
+    e.llm.stream_story=generate
+    audio=await PersonalStoryService(e).render('лес','4-5',(),1,lambda:True)
+    assert audio and audio.duration_ms==75000 and len(calls)==1
+    assert ' '.join(e.tts.calls)==text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('expanded',[False,True])
+async def test_actual_ollama_http_transmits_measured_repair_feedback_without_replacing_messages(monkeypatch,expanded):
+    import httpx
+    from app.foundation.s2s import OllamaLLMProvider
+    from test_story_backend_context import URL,MODEL,contract
+    sent=[];client=httpx.AsyncClient
+    class Body(httpx.AsyncByteStream):
+        def __init__(self,raw):self.raw=raw
+        async def __aiter__(self):yield self.raw
+    def reply(request):
+        sent.append(json.loads(request.content))
+        parts=[' '.join(part[:7]) for part in PLOT_SENTENCES] if expanded and len(sent)==2 else SHORT_PLOT
+        raw='\n'.join(map(json.dumps,[{'message':{'content':wire(parts)}},
+                                    {'done':True,'done_reason':'stop'}])).encode()
+        return httpx.Response(200,stream=Body(raw))
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:client(transport=httpx.MockTransport(reply),**kw))
+    c=await contract();e=engine('4-5')
+    e.llm=OllamaLLMProvider(URL,MODEL,1,num_ctx=16384,story_backend_contract=c)
+    audio=await PersonalStoryService(e).render('лес','4-5',(),1,lambda:True)
+    assert (audio is not None) is expanded
+    assert len(sent)==2 and len(sent[0]['messages'])==1 and len(sent[1]['messages'])==2
+    assert sent[0]['messages'][0]==sent[1]['messages'][0]
+    message=sent[1]['messages'][-1]
+    assert message['role']=='user'
+    feedback=json.loads(message['content'])
+    assert feedback['draft']==json.loads(wire(SHORT_PLOT)) and 'text' not in feedback['draft']
+    assert feedback['required_minimum']==840 and feedback['desired_volume']==[1120,1260]
+    assert feedback['measured_russian_characters']<840
+    assert isinstance(feedback['revision_request'],str) and 0<len(feedback['revision_request'])<500
+    assert all(item['shift'] is False and item['truncate'] is False
+               and item['options']['num_ctx']==16384 and item['format']==e.llm.STORY_RESPONSE_SCHEMA for item in sent)
+    assert c.ready(URL,MODEL)
+    assert bool(e.tts.calls) is expanded
+
+
+@pytest.mark.asyncio
 async def test_short_794_character_draft_gets_one_measured_repair_before_any_semantic_or_tts():
     text=' '.join(SHORT_PLOT)
     assert len(text)==794 and len(re.findall(r'[.!?]+',text))==13
@@ -78,9 +128,9 @@ async def test_one_repair_keeps_age_and_develops_all_four_parts(band):
         if len(messages_seen)==1:yield wire(short,band)
         else:
             feedback=json.loads(messages[-1]['content'])
-            minimum=7*sum(DURATION_BOUNDS[band])
+            minimum=14*DURATION_BOUNDS[band][0];target=7*sum(DURATION_BOUNDS[band])
             assert feedback['measured_russian_characters']<feedback['required_minimum']==minimum
-            assert feedback['desired_volume']==[minimum,minimum+minimum//8]
+            assert feedback['desired_volume']==[target,target+target//8]
             assert feedback['draft']['age_band']==band and 'text' not in feedback['draft']
             assert set(feedback['draft']['plot'])=={'setting','problem','attempt','resolution'}
             async for value in original(messages,request_id,cancelled):yield value
