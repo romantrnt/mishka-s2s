@@ -9,13 +9,138 @@ Optional trained voices require separate, explicitly selected runtimes and
 are unavailable in this deployment.
 
 Current live checkpoint (2026-11-18): pod `fihihgl91rnwu4`, application PID
-`16858`, runtime source checkpoint `9fe4f90` on
+`18180`, runtime source commit `7f15b5dfb555c534be46826fb2c15c74f52e01c8` on
 `codex/remote-device-simulator`. Open
 `https://fihihgl91rnwu4-8000.proxy.runpod.net/console` and use the protected
-credentials described below. Real browser cancellation, all three story ages,
-pause/resume, visible lighting, active exit, mixed continuation and client
-fault/retry passed. Physical hearing and Roman's personal file access remain
-unobserved. Earlier PIDs below are historical evidence.
+credentials described below. The reviewed Stage 1 candidate is ready; actual
+browser acceptance of its new paths is in progress. Earlier browser passes
+below are source-bound baseline evidence. Physical hearing and Roman's
+personal file access remain unobserved. Earlier PIDs are historical evidence.
+
+## Stage 1 product integrity — 2026-11-18
+
+The application-only rollout retained the existing environment, model assets,
+private state, original story WAV files, Max fixture and story-backend receipt.
+The pod and loopback Ollama server were not restarted. Both model context
+settings remain `16384`; the current voice is Silero without voice conversion.
+All 16 runtime files matched the final reviewed manifest. Authenticated HTTP
+served `console.js` SHA-256
+`50615a1b80a65074a0afa3f43b118442871562dfe02ea5cd330ace773d23d7e7`.
+Readiness returned `READY`; the initial handset was down with no browser owner.
+Prior files, the manifest and rollout/readiness receipts are retained under
+`/workspace/mishka-artifacts/product-integrity-20261118-v4/`. Its three-file
+follow-up builds on the reviewed v3 deployment; v4 retains a complete 16-file
+manifest. Earlier v1/v2 archives were superseded during review and were never
+executed.
+
+Implemented and independently reviewed:
+
+- Actual allowlisted model game proposals use an owned, spoken confirmation.
+  A game called from conversation preserves its caller and returns there;
+  root-launched games return to the menu. Early/stale consent cannot start a
+  game. Control proposals do not consume a spoken dialogue turn or reset its
+  existing budget. The saved conversation's technical clock pauses during the
+  nested game; its previously spent time, turns and history are retained.
+  Engagement inactivity and Max authorization expiry remain independent. A
+  150-second game test verified this pause without resetting the caller budget.
+  The word game uses the actual bounded, age-scoped S2S path.
+- Quiz answer 7 scores on short release; hold it five seconds and release to
+  exit, including during instructions. Other games keep their back controls.
+  Word-game instructions explain the finite party and age-specific rules.
+  Bounded reminders preserve the 120-second engagement rule and separate Max
+  expiry. System speech does not renew user activity.
+- Admitted game speech cannot be invalidated by a reminder while mandatory
+  safety classification is pending. Cancellation/failure restores the original
+  deadline; old checks cannot hush a new run. Sequence and hold mechanics keep
+  their own wakeups, including a hold deadline after an earlier pending hint.
+- OFF digits/emblems are dim gray, with independent ON rendering using the
+  existing 18 channels. Atomic snapshot capture, ordered revisions and a service
+  instance identifier prevent delayed HTTP from undoing newer WS lighting and
+  preserve explicit reload after a service restart.
+- Root-3 ordinary speech now reaches bounded dialogue; day-menu speech reaches
+  the existing typed capability checks, with truthful provider unavailability.
+  Back cancels its queued audio. Narrow verified wellbeing reassurances retain
+  semantic escalation. Personal-story references cannot steal button 7 from a
+  later help question or root menu; genuine story pause/back/resume and public
+  checkpoints are retained.
+- Current descriptor selections, Next and Back act on the same fresh press
+  during menu narration/repeat; held keys and stale mappings remain fenced.
+  Existing day/theme voice requests can dismiss the repeat question without
+  losing their action. Complete positive consent compounds are accepted only
+  for the current ready offer; explicit adult-help requests retain priority.
+- Eleven internal follow-up builders share original-event identity and their
+  own source ordering. Missing original correlation and a switch between
+  independently numbered input sources cannot turn a new reply into a false
+  duplicate/stale event. Actual original replays remain inert.
+
+Local checks and their limits:
+
+- Focused source, ownership, cancellation, safety and caller tests passed in
+  several overlapping batches; counts are not additive. The final timer delta
+  passed 26 cases. The story/help batch passed 65 cases, with 27 related public
+  checkpoint/expiry cases. Nine affected Node suites, canonical verification,
+  syntax checks and final diff checks passed.
+- The final three-file follow-up passed 215 linked cases on its exact frozen
+  sources, including actual Stand ingress with empty correlation, four turns
+  and natural completion, source-order changes, repeated offers/fallbacks,
+  original replay, menu phases, both help-priority contexts, personal stories,
+  onboarding and PCM ownership. Canonical verification, syntax and diff checks
+  passed; Chief independently reviewed the final hashes and replayed the REDs.
+- Chief independently reproduced the defects and reviewed the final hashes.
+  The final crossing-deadline case passed without changing original wait
+  deadlines. An actual local Chromium matrix passed 64 indicator combinations
+  across flat/WebGL and desktop/390px, including rapid update and reset. This
+  establishes local rendering, not physical-board brightness.
+- An expanded legacy timer run initially returned **34 passed / 9 failed**.
+  All failed IDs were classified: four shared a missing legacy hold timer,
+  four shared an obsolete extra menu skip, and one used a separate obsolete
+  full-entry press sequence. Representative failures from all three causes
+  were reproduced on the preceding source. A test-only correction now uses an
+  explicit real legacy engine state and the actual current public chooser.
+  The two affected modules passed **17 cases**, reaching the original strict
+  HID, owned lease, timing, scoring, demonstration and hangup checks. PM reviewed
+  their diff independently; no runtime file or public game route was changed.
+
+Current hosted acceptance is owned by Chief against PID `18180`: actual model
+proposal/confirmation/game/caller, scoped word turns and natural PCM drain,
+short/held exit, interruptions, repaired root/day/help paths and a clean next
+visit. Readiness, mocks and local rendering do not establish those results.
+Physical microphone/hearing, physical RFID/board, positive external schedule or
+weather data and clinical suitability remain outside the software proof.
+
+On PID `18180`, a continuous synthetic-WAV request → actual Whisper → native
+quiz proposal → typed “Да, давай” → real quiz → button 7 → preserved caller
+passed. This does not establish spoken consent: two affirmation WAVs produced
+a retry or ordinary dialogue rather than starting the game, and their actual
+recognition has not been established. A separate word WAV crossed the reminder
+boundary during VAD/STT and returned `stale_session_generation`; a local
+barrier reproduction is in progress. Neither that hypothesis nor a later
+synthetic utterance reaching help is classified as a confirmed cause without
+the relevant recognition/ownership evidence. Multiple word turns and natural
+completion remain open. Server result timestamps describe completion, not
+request admission; they alone do not establish a second live client.
+
+The first hosted Stage 1 pass on PID `17636` established ordinary native
+dialogue/Silero drain, root-3 useful speech, verified pain/fear reassurance,
+typed game proposal → button confirmation → manual exit → caller → next answer,
+and a real personal story → pause → help → button-7 confirmation → owned
+PHRASE_091 with natural drain. That story contained 66,237 ms of PCM; its pause
+checkpoint was 45,845 ms. Hangup left all 18 channels dark, no pressed keys,
+capture off and no browser errors. Evidence is retained in ignored
+`runtime/local-integration-20261117/runpod-stage1-story-help-17636.json` and the
+older/recovery/young Stage 1 artifacts for the same PID.
+
+That first pass also found real defects: the repeat-menu gate swallowed a valid date
+request and the first Back press; compound consent such as “Да, давай” cleared
+an offer; absent original correlation and inherited external sequence numbers
+made later internal replies duplicate/stale. Actual Stand parsing uses an empty
+correlation string. The local transport regression reproduced the second-word
+failure on the exact preceding source. These findings keep integrated
+acceptance open until the deployed follow-up is replayed against PID `18180`.
+Synthetic-WAV request → offer and the separate typed full game chain are not
+combined into one continuous voice-path pass. A 5.2-second gesture on a quiz
+question without answer 7 established ordinary button exit, not the long-hold
+threshold; hosted answer-7/threshold acceptance remains separate.
 
 ## Runtime and server boundary
 

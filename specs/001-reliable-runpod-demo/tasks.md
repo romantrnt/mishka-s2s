@@ -54,6 +54,29 @@ Decisions are grounded in current code, not the illustrative 10-question,
 all activities, data and access controls. Do not stop the pod or delete branches.
 Real microphone/hearing and physical board behavior remain distinct evidence.
 
+Reviewed source `7f15b5dfb555c534be46826fb2c15c74f52e01c8` is deployed as
+application PID `18180`. The guarded rollout verified all 16 runtime hashes,
+readiness and served client `50615a1b…`; it retained the environment, private
+assets and running pod/Ollama. Chief owns the active actual-provider/browser
+acceptance. T031–T035 have implementation, focused local checks and independent
+review; their integrated hosted results and T036 remain open until recorded in
+the [runbook](../../docs/remote-stand-runbook.md). Earlier passes below are not
+relabelled as evidence for these new paths.
+
+The initial hosted pass found repeat-menu interception, incomplete compound
+consent and internal-event identity/order defects. The follow-up corrects the
+shared causes, including existing theme requests and adult-help priority;
+215 linked cases and independent final-source review passed. Chief replays the
+affected native paths against PID `18180`; the initial first-turn success does
+not establish multiple turns, and ordinary exit is separate from answer-7/hold
+threshold acceptance.
+
+The continuous PID `18180` WAV request → Whisper → quiz proposal → typed
+compound consent → real quiz → manual exit → caller passed. Spoken consent,
+multiple word turns/natural finish and actual answer-7/hold remain open. A word
+audio/reminder boundary is being reproduced before any further runtime change;
+the existing semantic-classification barrier test does not cover VAD/STT.
+
 ## Previous observed outcomes — 2026-11-18
 
 Candidate: application PID `16858`, source `9fe4f90`, branch
