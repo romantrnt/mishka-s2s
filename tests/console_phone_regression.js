@@ -367,6 +367,10 @@ async function onboardingGuidance(){
  context.render(menu);assertHint('1 — Огоньки; 5 — Игра в слова; 7 — назад.');
  assert.doesNotMatch(fields['guide-text'].textContent,/5 — помощь/);
  show('wellbeing_check');assertHint('Ответь на вопрос Мишки: 1 — нет; 7 — да, нужна помощь; 5 — повторить вопрос.');
+ show('personal_story_generating');assertHint('Мишка сочиняет и проверяет сказку. Подожди немного. 7 — выйти, если ждать не хочется.');
+ show('personal_story_playing');assertHint('Слушай сказку. 6 — пауза; 7 — выйти из сказки.');
+ const pendingStory=show('story_paused');pendingStory.canonical_state={personal_story_checkpoint_pending:true};context.render(pendingStory);
+ assertHint('Сохраняем место в сказке. Подожди немного. Если продолжить не получилось, нажми 7 и выбери новую сказку.');
  show('safety_stop');assertHint('Позови взрослого рядом. Положи трубку, чтобы завершить разговор.');
  const dialogueOff='Включи микрофон и поговори с Мишкой. Можно написать в «Инструментах».';
  const dialoguePending='Разреши микрофон в окне браузера. Или напиши Мишке в «Инструментах».';

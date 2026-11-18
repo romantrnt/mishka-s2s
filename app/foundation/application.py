@@ -1243,7 +1243,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        _interaction_nonce: str | None = None,
                                        _game_timer_scope: tuple | None = None,
                                        identity_profile: dict[str, Any] | None = None,
-                                       _speech_ingress_guard=None, _speech_lifecycle_guard=None) -> dict[str, Any]:
+                                       _speech_ingress_guard=None, _speech_lifecycle_guard=None,
+                                       _story_checkpoint_guard=None) -> dict[str, Any]:
         if event.event_type == "InteractionIdleExpired" and not interaction_idle_authorized:
             return self._identity_result(event.session_id, "interaction_idle_untrusted")
         speech_work = event.event_type == "SpeechReceived"
@@ -1268,6 +1269,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 identity_profile=identity_profile,
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
+                _story_checkpoint_guard=_story_checkpoint_guard,
                 _safety_guidance=safety_guidance,
             )
         except (asyncio.CancelledError, Exception) as exc:
@@ -1300,6 +1302,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              _game_timer_scope: tuple | None = None,
                                              identity_profile: dict[str, Any] | None = None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
+                                             _story_checkpoint_guard=None,
                                              _safety_guidance: dict) -> dict[str, Any]:
         """Bridge canonical decisions to application-owned effects.
 
@@ -1436,6 +1439,24 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             personal_story_authorized = bool(personal_story_authorized and owner and owner.audio is not None
                 and event.payload.get("request_id") == owner.request_id
                 and self._personal_story_scope(event.session_id, owner))
+        if (event.event_type == "StoryPositionUpdated" and event.source == "browser_audio_checkpoint"
+                and payload.get("story_id") == STORY_ID):
+            owner = self._personal_stories.get(event.session_id)
+            paused = self._paused_story_playback.get(event.session_id)
+            if (_story_checkpoint_guard is None or not _story_checkpoint_guard()
+                    or not self._personal_story_scope(event.session_id, owner, checkpoint=True)
+                    or owner.checkpoint_ms != payload.get("offset_ms") or not paused
+                    or any(paused.get(key) != payload.get(key) for key in
+                           ("generation", "token", "playback_id", "playback_lease"))):
+                return self._identity_result(event.session_id, "stale_story_checkpoint")
+        if (current is not None and current.mode == "story_paused" and current.active_story_id == STORY_ID
+                and self._paused_story_playback.get(event.session_id, {}).get("browser_checkpoint_pending")
+                and ((event.event_type == "ButtonPressed" and payload.get("button_id") == 6)
+                     or (event.event_type == "SpeechReceived" and payload.get("intent") in {"continue", "resume", "resume_story"}))):
+            owner = self._personal_stories.get(event.session_id)
+            if (not self._personal_story_scope(event.session_id, owner, checkpoint=True)
+                    or owner.checkpoint_ms is None or not current.story_checkpoint_confirmed):
+                return self._identity_result(event.session_id, "personal_story_checkpoint_pending")
         if (current is not None and current.mode == "personal_story_theme" and current.scene_menu_phase != "repeat_listen" and transient_text
                 and payload.get("safety_severity") == "none" and personal_welcome_answer_verified):
             payload["intent"] = story_theme(transient_text) or "unsupported_story_theme"
@@ -1830,6 +1851,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     if (paused_owner is not None
                             and paused_owner.get("content_id") == effect.get("story_id")):
                         self._paused_story_playback[event.session_id] = dict(paused_owner)
+                        if getattr(self.audio, "browser_story_checkpoints", False):
+                            self._paused_story_playback[event.session_id]["browser_checkpoint_pending"] = True
                     outcome = pause()
                     if inspect.isawaitable(outcome):
                         outcome = await outcome
@@ -2536,7 +2559,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 "pipeline": ["ingress", "normalize_event", "session_guard", "safety_precheck", "route_mode", "policy_validate", "emit_effects", "persist_snapshot", "await_event"],
                 "guards": decision.get("guards", {})}
         """Start an anonymous visual session from a pre-auth physical button."""
-    async def receive_async(self, event: Event, transient_text: str | None = None) -> dict[str, Any]:
+    async def receive_async(self, event: Event, transient_text: str | None = None, *,
+                            _story_checkpoint_guard=None) -> dict[str, Any]:
         """Ingress for the single canonical runtime and LangGraph boundary."""
         from .domain import EVENT_TYPES
         if event.event_type not in EVENT_TYPES:
@@ -2637,7 +2661,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     "node": None, "reason": "handset_already_placed",
                     "outputs": [], "canonical_state": {"mode": "idle", "handset": "down"},
                     "correlation_id": event.correlation_id}
-        result = await self._receive_canonical_event(event, transient_text)
+        result = await self._receive_canonical_event(event, transient_text,
+            _story_checkpoint_guard=_story_checkpoint_guard)
         if result.get("reason") == "stale_session_generation":
             return result
         if event.event_type in {"AudioCompleted", "AudioFailed"}:

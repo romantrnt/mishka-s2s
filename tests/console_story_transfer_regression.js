@@ -20,7 +20,7 @@ const context = vm.createContext({console, AbortController, Map, Set, Date: {now
   clearTimeout: id => timers.delete(id), current: null, suppressPhoneAudio: false, audioReconnectPending: false,
   authBlocked: false, wsSnapshotReady: true, wsReloadRequired: false, mic: null, micStarting: false,
   audioRetry: null, firstSnapshotRendered: false, lastSpokenCommand: 0, lastResultCount: 0,
-  audioReady: true, audioContext, activeSources: new Set(), activeStoryPlayback: null, publicStoryBuffer: null,
+  audioReady: true, audioContext, activeSources: new Set(), activeStoryPlayback: null, publicStoryBuffer: null, personalStoryPlayback: null, personalStoryReceiptTimer: null,
   stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null, storySpeechGeneration: 0,
   audioGeneration: 0, minimumPCMGeneration: 0, pendingPCM: [], nextAudioTime: 0,
   audioQueueTail: Promise.resolve(), micInputGain: 1, postQueue: [], activePost: null,

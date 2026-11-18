@@ -34,6 +34,8 @@ let lastResultCount = 0;
 let storySpeechGeneration = 0;
 let activeStoryPlayback = null;
 let publicStoryBuffer = null;
+let personalStoryPlayback = null;
+let personalStoryReceiptTimer = null;
 let stoppedStoryCheckpoint = null;
 let stoppedStoryCheckpointTimer = null;
 let mic = null;
@@ -1225,6 +1227,7 @@ function handleAudioStop(message) {
   // must not cancel a newer phrase started from that same snapshot.
   const sequence = message.command_sequence;
   if (Number.isSafeInteger(sequence) && sequence > 0 && sequence <= lastSpokenCommand) return;
+  freezePersonalStoryPosition();
   freezeStoryCheckpoint();
   checkpointPublicStoryTransfer(message.checkpoint_request);
   minimumPCMGeneration = Math.max(minimumPCMGeneration, Number(message.generation) || 0);
@@ -1267,6 +1270,23 @@ function checkpointPublicStoryTransfer(request) {
   // Consume locally before stop/onended, including duplicate wire commands.
   discardStoppedStoryCheckpoint();
   post('/stand/audio/checkpoint', {...request, offset_ms: checkpoint.offset_ms}).catch(() => {});
+}
+
+function discardPersonalStoryPlayback() {
+  if (personalStoryReceiptTimer !== null) window.clearTimeout(personalStoryReceiptTimer);
+  personalStoryReceiptTimer = null;
+  personalStoryPlayback = null;
+}
+
+function freezePersonalStoryPosition() {
+  const playback = personalStoryPlayback;
+  if (!playback || playback.paused || !audioContext) return;
+  let played = playback.played;
+  for (const segment of playback.segments) played += Math.min(segment.duration, Math.max(0, audioContext.currentTime - segment.start));
+  playback.offsetMs = Math.min(playback.durationMs, playback.offsetMs + Math.floor(played * 1000));
+  playback.paused = true;
+  playback.revoked.add(playback.identity.playback_lease);
+  playback.segments.clear();
 }
 
 function audioIdentity(command) {
@@ -1376,6 +1396,19 @@ async function playStoryAsset(command, generation) {
 }
 
 function pauseStoryAsset() {
+  const personal = personalStoryPlayback;
+  if (personal) {
+    if (personal.expires !== undefined && Date.now() >= personal.expires) { discardPersonalStoryPlayback(); return; }
+    if (personal.checkpointSent) return;
+    freezePersonalStoryPosition();
+    audioGeneration += 1; pendingPCM.length = 0; audioQueueTail = Promise.resolve();
+    for (const source of activeSources) { try { source.stop(); } catch (_) {} }
+    activeSources.clear(); nextAudioTime = audioContext ? audioContext.currentTime : 0;
+    personal.checkpointSent = true;
+    post('/stand/audio/checkpoint', {...personal.identity, story_id: 'PERSONAL_STORY', offset_ms: personal.offsetMs}).catch(() => {});
+    $('audio-state').textContent = 'AUDIO: STORY PAUSED';
+    return;
+  }
   const playback = activeStoryPlayback;
   if (!playback || playback.paused || !audioContext || playback.generation !== storySpeechGeneration) return;
   playback.offset = Math.min(playback.buffer.duration, playback.offset + Math.max(0, audioContext.currentTime - playback.startedAt));
@@ -1399,6 +1432,8 @@ function resumeStoryAsset() {
 function speakCommands(state) {
   if (state.session && (!state.session.handset_up || !['fixed_story_playing', 'story_paused',
       'story_pause_announcement', 'story_resume_announcement'].includes(state.session.node))) publicStoryBuffer = null;
+  if (state.session && (!state.session.handset_up || !['personal_story_playing', 'story_paused',
+      'story_pause_announcement', 'story_resume_announcement'].includes(state.session.node))) discardPersonalStoryPlayback();
   for (const command of state.commands) {
     if (command.sequence <= lastSpokenCommand) continue;
     if (state.simulator && suppressPhoneAudio && command.type === 'audio_play') {
@@ -1457,6 +1492,9 @@ function speakCommands(state) {
 }
 
 function interactionGuide(state, media) {
+  if (state?.canonical_state?.personal_story_checkpoint_pending) {
+    return ['Сказка на паузе', 'Сохраняем место в сказке. Подожди немного. Если продолжить не получилось, нажми 7 и выбери новую сказку.'];
+  }
   if (state?.canonical_state?.public_story_checkpoint_pending) {
     return ['Сказка приостановлена', 'Восстанавливаем место в сказке. Если она не продолжилась, нажми 7 и выбери сказку заново.'];
   }
@@ -1521,6 +1559,8 @@ function interactionGuide(state, media) {
     exhibition_age_complete: ['Знакомство', 'Мишка завершает знакомство. Подожди немного.'],
     exhibition_onboarding_complete: ['Знакомство завершено', 'Сейчас появится меню. Подожди немного.'],
     fixed_story_playing: ['Сказка', 'Слушай сказку. 6 — пауза; 7 — выйти из сказки.'],
+    personal_story_generating: ['Новая сказка', 'Мишка сочиняет и проверяет сказку. Подожди немного. 7 — выйти, если ждать не хочется.'],
+    personal_story_playing: ['Новая сказка', 'Слушай сказку. 6 — пауза; 7 — выйти из сказки.'],
     story_pause_announcement: ['Сказка на паузе', 'Дослушай Мишку. Затем можно будет продолжить сказку.'],
     story_paused: ['Сказка на паузе', '6 — продолжить сказку; 7 — выйти из сказки.'],
     story_resume_announcement: ['Сказка', 'Дослушай Мишку. Сказка скоро продолжится.'],
@@ -1619,6 +1659,25 @@ async function playPCM(message, generation = audioGeneration) {
       return;
     }
     if (generation !== audioGeneration) return;
+    let personal = null;
+    if (identity?.response_id === 'PERSONAL_STORY') {
+      if (current?.session.node !== 'personal_story_playing' || !current.session.handset_up
+          || message.generation < minimumPCMGeneration) return;
+      const offsetMs = message.story_offset_ms, durationMs = message.story_duration_ms;
+      if (!Number.isSafeInteger(offsetMs) || !Number.isSafeInteger(durationMs)
+          || offsetMs < 0 || offsetMs > durationMs || durationMs <= 0 || durationMs > 300000) throw new Error('Private story position is invalid');
+      const previous = personalStoryPlayback;
+      const same = previous && Object.keys(identity).every(key => previous.identity[key] === identity[key]);
+      if (same) {
+        if (previous.paused || message.first || previous.initialOffsetMs !== offsetMs || previous.durationMs !== durationMs) return;
+      } else {
+        if (!message.first || (previous && (!previous.paused || previous.revoked.has(identity.playback_lease)))) return;
+        discardPersonalStoryPlayback();
+        personalStoryPlayback = {identity, offsetMs, initialOffsetMs: offsetMs, durationMs,
+          paused: false, checkpointSent: false, played: 0, segments: new Set(), revoked: previous?.revoked || new Set()};
+      }
+      personal = personalStoryPlayback;
+    }
     const raw = Uint8Array.from(atob(message.data_b64), character => character.charCodeAt(0));
     const encoding = String(message.encoding || "s16le").toLowerCase();
     const isFloat32 = encoding === "f32le";
@@ -1638,18 +1697,33 @@ async function playPCM(message, generation = audioGeneration) {
     source.connect(context.destination);
     activeSources.add(source);
     let ended = false;
+    let segment;
     source.onended = () => {
       activeSources.delete(source);
       if (ended || generation !== audioGeneration) return;
+      if (personal && (personal.paused || personalStoryPlayback !== personal)) return;
       ended = true;
+      if (personal && segment) { personal.segments.delete(segment); personal.played += segment.duration; }
       if (!activeSources.size) $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
       if (identity && message.final === true) {
+        if (personal) {
+          personal.segments.clear(); personal.revoked.add(identity.playback_lease);
+          // A server-admitted pause can arrive after the final chunk ended.
+          // Retain only its position receipt until canonical cleanup, never PCM/source authority.
+          personalStoryPlayback = {identity, offsetMs: personal.durationMs, durationMs: personal.durationMs,
+            paused: true, checkpointSent: false, segments: new Set(), revoked: personal.revoked, expires: Date.now() + 5000};
+          const receipt = personalStoryPlayback;
+          personalStoryReceiptTimer = window.setTimeout(() => {
+            if (personalStoryPlayback === receipt) discardPersonalStoryPlayback();
+          }, 5000);
+        }
         post('/stand/audio/lifecycle', {...identity, status: 'finished'}).catch(() => {});
         post('/stand/audio/completed', identity).catch(() => {});
       }
     };
     nextAudioTime = Math.max(context.currentTime, nextAudioTime);
     source.start(nextAudioTime);
+    if (personal) { segment = {start: nextAudioTime, duration: buffer.duration}; personal.segments.add(segment); }
     nextAudioTime += buffer.duration;
     if (identity && message.first === true) {
       post('/stand/audio/lifecycle', {...identity, status: 'playing'}).catch(() => {});
@@ -1752,6 +1826,8 @@ const resetButton = $('reset');
 if (resetButton) resetButton.onclick = () => { clearMic(); return post('/stand/reset'); };
 function interruptAudioForInput({preserveStoryCheckpoint = false} = {}) {
   if (!preserveStoryCheckpoint) { discardStoppedStoryCheckpoint(); publicStoryBuffer = null; }
+  if (preserveStoryCheckpoint) freezePersonalStoryPosition();
+  else discardPersonalStoryPlayback();
   micInputGain = 1;
   audioGeneration += 1;
   storySpeechGeneration += 1;

@@ -24,7 +24,7 @@ function harness() {
     audioQueueTail: Promise.resolve(), audioGeneration: 0, storySpeechGeneration: 0,
     pendingPCM: [], audioContext, nextAudioTime: 0, activeSources: new Set(),
     stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null, window: {clearTimeout() {},setTimeout() {}},
-    activeStoryPlayback: null, publicStoryBuffer: null, audioReady: true, micInputGain: 1,
+    activeStoryPlayback: null, publicStoryBuffer: null, personalStoryPlayback: null, personalStoryReceiptTimer: null, audioReady: true, micInputGain: 1,
     minimumPCMGeneration: 0, lastSpokenCommand: 0,
     unlockAudio: async () => { if (permission) await permission; return audioContext; },
     atob: value => Buffer.from(value, 'base64').toString('binary'),

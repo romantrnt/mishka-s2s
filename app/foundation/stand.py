@@ -652,6 +652,7 @@ class UARTAudioOutput:
 
 class BrowserUARTAudioOutput(UARTAudioOutput):
     """Keep public UART assets, with a separate lease-bound private PCM port."""
+    browser_story_checkpoints = True
 
     def __init__(self, adapter, available, play_pcm, *, owned_render_timeout_s=8.,
                  owned_voice_timeout_s=1.5):
@@ -1330,10 +1331,11 @@ class HardwareIntegrationStand:
             raise RuntimeError("private_pcm_invalid_owner")
         state = self.application.canonical_runtime.sessions.get(handle.session_id)
         identity_binding = (state.profile_ref, state.identity_request_id) if state is not None else None
+        story_owner = self.application._personal_stories.get(handle.session_id) if handle.response_id == "PERSONAL_STORY" else None
         # The pending welcome must survive draining its preceding ring-stop
         # UART command. It joins cancellable output tasks after that drain.
         self._schedule_notification(
-            self._play_browser_pcm_audio(handle, audio, saved[1], identity_binding),
+            self._play_browser_pcm_audio(handle, audio, saved[1], identity_binding, story_owner),
             operation="browser_private_pcm", session_id=handle.session_id)
 
     def _browser_pcm_callback_current(self, payload) -> bool:
@@ -1343,18 +1345,20 @@ class HardwareIntegrationStand:
         saved = self._browser_pcm_playback
         if saved is None:
             return False
-        handle, binding, identity_binding = saved
+        handle, binding, identity_binding, story_owner = saved
         identity = {"session_id": handle.session_id, "response_id": handle.response_id,
                     "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
                     "generation": handle.generation, "token": handle.token}
         return bool(all(payload.get(key) == value for key, value in identity.items())
                     and self.hub.owner_binding_current(binding)
+                    and (handle.response_id != "PERSONAL_STORY" or self.application._personal_stories.get(handle.session_id) is story_owner)
                     and self._pcm_owner_current(handle, identity_binding))
 
-    async def _play_browser_pcm_audio(self, handle, audio, binding, identity_binding):
+    async def _play_browser_pcm_audio(self, handle, audio, binding, identity_binding, story_owner=None):
         task = asyncio.current_task()
         def current():
             return bool(not self._closed and self.hub.owner_binding_current(binding)
+                        and (handle.response_id != "PERSONAL_STORY" or self.application._personal_stories.get(handle.session_id) is story_owner)
                         and self._pcm_owner_current(handle, identity_binding))
         try:
             if not current():
@@ -1371,12 +1375,15 @@ class HardwareIntegrationStand:
             if not current():
                 return
             self._response_audio_tasks.add(task)
-            self._browser_pcm_playback = (handle, binding, identity_binding)
+            self._browser_pcm_playback = (handle, binding, identity_binding, story_owner)
             self.playback.active_token = handle.token
             transport_generation = self.playback._generation
             playback = {"session_id": handle.session_id, "response_id": handle.response_id,
                         "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
                         "generation": handle.generation, "token": handle.token}
+            story_position = ({"story_offset_ms": story_owner.offset_ms,
+                "story_duration_ms": int(1000 * len(story_owner.audio.samples) / story_owner.audio.sample_rate)}
+                if story_owner is not None else {})
             # The owner consumes preceding UART stops before accepting PCM.
             if not await self.hub.send_private(
                     {"type": "stand_state", "state": self.panel_snapshot()}, binding, current):
@@ -1391,6 +1398,7 @@ class HardwareIntegrationStand:
                     "sample_rate": audio.sample_rate, "token": handle.token,
                     "session_id": handle.session_id, "generation": transport_generation,
                     "first": offset == 0, "final": offset + len(values) == len(audio.samples),
+                    **story_position,
                     "data_b64": base64.b64encode(pcm).decode("ascii"),
                 }, binding, current):
                     return
@@ -3214,6 +3222,9 @@ class HardwareIntegrationStand:
             "menu_tutorial_step", "active_effect", "lighting_effect",
             "public_story_checkpoint_pending",
         ) if key in canonical}
+        if (canonical.get("active_story_id") == "PERSONAL_STORY"
+                and canonical.get("mode") in {"story_pause_announcement", "story_paused"}):
+            canonical_safe["personal_story_checkpoint_pending"] = not canonical.get("story_checkpoint_confirmed", False)
         menu = self._panel_scene_menu(canonical)
         if menu is not None:
             canonical_safe["scene_menu_descriptor"] = menu
@@ -3665,14 +3676,53 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                 or offset_ms < 0):
             return {"reason": "stale_story_checkpoint"}
         verified = app.canonical_runtime.stories.get_verified(story_id)
+        personal = None
+        checkpoint_guard = None
+        if story_id == "PERSONAL_STORY":
+            saved = stand._browser_pcm_playback
+            if saved is None:
+                return {"reason": "stale_story_checkpoint"}
+            handle, binding, identity_binding, personal = saved
+            if (type(payload.get("offset_ms")) is not int or type(payload.get("generation")) is not int
+                    or type(payload.get("token")) is not type(handle.token)
+                    or payload.get("session_id") != handle.session_id or payload.get("generation") != handle.generation
+                    or payload.get("response_id") != story_id or payload.get("token") != handle.token
+                    or payload.get("playback_id") != handle.playback_id or payload.get("playback_lease") != handle.playback_lease
+                    or not stand.hub.owner_binding_current(binding)
+                    or not stand._personal_story_checkpoint_current(handle, personal, getattr(stand, "_hid_generation", 0))
+                    or not personal.offset_ms <= offset_ms <= int(1000 * len(personal.audio.samples) / personal.audio.sample_rate)):
+                return {"reason": "stale_story_checkpoint"}
+            if owner.get("checkpoint_claimed"):
+                return {"reason": "stale_story_checkpoint"}
+            owner["checkpoint_claimed"] = True
+            # Resume requires this exact acknowledged position in the private RAM owner.
+            personal.checkpoint_ms = offset_ms
+            hid_generation = getattr(stand, "_hid_generation", 0)
+            def checkpoint_guard():
+                return (stand._browser_pcm_playback is saved and stand.hub.owner_binding_current(binding)
+                    and stand._personal_story_checkpoint_current(handle, personal, hid_generation))
         if verified is not None:
             offset_ms = min(offset_ms, int(verified.get("duration_ms") or offset_ms))
         stand._audio_event_sequence += 1
-        result = await app.receive_async(Event(
-            "StoryPositionUpdated", sid, stand._audio_event_sequence, time.time(),
-            "browser_audio_checkpoint", {"story_id": story_id, "offset_ms": offset_ms},
-            f"story-position:{playback_id}",
-        ))
+        try:
+            result = await app.receive_async(Event(
+                "StoryPositionUpdated", sid, stand._audio_event_sequence, time.time(),
+                "browser_audio_checkpoint", {"story_id": story_id, "offset_ms": offset_ms,
+                    **({key: payload[key] for key in ("generation", "token", "playback_id", "playback_lease")}
+                       if personal is not None else {})},
+                f"story-position:{playback_id}",
+            ), **({"_story_checkpoint_guard": checkpoint_guard} if personal is not None else {}))
+        finally:
+            if personal is not None and app._paused_story_playback.get(sid) is owner:
+                owner.pop("checkpoint_claimed", None)
+                if app._personal_stories.get(sid) is personal:
+                    committed = (app.canonical_runtime.sessions.get(sid) is state
+                        and app._session_epochs.get(sid, 0) == generation and state.story_checkpoint_confirmed
+                        and state.dialogue_memory.story_checkpoint == {"story_id": story_id, "offset_ms": offset_ms})
+                    if committed:
+                        app._paused_story_playback.pop(sid, None)
+                    elif personal.checkpoint_ms == offset_ms:
+                        personal.checkpoint_ms = None
         if result.get("reason") == "story_checkpoint_updated" and app._paused_story_playback.get(sid) is owner:
             app._paused_story_playback.pop(sid, None)
         stand._collect_events()

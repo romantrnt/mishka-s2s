@@ -76,7 +76,7 @@ function installBrowserHandlers(h) {
     })},
     $: id => id === 'buttons' ? {append: button => buttons.push(button)} : (fields[id] ||= {}),
     audioContext, unlockAudio: async () => audioContext,
-    activeSources: new Set(), activeStoryPlayback: null, publicStoryBuffer: null, stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null,
+    activeSources: new Set(), activeStoryPlayback: null, publicStoryBuffer: null, personalStoryPlayback: null, personalStoryReceiptTimer: null, stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null,
     storySpeechGeneration: 1, audioReady: true,
     current: {session: {node: 'fixed_story_playing'}},
   });

@@ -34,7 +34,7 @@ const context = vm.createContext({
   unlockAudio: async () => audioContext,
   audioContext,
   activeSources: new Set(),
-  activeStoryPlayback: null, publicStoryBuffer: null, stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null,
+  activeStoryPlayback: null, publicStoryBuffer: null, personalStoryPlayback: null, personalStoryReceiptTimer: null, stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null,
   window: timerWindow,
   storySpeechGeneration: 1,
   audioGeneration: 0,

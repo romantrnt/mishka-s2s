@@ -143,6 +143,7 @@ class StoryOwner:
     closed: bool = False
     def close(self):
         self.closed=True;self.audio=None
+        self.offset_ms=0;self.checkpoint_ms=None
         task,self.task=self.task,None
         if task is not None and not task.done(): task.cancel()
 
