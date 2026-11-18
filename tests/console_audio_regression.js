@@ -34,7 +34,7 @@ const context = vm.createContext({
   unlockAudio: async () => audioContext,
   audioContext,
   activeSources: new Set(),
-  activeStoryPlayback: null, stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null,
+  activeStoryPlayback: null, publicStoryBuffer: null, stoppedStoryCheckpoint: null, stoppedStoryCheckpointTimer: null,
   window: timerWindow,
   storySpeechGeneration: 1,
   audioGeneration: 0,
@@ -223,6 +223,18 @@ async function run() {
   assert.strictEqual(context.stoppedStoryCheckpoint, null);
   context.checkpointPublicStoryTransfer(expiringRequest);
   assert.strictEqual(ofPath('/stand/audio/checkpoint').length, beforeExpired);
+
+  let uncachedFetches = 0;
+  context.fetch = async () => {uncachedFetches++;return {ok: true, arrayBuffer: async () => new ArrayBuffer(4)};};
+  for (const responseId of ['placeholder:fixed_story:fixed_aibolit_v1', 'PERSONAL_STORY']) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const value = command('uncached-' + responseId + attempt, responseId, 1000);
+      Object.assign(value.payload, {content_kind: 'story', asset_path: 'unverified.wav'});
+      await context.playStoryAsset(value, ++context.storySpeechGeneration);
+      assert.strictEqual(context.publicStoryBuffer, null, 'placeholder/personal content never enters the public cache');
+    }
+  }
+  assert.strictEqual(uncachedFetches, 4, 'nonpublic positive-offset commands always fetch independently');
 
   let wireBody = null;
   const transport = vm.createContext({

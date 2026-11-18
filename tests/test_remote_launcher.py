@@ -60,8 +60,13 @@ def test_real_max_lifespan_private_http_honest_readiness_and_owned_shutdown(tmp_
         model.mkdir()
         for name in ("model.bin", "config.json", "tokenizer.json"):
             (model / name).write_text("mock_test_path_selection_only")
+        receipt = tmp_path / "operator-story-receipt.json"
+        receipt.write_text("{}")
+        monkeypatch.setenv("MISHKA_STORY_BACKEND_RECEIPT_PATH", str(receipt))
         async with remote_session(max_source=MAX_SRC, state_dir=directory, whisper_model=model) as runtime:
             assert runtime.api.state.stand.settings.stt_model == str(model)
+            assert runtime.api.state.stand.settings.story_backend_receipt_path == str(receipt)
+            assert runtime.api.state.stand.application.bounded_s2s.story_backend_contracts == {}, "path binding does not approve an invalid receipt"
             assert runtime.manifest["whisper_local_assets"] is True
             assert runtime.manifest["whisper_model"] == str(model)
             with pytest.raises(RemoteLaunchError, match="remote_state_already_in_use"):

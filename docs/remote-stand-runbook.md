@@ -136,14 +136,33 @@ current-lease lifecycle gaps; Chief owns independent review and coordinated live
 acceptance. Coordinate before any restart or deployment. The Runpod pod and
 providers remain running. Whole-product acceptance is incomplete.
 
-The follow-up causal repair is now live in application PID 9303. Current-lease
+The follow-up causal repair was accepted in application PID 9303. Current-lease
 lifecycle no longer depends on the last effect list after a button release;
 a stopped public story retains only an exact one-shot position receipt for
 five seconds. The same deployment supplies contextual game guidance and a
 fixed-field TTS failure event without utterance/error text. Four-file manifests,
 backups and rollback metadata are in
 `/workspace/mishka-artifacts/expiry-word-diagnostic-20261118`.
-Readiness and exact served JavaScript passed; actual Max expiry is being rerun.
+Readiness and exact served JavaScript passed. Actual Max expiry while playing
+passed: one checkpoint transferred offset 91,221 ms, the anonymous generation
+resumed at 91.221 seconds, and a late old completion was rejected. The observed
+resume gap was 7.779 seconds because the public WAV was fetched/decoded again;
+the public-buffer reuse fix is now deployed for acceptance. The paused idle
+boundary also passed after 120.145 seconds, followed by a successful new game.
+Evidence: `runtime/local-integration-20261117/runpod-expiry-repair-9303.json`.
+Source checkpoint `d4bf136` is pushed to `codex/remote-device-simulator`; it
+contains no raw operator recordings, weights, credentials or runtime state.
+
+The next reviewed bundle is live in application PID 10134: a single public
+story buffer reused only by a new owned positive-offset command, explicit
+launcher binding of the verified story receipt, and filtering of standalone
+decorative TTS chunks. A wholly nonverbal model reply still takes the honest
+fallback. Two native probes after the word fix produced valid meaningful PCM
+and no Silero failure. Exact three-file hashes and backups are under
+`/workspace/mishka-artifacts/story-buffer-receipt-20261118`. Readiness and the
+served console hash passed; actual browser reuse, word turns and personal
+generation/play/cancel are assigned to Chief. The separate browser personal
+PCM pause repair is still local and is excluded from this bundle.
 
 Pinned protocol source: [Ollama v0.40.16 API](https://github.com/ollama/ollama/blob/v0.40.16/api/types.go), [runner scheduling](https://github.com/ollama/ollama/blob/v0.40.16/server/sched.go), and [llamacpp execution](https://github.com/ollama/ollama/blob/v0.40.16/llm/llama_server.go). Native probe results are retained beside the four-file deployment evidence.
 

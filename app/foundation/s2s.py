@@ -1016,12 +1016,12 @@ class SentenceChunker:
             result.append(self.buffer[:selected.end()].strip())
             self.buffer=self.buffer[selected.end():].lstrip()
             self.first=False
-        return [x for x in result if x]
+        return [x for x in result if any(char.isalnum() for char in x)]
 
     def flush(self):
         value=self.buffer.strip()
         self.buffer=""
-        return [value] if value else []
+        return [value] if any(char.isalnum() for char in value) else []
 
 class OutputSafetyValidator:
     BLOCK=re.compile(r"диагноз|diagnos|дозировк|dosage|прими таблет|take .*medicine|прекрати леч|stop treatment|системн.*промпт|system prompt|как навредить|how to harm", re.I)
@@ -3139,6 +3139,8 @@ class BoundedConversationEngine:
                     with contextlib.suppress(asyncio.CancelledError):
                         await failure_task
             await close_chunks(chunker.flush())
+            if not chunks and not actions:
+                raise ValueError("empty_model_speech")
             generation_started = time.perf_counter() - provider.elapsed_s
             self.metrics.observe("llm", generation_started)
             self.metrics.observe_voice_stage(context.session_id, "llm", generation_started, generation_id=trace_generation_id)

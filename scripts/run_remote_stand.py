@@ -209,6 +209,7 @@ async def _remote_session(*, max_source: Path | None = None, max_bundle: Path | 
                             mutation_auth_policy="token_required", voice_conversion=expected_voice,
                             stt_model=model_reference,
                             llm_provider="mock" if profile == "mock" else "ollama",
+                            story_backend_receipt_path=os.environ.get("MISHKA_STORY_BACKEND_RECEIPT_PATH", "").strip(),
                             weather_provider="demo", history_db=str(directory / "session_history.sqlite3"),
                             silero_cache_path=str(directory / "cache/silero/v5_5_ru.pt"))
         if trained:

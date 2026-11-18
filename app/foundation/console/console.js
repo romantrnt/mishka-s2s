@@ -33,6 +33,7 @@ let lastSpokenCommand = 0;
 let lastResultCount = 0;
 let storySpeechGeneration = 0;
 let activeStoryPlayback = null;
+let publicStoryBuffer = null;
 let stoppedStoryCheckpoint = null;
 let stoppedStoryCheckpointTimer = null;
 let mic = null;
@@ -1329,17 +1330,31 @@ async function playGenericAsset(command, generation) {
 
 async function playStoryAsset(command, generation) {
   discardStoppedStoryCheckpoint();
-  const response = await fetch(apiPath('/stand/audio/story/' + encodeURIComponent(command.payload.response_id)));
-  if (!response.ok) throw new Error('story audio HTTP ' + response.status);
-  const data = await response.arrayBuffer();
-  const context = await unlockAudio();
+  const storyId = command.payload.response_id, assetPath = command.payload.asset_path;
+  const offsetMs = Number(command.payload.offset_ms || 0);
+  // Only server-owned fixed public assets can retain one decoded buffer, never playback authority.
+  const publicAsset = command.payload.content_kind === 'story' && /^fixed_[a-z0-9_]+$/.test(storyId)
+    && typeof assetPath === 'string' && assetPath.length > 0;
+  const cached = publicAsset && offsetMs > 0 && publicStoryBuffer?.storyId === storyId
+    && publicStoryBuffer.assetPath === assetPath ? publicStoryBuffer.buffer : null;
+  if (!cached) publicStoryBuffer = null;
+  let buffer = cached, context;
+  if (buffer) {
+    context = await unlockAudio();
+  } else {
+    const response = await fetch(apiPath('/stand/audio/story/' + encodeURIComponent(storyId)));
+    if (!response.ok) throw new Error('story audio HTTP ' + response.status);
+    const data = await response.arrayBuffer();
+    context = await unlockAudio();
+    if (generation !== storySpeechGeneration || current?.session.node !== 'fixed_story_playing') return;
+    buffer = await context.decodeAudioData(data);
+  }
   if (generation !== storySpeechGeneration || current?.session.node !== 'fixed_story_playing') return;
-  const buffer = await context.decodeAudioData(data);
-  if (generation !== storySpeechGeneration || current?.session.node !== 'fixed_story_playing') return;
+  if (publicAsset) publicStoryBuffer = {storyId, assetPath, buffer};
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.connect(context.destination);
-  const offset = Math.min(buffer.duration, Math.max(0, Number(command.payload.offset_ms || 0) / 1000));
+  const offset = Math.min(buffer.duration, Math.max(0, offsetMs / 1000));
   const playback = {
     buffer, source, offset, startedAt: context.currentTime, paused: false, generation,
     identity: audioIdentity(command),
@@ -1350,6 +1365,7 @@ async function playStoryAsset(command, generation) {
     activeSources.delete(source);
     if (playback.paused || activeStoryPlayback !== playback || generation !== storySpeechGeneration) return;
     activeStoryPlayback = null;
+    publicStoryBuffer = null;
     $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
     post('/stand/audio/lifecycle', {...playback.identity, status: 'finished'}).catch(() => {});
     post('/stand/audio/completed', playback.identity).catch(() => {});
@@ -1381,6 +1397,8 @@ function resumeStoryAsset() {
 }
 
 function speakCommands(state) {
+  if (state.session && (!state.session.handset_up || !['fixed_story_playing', 'story_paused',
+      'story_pause_announcement', 'story_resume_announcement'].includes(state.session.node))) publicStoryBuffer = null;
   for (const command of state.commands) {
     if (command.sequence <= lastSpokenCommand) continue;
     if (state.simulator && suppressPhoneAudio && command.type === 'audio_play') {
@@ -1733,7 +1751,7 @@ if (handsetDownButton) handsetDownButton.onclick = () => { clearMic(); return po
 const resetButton = $('reset');
 if (resetButton) resetButton.onclick = () => { clearMic(); return post('/stand/reset'); };
 function interruptAudioForInput({preserveStoryCheckpoint = false} = {}) {
-  if (!preserveStoryCheckpoint) discardStoppedStoryCheckpoint();
+  if (!preserveStoryCheckpoint) { discardStoppedStoryCheckpoint(); publicStoryBuffer = null; }
   micInputGain = 1;
   audioGeneration += 1;
   storySpeechGeneration += 1;
