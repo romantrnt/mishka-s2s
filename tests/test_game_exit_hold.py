@@ -402,3 +402,33 @@ def test_public_hold_projection_is_bounded_and_contains_no_gesture_owner():
             assert 'game_exit_hold' not in h.stand.panel_snapshot()['canonical_state']
     finally:
         h.stand.close()
+
+
+def test_ws_simulator_action_enforces_owner_and_preserves_fifo():
+    from starlette.testclient import TestClient
+    from app.foundation.config import Settings
+    from app.foundation.lifecycle import RuntimeState
+    from app.foundation.stand import create_stand_app
+    api = create_stand_app(Settings(profile='mock', hardware_mode='simulator', stand_access_token='ws-hold-test'))
+    stand = api.state.stand
+    seen = []
+    async def fake_action(payload):
+        seen.append(dict(payload))
+        return {"reason": "ok"}
+    stand.remote_devices.action = fake_action
+    with TestClient(api) as client:
+        api.state.lifecycle._state = RuntimeState.READY
+        with client.websocket_connect('/stand/ws', headers={'x-stand-token': 'ws-hold-test'}) as owner_ws:
+            initial = owner_ws.receive_json()
+            assert initial['write_owner'] is True
+            with client.websocket_connect('/stand/ws', headers={'x-stand-token': 'ws-hold-test'}) as guest_ws:
+                guest_init = guest_ws.receive_json()
+                assert guest_init['write_owner'] is False
+                guest_ws.send_json({'type': 'simulator_action', 'action': 'button', 'button_id': 7, 'press': 'press', 'epoch': 1})
+                err = guest_ws.receive_json()
+                assert err['type'] == 'error' and err['error']['code'] == 'conflict'
+            owner_ws.send_json({'type': 'simulator_action', 'action': 'button', 'button_id': 7, 'press': 'press', 'epoch': 1})
+            owner_ws.send_json({'type': 'simulator_action', 'action': 'button', 'button_id': 7, 'press': 'release', 'epoch': 1})
+            owner_ws.send_json({'type': 'ping'})
+            assert owner_ws.receive_json()['type'] == 'pong'
+    assert [(item['press'], item['button_id']) for item in seen] == [('press', 7), ('release', 7)]

@@ -3958,6 +3958,29 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
         # processed only after the old response finished.
         audio_tasks: set[asyncio.Task[Any]] = set()
         max_pending_audio = 16  # includes both PCM frames and flush requests
+        control_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=32)
+
+        async def run_control_queue() -> None:
+            while True:
+                item_kind, item_payload = await control_queue.get()
+                try:
+                    if item_kind == "simulator_action":
+                        result = await stand.remote_devices.action(item_payload)
+                    else:
+                        sid_arg = item_payload.pop("_session_id", None)
+                        result = await stand.inject(item_kind, item_payload, sid_arg)
+                    if isinstance(result, dict) and result.get("error"):
+                        error = result["error"]
+                        await websocket.send_json({"type": "error", "error": {
+                            "code": error.get("code", "internal_error"),
+                            "message": error.get("message", "stand input processing failed"),
+                        }})
+                except Exception:
+                    pass
+                finally:
+                    control_queue.task_done()
+
+        control_task = asyncio.create_task(run_control_queue(), name="mishka-ws-simulator-actions")
         capture_owners = {}
 
         def capture_current(sid, owned):
@@ -4019,7 +4042,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                     if kind == "ping":
                         await websocket.send_json({"type": "pong"})
                         continue
-                    if kind in {"audio_pcm", "flush_audio", "handset", "button", "button_released", "button_hold", "button_long_hold", "text", "reset"}:
+                    if kind in {"audio_pcm", "flush_audio", "handset", "button", "button_released", "button_hold", "button_long_hold", "simulator_action", "text", "reset"}:
                         lifecycle = getattr(api.state, "lifecycle", None)
                         if (lifecycle is not None
                                 and not lifecycle.admits_users()
@@ -4037,7 +4060,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                         # Only the latest session is needed for cleanup diagnostics.
                         session_ids.clear()
                         session_ids.add(str(session_id))
-                    if kind in {"audio_pcm", "flush_audio", "handset", "button", "button_released", "button_hold", "button_long_hold", "text", "reset"} and not stand.hub.is_owner(websocket):
+                    if kind in {"audio_pcm", "flush_audio", "handset", "button", "button_released", "button_hold", "button_long_hold", "simulator_action", "text", "reset"} and not stand.hub.is_owner(websocket):
                         await websocket.send_json({"type":"error","error":{"code":"conflict","message":"stand input lease is owned by another client"}})
                         continue
                     # Reject before decoding/retaining PCM or creating a task.
@@ -4070,7 +4093,22 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                         sid = str(session_id or stand.active_session_id)
                         schedule_audio(browser_audio(tuple(0.0 for _ in range(320)), 16000, sid, True,
                                                      stand.hub.owner_binding(), stand._audio_owner_guard(sid)))
-                    elif kind in {"handset","button","button_released","button_hold","button_long_hold","text"}:
+                    elif kind == "simulator_action":
+                        if stand.remote_devices is None:
+                            await websocket.send_json({"type": "error", "error": {"code": "validation_error", "message": "simulator is not enabled"}})
+                        elif control_queue.full():
+                            await websocket.send_json({"type": "error", "error": {"code": "simulator_backpressure", "message": "simulator input queue is full"}})
+                        else:
+                            control_queue.put_nowait(("simulator_action", {k: v for k, v in message.items() if k != "type"}))
+                    elif kind in {"button", "button_released", "button_hold", "button_long_hold"}:
+                        if control_queue.full():
+                            await websocket.send_json({"type": "error", "error": {"code": "simulator_backpressure", "message": "simulator input queue is full"}})
+                        else:
+                            control_queue.put_nowait((kind, {
+                                **{k: v for k, v in message.items() if k not in {"type", "session_id"}},
+                                "_session_id": message.get("session_id"),
+                            }))
+                    elif kind in {"handset", "text"}:
                         result = await stand.inject(kind,{k:v for k,v in message.items() if k not in {"type","session_id"}},message.get("session_id"))
                         if isinstance(result, dict) and result.get("error"):
                             error = result["error"]
@@ -4089,6 +4127,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                     await websocket.send_json({"type":"error","error":{"code":"invalid_audio_frame","message":"audio PCM frame is invalid"}})
         except WebSocketDisconnect: pass
         finally:
+            control_task.cancel()
+            await asyncio.gather(control_task, return_exceptions=True)
             stand.hub.disconnect(websocket)
             # Finished collecting tasks no longer exist in audio_tasks, but
             # their RAM capture still belongs to this write lease.

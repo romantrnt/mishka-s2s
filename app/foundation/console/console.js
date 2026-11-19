@@ -142,6 +142,8 @@ const LIFECYCLE_POST_PATHS = new Set([
 let postQueue = [];
 let activePost = null;
 let postGeneration = 0;
+var wsWriteOwner = false;
+const wsButtonSockets = new Map();
 
 function postAdmissionAvailable() {
   return !current?.simulator || (wsSnapshotReady && !wsReloadRequired && !authBlocked);
@@ -234,6 +236,38 @@ function post(path, body = {}) {
       ? JSON.stringify(['audio', payload.session_id, payload.response_id, payload.playback_id,
         payload.playback_lease, payload.generation, payload.token])
       : null;
+  const legacyButtonType = {
+    '/stand/button': 'button',
+    '/stand/button-released': 'button_released',
+    '/stand/button-hold': 'button_hold',
+    '/stand/button-long-hold': 'button_long_hold',
+  }[path];
+  const isButtonPress = (simulated && payload.action === 'button' && payload.press === 'press')
+    || path === '/stand/button';
+  const isButtonRelease = (simulated && payload.action === 'button' && payload.press === 'release')
+    || path === '/stand/button-released';
+  if (!urgent && ((simulated && payload.action === 'button') || legacyButtonType)
+      && typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN
+      && wsWriteOwner && postAdmissionAvailable()) {
+    const useWs = isButtonPress
+      ? (!activePost && !postQueue.length)
+      : wsButtonSockets.get(owner) === ws;
+    if (useWs) {
+      try {
+        const wsMsg = legacyButtonType
+          ? { type: legacyButtonType, ...payload }
+          : { type: 'simulator_action', ...payload };
+        ws.send(JSON.stringify(wsMsg));
+        if (isButtonPress) wsButtonSockets.set(owner, ws);
+        else if (isButtonRelease) wsButtonSockets.delete(owner);
+        recordLiveInput(path, payload);
+        return Promise.resolve(null);
+      } catch (_) {
+        wsButtonSockets.delete(owner);
+      }
+    }
+  }
+  if (isButtonRelease) wsButtonSockets.delete(owner);
   if (storyCancel) {
     const pending = [activePost, ...postQueue].find(item => item?.storyCancel && item.path === path && item.wireBody === wireBody);
     if (pending) return pending.promise;
@@ -598,6 +632,8 @@ function connect() {
   const socket = new WebSocket(`${scheme}://${location.host}${apiPath("/stand/ws")}`);
   ws = socket;
   wsSnapshotReady = false;
+  if (typeof wsWriteOwner !== 'undefined') wsWriteOwner = false;
+  if (typeof wsButtonSockets !== 'undefined') wsButtonSockets.clear();
   cancelOrdinaryPosts();
   socket.onopen = () => {
     if (ws !== socket) return;
@@ -617,6 +653,8 @@ function connect() {
     stopWebsocketHeartbeat();
     ws = null;
     wsSnapshotReady = false;
+    if (typeof wsWriteOwner !== 'undefined') wsWriteOwner = false;
+    if (typeof wsButtonSockets !== 'undefined') wsButtonSockets.clear();
     cancelOrdinaryPosts();
     clearMic();
     audioReconnectPending = !authBlocked && (audioReconnectPending
@@ -658,6 +696,9 @@ function connect() {
         return;
       }
       if (message.type === "stand_state") {
+        if (Object.prototype.hasOwnProperty.call(message, "write_owner")) {
+          wsWriteOwner = Boolean(message.write_owner);
+        }
         const state = normalizeState(message.state);
         if (!state) { showError("WebSocket sent invalid stand state"); return; }
         if (!simulatorSnapshotIsCurrent(state)) {

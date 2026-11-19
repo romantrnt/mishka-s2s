@@ -469,6 +469,44 @@ async function scopedPersonalStoryCancellation() {
   }
 }
 
+async function wsButtonDeliveryAndHttpFallback() {
+  const h = harness();
+  const sentWs = [];
+  const socket = { readyState: 1, send: raw => sentWs.push(JSON.parse(raw)) };
+  Object.assign(h.context, {
+    ws: socket,
+    WebSocket: { OPEN: 1 },
+    wsWriteOwner: true,
+    wsSnapshotReady: true,
+    wsReloadRequired: false,
+    authBlocked: false,
+    current: {
+      session: { node: 'game_active', handset_up: true, state: 'ACTIVE' },
+      simulator: { epoch: 3, session: { session_id: 'first-session', node: 'game_active' },
+        admission: { input_ready: true, connected: true }, devices: { handset: { state: 'up' } } },
+    },
+  });
+  await h.context.post('/stand/simulator/action', { action: 'button', button_id: 7, press: 'press', epoch: 3 });
+  await h.context.post('/stand/simulator/action', { action: 'button', button_id: 7, press: 'release', epoch: 3 });
+  assert.strictEqual(h.requests.length, 0, 'owner WS delivers button press/release without HTTP FIFO delay');
+  assert.deepStrictEqual(sentWs.map(m => [m.type, m.button_id, m.press]), [
+    ['simulator_action', 7, 'press'],
+    ['simulator_action', 7, 'release'],
+  ]);
+
+  h.context.wsWriteOwner = false;
+  const fallbackPress = h.context.post('/stand/simulator/action', { action: 'button', button_id: 7, press: 'press', epoch: 3 });
+  const fallbackRelease = h.context.post('/stand/simulator/action', { action: 'button', button_id: 7, press: 'release', epoch: 3 });
+  await tick();
+  assert.strictEqual(h.requests.length, 1, 'non-owner falls back to HTTP FIFO queue');
+  h.requests[0].resolve(response());
+  await fallbackPress;
+  await tick();
+  assert.strictEqual(h.requests.length, 2);
+  h.requests[1].resolve(response());
+  await fallbackRelease;
+}
+
 async function run() {
   await lifecycleUnderNormalBacklog();
   await lifecycleCoalescing();
@@ -482,6 +520,7 @@ async function run() {
   await totalPostDeadline();
   await ignoredCallerErrors();
   await scopedPersonalStoryCancellation();
+  await wsButtonDeliveryAndHttpFallback();
   console.log('console queue regression: backlog, urgent cleanup, stale fences, FIFO, audio identity and total deadlines passed');
 }
 if(process.argv.includes('--bridge')) {
