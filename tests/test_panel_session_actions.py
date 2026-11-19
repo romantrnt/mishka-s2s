@@ -373,3 +373,62 @@ async def test_current_panel_route_survives_source_scan_clear_and_fresh_ready_at
         assert h.state.interaction_route == "panel" and h.state.handset == "up"
     finally:
         await h.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", [False, True])
+async def test_end_while_down_allows_next_physical_lift_for_new_visit(tmp_path, identity):
+    h = PanelStand(tmp_path, identity=identity)
+    try:
+        if identity:
+            await h.ready()
+        await h.control("start")
+        assert (await h.control("end"))["reason"] == "soft_end"
+        assert h.state.mode == "session_closed" and h.state.handset == "down"
+        assert not h.state.interaction_open
+        lifted = await h.simulator.action({"action": "handset", "state": "up"})
+        assert lifted["reason"] == "exhibition_handset_lifted"
+        assert h.state.mode == "voice_welcome" and h.state.handset == "up"
+        assert h.state.interaction_route == "handset" and h.state.interaction_open
+        assert h.state.profile_status == "anonymous"
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+async def test_end_while_up_still_blocks_duplicate_lift_until_handset_placed(tmp_path):
+    h = PanelStand(tmp_path, identity=True)
+    try:
+        await h.simulator.action({"action": "handset", "state": "up"})
+        await h.ready()
+        await h.control("start")
+        assert (await h.control("end"))["reason"] == "soft_end"
+        assert h.state.mode == "session_closed" and h.state.handset == "up"
+        assert (await h.simulator.action({"action": "handset", "state": "up"}))["reason"] == "handset_already_lifted"
+        assert not h.state.interaction_open
+        assert (await h.simulator.action({"action": "handset", "state": "down"}))["reason"] == "closed_handset_placed"
+        assert h.state.mode == "idle" and h.state.handset == "down"
+        lifted = await h.simulator.action({"action": "handset", "state": "up"})
+        assert lifted["reason"] == "exhibition_handset_lifted"
+        assert h.state.mode == "voice_welcome" and h.state.handset == "up"
+    finally:
+        await h.close()
+
+
+def test_canonical_runtime_end_while_down_allows_ready_then_lift():
+    import time
+    from app.foundation.canonical_contract import CanonicalEvent, CanonicalRuntime
+    runtime = CanonicalRuntime(exhibition_mode=True, optional_identity=True)
+    sid = "direct-end-down"
+    now = time.monotonic()
+    started = runtime.handle(CanonicalEvent("SessionStarted", sid, 1, 0, "panel", {}, "s1", now), session_action_authorized=True)
+    assert started["reason"] == "panel_session_started"
+    ended = runtime.handle(CanonicalEvent("SessionCancel", sid, 2, started["state"]["state_version"], "panel", {}, "s2", now + 1), session_action_authorized=True)
+    assert ended["reason"] == "soft_end" and ended["state"]["mode"] == "session_closed"
+    ready = runtime.handle(CanonicalEvent("ClientProfileReady", sid, 3, ended["state"]["state_version"], "max", {
+        "request_id": "req-1", "expires_monotonic": now + 100.0, "ready_deadline": now + 100.0,
+    }, "s3", now + 2), profile={"profile_ref": "p1", "display_name": "Синтетик", "age_years": 6, "grammatical_gender": "male"}, identity_event_authorized=True)
+    assert ready["reason"] == "profile_ready" and ready["state"]["mode"] == "profile_ready"
+    lifted = runtime.handle(CanonicalEvent("HandsetLifted", sid, 4, ready["state"]["state_version"], "handset", {}, "s4", now + 3))
+    assert lifted["reason"] == "exhibition_handset_lifted"
+    assert lifted["state"]["mode"] == "voice_welcome" and lifted["state"]["profile_status"] == "identified"

@@ -1589,7 +1589,9 @@ class CanonicalRuntime(SceneMenuMixin):
             state.interaction_idle = False
             state.mode = "idle"
         if self.optional_identity and event.event_type == "ClientProfileReady":
-            if state.mode not in {"idle", "profile_ready"}:
+            if state.mode not in {"idle", "profile_ready"} and not (
+                state.mode == "session_closed" and state.substate == "soft_end" and state.interaction_route is None
+            ):
                 return self._decision(state, [], "profile_active_session_ignored")
             if not profile or float(event.payload.get("expires_monotonic") or 0) <= monotonic_now:
                 return self._decision(state, [], "profile_expired")
@@ -1672,7 +1674,9 @@ class CanonicalRuntime(SceneMenuMixin):
         # anonymous start creates a fresh scenario context. Stray handset,
         # audio and button events must not resurrect it.
         if state.mode in {"soft_end", "session_closed"} and event.event_type not in {"AnonymousStart", "SessionReset"}:
-            return self._decision(state, [], "session_closed")
+            if not (state.mode == "session_closed" and state.handset == "down"
+                    and state.substate == "soft_end" and event.event_type == "HandsetLifted"):
+                return self._decision(state, [], "session_closed")
         if event.event_type == "ExhibitionOnboardingComplete":
             if not self.exhibition_mode or state.mode != "exhibition_onboarding_complete":
                 return self._decision(state, [], "exhibition_menu_handoff_ignored")
@@ -2355,6 +2359,9 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.identity_ready_deadline = None
 
                 state.mode = "idle"
+            elif state.mode == "session_closed" and state.handset == "down" and state.substate == "soft_end":
+                state.mode = "idle"
+                state.substate = None
             if state.interaction_route == "panel":
                 state.handset = "up"
                 return self._session_action_noop(state, "panel_handset_lifted")
