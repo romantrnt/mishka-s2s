@@ -87,9 +87,10 @@ def test_toddlers_and_their_adjacent_quizzes_never_require_number_labels():
     for seed in range(8):
         for kind in ('quiz', 'odd_one_out'):
             for item in build_deck(kind, '1-3', seed=seed):
-                assert item.display in {'colors', 'pictograms'}
+                assert item.display == 'colors'
                 if kind == 'quiz':
-                    assert len(item.options) <= 2
+                    assert len(item.options) == 7
+                    assert tuple(b for b, _ in item.options) == (1, 2, 3, 4, 5, 6, 7)
                     assert not any(token in item.prompt.lower() for token in (
                         'сколько', 'плюс', 'минус', 'число', 'слог', 'букв',
                     ))
@@ -138,11 +139,11 @@ def test_curated_science_language_and_classification_answers():
     middle = {item.prompt: _answer_text(item) for item in _primary('quiz', '4-5')}
     assert middle['Сколько лап у собаки?'] == 'четыре'
     assert middle['Сколько времён года?'] == 'четыре'
-    assert middle['Кто из этих животных птица?'] == 'воробей'
+    assert middle['Сколько ножек у жука?'] == 'шесть'
     older = {item.prompt: _answer_text(item) for item in _primary('quiz', '6-7')}
     assert older['Сколько будет два плюс три?'] == 'пять'
     assert older['Сколько слогов в слове «машина»?'] == 'три'
-    assert older['Кто из этих животных млекопитающее?'] == 'дельфин'
+    assert older['Какой цвет получится при смешивании красной и синей краски?'] == 'фиолетовый'
     odd = {item.prompt: _answer_text(item) for item in _primary('odd_one_out', '6-7')}
     assert odd['Найди лишнее. Четыре варианта — птицы.'] == 'крокодил'
     assert odd['Найди лишнее. Четыре варианта — чётные числа.'] == 'пять'

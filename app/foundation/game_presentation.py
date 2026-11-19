@@ -23,7 +23,7 @@ _DIGIT_LABELS = {1:"Один", 2:"Два", 3:"Три", 4:"Четыре", 5:"Пя
 _ORDINAL_LABELS = {1:"Первый", 2:"Второй", 3:"Третий", 4:"Четвёртый", 5:"Пятый", 6:"Шестой", 7:"Седьмой"}
 _NUMERIC_WORDS = {"один": 1, "одно": 1, "одна": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7}
 STATIC_GAME_PHRASES = (
-    "Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь.",
+    "Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь.",
     "Нажми свой ответ.",
     "Что из этого лишнее?",
     "Пока не угадал. Оставил три варианта — попробуй ещё раз!",
@@ -75,8 +75,7 @@ class GamePresentationMixin:
             segments.append((rules_intro, (), None))
         if prompt:
             segments.append((prompt, (), effect.get("phrase_asset_id")))
-        narrate_options = (effect.get("game_id") == "odd_one_out" or
-            (effect.get("game_id") == "quiz" and effect.get("display", "digits") == "digits"))
+        narrate_options = effect.get("game_id") == "odd_one_out"
         if narrate_options and effect.get("options") and not effect.get("is_hint"):
             labels = _COLOR_LABELS if effect.get("display") == "colors" else _DIGIT_LABELS
             digits_display = effect.get("display", "digits") == "digits"

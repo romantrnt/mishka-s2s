@@ -262,14 +262,17 @@ async def test_native_start_callback_follows_stream_start_and_owner(monkeypatch,
     assert order == (["start", "cue", "write"] if mode == "ok" else ["start"])
 
 
-def test_arbitrary_quiz_options_are_spoken_with_their_real_button_mapping():
+def test_quiz_never_dictates_button_options_verbally():
     from app.foundation.game_presentation import GamePresentationMixin
-    effect = {"game_id":"quiz", "prompt":"Кто говорит мяу?", "display":"digits",
-              "options":((1,"кошка"),(2,"собака"),(3,"корова"))}
+    effect = {"game_id":"quiz", "prompt":"Сколько лап у собаки?", "display":"digits",
+              "rules_intro":"Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь.",
+              "options":((1,"один"),(2,"два"),(3,"три"),(4,"четыре"),(5,"пять"),(6,"шесть"),(7,"семь"))}
     segments = GamePresentationMixin()._game_prompt_segments(effect)
-    assert [text for text,_,_ in segments] == ["Кто говорит мяу?", "Один: кошка.",
-        "Два: собака.", "Три: корова.", "Нажми свой ответ."]
-    assert [buttons for _,buttons,_ in segments] == [(), (1,), (2,), (3,), ()]
+    assert [text for text,_,_ in segments] == [
+        "Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь.",
+        "Сколько лап у собаки?",
+    ]
+    assert [buttons for _,buttons,_ in segments] == [(), ()]
 
 
 @pytest.mark.asyncio

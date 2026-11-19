@@ -101,6 +101,12 @@ body[data-phone] .phone-primary:hover {background:#343a3a;}
  .phone-paw {width:72%;}
  .phone-tool-section dl {grid-template-columns:110px minmax(0,1fr);}
 }
-@media(prefers-reduced-motion:reduce) {body[data-phone] *,body[data-phone] *::before {transition:none!important;scroll-behavior:auto!important;}}
+@keyframes keyWake {
+ 0% {filter:brightness(1.0);box-shadow:inset 3px 4px 6px #ffffff30,inset -3px -4px 4px #16323e3d,0 3px 1px #334b55;}
+ 45% {filter:brightness(1.42);box-shadow:0 0 18px color-mix(in srgb,var(--key-color) 75%,white),inset 0 0 8px #ffffff88;}
+ 100% {filter:brightness(1.16);box-shadow:inset 3px 4px 6px #ffffff30,inset -3px -4px 4px #16323e3d,0 3px 1px #334b55;}
+}
+body[data-phone] .phone-key[data-ready-wake="true"] {animation:keyWake .38s ease-out both;}
+@media(prefers-reduced-motion:reduce) {body[data-phone] *,body[data-phone] *::before {transition:none!important;animation:none!important;scroll-behavior:auto!important;}}
 body[data-phone] .phone-key[data-digit="true"] span {color:#ffffff;text-shadow:0 0 8px #fff7;}
 body[data-phone] .phone-key[data-symbol="true"] svg {color:#ffffff;filter:drop-shadow(0 0 6px #fff8);}

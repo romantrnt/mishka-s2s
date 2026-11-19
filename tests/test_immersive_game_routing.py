@@ -285,6 +285,7 @@ def test_quiz_narrows_from_seven_to_three_on_first_wrong_and_resets_next_round()
     assert 'фиолетов' not in prompt_eff['prompt'].lower()
     assert prompt_eff['answer_buttons'] == list(narrowed)
     assert [b for b, _ in prompt_eff['options']] == list(narrowed)
+    assert prompt_eff['prompt'] == challenge.hints[0]
 
     # Rapid tap during hint animation is ignored and does not corrupt state.
     other_wrong = next(b for b in narrowed if b != 7)
@@ -324,21 +325,13 @@ def test_quiz_narrows_from_seven_to_three_on_first_wrong_and_resets_next_round()
     assert tuple(game_answer_buttons(r.state.game_engine_state)) == tuple(b for b, _ in next_ch.options)
 
 
-def test_quiz_with_three_or_fewer_options_does_not_fake_narrow():
-    r = Route('6-7')
-    r.menu()
-    r.start(2)
-    r.ready()
-    engine = r.state.game_engine_state
-    small_idx = next(i for i, c in enumerate(engine.deck) if 2 <= len(c.options) <= 3)
-    r.state.game_engine_state = replace(engine, challenge_index=small_idx, phase='playing')
-    ch = current_challenge(r.state.game_engine_state)
-    wrong_btn = next(b for b, _ in ch.options if b != ch.answer)
-    res = r.press(wrong_btn)
-    r.release(wrong_btn)
-    assert res['reason'] == 'game_retry'
-    assert r.state.game_engine_state.narrowed_options == ()
-    assert tuple(game_answer_buttons(r.state.game_engine_state)) == tuple(b for b, _ in ch.options)
+def test_quiz_every_band_uses_all_seven_buttons_and_does_not_narrow_small_odd():
+    for band in ('1-3', '4-5', '6-7'):
+        r = Route(band)
+        r.menu()
+        r.start(2)
+        r.ready()
+        assert tuple(game_answer_buttons(r.state.game_engine_state)) == (1, 2, 3, 4, 5, 6, 7)
 
 
 def test_quiz_rules_spoken_once_and_third_miss_highlights_answer_without_autoscore():
@@ -347,7 +340,7 @@ def test_quiz_rules_spoken_once_and_third_miss_highlights_answer_without_autosco
     r.start(2)
     first_prompt = r.done()
     eff1 = next(e for e in first_prompt['effects'] if e['type'] == 'game_prompt')
-    assert eff1['rules_intro'] == 'Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь.'
+    assert eff1['rules_intro'] == 'Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь.'
     assert eff1['exit_hint'] is None
     r.done()
     ch = current_challenge(r.state.game_engine_state)
@@ -361,7 +354,7 @@ def test_quiz_rules_spoken_once_and_third_miss_highlights_answer_without_autosco
     assert r.state.game_engine_state.wrong_attempts == 0
     # 1st miss -> narrows to 3 (not straight to 1)
     r.press(wrong_btns[0]); r.release(wrong_btns[0]); r.done()
-    assert len(game_answer_buttons(r.state.game_engine_state)) == 3 or len(ch.options) <= 3
+    assert len(game_answer_buttons(r.state.game_engine_state)) == 3
     # 2nd miss
     other_wrong = next(b for b in game_answer_buttons(r.state.game_engine_state) if b != ch.answer)
     r.press(other_wrong); r.release(other_wrong); r.done()
@@ -380,91 +373,86 @@ def test_quiz_rules_spoken_once_and_third_miss_highlights_answer_without_autosco
     assert eff2['rules_intro'] is None and eff2['exit_hint'] is None
 
 
-def test_quiz_numeric_options_avoid_digit_duplication():
+def test_quiz_never_dictates_options_and_blocks_early_tap_until_prompt_completes():
     from app.foundation.game_presentation import GamePresentationMixin
     mixin = GamePresentationMixin()
-    same = {'game_id': 'quiz', 'prompt': 'Сколько слогов?', 'display': 'digits',
-            'rules_intro': 'Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь.',
-            'options': ((1, 'один'), (2, 'два'), (3, 'три'))}
-    segs = mixin._game_prompt_segments(same)
+    eff = {'game_id': 'quiz', 'prompt': 'Сколько лап у собаки?', 'display': 'digits',
+           'rules_intro': 'Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь.',
+           'options': ((1, 'один'), (2, 'два'), (3, 'три'), (4, 'четыре'), (5, 'пять'), (6, 'шесть'), (7, 'семь'))}
+    segs = mixin._game_prompt_segments(eff)
     assert [t for t, _, _ in segs] == [
-        'Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь.',
-        'Сколько слогов?', 'один.', 'два.', 'три.', 'Нажми свой ответ.'
+        'Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь.',
+        'Сколько лап у собаки?',
     ]
-    assert [b for _, b, _ in segs] == [(), (), (1,), (2,), (3,), ()]
 
-    diff = {'game_id': 'quiz', 'prompt': 'Сколько?', 'display': 'digits',
-            'options': ((1, 'пять'), (2, 'шесть'))}
-    segs_diff = mixin._game_prompt_segments(diff)
-    assert [t for t, _, _ in segs_diff] == ['Сколько?', 'Первый вариант: пять.', 'Второй вариант: шесть.', 'Нажми свой ответ.']
-
-
-def test_quiz_accepts_valid_answer_once_prompt_audible_and_stops_narration():
     r = Route('6-7')
     r.menu()
     r.start(2)
-    r.done()  # PHRASE_020 -> GAME_PROMPT
+    r.done()  # PHRASE_020 -> GAME_PROMPT (rules + question)
     assert r.state.game_audio_stage == 'prompt'
-    assert r.state.game_prompt_audible is False
     answer = current_challenge(r.state.game_engine_state).answer
-
-    # Before prompt becomes audible, tap is ignored (no early scoring).
+    # Tap BEFORE question finishes (even during rules/praise/question) must NOT score!
     r.press(answer)
     early = r.release(answer)
     assert early['reason'] == 'game_prompt_waiting'
     assert r.state.game_engine_state.round == 0
-
-    # Once prompt audio starts playing, valid button accepts immediately and stops narration.
-    r.state.game_prompt_audible = True
-    old_lease = r.state.playback_lease
-    pressed = r.press(answer)
-    released = r.release(answer)
-    accepted = released if answer == 7 else pressed
-    assert accepted['reason'] == 'game_progress'
+    # After AudioCompleted(GAME_PROMPT), valid tap scores immediately.
+    r.done()
+    assert r.state.game_audio_stage == 'playing'
+    p = r.press(answer)
+    rel = r.release(answer)
+    scored = rel if answer == 7 else p
+    assert scored['reason'] == 'game_progress'
     assert r.state.game_engine_state.round == 1
-    assert any(e.get('type') == 'audio_stop' for e in accepted['effects'])
 
-    # Stale AudioCompleted for the interrupted prompt cannot reset state.
+
+def test_quiz_short_round_completes_cleanly_and_120s_rfid_expiry_preserves_game():
+    r = Route('4-5')
+    r.runtime.optional_identity = True
+    r.state.profile_ref = 'demo-ref'
+    r.state.profile_status = 'identified'
+    r.state.identity_request_id = 'req-120'
+    r.state.identity_expires_monotonic = r.clock + 120.0
+    r.menu()
+    r.start(2)
+    r.ready()
+    # Play 5 questions
+    for i in range(5):
+        ans = current_challenge(r.state.game_engine_state).answer
+        r.press(ans)
+        if ans == 7:
+            r.clock += 0.1
+        r.release(ans)
+        r.done(); r.done()  # PHRASE_022 + GAME_PROMPT -> playing
+    assert r.state.game_engine_state.round == 5
+    # Simulate 120s RFID expiry mid-quiz!
+    r.clock += 125.0
     r.seq += 1
-    stale = r.runtime.handle(CanonicalEvent('AudioCompleted', 'games', r.seq, r.state.state_version, 'audio',
-                                            {'response_id': 'GAME_PROMPT', 'playback_lease': old_lease}), r.clock)
-    assert stale['reason'] in {'game_prompt_stale_audio', 'event_ignored'}
-    assert r.state.game_engine_state.round == 1
-
-    # Pressing 7 and cancelling <0.6s during prompt must not corrupt game_audio_stage.
-    r2 = Route('6-7')
-    r2.menu()
-    r2.start(2)
-    r2.done()
-    r2.state.game_prompt_audible = True
-    held = r2.press(7)
-    assert held['reason'] == 'game_exit_pending'
-    assert r2.state.game_audio_stage == 'prompt'
-    r2.clock += 0.1
-    r2.seq += 1
-    aborted = r2.runtime.handle(CanonicalEvent('ButtonReleased', 'games', r2.seq, r2.state.state_version, 'hid',
-                                               {'button_id': 7, 'cancelled': True}), r2.clock)
-    assert aborted['reason'] == 'game_exit_aborted'
-    assert r2.state.game_audio_stage == 'prompt'
-    fin = r2.done()
-    assert r2.state.game_audio_stage == 'playing'
-
-    # Short tap of button 7 when answer == 7 during audible prompt scores immediately.
-    r3 = Route('6-7')
-    r3.menu()
-    r3.start(2)
-    r3.done()
-    idx7 = next(i for i, c in enumerate(r3.state.game_engine_state.deck) if c.answer == 7)
-    r3.state.game_engine_state = replace(r3.state.game_engine_state, challenge_index=idx7)
-    r3.state.game_prompt_audible = True
-    p7 = r3.press(7)
-    assert p7['reason'] == 'game_exit_pending'
-    assert r3.state.game_audio_stage == 'prompt'
-    r3.clock += 0.1
-    rel7 = r3.release(7)
-    assert rel7['reason'] == 'game_progress'
-    assert r3.state.game_engine_state.round == 1
-    assert any(e.get('type') == 'audio_stop' for e in rel7['effects'])
+    exp = r.runtime.handle(CanonicalEvent('IdentityAuthorizationExpired', 'games', r.seq, r.state.state_version, 'internal_identity',
+                                          {'request_id': 'req-120'}), r.clock, identity_event_authorized=True)
+    assert exp['reason'] == 'public_game_identity_expired'
+    assert r.state.profile_status == 'anonymous' and r.state.profile_ref is None
+    assert r.state.mode == 'game_active' and r.state.active_game_id == 'quiz'
+    assert r.state.handset == 'up' and r.state.game_engine_state.round == 5
+    # Finish remaining 3 questions (round 5 -> 8 = natural short round completion)
+    for i in range(3):
+        ans = current_challenge(r.state.game_engine_state).answer
+        p = r.press(ans)
+        if ans == 7:
+            r.clock += 0.1
+        rel = r.release(ans)
+        res = rel if ans == 7 else p
+        if i < 2:
+            assert res['reason'] == 'game_progress'
+            r.done(); r.done()
+        else:
+            assert res['reason'] == 'game_completed'
+    assert r.state.mode == 'game_menu'
+    assert r.state.handset == 'up'
+    # Re-enter quiz cleanly for 10+ total questions
+    r.start(2)
+    r.ready()
+    assert r.state.mode == 'game_active' and r.state.game_engine_state.round == 0
 
 
 

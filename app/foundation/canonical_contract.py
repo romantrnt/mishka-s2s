@@ -981,6 +981,20 @@ class CanonicalRuntime(SceneMenuMixin):
                               schedule_ref=str(value.get("schedule_ref")) if value.get("schedule_ref") else None,
                               game_level=max(0, min(9, prior_level)))
 
+    def _clear_identity_only(self, state: CanonicalState) -> None:
+        fresh = self._new_state(state.session_id, None)
+        for name in ("profile_ref", "profile_status", "display_name", "grammatical_gender", "language", "timezone",
+                     "age_band", "age_band_source", "age_years", "age_policy", "profile_data_incomplete",
+                     "current_date", "accessibility_policy", "schedule_ref", "onboarding_name_collected"):
+            setattr(state, name, getattr(fresh, name))
+        state.history_tail.clear()
+        state.dialogue_memory.clear()
+        state.mood_result = None
+        state.identity_request_id = None
+        state.identity_ready_deadline = None
+        state.identity_expires_monotonic = None
+        state.identity_capabilities = []
+
     def clear_identity(self, state: CanonicalState) -> None:
         """Scrub private and derived identity independently of local safety mode."""
         state.activity_return_mode = state.dialogue_information_kind = None
@@ -1243,7 +1257,7 @@ class CanonicalRuntime(SceneMenuMixin):
         rules_intro = None
         if engine.game_id == "quiz" and text is None and not state.quiz_rules_spoken:
             state.quiz_rules_spoken = True
-            rules_intro = "Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь."
+            rules_intro = "Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь."
         exit_hint = (None if engine.game_id == "quiz" else
                      ("Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." if hold_exit_policy(engine)
                       else "Чтобы выйти, нажми семь.") if engine.round == 0 and text is None else None)
@@ -1265,32 +1279,6 @@ class CanonicalRuntime(SceneMenuMixin):
             return self._decision(state, [], "game_unavailable")
         immersive = getattr(engine, 'immersive', False)
         button_id = int(event.payload["button_id"])
-        interrupted_prompt = False
-        can_barge_prompt = (
-            immersive
-            and engine.game_id in {'quiz', 'odd_one_out'}
-            and state.game_audio_stage == 'prompt'
-            and state.game_prompt_audible
-            and not state.game_prompt_is_hint
-            and event.payload.get('cancelled') is not True
-            and (
-                (event.event_type == 'ButtonPressed' and button_id != 7)
-                or (
-                    event.event_type == 'ButtonReleased'
-                    and button_id == 7
-                    and engine.seven_exit_phase == 'pending'
-                    and (engine.seven_exit_down_at is None or now < engine.seven_exit_down_at + 0.6)
-                )
-            )
-            and button_id in game_answer_buttons(engine)
-        )
-        if can_barge_prompt:
-            engine = finish_prompt(engine, now).state
-            if button_id == 7 and event.event_type == 'ButtonReleased':
-                engine = replace(engine, seven_answer_generation=engine.round_generation)
-            state.game_engine_state = engine
-            state.game_audio_stage = 'playing'
-            interrupted_prompt = True
         staged = immersive and engine.game_id != 'free_lights' and state.game_audio_stage in {'starting', 'prompt'}
         outcome = advance_game(engine, edge=event.event_type, button=button_id,
                                sequence=engine.last_sequence + 1, now=now, paused=staged,
@@ -1337,6 +1325,11 @@ class CanonicalRuntime(SceneMenuMixin):
         if immersive:
             state.game_progress[engine.game_id] = max(state.game_progress.get(engine.game_id, 0),
                                                       getattr(outcome.state, 'level', 0))
+            if outcome.completed:
+                decision = self._game_exit(state, "game_completed")
+                if state.interaction_open:
+                    decision["effects"].append({"type": "speak", "phrase_id": outcome.feedback_id or "PHRASE_028"})
+                return decision
             effects = []
             # A release must not replace an in-flight free-light ripple.
             if outcome.wave_origin is not None:
@@ -1349,9 +1342,7 @@ class CanonicalRuntime(SceneMenuMixin):
                            self._game_prompt(state, outcome.speech_text, outcome.feedback_id)]
             elif outcome.feedback_id and state.interaction_open:
                 effects.append({"type":"speak", "phrase_id":outcome.feedback_id})
-            if interrupted_prompt and not any(e.get("type") == "audio_stop" for e in effects):
-                effects.insert(0, {"type": "audio_stop"})
-            return self._decision(state, effects, "game_" + outcome.status, clear_audio=interrupted_prompt)
+            return self._decision(state, effects, "game_" + outcome.status)
         effects = [self._game_lighting(outcome.state)]
         if (engine.game_id == "repeat_pattern" and event.event_type == "ButtonPressed"
                 and outcome.status in {"sequence_partial", "sequence_retry", "progress", "completed"}):
@@ -1673,6 +1664,17 @@ class CanonicalRuntime(SceneMenuMixin):
         if self.optional_identity and event.event_type == "ClientProfileCleared":
             if not self.has_private_context(state) and not identity_context_present:
                 return self._decision(state, [], "profile_already_clear")
+            if (event.payload.get("reason_code") == "session_expired" and state.interaction_open
+                    and state.safety_severity == "none"
+                    and (state.mode in {"game_menu", "root_menu", "fixed_story_menu"}
+                         or (state.mode == "game_active" and state.active_game_id != "word_game"))):
+                self._clear_identity_only(state)
+                if state.game_return_mode == "bear_dialogue":
+                    state.game_return_mode = "game_menu"
+                state.activity_return_mode = None
+                state.state_version += 1
+                reason_code = "public_game_identity_expired" if state.mode == "game_active" else "public_menu_identity_expired"
+                return self._decision(state, [{"type": "identity_cleared"}], reason_code)
             self.clear_identity(state)
             state.state_version += 1
             effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}]
@@ -1689,6 +1691,17 @@ class CanonicalRuntime(SceneMenuMixin):
             deadline = state.identity_ready_deadline if event.event_type == "IdentityReadyExpired" else state.identity_expires_monotonic
             if deadline is None or monotonic_now < deadline:
                 return self._decision(state, [], "identity_expiry_not_due")
+            if (event.event_type == "IdentityAuthorizationExpired" and state.interaction_open
+                    and state.safety_severity == "none"
+                    and (state.mode in {"game_menu", "root_menu", "fixed_story_menu"}
+                         or (state.mode == "game_active" and state.active_game_id != "word_game"))):
+                self._clear_identity_only(state)
+                if state.game_return_mode == "bear_dialogue":
+                    state.game_return_mode = "game_menu"
+                state.activity_return_mode = None
+                state.state_version += 1
+                reason_code = "public_game_identity_expired" if state.mode == "game_active" else "public_menu_identity_expired"
+                return self._decision(state, [{"type": "identity_cleared"}], reason_code)
             self.clear_identity(state)
             state.state_version += 1
             effects = [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}]

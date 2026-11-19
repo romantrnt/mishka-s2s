@@ -56,7 +56,41 @@ function mountPhone() {
     $('phone-error').hidden=true;
     return value;
   };
-  const input=new DeviceInput({send,snapshot:()=>simulator,enabled:id=>canMutate()&&Boolean(simulator.devices.buttons.find(key=>key.id===id)?.enabled),change:()=>renderMechanical(),error:showError});
+  let lastQuizWakeKey=null;
+  let tapToneCtx=null;
+  function playSoftTapTone(id) {
+    try {
+      if(!bridge.media().audioReady)return;
+      const AC=window.AudioContext||window.webkitAudioContext;
+      if(!AC)return;
+      if(!tapToneCtx||tapToneCtx.state==='closed')tapToneCtx=new AC();
+      if(tapToneCtx.state==='suspended')tapToneCtx.resume().catch(()=>{});
+      const now=tapToneCtx.currentTime;
+      const osc=tapToneCtx.createOscillator();
+      const gain=tapToneCtx.createGain();
+      const freqs=[392,440,494,523,587,659,740];
+      osc.type='triangle';
+      osc.frequency.setValueAtTime(freqs[(id-1)%7]||440,now);
+      osc.frequency.exponentialRampToValueAtTime((freqs[(id-1)%7]||440)*0.86,now+0.045);
+      gain.gain.setValueAtTime(0.04,now);
+      gain.gain.exponentialRampToValueAtTime(0.0001,now+0.05);
+      osc.connect(gain);gain.connect(tapToneCtx.destination);
+      osc.start(now);osc.stop(now+0.055);
+    } catch {}
+  }
+  function triggerQuizWakeAnimation() {
+    keys.forEach((key,id)=>{
+      if(key.dataset.readyWakeTimer){clearTimeout(Number(key.dataset.readyWakeTimer));}
+      key.removeAttribute('data-ready-wake');
+      const delay=(id-1)*28;
+      const t=setTimeout(()=>{
+        key.dataset.readyWake='true';
+        setTimeout(()=>{if(key.dataset.readyWake==='true')key.removeAttribute('data-ready-wake');},420);
+      },delay);
+      key.dataset.readyWakeTimer=String(t);
+    });
+  }
+  const input=new DeviceInput({send,snapshot:()=>simulator,enabled:id=>{const ok=canMutate()&&Boolean(simulator.devices.buttons.find(key=>key.id===id)?.enabled);return ok;},change:()=>{const cur=input.pressed();if(cur.size){for(const pid of cur)playSoftTapTone(pid);}renderMechanical();},error:showError});
   function renderMechanical() {
     const pressed=input.pressed();
     model?.update(simulator,pressed);
@@ -69,6 +103,16 @@ function mountPhone() {
       key.dataset.fill=String(simulator?.devices?.lighting?.[channels[id][0]]===1);
       key.dataset.digit=String(simulator?.devices?.lighting?.[channels[id][1]]===1);
       key.dataset.symbol=String(simulator?.devices?.lighting?.[channels[id][2]]===1);
+    }
+    const cs=(typeof state!=='undefined'?state?.canonical_state:null)||simulator?.canonical_state;
+    if(cs?.mode==='game_active'&&cs?.active_game_id==='quiz'&&cs?.game_audio_stage==='playing') {
+      const wakeKey=`${cs.game_round||0}:${cs.state_version||0}`;
+      if(lastQuizWakeKey!==wakeKey&&lastQuizWakeKey!==`done:${cs.game_round||0}`) {
+        lastQuizWakeKey=`done:${cs.game_round||0}`;
+        triggerQuizWakeAnimation();
+      }
+    } else if(cs?.game_audio_stage!=='playing') {
+      lastQuizWakeKey=null;
     }
   }
   function cleanup({preserveMedia=false,...options}={}) {handsetGeneration++;handsetPending=null;sessionPending=null;input.cancel();pointers.clear();if(!preserveMedia)bridge.cleanup(options);}

@@ -2047,8 +2047,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             and previous_state.identity_request_id != getattr(next_owner, "identity_request_id", None))
         identity_ended = bool(previous_state is not None and previous_state.profile_ref
                               and getattr(next_owner, "profile_ref", None) is None)
-        identity_cleanup = identity_owner_changed or identity_ended or (
-            takes_ownership and event.event_type == "ClientProfileCleared")
+        public_identity_preserved = decision["reason"] in {"public_game_identity_expired", "public_menu_identity_expired"}
+        identity_cleanup = (not public_identity_preserved) and (
+            identity_owner_changed or identity_ended or (
+                takes_ownership and event.event_type == "ClientProfileCleared")
+        )
         if (identity_ended and self.max_json and event.event_type != "ClientProfileCleared"
                 and self._max_client_boundary is not None
                 and self._max_client_boundary.session_id == event.session_id):

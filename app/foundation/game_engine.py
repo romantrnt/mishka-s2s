@@ -205,8 +205,6 @@ def _answer_challenge(state: GameState, button: int) -> GameTransition:
         narrowed = _narrow_challenge_options(state, challenge, button)
         if state.game_id == 'quiz' and state.wrong_attempts >= 2:
             hint = 'Посмотри на огонёк — попробуй нажать эту кнопку!'
-        elif narrowed and not state.narrowed_options:
-            hint = 'Пока не угадал. Оставил три варианта — попробуй ещё раз!'
         else:
             hints = challenge.hints or ('Попробуем ещё раз. ' + challenge.prompt,)
             hint = hints[min(state.challenge_attempts, len(hints) - 1)]
@@ -218,10 +216,19 @@ def _answer_challenge(state: GameState, button: int) -> GameTransition:
                         timer_generation=state.timer_generation + 1)
         return GameTransition(state, desired_buttons(state), 'retry', speech_text=hint)
     count = state.round + 1
+    complete = count >= state.rounds
+    if complete:
+        state = replace(state, round=count, level=state.level + 1,
+                        round_generation=state.round_generation + 1,
+                        challenge_attempts=0, hints_emitted=0,
+                        wrong_attempts=0, narrowed_options=(),
+                        phase='completed', response_deadline=None, hint_deadline=None,
+                        timer_generation=state.timer_generation + 1)
+        return GameTransition(state, desired_buttons(state), 'completed',
+                              feedback_id='PHRASE_028', completed=True)
     index = state.challenge_index + 1
     deck = state.deck
     if index >= len(deck):
-        # A new shuffle after each full deck; never a finite auto-exit.
         deck = build_deck(state.game_id, state.age_band, seed=state.seed + count)
         index = 0
     state = replace(state, round=count, level=state.level + 1,
