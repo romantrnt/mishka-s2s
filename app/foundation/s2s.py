@@ -1025,32 +1025,147 @@ class _DialogueJSONBridge:
         self.on_token = on_token
         self.on_boundary = on_boundary
 
+    @staticmethod
+    def _extract_first_say_phrase(raw_prefix: str) -> str | None:
+        m = re.match(r'^\s*\{\s*"type"\s*:\s*"say"\s*,\s*"text"\s*:\s*"', raw_prefix)
+        if not m:
+            return None
+        body = raw_prefix[m.end():]
+        chars: list[str] = []
+        i = 0
+        n = len(body)
+        while i < n:
+            ch = body[i]
+            if ch == '"':
+                break
+            if ch == '\\':
+                if i + 1 >= n:
+                    break
+                esc = body[i + 1]
+                if esc == 'u':
+                    if i + 6 > n:
+                        break
+                    try:
+                        chars.append(chr(int(body[i + 2:i + 6], 16)))
+                    except ValueError:
+                        return None
+                    i += 6
+                    continue
+                chars.append({'n': '\n', 'r': '\r', 't': '\t', 'b': '\b', 'f': '\f'}.get(esc, esc))
+                i += 2
+                continue
+            chars.append(ch)
+            i += 1
+        decoded = "".join(chars)
+        match = re.match(r'^(.+?[.!?…]+)(?=\s|$)', decoded, re.S)
+        if match and re.search(r'\b[а-яА-ЯёЁa-zA-Z]\.$', match.group(1)):
+            match = None
+        if not match and len(decoded) >= 32:
+            clause = re.match(r'^(.{28,}?[,;:])(?=\s)', decoded, re.S)
+            if clause and not clause.group(1)[-2].isdigit():
+                match = clause
+        if not match:
+            return None
+        phrase = match.group(1).strip()
+        return phrase if any(c.isalnum() for c in phrase) else None
+
     async def stream(self, messages, request_id, cancelled):
-        parts, size, complete = [], 0, False
-        async for token in self.provider.stream(messages, request_id, cancelled):
+        if os.getenv("MISHKA_STREAM_FIRST_JSON_CHUNK", "0") != "1":
+            parts, size, complete = [], 0, False
+            async for token in self.provider.stream(messages, request_id, cancelled):
+                if cancelled():
+                    raise asyncio.CancelledError
+                self.on_token(token)
+                size += len(token)
+                if size > self.max_chars:
+                    raise ValueError("LLM stream exceeded limit")
+                parts.append(token)
+                if not complete:
+                    try:
+                        json.JSONDecoder().raw_decode("".join(parts).lstrip())
+                    except json.JSONDecodeError:
+                        pass
+                    except RecursionError as exc:
+                        raise ValueError("dialogue_json_invalid") from exc
+                    else:
+                        complete = True
+                        self.on_boundary("json_complete")
             if cancelled():
                 raise asyncio.CancelledError
-            self.on_token(token)
-            size += len(token)
-            if size > self.max_chars:
-                raise ValueError("LLM stream exceeded limit")
-            parts.append(token)
-            if not complete:
-                try:
-                    json.JSONDecoder().raw_decode("".join(parts).lstrip())
-                except json.JSONDecodeError:
-                    pass
-                except RecursionError as exc:
-                    raise ValueError("dialogue_json_invalid") from exc
-                else:
-                    complete = True
-                    self.on_boundary("json_complete")
-        if cancelled():
-            raise asyncio.CancelledError
-        self.on_boundary("llm_clean_terminal")
-        xml = self.contract.to_xml("".join(parts))
-        self.on_boundary("json_validated")
-        yield xml
+            self.on_boundary("llm_clean_terminal")
+            xml = self.contract.to_xml("".join(parts))
+            self.on_boundary("json_validated")
+            yield xml
+            return
+
+        token_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+        async def produce():
+            try:
+                async for tok in self.provider.stream(messages, request_id, cancelled):
+                    await token_queue.put(("tok", tok))
+                await token_queue.put(("eof", None))
+            except BaseException as exc:
+                await token_queue.put(("err", exc))
+
+        producer = asyncio.create_task(produce(), name="dialogue-json-producer")
+        parts, size, complete = [], 0, False
+        emitted_prefix: str | None = None
+        try:
+            while True:
+                kind, payload = await token_queue.get()
+                if kind == "err":
+                    raise payload
+                if kind == "eof":
+                    break
+                if cancelled():
+                    raise asyncio.CancelledError
+                token = payload
+                self.on_token(token)
+                size += len(token)
+                if size > self.max_chars:
+                    raise ValueError("LLM stream exceeded limit")
+                parts.append(token)
+                joined = "".join(parts)
+                if not complete:
+                    try:
+                        json.JSONDecoder().raw_decode(joined.lstrip())
+                    except json.JSONDecodeError:
+                        pass
+                    except RecursionError as exc:
+                        raise ValueError("dialogue_json_invalid") from exc
+                    else:
+                        complete = True
+                        self.on_boundary("json_complete")
+                if emitted_prefix is None and not complete:
+                    phrase = self._extract_first_say_phrase(joined)
+                    if phrase is not None:
+                        emitted_prefix = phrase
+                        yield f"<say>{html.escape(phrase, quote=False)}</say>"
+            if cancelled():
+                raise asyncio.CancelledError
+            self.on_boundary("llm_clean_terminal")
+            xml = self.contract.to_xml("".join(parts))
+            self.on_boundary("json_validated")
+            if emitted_prefix is None:
+                yield xml
+            else:
+                say_match = re.match(r'^<say>(.*?)</say>(.*)$', xml, re.S)
+                if not say_match:
+                    raise ValueError("dialogue_json_prefix_mismatch")
+                full_text = html.unescape(say_match.group(1))
+                if not full_text.startswith(emitted_prefix):
+                    raise ValueError("dialogue_json_prefix_mismatch")
+                remainder = full_text[len(emitted_prefix):].lstrip()
+                tail_actions = say_match.group(2)
+                out = (f"<say>{html.escape(remainder, quote=False)}</say>" if remainder else "") + tail_actions
+                if out:
+                    yield out
+        finally:
+            if not producer.done():
+                producer.cancel()
+            with contextlib.suppress(BaseException):
+                await producer
 
 
 class StreamingTokenConsumer:
