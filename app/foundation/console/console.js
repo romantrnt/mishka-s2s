@@ -1630,6 +1630,16 @@ function interactionGuide(state, media) {
   if (state?.canonical_state?.public_story_checkpoint_pending) {
     return ['Сказка приостановлена', 'Восстанавливаем место в сказке. Если она не продолжилась, нажми 7 и выбери сказку заново.'];
   }
+  if (state?.session?.state === 'ENDED' || state?.session?.node === 'session_closed') {
+    return state.session?.handset_up
+      ? ['Сеанс завершён', 'Сеанс завершён. Положи трубку, чтобы начать заново.']
+      : ['Сеанс завершён', 'Поднимите трубку'];
+  }
+  if (state?.canonical_state?.mode === 'profile_ready') {
+    return ['Карта принята', state?.simulator?.session?.session_actions?.includes('start')
+      ? 'Карта принята. Нажми «Начать» или подними трубку.'
+      : 'Карта принята. Подними трубку, чтобы начать.'];
+  }
   if (!interactionActive(state)) return state?.simulator?.session?.session_actions?.includes('start')
     ? ['Начнём?', 'Нажми «Начать» или подними трубку, чтобы поговорить с Мишкой.'] : null;
   const node = state.session.node;
@@ -1650,19 +1660,18 @@ function interactionGuide(state, media) {
     if (['pending','progress'].includes(game.game_exit_hold?.phase)) return [title, 'Держи 7. Огоньки заполняются. Когда они заполнятся, можно отпустить.'];
     if (['starting', 'prompt'].includes(game.game_audio_stage)
       || ['instruction', 'awaiting_prompt'].includes(game.game_phase)) return [title,
-        'Дослушай Мишку. Потом можно будет ответить. ' + (game.active_game_id === 'quiz'
-          ? 'Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.' : '7 — выйти из игры.')];
-    if (game.active_game_id === 'repeat_pattern' && game.game_phase === 'demonstrate') return [title, 'Посмотри, как загораются огоньки. Потом повтори последовательность. 7 — выйти из игры.'];
+        'Дослушай Мишку. Потом можно будет ответить. Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.'];
+    if (game.active_game_id === 'repeat_pattern' && game.game_phase === 'demonstrate') return [title, 'Посмотри, как загораются огоньки. Потом повтори последовательность. Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.'];
     if (game.active_game_id === 'word_game') {
       const hint = media.pending ? 'Разреши микрофон в окне браузера и назови слово.'
         : !media.microphone ? 'Включи микрофон и назови слово.'
           : media.microphoneAccepting ? 'Назови слово для игры.' : 'Дослушай Мишку. Потом назови слово.';
-      return [title, hint + ' Можно написать слово в «Инструментах». 7 — выйти из игры.'];
+      return [title, hint + ' Можно написать слово в «Инструментах». Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.'];
     }
     return [title, {
-      free_lights: 'Нажимай кнопки 1–6 и играй с огоньками. 7 — выйти из игры.',
-      repeat_pattern: 'Повтори подсвеченные кнопки в том же порядке. 7 — выйти из игры.',
-      odd_one_out: 'Нажми подсвеченную кнопку с лишним предметом. 7 — выйти из игры.',
+      free_lights: 'Нажимай кнопки 1–6 и играй с огоньками. Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.',
+      repeat_pattern: 'Повтори подсвеченные кнопки в том же порядке. Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.',
+      odd_one_out: 'Нажми подсвеченную кнопку с лишним предметом. Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.',
       quiz: 'Вопрос ' + (Number(game.game_round || 0) + 1) + ' из 8. Нажми подсвеченную кнопку с ответом. Для ответа 7 коротко нажми и отпусти. Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.',
     }[game.active_game_id] || 'Следуй текущей подсветке и подсказке Мишки.'];
   }

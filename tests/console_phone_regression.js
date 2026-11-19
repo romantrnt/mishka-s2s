@@ -518,10 +518,10 @@ function gameGuidance(){
   show(id,'playing','instruction');check(/Дослушай Мишку/);
   show(id,'playing','playing','game_exit_confirmation');check(/6 — продолжить; 7 — закончить; 5 — помощь/);
  }
- show('free_lights');check(/1–6.*7 — выйти/);
+ show('free_lights');check(/1–6.*держи 7.*Теперь отпускай/);
  show('repeat_pattern','playing','demonstrate');check(/Посмотри.*Потом повтори/);
- show('repeat_pattern');check(/Повтори подсвеченные кнопки.*7 — выйти/);
- show('odd_one_out');check(/подсвеченную кнопку.*7 — выйти/);
+ show('repeat_pattern');check(/Повтори подсвеченные кнопки.*держи 7.*Теперь отпускай/);
+ show('odd_one_out');check(/подсвеченную кнопку.*держи 7.*Теперь отпускай/);
  show('quiz');check(/подсвеченную кнопку.*ответа 7 коротко нажми и отпусти.*держи 7.*Теперь отпускай/);
  show('quiz','playing','demonstrate');check(/подсвеченную кнопку.*держи 7.*Теперь отпускай/);
  assert.doesNotMatch(fields['guide-text'].textContent,/7 —/,'quiz 7 may be an answer');
@@ -611,8 +611,8 @@ async function onboardingGuidance(){
  assert.strictEqual(fields['phone-handset'].disabled,false,'closed session still offers handset cleanup');
  show('session_closed',false);assert.strictEqual(fields['phone-instruction'].textContent,'Поднимите трубку');
  const profile=show('profile_ready',false);profile.session.state='STANDBY';profile.canonical_state={mode:'profile_ready'};context.render(profile);
- assert.strictEqual(fields['phone-instruction'].textContent,'Поднимите трубку');
- assert.strictEqual(fields['guide-text'].textContent,'Поднимите трубку, чтобы начать.');
+ assert.strictEqual(fields['phone-instruction'].textContent,'Карта принята. Подними трубку, чтобы начать.');
+ assert.strictEqual(fields['guide-text'].textContent,'Карта принята. Подними трубку, чтобы начать.');
  const menu=show('game_menu');
  menu.canonical_state={mode:'game_menu',scene_menu_descriptor:{scene:'game_menu',items:[{slot:1,title:'Огоньки'},{slot:5,title:'Игра в слова'}],buttons:[1,5,7]}};
  context.render(menu);assertHint('1 — Огоньки; 5 — Игра в слова; 7 — назад.');

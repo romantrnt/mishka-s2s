@@ -455,4 +455,25 @@ def test_quiz_short_round_completes_cleanly_and_120s_rfid_expiry_preserves_game(
     assert r.state.mode == 'game_active' and r.state.game_engine_state.round == 0
 
 
+def test_rapid_double_tap_7_from_game_menu_does_not_enter_schedule_weather():
+    r = Route('4-5')
+    r.menu()
+    assert r.state.mode == 'game_menu'
+    back = r.press(7)
+    assert back['reason'] == 'game_menu_back'
+    assert r.state.mode == 'root_menu'
+    r.release(7)
+    # Rapid second press 50ms later must not bounce into schedule_weather.
+    r.clock += 0.05
+    bounce = r.press(7)
+    assert bounce['reason'] == 'submenu_back_bounce_ignored'
+    assert r.state.mode == 'root_menu'
+    r.release(7)
+    # Deliberate press 700ms later enters schedule_weather normally.
+    r.clock += 0.70
+    ok = r.press(7)
+    assert ok['reason'] == 'button_mode'
+    assert r.state.mode == 'schedule_weather'
+
+
 

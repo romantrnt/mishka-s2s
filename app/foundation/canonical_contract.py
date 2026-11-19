@@ -280,6 +280,7 @@ class CanonicalState:
     accepted_buttons_down: list[int] = field(default_factory=list)
     scene_menu_descriptor: dict[str, Any] = field(default_factory=dict)
     scene_menu_generation: int = field(default=0, repr=False)
+    root_menu_back_guard_until: float | None = field(default=None, repr=False)
     mood_result: str | None = None
     accessibility_policy: dict[str, Any] = field(default_factory=dict)
     schedule_ref: str | None = None
@@ -2588,6 +2589,8 @@ class CanonicalRuntime(SceneMenuMixin):
                     {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons), "skipped": True},
                 ], "exhibition_menu_tutorial_skipped", clear_audio=True)
             if self.exhibition_mode and state.mode == "menu_ready":
+                if button == 7 and state.root_menu_back_guard_until is not None and monotonic_now < state.root_menu_back_guard_until:
+                    return self._decision(state, [], "submenu_back_bounce_ignored")
                 if button in state.menu_pressed_buttons:
                     return self._decision(state, [], "exhibition_menu_button_duplicate")
                 action = {
@@ -2747,15 +2750,18 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode == "fixed_story_menu" and button == 7:
                 if state.activity_return_mode == 'bear_dialogue':
                     return self._activity_back(state, 'story_menu_back')
+                state.root_menu_back_guard_until = monotonic_now + 0.65
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "story_menu_back")
             if state.mode == "game_menu" and button == 7:
                 if state.activity_return_mode == 'bear_dialogue':
                     return self._activity_back(state, 'game_menu_back')
+                state.root_menu_back_guard_until = monotonic_now + 0.65
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "game_menu_back")
             if state.mode in {"support_intake", "bear_dialogue", "personal_story_generating",
                               "personal_story_validating", "personal_story_playing"} and button == 7:
+                state.root_menu_back_guard_until = monotonic_now + 0.65
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "activity_back")
             if state.mode == "wellbeing_check" and button == 5:
@@ -2765,6 +2771,8 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode == "wellbeing_check" and button == 1:
                 return self._support_no(state)
             if state.mode in {"idle", "visual_welcome", "anonymous_visual", "root_menu", "dialogue_memory_expired", "dialogue_suspended_ram", "voice_welcome", "automatic_mood_check", "awaiting_handset"}:
+                if state.mode == "root_menu" and button == 7 and state.root_menu_back_guard_until is not None and monotonic_now < state.root_menu_back_guard_until:
+                    return self._decision(state, [], "submenu_back_bounce_ignored")
                 mode = BUTTON_MODES[button]
                 if mode in {"game_menu", "fixed_story_menu", "personal_story_theme", "schedule_weather"}:
                     state.scene_menu_held = [button]
@@ -2797,6 +2805,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode == "personal_story_theme":
                 theme = self._menu_selection(state, button)
                 if button == 7:
+                    state.root_menu_back_guard_until = monotonic_now + 0.65
                     state.mode, state.state_version = "root_menu", state.state_version + 1
                     return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "personal_story_cancelled")
                 if theme is not None:
@@ -2866,6 +2875,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode == "schedule_weather":
                 action = "back" if button==7 else self._menu_selection(state,button)
                 if action == "back":
+                    state.root_menu_back_guard_until = monotonic_now + 0.65
                     state.mode, state.state_version = "root_menu", state.state_version + 1
                     return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"},
                         {"type": "lighting_preset", "preset": "ROOT_MENU"}], "info_back", clear_audio=True)
