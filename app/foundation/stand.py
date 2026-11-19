@@ -3072,7 +3072,7 @@ class HardwareIntegrationStand:
         if not isinstance(value, dict):
             return {}
         allowed = {
-            "session_id", "state", "state_version", "reason",
+            "session_id", "state", "state_version", "reason", "auth_status",
             "audio_status", "pending", "barge_in", "correlation_id",
         }
         result = {key: value[key] for key in allowed if key in value
