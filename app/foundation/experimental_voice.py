@@ -573,8 +573,9 @@ class ExperimentalTTSProvider:
                 self._active_stream_exchange = exchange_task
                 pending = array.array("f")
                 emitted = 0
+                first_block_s = 0.4 if self.provider_name == "vox555" else _NATIVE_FIRST_BLOCK_SECONDS
                 target = max(1, int(self._config["sample_rate"] * (
-                    _NATIVE_FIRST_BLOCK_SECONDS if first_chunk else _NATIVE_LATER_BLOCK_SECONDS)))
+                    first_block_s if first_chunk else _NATIVE_LATER_BLOCK_SECONDS)))
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:

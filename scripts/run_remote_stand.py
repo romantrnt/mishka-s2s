@@ -160,11 +160,15 @@ async def _remote_session(*, max_source: Path | None = None, max_bundle: Path | 
     from scripts.run_max_json_demo import SyntheticCapture
     if profile not in {"mock", "local_gpu"} or (max_source is None) == (max_bundle is None):
         raise RemoteLaunchError("remote_explicit_profile_and_max_source_required")
-    trained = voice_route in {"voxcpm765_rvc100", "silero_rvc100"}
-    experimental = voice_route == "voxcpm765_rvc100"
-    if voice_route not in {"baseline_silero", "voxcpm765_rvc100", "silero_rvc100"}:
+    rvc_trained = voice_route in {"voxcpm765_rvc100", "silero_rvc100"}
+    vox_clean = voice_route == "vox555"
+    experimental = voice_route in {"voxcpm765_rvc100", "vox555"}
+    trained = rvc_trained or vox_clean
+    if voice_route not in {"baseline_silero", "voxcpm765_rvc100", "silero_rvc100", "vox555"}:
         raise RemoteLaunchError("remote_voice_route_unsupported")
-    if trained and (profile != "local_gpu" or not all((rvc_root, rvc_python, rvc_model, rvc_index)) or (experimental and not voice_manifest)):
+    if rvc_trained and (profile != "local_gpu" or not all((rvc_root, rvc_python, rvc_model, rvc_index)) or (experimental and not voice_manifest)):
+        raise RemoteLaunchError("remote_trained_voice_requires_explicit_assets")
+    if vox_clean and (profile != "local_gpu" or not voice_manifest or any((rvc_root, rvc_python, rvc_model, rvc_index))):
         raise RemoteLaunchError("remote_trained_voice_requires_explicit_assets")
     if not trained and any((voice_manifest, rvc_root, rvc_python, rvc_model, rvc_index)):
         raise RemoteLaunchError("remote_baseline_rejects_trained_assets")
@@ -174,7 +178,7 @@ async def _remote_session(*, max_source: Path | None = None, max_bundle: Path | 
     if minimum_free_vram_gb is not None:
         Settings(min_available_vram_gb=minimum_free_vram_gb).validate()
         resource_overrides["min_available_vram_gb"] = minimum_free_vram_gb
-    expected_voice = "rvc_v2" if trained else "off"
+    expected_voice = "rvc_v2" if rvc_trained else "off"
     if os.getenv("MISHKA_VOICE_CONVERSION", expected_voice).strip().lower() != expected_voice:
         raise RemoteLaunchError("remote_baseline_requires_voice_conversion_off")
     allowed = tuple(normalize_origin(value) for value in origins)
@@ -204,7 +208,7 @@ async def _remote_session(*, max_source: Path | None = None, max_bundle: Path | 
     owned = api = None
     manifest = {"event": "starting", "pid": os.getpid(), "profile": profile, "hardware_mode": "simulator",
                 "synthetic_data": True, "production_ready": False, "voice_conversion": expected_voice,
-                "voice_route": voice_route, "tts_provider": "voxcpm765" if experimental else "silero",
+                "voice_route": voice_route, "tts_provider": ("vox555" if vox_clean else "voxcpm765" if experimental else "silero"),
                 "min_available_vram_gb": minimum_free_vram_gb if minimum_free_vram_gb is not None else Settings().min_available_vram_gb,
                 "whisper_model": model_reference, "whisper_local_assets": whisper_model is not None,
                 "started_at": datetime.now(timezone.utc).isoformat(), "host": host, "port": port,
@@ -229,20 +233,26 @@ async def _remote_session(*, max_source: Path | None = None, max_bundle: Path | 
                             silero_cache_path=str(directory / "cache/silero/v5_5_ru.pt"))
         if trained:
             from dataclasses import replace
-            settings = replace(settings, tts_provider="voxcpm765" if experimental else "silero",
-                               experimental_voice_manifest=str(voice_manifest.expanduser().absolute()) if experimental else "",
-                               rvc_project_root=str(rvc_root.expanduser().absolute()),
-                               rvc_python=str(rvc_python.expanduser().absolute()),
-                               rvc_model=str(rvc_model.expanduser().absolute()),
-                               rvc_index=str(rvc_index.expanduser().absolute()),
-                               rvc_worker_script=str(PROJECT_ROOT / "scripts/rvc_trained_worker.py"),
-                               rvc_index_rate=.75, rvc_fallback_mode="fail_closed",
-                               rvc_tmp_dir=str(directory / "cache/rvc-tmp"),
-                               rvc_startup_timeout_s=180, rvc_timeout_s=180,
-                               tts_timeout_s=180, e2e_stage_timeout_s=600, e2e_warmup_timeout_s=600,
-                               watchdog_stale_after_s=max(settings.watchdog_stale_after_s,
-                                   settings.max_turn_seconds + settings.audio_cleanup_timeout_s + 5),
-                               **resource_overrides)
+            trained_kwargs = {
+                "tts_provider": ("vox555" if vox_clean else "voxcpm765" if experimental else "silero"),
+                "experimental_voice_manifest": str(voice_manifest.expanduser().absolute()) if experimental else "",
+                "tts_timeout_s": 180, "e2e_stage_timeout_s": 600, "e2e_warmup_timeout_s": 600,
+                "watchdog_stale_after_s": max(settings.watchdog_stale_after_s,
+                    settings.max_turn_seconds + settings.audio_cleanup_timeout_s + 5),
+                **resource_overrides,
+            }
+            if rvc_trained:
+                trained_kwargs.update({
+                    "rvc_project_root": str(rvc_root.expanduser().absolute()),
+                    "rvc_python": str(rvc_python.expanduser().absolute()),
+                    "rvc_model": str(rvc_model.expanduser().absolute()),
+                    "rvc_index": str(rvc_index.expanduser().absolute()),
+                    "rvc_worker_script": str(PROJECT_ROOT / "scripts/rvc_trained_worker.py"),
+                    "rvc_index_rate": .75, "rvc_fallback_mode": "fail_closed",
+                    "rvc_tmp_dir": str(directory / "cache/rvc-tmp"),
+                    "rvc_startup_timeout_s": 180, "rvc_timeout_s": 180,
+                })
+            settings = replace(settings, **trained_kwargs)
         api = create_stand_app(settings, phone_client=owned, simulator_scan=capture.scan)
         if experimental:
             from app.foundation.public_menu_audio import enable_public_menu_audio_cache, public_menu_audio_readiness
@@ -315,7 +325,7 @@ def parser():
     result.add_argument("--external-origin", action="append", required=True, help="Exact allowed browser origin; repeat explicitly for localhost")
     result.add_argument("--max-port", type=int, default=0, help="Owned loopback Max HTTPS listener; 0 allocates a fresh port")
     result.add_argument("--whisper-model", type=Path, help="Existing pinned faster-whisper model directory; avoids mutable model lookup")
-    result.add_argument("--voice-route", choices=("baseline_silero", "voxcpm765_rvc100", "silero_rvc100"), default="baseline_silero")
+    result.add_argument("--voice-route", choices=("baseline_silero", "voxcpm765_rvc100", "silero_rvc100", "vox555"), default="baseline_silero")
     result.add_argument("--voice-manifest", type=Path)
     result.add_argument("--rvc-root", type=Path)
     result.add_argument("--rvc-python", type=Path)

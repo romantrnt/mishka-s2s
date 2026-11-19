@@ -123,7 +123,7 @@ def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackContro
     playback=playback_override or SoundDevicePlaybackController(settings.audio_output_device or None)
     def resolved(value: str) -> str:
         return _project_path(value, keep_bare_command=True)
-    if settings.tts_provider == "voxcpm765":
+    if settings.tts_provider in {"voxcpm765", "vox555"}:
         from .experimental_voice import create_experimental_tts_provider
         tts = create_experimental_tts_provider(settings.tts_provider, settings.experimental_voice_manifest)
     else:

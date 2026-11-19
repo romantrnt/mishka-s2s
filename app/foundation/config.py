@@ -369,9 +369,9 @@ class Settings:
             raise SettingsError("production profile cannot use demo weather")
         if self.voice_conversion not in {"rvc_v2", "off", "disabled"}:
             raise SettingsError("unsupported MISHKA_VOICE_CONVERSION")
-        if self.tts_provider not in {"silero", "voxcpm765"}:
+        if self.tts_provider not in {"silero", "voxcpm765", "vox555"}:
             raise SettingsError("unsupported TTS provider")
-        if self.tts_provider == "voxcpm765" and (self.profile != "local_gpu" or not self.experimental_voice_manifest):
+        if self.tts_provider in {"voxcpm765", "vox555"} and (self.profile != "local_gpu" or not self.experimental_voice_manifest):
             raise SettingsError("trained TTS requires local_gpu and explicit manifest")
         if self.rvc_fallback_mode not in {"passthrough", "controlled_passthrough", "fail_closed"}:
             raise SettingsError("unsupported RVC_FALLBACK_MODE")
