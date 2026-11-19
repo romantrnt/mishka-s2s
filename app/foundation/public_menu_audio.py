@@ -47,10 +47,10 @@ async def menu_validation_text(application, page, text):
                 }):
             return None
         words = {1:'один',2:'два',3:'три',4:'четыре'}
-        span = f'Кнопка {words[item.slot]}: Телефон.'
+        span = f'{words[item.slot].capitalize()} — Телефон.'
         if validation_text.count(span) != 1:
             return None
-        validation_text = validation_text.replace(span, f'Кнопка {words[item.slot]}: Сказка.', 1)
+        validation_text = validation_text.replace(span, f'{words[item.slot].capitalize()} — Сказка.', 1)
     return engine.normalizer.normalize(validation_text)
 
 

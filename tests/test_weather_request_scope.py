@@ -129,7 +129,7 @@ def test_missing_day_weather_is_explained_without_fake_choice(band):
     assert page.buttons == (1, 5, 7)
     assert [(item.id, item.title) for item in page.items] == [('date', 'Дата')]
     assert 'Погоду сейчас не могу проверить.' in page.spoken_text
-    assert page.spoken_text.index('Погоду сейчас') < page.spoken_text.index('Кнопка один')
+    assert page.spoken_text.index('Погоду сейчас') < page.spoken_text.index('Один —')
     assert page.action_for(5) == ('help', None) and page.action_for(7) == ('back', None)
     assert len(page.spoken_text) <= 320
 

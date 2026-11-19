@@ -207,7 +207,7 @@ async def test_telefon_exception_remains_exact_not_a_blanket_catalogue_bypass(ap
     try:
         from app.foundation.menu_content import MenuItem
         page = replace(page, scene='fixed_story_menu', items=(MenuItem(1, 'fixed_neznayka_v1', 'Телефон'),),
-                       spoken_text='Кнопка один: Телефон. Пять — помощь. Семь — назад.')
+                       spoken_text='Один — Телефон. Пять — помощь. Семь — назад.')
         async def trusted(text, **kwargs):
             return SimpleNamespace(allowed='Телефон' not in text, reason='personal_data')
         h.app.bounded_s2s.response_validator.validate_trusted = trusted

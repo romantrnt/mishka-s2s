@@ -196,7 +196,7 @@ def build_menu_page(scene: str, band: str, page: int = 0, *,
     items = tuple(MenuItem(slot, item_id, title)
                   for slot, (item_id, title) in enumerate(choices[page * size:(page + 1) * size], 1))
     buttons = tuple(item.slot for item in items) + (() if scene == "game_menu" else (5,)) + ((6,) if count > 1 else ()) + (7,)
-    parts = [f"Кнопка {_BUTTON_WORDS[item.slot]}: {item.title}." for item in items]
+    parts = [f"{_BUTTON_WORDS[item.slot].capitalize()} — {item.title}." for item in items]
     if not items:
         parts.append("Сейчас здесь нет доступных вариантов.")
     if scene != "game_menu":
