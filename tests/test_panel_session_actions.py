@@ -432,3 +432,31 @@ def test_canonical_runtime_end_while_down_allows_ready_then_lift():
     lifted = runtime.handle(CanonicalEvent("HandsetLifted", sid, 4, ready["state"]["state_version"], "handset", {}, "s4", now + 3))
     assert lifted["reason"] == "exhibition_handset_lifted"
     assert lifted["state"]["mode"] == "voice_welcome" and lifted["state"]["profile_status"] == "identified"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_auth", [False, True])
+async def test_physical_lift_entry_guest_and_reverse_auth_reach_menu_and_clean_next_visit(tmp_path, reverse_auth):
+    h = PanelStand(tmp_path, identity=reverse_auth)
+    try:
+        lifted = await h.simulator.action({"action": "handset", "state": "up"})
+        assert lifted["reason"] == "exhibition_handset_lifted"
+        assert h.state.mode == "voice_welcome" and h.state.interaction_route == "handset"
+        if reverse_auth:
+            old = h.state
+            assert (await h.ready())["reason"] == "profile_ready"
+            assert h.state is not old and h.state.mode == "voice_welcome"
+            assert h.state.profile_status == "identified" and h.state.handset == "up"
+        await h.menu()
+        await h.key(7)
+        assert h.state.mode == "schedule_weather"
+        await h.key(7)
+        assert h.state.mode == "root_menu"
+        assert (await h.control("end"))["reason"] == "soft_end"
+        assert h.state.mode == "session_closed" and h.state.handset == "up"
+        assert (await h.simulator.action({"action": "handset", "state": "down"}))["reason"] == "closed_handset_placed"
+        next_lift = await h.simulator.action({"action": "handset", "state": "up"})
+        assert next_lift["reason"] == "exhibition_handset_lifted"
+        assert h.state.profile_status == "anonymous" and h.state.mode == "voice_welcome"
+    finally:
+        await h.close()

@@ -1098,12 +1098,12 @@ function render(state, { fromWebSocket = false } = {}) {
     const result = item.result || {};
     const reason = String(result.reason || '');
     const outputs = Array.isArray(result.outputs) ? result.outputs : [];
-    const reasonLooksFailed = /(?:^|_)(?:error|failed|blocked|fallback|unavailable|retry)(?:$|_)/i.test(reason);
+    const reasonLooksFailed = /(?:^|_)(?:error|failed|blocked|fallback|unavailable)(?:$|_)/i.test(reason);
     const outputLooksFailed = outputs.some(output => {
       const action = String(output?.action || output?.type || '');
       const resolution = String(output?.resolution || '');
-      return /(?:blocked|failed|fallback|unavailable|retry)/i.test(`${action} ${resolution}`)
-        || ['safe_stop', 'transition_rejected', 'audio_retry', 's2s_fallback', 'content_blocked', 'privacy_blocked'].includes(action);
+      return /(?:blocked|failed|fallback|unavailable)/i.test(`${action} ${resolution}`)
+        || ['safe_stop', 'transition_rejected', 's2s_fallback', 'content_blocked', 'privacy_blocked'].includes(action);
     });
     return reasonLooksFailed || outputLooksFailed;
   });
@@ -1720,7 +1720,10 @@ function interactionGuide(state, media) {
     story_pause_announcement: ['Сказка на паузе', 'Дослушай Мишку. Затем можно будет продолжить сказку.'],
     story_paused: ['Сказка на паузе', '6 — продолжить сказку; 7 — выйти из сказки.'],
     story_resume_announcement: ['Сказка', 'Дослушай Мишку. Сказка скоро продолжится.'],
-    session_closed: ['Сеанс завершён', 'Сеанс завершён. Положи трубку, чтобы начать заново.'],
+    awaiting_handset: ['Подними трубку', 'Подними трубку, чтобы Мишка начал.'],
+    session_closed: state.session?.handset_up
+      ? ['Сеанс завершён', 'Сеанс завершён. Положи трубку, чтобы начать заново.']
+      : ['Сеанс завершён', 'Поднимите трубку'],
     safety_stop: ['Позови взрослого', 'Позови взрослого рядом. Положи трубку, чтобы завершить разговор.'],
     wellbeing_check: ['Нужна помощь?', 'Ответь на вопрос Мишки: 1 — нет; 7 — да, нужна помощь; 5 — повторить вопрос.'],
   }[node] || null;

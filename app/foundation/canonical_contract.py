@@ -1640,7 +1640,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
             state.interaction_route = None
             return self._decision(state, effects + [{"type": "lighting_dark"}], "identity_expired")
-        if self.optional_identity and state.mode == "session_closed" and event.event_type == "HandsetPlaced":
+        if (self.optional_identity or state.substate == "soft_end") and state.mode == "session_closed" and event.event_type == "HandsetPlaced":
             state.handset, state.mode, state.expected_inputs = "down", "idle", ["handset_up"]
             state.state_version += 1
             return self._decision(state, [{"type": "lighting_dark"}], "closed_handset_placed")
