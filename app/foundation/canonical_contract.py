@@ -1648,7 +1648,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.interaction_route = None
             return self._decision(state, effects + [{"type": "lighting_dark"}], "identity_expired")
         if (self.optional_identity or state.substate == "soft_end") and state.mode == "session_closed" and event.event_type == "HandsetPlaced":
-            state.handset, state.mode, state.expected_inputs = "down", "idle", ["handset_up"]
+            state.handset, state.mode, state.substate, state.expected_inputs = "down", "idle", None, ["handset_up"]
             state.state_version += 1
             return self._decision(state, [{"type": "lighting_dark"}], "closed_handset_placed")
         if event.event_type in {"SessionCancel", "SessionReset"}:
@@ -1657,6 +1657,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.mode = ("session_closed" if state.handset == "up" else "idle") if self.optional_identity else ("soft_end" if event.event_type == "SessionCancel" else "session_closed")
             if session_action_authorized and event.event_type == "SessionCancel":
                 state.mode = "session_closed"
+                state.substate = "soft_end"
             state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
             state.state_version += 1
             lighting = {"type": "lighting_dark"} if self.optional_identity else {"type": "lighting_preset", "preset": "READY"}
@@ -2369,7 +2370,7 @@ class CanonicalRuntime(SceneMenuMixin):
             elif state.mode == "session_closed" and state.handset == "down" and state.substate == "soft_end":
                 state.mode = "idle"
                 state.substate = None
-            if state.interaction_route == "panel":
+            if state.interaction_route == "panel" and state.mode != "awaiting_handset" and not state.pending_mode:
                 state.handset = "up"
                 return self._session_action_noop(state, "panel_handset_lifted")
             state.interaction_route = "handset"
@@ -2420,17 +2421,17 @@ class CanonicalRuntime(SceneMenuMixin):
                 # The active menu owns its button affordances; microphone admission
                 # is not a navigation event and must preserve that lighting.
                 return self._decision(state, [{"type": "capture_open"}], "voice_open_activity")
-            if state.profile_status == "identified":
-                state.mode = "root_menu"
-                state.expected_inputs = ["button", "speech", "handset_down"]
-                greeting = f"Привет, {state.display_name}. Я Мишка" if state.display_name else "Привет. Я Мишка"
-                return self._decision(state, [{"type": "speak_dynamic", "text": greeting, "personalized": bool(state.display_name)}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "identified_menu_opened")
             if state.pending_mode:
                 pending = state.pending_mode
                 state.pending_mode = None
                 state.mode = pending
                 state.expected_inputs = ["button", "speech", "handset_down"]
                 return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "voice_open_pending_activity")
+            if state.profile_status == "identified":
+                state.mode = "root_menu"
+                state.expected_inputs = ["button", "speech", "handset_down"]
+                greeting = f"Привет, {state.display_name}. Я Мишка" if state.display_name else "Привет. Я Мишка"
+                return self._decision(state, [{"type": "speak_dynamic", "text": greeting, "personalized": bool(state.display_name)}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "identified_menu_opened")
             state.mode = "voice_welcome"
             state.expected_inputs = ["button", "speech", "handset_down"]
             return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "voice_open")
