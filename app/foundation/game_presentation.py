@@ -54,7 +54,7 @@ class GamePresentationMixin:
             segments.append((prompt, (), effect.get("phrase_asset_id")))
         narrate_options = (effect.get("game_id") == "odd_one_out" or
             (effect.get("game_id") == "quiz" and effect.get("display", "digits") == "digits"))
-        if narrate_options and effect.get("options"):
+        if narrate_options and effect.get("options") and not effect.get("is_hint"):
             labels = _COLOR_LABELS if effect.get("display") == "colors" else _DIGIT_LABELS
             for button, text in tuple(effect.get("options") or ())[:7]:
                 if type(button) is int and button in labels:

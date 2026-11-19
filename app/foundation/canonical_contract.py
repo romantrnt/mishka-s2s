@@ -1227,13 +1227,16 @@ class CanonicalRuntime(SceneMenuMixin):
             "word_game": word_prompt,
         }.get(engine.game_id, "Выбери ответ."))
         state.game_audio_stage = "prompt"
+        answer_buttons = list(game_answer_buttons(engine))
+        allowed = set(answer_buttons)
         return {"type":"game_prompt", "content_id":"GAME_PROMPT", "game_id":engine.game_id,
             "challenge_id":challenge.id if challenge else None, "prompt":prompt,
             "feedback_phrase_id":feedback_id, "feedback_text":"Получилось!" if feedback_id else None,
-            "options":list(challenge.options) if challenge else [],
+            "options":[item for item in challenge.options if item[0] in allowed] if challenge else [],
+            "is_hint": bool(text is not None and feedback_id is None),
             "phrase_id":(challenge.phrase_id if challenge else spec.instruction_phrase_id
                          if engine.game_id in {'free_lights','repeat_pattern'} else None) if text is None else None,
-            "answer_buttons":list(game_answer_buttons(engine)),
+            "answer_buttons":answer_buttons,
             "exit_hint": ("Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." if hold_exit_policy(engine)
                           else "Чтобы выйти, нажми семь.") if engine.round == 0 and text is None else None,
             "display":getattr(challenge, "display", "digits") if challenge else "colors"}
@@ -1297,6 +1300,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 effects.append(self._game_lighting(outcome.state))
             if outcome.speech_text and state.interaction_open:
                 effects = [{"type":"audio_stop"}, {"type":"capture_close"},
+                           *([self._game_lighting(outcome.state)] if engine.game_id != 'free_lights' else []),
                            self._game_prompt(state, outcome.speech_text, outcome.feedback_id)]
             elif outcome.feedback_id and state.interaction_open:
                 effects.append({"type":"speak", "phrase_id":outcome.feedback_id})
@@ -2595,7 +2599,7 @@ class CanonicalRuntime(SceneMenuMixin):
             } and state.mode != "game_menu" and not (
                 state.mode == "game_active" and state.game_engine_state is not None
                 and getattr(state.game_engine_state, 'immersive', False)
-                and button in game_answer_buttons(state.game_engine_state)
+                and button in game_answer_buttons(state.game_engine_state, include_narrowed=False)
             ) and not (self.exhibition_mode and state.mode == "exhibition_age_selection"):
                 question = state.support_question_kind if state.mode == "wellbeing_check" else None
                 state.support_question_kind = question or "pain_or_discomfort"

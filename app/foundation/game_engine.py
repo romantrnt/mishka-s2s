@@ -78,6 +78,7 @@ class GameState:
     challenge_index: int = 0
     # Shared ordered-hint cursor; hints_emitted separately bounds timer repeats.
     challenge_attempts: int = 0
+    narrowed_options: tuple[int, ...] = ()
     seven_answer_generation: int | None = None
     seven_exit_down_at: float | None = None
     seven_exit_phase: str = 'idle'
@@ -101,10 +102,12 @@ def current_challenge(state: GameState) -> GameChallenge | None:
     return state.deck[state.challenge_index % len(state.deck)]
 
 
-def game_answer_buttons(state: GameState) -> tuple[int, ...]:
+def game_answer_buttons(state: GameState, *, include_narrowed: bool = True) -> tuple[int, ...]:
     """Answers stay contextual during their prompt, including physical 5 and 7."""
     challenge = current_challenge(state)
     if challenge is not None:
+        if include_narrowed and state.narrowed_options:
+            return state.narrowed_options
         return tuple(button for button, _ in challenge.options)
     if state.game_id == 'free_lights':
         return (1, 2, 3, 4, 5, 6)
@@ -178,13 +181,31 @@ def _progress(state: GameState) -> GameTransition:
                           'PHRASE_028' if complete else None, complete)
 
 
+def _narrow_challenge_options(state: GameState, challenge: GameChallenge, wrong_button: int) -> tuple[int, ...]:
+    """Narrow >3 quiz options down to 3 (answer + 2 wrong) on first error without renumbering."""
+    options = tuple(b for b, _ in challenge.options)
+    if state.game_id != 'quiz' or state.narrowed_options or len(options) <= 3:
+        return state.narrowed_options
+    wrong_candidates = tuple(b for b in options if b != challenge.answer and b != wrong_button)
+    if len(wrong_candidates) < 2:
+        wrong_candidates = tuple(b for b in options if b != challenge.answer)
+    offset = (state.seed + state.challenge_index + wrong_button) % len(wrong_candidates)
+    picked = (wrong_candidates[offset], wrong_candidates[(offset + 1) % len(wrong_candidates)])
+    return tuple(sorted({challenge.answer, *picked}))
+
+
 def _answer_challenge(state: GameState, button: int) -> GameTransition:
     challenge = current_challenge(state)
     if button != challenge.answer:
-        hints = challenge.hints or ('Попробуем ещё раз. ' + challenge.prompt,)
-        hint = hints[min(state.challenge_attempts, len(hints) - 1)]
+        narrowed = _narrow_challenge_options(state, challenge, button)
+        if narrowed and not state.narrowed_options:
+            hint = 'Пока не угадал. Оставил три варианта — попробуй ещё раз!'
+        else:
+            hints = challenge.hints or ('Попробуем ещё раз. ' + challenge.prompt,)
+            hint = hints[min(state.challenge_attempts, len(hints) - 1)]
         state = replace(state, phase='awaiting_prompt',
                         challenge_attempts=state.challenge_attempts + 1,
+                        narrowed_options=narrowed,
                         response_deadline=None, hint_deadline=None,
                         timer_generation=state.timer_generation + 1)
         return GameTransition(state, desired_buttons(state), 'retry', speech_text=hint)
@@ -198,6 +219,7 @@ def _answer_challenge(state: GameState, button: int) -> GameTransition:
     state = replace(state, round=count, level=state.level + 1,
                     round_generation=state.round_generation + 1, deck=deck,
                     challenge_index=index, challenge_attempts=0, hints_emitted=0,
+                    narrowed_options=(),
                     phase='awaiting_prompt', response_deadline=None, hint_deadline=None,
                     timer_generation=state.timer_generation + 1)
     return GameTransition(state, desired_buttons(state), 'progress',

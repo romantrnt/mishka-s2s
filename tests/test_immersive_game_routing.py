@@ -77,7 +77,7 @@ def test_invite_menu_start_and_prompt_are_ordered_and_do_not_score_early():
     stale=r.send('AudioCompleted',{'response_id':'GAME_PROMPT','playback_lease':'stale'})
     assert stale['effects']==[] and r.state.game_audio_stage=='prompt'
     r.done()
-    r.press(answer)
+    r.press(answer);r.release(answer)
     assert r.state.game_engine_state.round==old.round+1
     assert r.state.game_audio_stage=='prompt'
 
@@ -252,3 +252,91 @@ async def test_irrelevant_keys_during_a_real_word_turn_preserve_its_history_owne
         release.set()
         if task:await asyncio.gather(task,return_exceptions=True)
         await h.close()
+
+
+def test_quiz_narrows_from_seven_to_three_on_first_wrong_and_resets_next_round():
+    r = Route('6-7')
+    r.menu()
+    r.start(2)
+    r.ready()
+    engine = r.state.game_engine_state
+    paint_idx = next(i for i, c in enumerate(engine.deck) if c.id == 'quiz-6-7-23')
+    r.state.game_engine_state = replace(engine, challenge_index=paint_idx, phase='playing')
+    challenge = current_challenge(r.state.game_engine_state)
+    assert challenge.answer == 7
+    assert tuple(game_answer_buttons(r.state.game_engine_state)) == (1, 2, 3, 4, 5, 6, 7)
+
+    # Idle hint timer must NOT narrow options.
+    r.state.game_engine_state = replace(r.state.game_engine_state, hint_deadline=r.clock + 1.0)
+    r.clock += 2.0
+    r.send('GameTimer', {'timer_generation': r.state.game_engine_state.timer_generation})
+    assert tuple(game_answer_buttons(r.state.game_engine_state)) == (1, 2, 3, 4, 5, 6, 7)
+    r.done()
+
+    # First wrong answer (button 1) narrows to 3 options: 7 + 2 wrong (excluding 1), no answer spoiler.
+    wrong_res = r.press(1)
+    r.release(1)
+    assert wrong_res['reason'] == 'game_retry'
+    narrowed = tuple(game_answer_buttons(r.state.game_engine_state))
+    assert len(narrowed) == 3 and 7 in narrowed and 1 not in narrowed
+    lighting = next(e for e in wrong_res['effects'] if e.get('type') == 'lighting_preset' and e.get('preset') == 'GAME_OUTPUT')
+    assert tuple(lighting['buttons']) == narrowed
+    prompt_eff = next(e for e in wrong_res['effects'] if e.get('type') == 'game_prompt')
+    assert 'фиолетов' not in prompt_eff['prompt'].lower()
+    assert prompt_eff['answer_buttons'] == list(narrowed)
+    assert [b for b, _ in prompt_eff['options']] == list(narrowed)
+
+    # Rapid tap during hint animation is ignored and does not corrupt state.
+    other_wrong = next(b for b in narrowed if b != 7)
+    rapid = r.press(other_wrong)
+    r.release(other_wrong)
+    assert rapid['reason'] == 'game_prompt_waiting'
+    assert r.state.game_engine_state.challenge_attempts == 1
+    r.done()
+
+    # Tapping an eliminated button (including 5) is ignored and never triggers help_priority.
+    eliminated = next(b for b in (1, 2, 3, 4, 5, 6) if b not in narrowed)
+    ignored = r.press(eliminated)
+    r.release(eliminated)
+    assert ignored['reason'] == 'game_ignored'
+    assert r.state.game_engine_state.challenge_attempts == 1
+    if 5 not in narrowed:
+        ignored_five = r.press(5)
+        r.release(5)
+        assert ignored_five['reason'] == 'game_ignored' and r.state.mode == 'game_active'
+
+    # Second wrong answer keeps the 3 narrowed options.
+    second = r.press(other_wrong)
+    r.release(other_wrong)
+    assert second['reason'] == 'game_retry'
+    assert tuple(game_answer_buttons(r.state.game_engine_state)) == narrowed
+    r.done()
+
+    # Short-tap 7 scores the answer and resets narrowing for the next question.
+    win = r.press(7)
+    assert win['reason'] == 'game_exit_pending'
+    r.clock += 0.1
+    scored = r.release(7)
+    assert scored['reason'] == 'game_progress'
+    assert r.state.game_engine_state.narrowed_options == ()
+    assert r.state.game_engine_state.challenge_attempts == 0
+    next_ch = current_challenge(r.state.game_engine_state)
+    assert tuple(game_answer_buttons(r.state.game_engine_state)) == tuple(b for b, _ in next_ch.options)
+
+
+def test_quiz_with_three_or_fewer_options_does_not_fake_narrow():
+    r = Route('6-7')
+    r.menu()
+    r.start(2)
+    r.ready()
+    engine = r.state.game_engine_state
+    small_idx = next(i for i, c in enumerate(engine.deck) if len(c.options) <= 3)
+    r.state.game_engine_state = replace(engine, challenge_index=small_idx, phase='playing')
+    ch = current_challenge(r.state.game_engine_state)
+    wrong_btn = next(b for b, _ in ch.options if b != ch.answer)
+    res = r.press(wrong_btn)
+    r.release(wrong_btn)
+    assert res['reason'] == 'game_retry'
+    assert r.state.game_engine_state.narrowed_options == ()
+    assert tuple(game_answer_buttons(r.state.game_engine_state)) == tuple(b for b, _ in ch.options)
+
