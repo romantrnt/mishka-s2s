@@ -1251,18 +1251,12 @@ class CanonicalRuntime(SceneMenuMixin):
         if outcome.status == "exit_requested":
             return self._game_exit(state, "game_exited_by_long_button")
         if outcome.status == 'exit_pending':
-            if engine.game_id in {'free_lights', 'word_game'}:
-                return self._decision(state, [], 'game_exit_pending')
-            state.game_audio_stage = 'idle'
-            state.state_version += 1
-            return self._decision(state, [{'type':'audio_stop'}, {'type':'capture_close'},
-                {'type':'lighting_preset','preset':'GAME_EXIT_HOLD','step':0}], 'game_exit_pending', clear_audio=True)
+            return self._decision(state, [], 'game_exit_pending')
         if outcome.status == 'exit_aborted':
             recognized = (engine.seven_exit_phase in {'progress', 'ready'}
                           or (engine.seven_exit_down_at is not None and now >= engine.seven_exit_down_at + 0.6))
             if not recognized:
-                effects = [] if engine.game_id in {'free_lights', 'word_game'} else [self._game_lighting(state.game_engine_state)]
-                return self._decision(state, effects, 'game_exit_aborted')
+                return self._decision(state, [], 'game_exit_aborted')
             state.game_engine_state = replace(pause_game(outcome.state), phase='awaiting_prompt')
             state.state_version += 1
             effects = [{'type':'audio_stop'}, {'type':'capture_close'}, self._game_lighting(state.game_engine_state)]
@@ -1821,7 +1815,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.state_version += 1
             if outcome.status in {'exit_progress','exit_ready'}:
                 effects = [{'type':'lighting_preset','preset':'GAME_EXIT_HOLD','step':outcome.state.seven_exit_step}]
-                if outcome.status == 'exit_progress' and outcome.state.seven_exit_step == 1 and engine.game_id in {'free_lights', 'word_game'}:
+                if outcome.status == 'exit_progress' and outcome.state.seven_exit_step == 1:
                     state.game_audio_stage = 'idle'
                     effects = [{'type':'audio_stop'}, {'type':'capture_close'}] + effects
                 if outcome.status == 'exit_ready' and state.interaction_open:

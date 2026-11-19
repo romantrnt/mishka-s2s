@@ -119,8 +119,6 @@ async def test_actual_app_timer_fills_real_channels_and_latches_owned_ready_once
         started = h.clock
         assert (await h.send('ButtonPressed', {'button_id':7}))['reason'] == 'game_exit_pending'
         idle_deadline = h.app._engagement_owners[sid]['deadline']
-        assert not any(h.app.led.output.snapshot().values())
-        assert h.state.game_audio_stage == 'idle' and h.app._game_voice_scope(sid) is None
         scopes = []
         for step in range(1,8):
             scope = h.app._game_timer_scopes[sid]
@@ -128,6 +126,8 @@ async def test_actual_app_timer_fills_real_channels_and_latches_owned_ready_once
             h.clock = scope[-1]
             result = (await h.app.flush_game_timers())[0]
             assert result['reason'] == ('game_exit_ready' if step == 7 else 'game_exit_progress')
+            if step == 1:
+                assert h.state.game_audio_stage == 'idle' and h.app._game_voice_scope(sid) is None
             lit = {int(element) for element,value in h.app.led.output.snapshot().items() if value}
             assert lit == set(FILL_ORDER[:step])
             assert h.state.game_engine_state.seven_exit_step == step
