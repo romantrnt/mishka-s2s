@@ -145,40 +145,103 @@ class GamePresentationMixin:
 
         async def render():
             nonlocal stage, segment_index, failure_reason
-            chunks = []
-            for segment_index, (text, buttons, phrase_id) in enumerate(self._game_prompt_segments(effect)):
+            raw_segments = self._game_prompt_segments(effect)
+            if not raw_segments:
+                return None
+            normalized_segments = []
+            for segment_index, (text, buttons, phrase_id) in enumerate(raw_segments):
                 if not current():
                     return None
                 stage = "normalization"
-                text = engine.normalizer.normalize(text)
-                if not text or len(text) > engine.config.max_response_chars:
+                norm = engine.normalizer.normalize(text)
+                if not norm or len(norm) > engine.config.max_response_chars:
                     failure_reason = "invalid_text"
                     return None
-                stage = "validation"
-                validation = await engine.response_validator.validate_trusted(text)
+                normalized_segments.append((norm, buttons, phrase_id))
+            stage = "validation"
+            combined_text = "\n".join(text for text, _, _ in normalized_segments)
+            if len(combined_text) <= engine.config.max_response_chars:
+                validation = await engine.response_validator.validate_trusted(combined_text)
                 if not current():
                     return None
                 if not validation.allowed:
                     failure_reason = "validation_blocked"
+                    return None
+            else:
+                for segment_index, (text, _, _) in enumerate(normalized_segments):
+                    validation = await engine.response_validator.validate_trusted(text)
+                    if not current():
+                        return None
+                    if not validation.allowed:
+                        failure_reason = "validation_blocked"
+                        return None
+
+            # Load recorded assets individually; batch consecutive TTS-only segments
+            # to avoid N sequential TTS round-trips while preserving proportional cues.
+            prepared = []
+            pending_tts = []
+
+            async def flush_tts():
+                nonlocal stage, failure_reason
+                if not pending_tts:
+                    return True
+                joined = " ".join(item[0] for item in pending_tts)
+                stage = "synthesis"
+                audio = await tts.synthesize(joined, token, cancelled)
+                if not current():
+                    return False
+                if not valid_pcm(audio):
+                    failure_reason = "invalid_tts_pcm"
+                    return False
+                if len(pending_tts) == 1:
+                    prepared.append((audio, pending_tts[0][1], False, ()))
+                else:
+                    total_chars = max(1, sum(len(item[0]) for item in pending_tts))
+                    dur_s = len(audio.samples) / audio.sample_rate
+                    sub_cues = []
+                    pos = 0
+                    for seg_text, seg_buttons in pending_tts:
+                        sub_cues.append(((pos / total_chars) * dur_s, seg_buttons))
+                        pos += len(seg_text)
+                    prepared.append((audio, (), False, tuple(sub_cues)))
+                pending_tts.clear()
+                return True
+
+            for segment_index, (text, buttons, phrase_id) in enumerate(normalized_segments):
+                if not current():
                     return None
                 stage = "asset_load"
                 try:
                     audio = await asyncio.to_thread(self._load_game_asset, phrase_id, token) if phrase_id else None
                 except Exception:
                     audio = None
-                recorded = audio is not None
-                if audio is None:
-                    stage = "synthesis"
-                    audio = await tts.synthesize(text, token, cancelled)
-                if not current():
-                    return None
-                if not valid_pcm(audio):
-                    failure_reason = "invalid_recorded_pcm" if recorded else "invalid_tts_pcm"
-                    return None
-                chunks.append((audio, buttons, recorded))
+                if audio is not None:
+                    if not await flush_tts():
+                        return None
+                    if not valid_pcm(audio):
+                        failure_reason = "invalid_recorded_pcm"
+                        return None
+                    prepared.append((audio, buttons, True, ()))
+                else:
+                    pending_tts.append((text, buttons))
+            if not await flush_tts():
+                return None
+
             stage, failure_reason = "baseline_assembly", "baseline_unavailable"
-            baseline["audio"] = await self._assemble_game_audio(
-                [(audio, buttons) for audio, buttons, _ in chunks], token, current)
+            base_assembled = await self._assemble_game_audio(
+                [(audio, buttons) for audio, buttons, _, _ in prepared], token, current)
+            if base_assembled is None:
+                return None
+            # Expand proportional sub_cues for batched TTS blocks.
+            base_audio, base_cues = base_assembled
+            expanded_cues = []
+            for (cue_offset, cue_buttons), (_, _, _, sub_cues) in zip(base_cues, prepared):
+                if sub_cues:
+                    for sub_off, sub_btns in sub_cues:
+                        expanded_cues.append((cue_offset + sub_off, sub_btns))
+                else:
+                    expanded_cues.append((cue_offset, cue_buttons))
+            baseline["audio"] = (base_audio, tuple(expanded_cues))
             if not current() or not callable(convert):
                 return baseline.get("audio")
             readiness = getattr(voice, "readiness", None)
@@ -188,7 +251,7 @@ class GamePresentationMixin:
             enhancement_deadline = asyncio.get_running_loop().time() + min(
                 getattr(self.audio, "owned_voice_timeout_s", 1.5), engine.config.max_turn_seconds)
             try:
-                for audio, buttons, recorded in chunks:
+                for audio, buttons, recorded, _ in prepared:
                     if recorded:
                         enhanced.append((audio, buttons))
                         continue
@@ -204,7 +267,18 @@ class GamePresentationMixin:
                         return baseline.get("audio")
                     enhanced.append((converted, buttons))
                 stage, failure_reason = "enhanced_assembly", "enhanced_assembly_unavailable"
-                return await self._assemble_game_audio(enhanced, token, current)
+                enh_assembled = await self._assemble_game_audio(enhanced, token, current)
+                if enh_assembled is None:
+                    return None
+                enh_audio, enh_cues = enh_assembled
+                enh_expanded = []
+                for (cue_offset, cue_buttons), (_, _, _, sub_cues) in zip(enh_cues, prepared):
+                    if sub_cues:
+                        for sub_off, sub_btns in sub_cues:
+                            enh_expanded.append((cue_offset + sub_off, sub_btns))
+                    else:
+                        enh_expanded.append((cue_offset, cue_buttons))
+                return (enh_audio, tuple(enh_expanded))
             except asyncio.CancelledError:
                 raise
             except Exception:

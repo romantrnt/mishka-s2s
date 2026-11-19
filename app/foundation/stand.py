@@ -102,8 +102,10 @@ _PARSER_REASON_CODES = {
 _PIPELINE_EVENTS = frozenset({
     "audio_cancelled", "audio_dropped", "audio_ready", "audio_generation_failed", "barge_in", "chunk_closed",
     "first_audio_gate_entered", "first_audio_gate_released", "input_completed",
+    "json_complete", "json_validated", "llm_clean_terminal",
     "playback_cancelled", "playback_finished", "playback_started", "rvc_v2_fallback",
-    "speech_end", "token_received", "tts_started", "turn_started", "vad_failure",
+    "speech_end", "spoken_semantic_finished", "spoken_semantic_started",
+    "token_received", "tts_started", "turn_started", "vad_failure",
     "validation_block", "validation_error", "validation_failure", "voice_conversion_bypassed",
 })
 
@@ -851,7 +853,7 @@ class HardwareIntegrationStand:
             self.playback=BrowserPlaybackController(self.hub, self._browser_story_checkpoint_request)
             # Native Vox renders a full spoken menu before returning PCM.
             # Its configured budget applies only to this browser voice route.
-            trained_voice = self.settings.tts_provider == "voxcpm765"
+            trained_voice = self.settings.tts_provider in {"voxcpm765", "vox555"}
             self.audio_output = BrowserUARTAudioOutput(
                 self.adapter, self._browser_private_pcm_available, self._browser_pcm_play,
                 owned_render_timeout_s=(self.settings.tts_timeout_s + self.settings.rvc_timeout_s

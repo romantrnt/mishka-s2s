@@ -81,9 +81,9 @@ async def test_odd_original_list_is_real_pcm_and_one_terminal_opens_answers():
         handle, audio = await h.start(4)
         assert handle.response_id == "GAME_PROMPT" and audio.samples
         assert h.state.game_audio_stage == "prompt"
-        assert texts[-2:] == ["Что из этого лишнее?", "Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти."]
-        assert len([text for text in texts if any(text.startswith(c) for c in
-            ("Красный:", "Оранжевый:", "Жёлтый:", "Зелёный:", "Голубой:"))]) == 5
+        assert "Что из этого лишнее?" in texts[-1] and "Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." in texts[-1]
+        assert all(c in texts[-1] for c in
+            ("Красный:", "Оранжевый:", "Жёлтый:", "Зелёный:", "Голубой:"))
         cue_owner = h.app._game_prompt_cues[h.state.session_id]
         assert len(cue_owner[3]) == 8
         assert [buttons for _,buttons in cue_owner[3] if buttons] == [(1,), (2,), (3,), (4,), (5,)]
