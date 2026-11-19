@@ -302,6 +302,7 @@ class CanonicalState:
     game_progress: dict[str, int] = field(default_factory=dict)
     game_entry_seed: int = 0
     game_audio_stage: str = "idle"
+    quiz_rules_spoken: bool = False
     game_attempts: int = 0
     game_hint_stage: int = 0
     game_success_streak: int = 0
@@ -1004,6 +1005,7 @@ class CanonicalRuntime(SceneMenuMixin):
         state.game_level = state.game_attempts = state.game_hint_stage = state.game_success_streak = 0
         state.game_parameters = {}
         state.game_progress.clear()
+        state.quiz_rules_spoken = False
         state.game_entry_seed = 0
         state.game_audio_stage = "idle"
         state.mood_result = None
@@ -1229,16 +1231,24 @@ class CanonicalRuntime(SceneMenuMixin):
         state.game_audio_stage = "prompt"
         answer_buttons = list(game_answer_buttons(engine))
         allowed = set(answer_buttons)
+        is_hint = bool(text is not None and feedback_id is None)
+        rules_intro = None
+        if engine.game_id == "quiz" and text is None and not state.quiz_rules_spoken:
+            state.quiz_rules_spoken = True
+            rules_intro = "Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь."
+        exit_hint = (None if engine.game_id == "quiz" else
+                     ("Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." if hold_exit_policy(engine)
+                      else "Чтобы выйти, нажми семь.") if engine.round == 0 and text is None else None)
         return {"type":"game_prompt", "content_id":"GAME_PROMPT", "game_id":engine.game_id,
             "challenge_id":challenge.id if challenge else None, "prompt":prompt,
+            "rules_intro": rules_intro,
             "feedback_phrase_id":feedback_id, "feedback_text":"Получилось!" if feedback_id else None,
             "options":[item for item in challenge.options if item[0] in allowed] if challenge else [],
-            "is_hint": bool(text is not None and feedback_id is None),
+            "is_hint": is_hint,
             "phrase_id":(challenge.phrase_id if challenge else spec.instruction_phrase_id
                          if engine.game_id in {'free_lights','repeat_pattern'} else None) if text is None else None,
             "answer_buttons":answer_buttons,
-            "exit_hint": ("Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." if hold_exit_policy(engine)
-                          else "Чтобы выйти, нажми семь.") if engine.round == 0 and text is None else None,
+            "exit_hint": exit_hint,
             "display":getattr(challenge, "display", "digits") if challenge else "colors"}
 
     def _game_input(self, state: CanonicalState, event: CanonicalEvent, now: float) -> dict[str, Any]:
@@ -2002,7 +2012,18 @@ class CanonicalRuntime(SceneMenuMixin):
                             state.state_version += 1
                             return self._decision(state, [{"type": "capture_open"}],
                                                   "word_game_prompt_recovered", clear_audio=True)
-                        return self._game_exit(state, 'game_prompt_audio_failed')
+                        # Preserve the child's place on audio failure instead of silent kickback.
+                        outcome = finish_prompt(state.game_engine_state, monotonic_now)
+                        state.game_engine_state = outcome.state
+                        state.game_audio_stage = 'playing'
+                        state.audio_status = 'failed'
+                        state.audio_failure_code = 'game_prompt_audio_unavailable'
+                        state.expected_inputs = ['button', 'speech', 'handset_down']
+                        state.state_version += 1
+                        return self._decision(state, [
+                            {"type": "content_blocked", "error_code": "game_prompt_audio_unavailable"},
+                            self._game_lighting(outcome.state),
+                        ], 'game_prompt_audio_failed', clear_audio=True)
                     outcome = finish_prompt(state.game_engine_state, monotonic_now)
                     state.game_engine_state = outcome.state
                     state.game_audio_stage = 'playing'

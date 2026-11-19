@@ -662,10 +662,11 @@ class BrowserUARTAudioOutput(UARTAudioOutput):
     browser_story_checkpoints = True
 
     def __init__(self, adapter, available, play_pcm, *, owned_render_timeout_s=8.,
-                 owned_voice_timeout_s=1.5):
+                 owned_voice_timeout_s=1.5, play_pcm_stream=None):
         super().__init__(adapter)
         self._private_available = available
         self._private_play = play_pcm
+        self._private_stream_play = play_pcm_stream
         self.owned_render_timeout_s = owned_render_timeout_s
         self.owned_voice_timeout_s = owned_voice_timeout_s
 
@@ -675,6 +676,11 @@ class BrowserUARTAudioOutput(UARTAudioOutput):
 
     def play_pcm_owned(self, handle: PlaybackHandle, audio: AudioChunk):
         self._private_play(handle, audio)
+
+    def play_pcm_stream_owned(self, handle: PlaybackHandle, stream_aiter, *, on_cue=None):
+        if not callable(self._private_stream_play):
+            raise RuntimeError("private_pcm_stream_unsupported")
+        self._private_stream_play(handle, stream_aiter, on_cue=on_cue)
 
 class UARTDisplayController:
     def __init__(self, adapter: SerialHardwareAdapter): self.adapter=adapter
@@ -858,7 +864,8 @@ class HardwareIntegrationStand:
                 self.adapter, self._browser_private_pcm_available, self._browser_pcm_play,
                 owned_render_timeout_s=(self.settings.tts_timeout_s + self.settings.rvc_timeout_s
                                         if trained_voice else 8.),
-                owned_voice_timeout_s=(self.settings.rvc_timeout_s if trained_voice else 1.5))
+                owned_voice_timeout_s=(self.settings.rvc_timeout_s if trained_voice else 1.5),
+                play_pcm_stream=self._browser_pcm_stream_play)
         self.application,self.scenarios,self.metrics,self.publisher=build_application(
             content_root,self.settings,audio_output=self.audio_output,
             led_controller=UARTLEDController(self.adapter, self.lighting_output, legacy_sink=self._record_legacy_led, stage_hook=self._publish_lighting_wave_stage, effect_hook=self._publish_lighting_effect_frame, monotonic_now=self.monotonic_now, background_scheduler=self.background_scheduler),display_controller=UARTDisplayController(self.adapter),playback_override=self.playback,monotonic_now=self.monotonic_now,background_scheduler=self.background_scheduler)
@@ -1378,6 +1385,19 @@ class HardwareIntegrationStand:
             self._play_browser_pcm_audio(handle, audio, saved[1], identity_binding, story_owner),
             operation="browser_private_pcm", session_id=handle.session_id)
 
+    def _browser_pcm_stream_play(self, handle: PlaybackHandle, stream_aiter, *, on_cue=None) -> None:
+        from .owned_speech import OWNED_PCM_IDS
+        saved = self._browser_pcm_binding
+        if (handle.response_id not in OWNED_PCM_IDS or saved is None
+                or saved[0] != (handle.session_id, handle.generation)
+                or not self.hub.owner_binding_current(saved[1])):
+            raise RuntimeError("private_pcm_invalid_owner")
+        state = self.application.canonical_runtime.sessions.get(handle.session_id)
+        identity_binding = (state.profile_ref, state.identity_request_id) if state is not None else None
+        self._schedule_notification(
+            self._play_browser_pcm_stream(handle, stream_aiter, saved[1], identity_binding, on_cue=on_cue),
+            operation="browser_private_pcm_stream", session_id=handle.session_id)
+
     def _browser_pcm_callback_current(self, payload) -> bool:
         from .owned_speech import OWNED_PCM_IDS
         if self.hardware_mode == "physical" or payload.get("response_id") not in OWNED_PCM_IDS:
@@ -1458,6 +1478,103 @@ class HardwareIntegrationStand:
         finally:
             self._response_audio_tasks.discard(task)
             audio = None
+
+    async def _play_browser_pcm_stream(self, handle, stream_aiter, binding, identity_binding, *, on_cue=None):
+        from .private_welcome import valid_pcm
+        task = asyncio.current_task()
+        cue_tasks = []
+        def current():
+            return bool(not self._closed and self.hub.owner_binding_current(binding)
+                        and self._pcm_owner_current(handle, identity_binding))
+        try:
+            if not current():
+                return
+            async with self._transport_lock:
+                await self._flush_device_commands(timeout=1.0)
+            if not current():
+                return
+            previous = tuple(self._response_audio_tasks)
+            for previous_task in previous:
+                previous_task.cancel()
+            if previous:
+                await asyncio.gather(*previous, return_exceptions=True)
+            if not current():
+                return
+            self._response_audio_tasks.add(task)
+            self._browser_pcm_playback = (handle, binding, identity_binding, None)
+            self.playback.active_token = handle.token
+            transport_generation = self.playback._generation
+            playback = {"session_id": handle.session_id, "response_id": handle.response_id,
+                        "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
+                        "generation": handle.generation, "token": handle.token}
+            if not await self.hub.send_private(
+                    {"type": "stand_state", "state": self.panel_snapshot()}, binding, current):
+                return
+            first_frame = True
+            sent_any = False
+            last_rate = 24000
+            stream_started = None
+            queued_s = 0.0
+            async for chunk_audio, cue_buttons in stream_aiter:
+                if not current() or transport_generation != self.playback._generation:
+                    return
+                if not valid_pcm(chunk_audio):
+                    raise RuntimeError("invalid_stream_game_pcm")
+                last_rate = chunk_audio.sample_rate
+                if stream_started is None:
+                    stream_started = self.monotonic_now()
+                if callable(on_cue):
+                    target_at = stream_started + queued_s
+                    async def _fire_cue(at_t, btns):
+                        delay = at_t - self.monotonic_now()
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+                        if current():
+                            on_cue(btns)
+                    cue_tasks.append(asyncio.create_task(_fire_cue(target_at, cue_buttons)))
+                for offset in range(0, len(chunk_audio.samples), 4096):
+                    if not current() or transport_generation != self.playback._generation:
+                        return
+                    values = chunk_audio.samples[offset:offset + 4096]
+                    pcm = struct.pack("<" + "h" * len(values), *(round(value * 32767) for value in values))
+                    if not await self.hub.send_private({
+                        "type": "audio_pcm_output", "private": True, "playback": playback,
+                        "sample_rate": chunk_audio.sample_rate, "token": handle.token,
+                        "session_id": handle.session_id, "generation": transport_generation,
+                        "first": first_frame, "final": False,
+                        "data_b64": base64.b64encode(pcm).decode("ascii"),
+                    }, binding, current):
+                        return
+                    first_frame = False
+                    sent_any = True
+                queued_s += len(chunk_audio.samples) / chunk_audio.sample_rate
+            if not sent_any:
+                raise RuntimeError("empty_game_prompt_stream")
+            if current() and transport_generation == self.playback._generation:
+                await self.hub.send_private({
+                    "type": "audio_pcm_output", "private": True, "playback": playback,
+                    "sample_rate": last_rate, "token": handle.token,
+                    "session_id": handle.session_id, "generation": transport_generation,
+                    "first": False, "final": True,
+                    "data_b64": base64.b64encode(b"\x00\x00").decode("ascii"),
+                }, binding, current)
+        except asyncio.CancelledError:
+            for ct in cue_tasks:
+                ct.cancel()
+            raise
+        except Exception:
+            for ct in cue_tasks:
+                ct.cancel()
+            if current():
+                self._audio_event_sequence += 1
+                await self.application.receive_async(Event("AudioFailed", handle.session_id,
+                    self._audio_event_sequence, time.time(), "browser_private_pcm", {
+                        "response_id": handle.response_id, "token": handle.token,
+                        "generation": handle.generation, "playback_id": handle.playback_id,
+                        "playback_lease": handle.playback_lease, "error_code": "private_pcm_failed",
+                    }, "private-pcm:" + handle.playback_id))
+        finally:
+            self._response_audio_tasks.discard(task)
 
     def _headless_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
         from .owned_speech import OWNED_PCM_IDS

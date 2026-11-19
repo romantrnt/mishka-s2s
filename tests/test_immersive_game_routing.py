@@ -340,3 +340,62 @@ def test_quiz_with_three_or_fewer_options_does_not_fake_narrow():
     assert r.state.game_engine_state.narrowed_options == ()
     assert tuple(game_answer_buttons(r.state.game_engine_state)) == tuple(b for b, _ in ch.options)
 
+
+def test_quiz_rules_spoken_once_and_third_miss_highlights_answer_without_autoscore():
+    r = Route('6-7')
+    r.menu()
+    r.start(2)
+    first_prompt = r.done()
+    eff1 = next(e for e in first_prompt['effects'] if e['type'] == 'game_prompt')
+    assert eff1['rules_intro'] == 'Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь.'
+    assert eff1['exit_hint'] is None
+    r.done()
+    ch = current_challenge(r.state.game_engine_state)
+    wrong_btns = [b for b, _ in ch.options if b != ch.answer]
+    # Two inactivity pauses (wait_hint) must NOT count toward the 3-miss highlight threshold.
+    for _ in range(2):
+        r.state.game_engine_state = replace(r.state.game_engine_state, hint_deadline=r.clock + 1.0)
+        r.clock += 2.0
+        r.send('GameTimer', {'timer_generation': r.state.game_engine_state.timer_generation})
+        r.done()
+    assert r.state.game_engine_state.wrong_attempts == 0
+    # 1st miss -> narrows to 3 (not straight to 1)
+    r.press(wrong_btns[0]); r.release(wrong_btns[0]); r.done()
+    assert len(game_answer_buttons(r.state.game_engine_state)) == 3 or len(ch.options) <= 3
+    # 2nd miss
+    other_wrong = next(b for b in game_answer_buttons(r.state.game_engine_state) if b != ch.answer)
+    r.press(other_wrong); r.release(other_wrong); r.done()
+    # 3rd miss -> gently highlights only the right button, without auto-scoring
+    third = r.press(other_wrong); r.release(other_wrong)
+    assert third['reason'] == 'game_retry'
+    assert tuple(game_answer_buttons(r.state.game_engine_state)) == (ch.answer,)
+    assert r.state.game_engine_state.round == 0
+    r.done()
+    # Exit and re-enter quiz in the same session -> rules_intro is NOT repeated
+    r.press(7); r.clock += 5.1; r.release(7)
+    assert r.state.mode == 'game_menu'
+    r.start(2)
+    second_prompt = r.done()
+    eff2 = next(e for e in second_prompt['effects'] if e['type'] == 'game_prompt')
+    assert eff2['rules_intro'] is None and eff2['exit_hint'] is None
+
+
+def test_quiz_numeric_options_avoid_digit_duplication():
+    from app.foundation.game_presentation import GamePresentationMixin
+    mixin = GamePresentationMixin()
+    same = {'game_id': 'quiz', 'prompt': 'Сколько слогов?', 'display': 'digits',
+            'rules_intro': 'Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь.',
+            'options': ((1, 'один'), (2, 'два'), (3, 'три'))}
+    segs = mixin._game_prompt_segments(same)
+    assert [t for t, _, _ in segs] == [
+        'Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь.',
+        'Сколько слогов?', 'один.', 'два.', 'три.', 'Нажми свой ответ.'
+    ]
+    assert [b for _, b, _ in segs] == [(), (), (1,), (2,), (3,), ()]
+
+    diff = {'game_id': 'quiz', 'prompt': 'Сколько?', 'display': 'digits',
+            'options': ((1, 'пять'), (2, 'шесть'))}
+    segs_diff = mixin._game_prompt_segments(diff)
+    assert [t for t, _, _ in segs_diff] == ['Сколько?', 'Первый вариант: пять.', 'Второй вариант: шесть.', 'Нажми свой ответ.']
+
+

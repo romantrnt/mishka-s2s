@@ -16,6 +16,15 @@ from .private_welcome import valid_pcm
 GAME_PCM_IDS = frozenset({"GAME_PROMPT", "GAME_HINT"})
 _COLOR_LABELS = {1:"Красный", 2:"Оранжевый", 3:"Жёлтый", 4:"Зелёный", 5:"Голубой", 6:"Синий", 7:"Фиолетовый"}
 _DIGIT_LABELS = {1:"Один", 2:"Два", 3:"Три", 4:"Четыре", 5:"Пять", 6:"Шесть", 7:"Семь"}
+_ORDINAL_LABELS = {1:"Первый", 2:"Второй", 3:"Третий", 4:"Четвёртый", 5:"Пятый", 6:"Шестой", 7:"Седьмой"}
+_NUMERIC_WORDS = {"один": 1, "одно": 1, "одна": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7}
+STATIC_GAME_PHRASES = (
+    "Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь.",
+    "Нажми свой ответ.",
+    "Что из этого лишнее?",
+    "Пока не угадал. Оставил три варианта — попробуй ещё раз!",
+    "Посмотри на огонёк — попробуй нажать эту кнопку!",
+)
 
 
 def game_light_commands(buttons, display="digits"):
@@ -47,18 +56,28 @@ class GamePresentationMixin:
 
     def _game_prompt_segments(self, effect):
         prompt = str(effect.get("prompt") or "").strip()
+        rules_intro = str(effect.get("rules_intro") or "").strip()
         segments = []
         if effect.get("feedback_phrase_id"):
             segments.append((str(effect.get("feedback_text") or "Получилось!"), (), effect["feedback_phrase_id"]))
+        if rules_intro:
+            segments.append((rules_intro, (), None))
         if prompt:
             segments.append((prompt, (), effect.get("phrase_asset_id")))
         narrate_options = (effect.get("game_id") == "odd_one_out" or
             (effect.get("game_id") == "quiz" and effect.get("display", "digits") == "digits"))
         if narrate_options and effect.get("options") and not effect.get("is_hint"):
             labels = _COLOR_LABELS if effect.get("display") == "colors" else _DIGIT_LABELS
+            digits_display = effect.get("display", "digits") == "digits"
             for button, text in tuple(effect.get("options") or ())[:7]:
                 if type(button) is int and button in labels:
-                    segments.append((f"{labels[button]}: {text}.", (button,), None))
+                    clean = str(text or "").strip()
+                    num_val = _NUMERIC_WORDS.get(clean.lower()) if digits_display else None
+                    if num_val is not None:
+                        phrase = f"{clean}." if num_val == button else f"{_ORDINAL_LABELS[button]} вариант: {clean}."
+                    else:
+                        phrase = f"{labels[button]}: {clean}."
+                    segments.append((phrase, (button,), None))
             segments.append(("Что из этого лишнее?" if effect.get("game_id") == "odd_one_out"
                              else "Нажми свой ответ.", (), None))
         if effect.get("exit_hint"):
@@ -394,6 +413,170 @@ class GamePresentationMixin:
                 if self._game_cue_tasks.get(session_id) is asyncio.current_task():
                     self._game_cue_tasks.pop(session_id, None)
         self._game_cue_tasks[session_id] = asyncio.create_task(run(), name="mishka-game-light-cues")
+
+    def _static_game_cache(self):
+        cache = getattr(self, "_static_game_audio", None)
+        if cache is None:
+            cache = {}
+            self._static_game_audio = cache
+        return cache
+
+    async def _to_24k_chunk(self, audio, token, current, *, pad_s: float = 0.14):
+        from .s2s import AudioChunk
+        from .voice_pipeline import peak_normalize, resample_mono
+        if not current() or not valid_pcm(audio):
+            return None
+        rate = 24000
+        converted = (audio.samples if audio.sample_rate == rate else
+                     await asyncio.to_thread(resample_mono, audio.samples, audio.sample_rate, rate))
+        if not current():
+            return None
+        values = tuple(converted) + ((0.,) * int(rate * pad_s) if pad_s > 0 else ())
+        if values and all(math.isfinite(v) for v in values) and max(map(abs, values)) > 1.:
+            values = peak_normalize(values, safe_peak=1.)
+        out = AudioChunk(values, rate, token)
+        return out if valid_pcm(out) else None
+
+    async def warm_static_game_audio(self):
+        engine = self.bounded_s2s
+        tts = engine.tts
+        cache = self._static_game_cache()
+        for phrase in STATIC_GAME_PHRASES:
+            norm = engine.normalizer.normalize(phrase)
+            if not norm or norm in cache:
+                continue
+            try:
+                audio = await tts.synthesize(norm, 0, lambda: False)
+                chunk = await self._to_24k_chunk(audio, 0, lambda: True)
+                if chunk is not None:
+                    cache[norm] = chunk
+            except Exception:
+                continue
+
+    async def _validate_game_segments(self, effect, token, current):
+        engine = self.bounded_s2s
+        raw_segments = self._game_prompt_segments(effect)
+        if not raw_segments:
+            return None, "empty_prompt"
+        normalized_segments = []
+        for text, buttons, phrase_id in raw_segments:
+            if not current():
+                return None, "cancelled"
+            norm = engine.normalizer.normalize(text)
+            if not norm or len(norm) > engine.config.max_response_chars:
+                return None, "invalid_text"
+            normalized_segments.append((norm, buttons, phrase_id))
+        combined_text = "\n".join(text for text, _, _ in normalized_segments)
+        if len(combined_text) <= engine.config.max_response_chars:
+            validation = await engine.response_validator.validate_trusted(combined_text)
+            if not current():
+                return None, "cancelled"
+            if not validation.allowed:
+                return None, "validation_blocked"
+        else:
+            for text, _, _ in normalized_segments:
+                validation = await engine.response_validator.validate_trusted(text)
+                if not current():
+                    return None, "cancelled"
+                if not validation.allowed:
+                    return None, "validation_blocked"
+        return normalized_segments, None
+
+    async def _stream_game_prompt(self, session_id, effect, token, current):
+        from .s2s import AudioChunk, CachedTTSProvider
+        normalized_segments, failure_reason = await self._validate_game_segments(effect, token, current)
+        if not normalized_segments:
+            self._record_game_prompt_failure(session_id, effect, token, failure_reason or "empty_prompt", "validation", None, None)
+            return False
+        engine = self.bounded_s2s
+        tts = engine.tts
+        while isinstance(tts, CachedTTSProvider):
+            tts = tts.delegate
+        voice_mode = str(getattr(engine, "voice_mode", "off") or "off").lower()
+        can_stream_tts = hasattr(tts, "synthesize_stream") and voice_mode in {"off", "disabled"}
+        cache = self._static_game_cache()
+        handle = PlaybackHandle(
+            session_id=session_id,
+            generation=self._session_epochs.get(session_id, 0),
+            playback_id=f"{session_id}:{uuid.uuid4().hex}",
+            playback_lease=effect["playback_lease"],
+            response_id=effect["content_id"],
+            token=token,
+        )
+        self._register_audio_lease(session_id, handle.response_id, token, handle.playback_id, handle.playback_lease, duration_ms=0)
+        effect.update(playback_id=handle.playback_id, generation=handle.generation, session_id=session_id)
+        display = str(effect.get("display") or "digits")
+        default_buttons = tuple(effect.get("answer_buttons") or ())
+
+        def on_cue(buttons):
+            st = self.canonical_runtime.sessions.get(session_id)
+            eng = getattr(st, "game_engine_state", None) if st is not None else None
+            if not current() or eng is None or eng.seven_exit_phase != "idle":
+                return
+            target = buttons if buttons else default_buttons
+            cancel = getattr(self.led, "cancel_effects", None)
+            if callable(cancel):
+                cancel(clear=False)
+            active = dict(game_light_commands(target, display))
+            self.led.set_elements(tuple(LightingCommand(element, int(element in active), 140)
+                for element in LIGHTING_ELEMENT_IDS))
+
+        async def segment_stream():
+            cancelled = lambda: not current()
+            for text, buttons, phrase_id in normalized_segments:
+                if not current():
+                    return
+                audio = None
+                if phrase_id:
+                    try:
+                        audio = await asyncio.to_thread(self._load_game_asset, phrase_id, token)
+                    except Exception:
+                        audio = None
+                if audio is not None:
+                    chunk = await self._to_24k_chunk(audio, token, current)
+                    if chunk is None:
+                        return
+                    yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), buttons
+                    continue
+                cached = cache.get(text)
+                if cached is not None and valid_pcm(cached):
+                    yield replace(cached, token=token, session_id=session_id, generation_id=handle.generation), buttons
+                    continue
+                if can_stream_tts and text not in STATIC_GAME_PHRASES:
+                    first_sub = True
+                    async for sub in tts.synthesize_stream(text, token, cancelled):
+                        if not current():
+                            return
+                        chunk = await self._to_24k_chunk(sub, token, current, pad_s=0.0)
+                        if chunk is None:
+                            return
+                        yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), (buttons if first_sub else ())
+                        first_sub = False
+                    if not first_sub and current():
+                        yield AudioChunk((0.,) * int(24000 * 0.14), 24000, token, session_id, handle.generation), ()
+                    continue
+                audio = await engine.tts.synthesize(text, token, cancelled)
+                chunk = await self._to_24k_chunk(audio, token, current)
+                if chunk is None:
+                    return
+                if text in STATIC_GAME_PHRASES and len(cache) < 32:
+                    cache[text] = replace(chunk, token=0, session_id="", generation_id=0)
+                yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), buttons
+
+        try:
+            self.audio.play_pcm_stream_owned(handle, segment_stream(), on_cue=on_cue)
+        except Exception:
+            self._invalidate_audio_lease(session_id, "failed")
+            raise
+        return True
+
+    def _record_game_prompt_failure(self, session_id, effect, token, reason, stage, segment_index, exc):
+        self._record_audio_completion_diagnostic(
+            "game_prompt_render_failed", session_id=session_id, operation="game_prompt_render",
+            generation=self._session_epochs.get(session_id, 0), reason=reason, stage=stage,
+            segment_index=segment_index, exception_type=type(exc).__name__ if exc else None)
+        self.record_audio_diagnostic("game_prompt_render_failed", code=reason, stage=stage,
+            segment_index=segment_index, exception_type=type(exc).__name__ if exc else None)
 
     @staticmethod
     def _word_game_instructions(age_band):

@@ -261,7 +261,9 @@ async def _remote_session(*, max_source: Path | None = None, max_bundle: Path | 
             async def warm_public_menus():
                 def progress(status):
                     print(json.dumps({"event": "public_menu_warmup_progress", **status}), flush=True)
-                return await application.warm_public_menu_audio(progress=progress)
+                res = await application.warm_public_menu_audio(progress=progress)
+                await application.warm_static_game_audio()
+                return res
             application.runtime_manager.public_menu_warmup = warm_public_menus
             application.runtime_manager.public_menu_status = lambda: public_menu_audio_readiness(application)
         gateway = PrivateStandGateway(api, token=token, allowed_origins=allowed,

@@ -2540,20 +2540,36 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         and state_owner.mode == "game_active"
                         and state_owner.active_game_id == effect.get("game_id")
                         and state_owner.playback_lease == effect.get("playback_lease"))
-                rendered = await self._render_game_prompt(event.session_id, effect, record.cancellation_token, game_current)
-                if not game_current(): return stale_result()
-                if rendered is None:
-                    audio_failure = {"response_id": effect["content_id"],
-                        "playback_lease": effect["playback_lease"], "error_code": "game_prompt_unavailable"}
-                    _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="game_prompt_unavailable")
-                else:
+                if getattr(self.audio, "private_pcm_supported", False) and hasattr(self.audio, "play_pcm_stream_owned"):
                     try:
-                        self._play_game_prompt(event.session_id, rendered, effect, record.cancellation_token)
-                        _set_audio_effect_status(effect, asset_status="approved", queued=True, resolution="game_prompt_pcm_queued")
+                        ok = await self._stream_game_prompt(event.session_id, effect, record.cancellation_token, game_current)
+                        if not game_current(): return stale_result()
+                        if ok:
+                            _set_audio_effect_status(effect, asset_status="approved", queued=True, resolution="game_prompt_pcm_queued")
+                        else:
+                            audio_failure = {"response_id": effect["content_id"],
+                                "playback_lease": effect["playback_lease"], "error_code": "game_prompt_unavailable"}
+                            _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="game_prompt_unavailable")
                     except Exception:
+                        if not game_current(): return stale_result()
                         audio_failure = {"response_id": effect["content_id"],
                             "playback_lease": effect["playback_lease"], "error_code": "game_prompt_dispatch_failed"}
                         _set_audio_effect_status(effect, asset_status="approved", queued=False, resolution="game_prompt_dispatch_failed")
+                else:
+                    rendered = await self._render_game_prompt(event.session_id, effect, record.cancellation_token, game_current)
+                    if not game_current(): return stale_result()
+                    if rendered is None:
+                        audio_failure = {"response_id": effect["content_id"],
+                            "playback_lease": effect["playback_lease"], "error_code": "game_prompt_unavailable"}
+                        _set_audio_effect_status(effect, asset_status="absent", queued=False, resolution="game_prompt_unavailable")
+                    else:
+                        try:
+                            self._play_game_prompt(event.session_id, rendered, effect, record.cancellation_token)
+                            _set_audio_effect_status(effect, asset_status="approved", queued=True, resolution="game_prompt_pcm_queued")
+                        except Exception:
+                            audio_failure = {"response_id": effect["content_id"],
+                                "playback_lease": effect["playback_lease"], "error_code": "game_prompt_dispatch_failed"}
+                            _set_audio_effect_status(effect, asset_status="approved", queued=False, resolution="game_prompt_dispatch_failed")
             elif kind == "dialogue_prompt":
                 def prompt_current():
                     return bool(still_current() and state_owner.interaction_open
