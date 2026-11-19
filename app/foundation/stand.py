@@ -1476,6 +1476,9 @@ class HardwareIntegrationStand:
                         "playback_lease": handle.playback_lease, "error_code": "private_pcm_failed",
                     }, "private-pcm:" + handle.playback_id))
         finally:
+            if hasattr(stream_aiter, "aclose"):
+                with contextlib.suppress(Exception):
+                    await stream_aiter.aclose()
             self._response_audio_tasks.discard(task)
             audio = None
 
@@ -1574,6 +1577,9 @@ class HardwareIntegrationStand:
                         "playback_lease": handle.playback_lease, "error_code": "private_pcm_failed",
                     }, "private-pcm:" + handle.playback_id))
         finally:
+            if hasattr(stream_aiter, "aclose"):
+                with contextlib.suppress(Exception):
+                    await stream_aiter.aclose()
             self._response_audio_tasks.discard(task)
 
     def _headless_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
@@ -3249,7 +3255,7 @@ class HardwareIntegrationStand:
         if isinstance(pipeline, dict):
             safe_pipeline = {}
             for field, allowed in (
-                ("tts_provider", {"silero", "voxcpm765", "mock"}),
+                ("tts_provider", {"silero", "vox555", "voxcpm765", "mock"}),
                 ("voice_conversion", {"rvc_v2", "off", "disabled"}),
             ):
                 item = pipeline.get(field)

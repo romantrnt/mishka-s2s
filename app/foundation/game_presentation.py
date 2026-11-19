@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import replace
 import math
 from pathlib import Path
@@ -14,6 +15,9 @@ from .lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEM
 from .private_welcome import valid_pcm
 
 GAME_PCM_IDS = frozenset({"GAME_PROMPT", "GAME_HINT"})
+_GAME_CONTENT_VERSION = "game_v2"
+_GAME_CACHE_MAX_ENTRIES = 256
+_GAME_CACHE_MAX_BYTES = 48 * 1024 * 1024
 _COLOR_LABELS = {1:"Красный", 2:"Оранжевый", 3:"Жёлтый", 4:"Зелёный", 5:"Голубой", 6:"Синий", 7:"Фиолетовый"}
 _DIGIT_LABELS = {1:"Один", 2:"Два", 3:"Три", 4:"Четыре", 5:"Пять", 6:"Шесть", 7:"Семь"}
 _ORDINAL_LABELS = {1:"Первый", 2:"Второй", 3:"Третий", 4:"Четвёртый", 5:"Пятый", 6:"Шестой", 7:"Седьмой"}
@@ -24,6 +28,13 @@ STATIC_GAME_PHRASES = (
     "Что из этого лишнее?",
     "Пока не угадал. Оставил три варианта — попробуй ещё раз!",
     "Посмотри на огонёк — попробуй нажать эту кнопку!",
+    "Нажимай кнопки и смотри, как расходится свет.",
+    "Посмотри на огоньки. Потом повтори их порядок.",
+    "Сыграем небольшую партию. Назови животное или еду. Я назову другое.",
+    "Сыграем небольшую партию. Называем слова на последнюю букву предыдущего. Мягкий и твёрдый знак, ы пропускаем. Назови первое слово.",
+    "Сыграем небольшую партию. Будем по очереди называть животных. Назови любое животное.",
+    "Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти.",
+    "Чтобы выйти, нажми семь.",
 )
 
 
@@ -417,11 +428,192 @@ class GamePresentationMixin:
     def _static_game_cache(self):
         cache = getattr(self, "_static_game_audio", None)
         if cache is None:
-            cache = {}
+            cache = OrderedDict()
             self._static_game_audio = cache
+            self._static_game_audio_bytes = 0
         return cache
 
-    async def _to_24k_chunk(self, audio, token, current, *, pad_s: float = 0.14):
+    def _game_cache_key(self, text: str) -> tuple[str, str, str, str]:
+        from .s2s import CachedTTSProvider
+        engine = self.bounded_s2s
+        tts = getattr(engine, "tts", None)
+        while isinstance(tts, CachedTTSProvider):
+            tts = tts.delegate
+        provider_fp = str(getattr(tts, "provider_name", None) or type(tts).__name__)
+        voice_mode = str(getattr(engine, "voice_mode", "off") or "off").lower()
+        return (text, _GAME_CONTENT_VERSION, provider_fp, voice_mode)
+
+    def _get_cached_game_chunk(self, text: str):
+        cache = self._static_game_cache()
+        key = self._game_cache_key(text)
+        chunk = cache.get(key)
+        if chunk is not None and valid_pcm(chunk):
+            cache.move_to_end(key)
+            return chunk
+        if key in cache:
+            self._evict_game_cache_key(key)
+        return None
+
+    def _evict_game_cache_key(self, key) -> None:
+        cache = self._static_game_cache()
+        old = cache.pop(key, None)
+        if old is not None:
+            cur = getattr(self, "_static_game_audio_bytes", 0)
+            self._static_game_audio_bytes = max(0, cur - len(old.samples) * 4)
+
+    def _put_cached_game_chunk(self, text: str, chunk) -> None:
+        if not valid_pcm(chunk):
+            return
+        entry_bytes = len(chunk.samples) * 4
+        if entry_bytes > _GAME_CACHE_MAX_BYTES // 4:
+            return
+        cache = self._static_game_cache()
+        key = self._game_cache_key(text)
+        if key in cache:
+            self._evict_game_cache_key(key)
+        while cache and (
+            len(cache) >= _GAME_CACHE_MAX_ENTRIES
+            or getattr(self, "_static_game_audio_bytes", 0) + entry_bytes > _GAME_CACHE_MAX_BYTES
+        ):
+            evict_key, _ = cache.popitem(last=False)
+            cur = getattr(self, "_static_game_audio_bytes", 0)
+            # Recompute accurately on eviction
+            self._static_game_audio_bytes = sum(len(v.samples) * 4 for v in cache.values())
+        cache[key] = replace(chunk, token=0, session_id="", generation_id=0)
+        self._static_game_audio_bytes = getattr(self, "_static_game_audio_bytes", 0) + entry_bytes
+
+    def _game_tts_synthesis_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_game_tts_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._game_tts_lock = lock
+        return lock
+
+    def _cancel_game_prewarm(self, session_id: str | None = None) -> None:
+        tasks = getattr(self, "_game_prewarm_tasks", None)
+        if not tasks:
+            return
+        if session_id is None:
+            for task in list(tasks.values()):
+                task.cancel()
+            tasks.clear()
+            return
+        task = tasks.pop(session_id, None)
+        if task is not None:
+            task.cancel()
+
+    async def _cancel_and_wait_game_prewarm(self, session_id: str) -> None:
+        tasks = getattr(self, "_game_prewarm_tasks", None)
+        if not tasks:
+            return
+        task = tasks.pop(session_id, None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+
+    def _schedule_game_prompt_prewarm(self, session_id: str, state) -> None:
+        from .game_engine import current_challenge, hold_exit_policy
+        from .canonical_contract import IMMERSIVE_GAME_SPECS, game_answer_buttons
+        self._cancel_game_prewarm(session_id)
+        engine_state = getattr(state, "game_engine_state", None)
+        if engine_state is None or not getattr(state, "interaction_open", False):
+            return
+        challenge = current_challenge(engine_state)
+        spec = next((item for item in IMMERSIVE_GAME_SPECS if item.game_id == engine_state.game_id), None)
+        if spec is None:
+            return
+        word_prompt = (
+            "Сыграем небольшую партию. Назови животное или еду. Я назову другое."
+            if state.age_band == "1-3" else
+            "Сыграем небольшую партию. Называем слова на последнюю букву предыдущего. Мягкий и твёрдый знак, ы пропускаем. Назови первое слово."
+            if state.age_band in {"5-7", "6-7"} else
+            "Сыграем небольшую партию. Будем по очереди называть животных. Назови любое животное."
+        )
+        prompt = (challenge.prompt if challenge else {
+            "free_lights": "Нажимай кнопки и смотри, как расходится свет.",
+            "repeat_pattern": "Посмотри на огоньки. Потом повтори их порядок.",
+            "word_game": word_prompt,
+        }.get(engine_state.game_id, "Выбери ответ."))
+        allowed = set(game_answer_buttons(engine_state))
+        rules_intro = (
+            "Я назову варианты. Выбери ответ кнопкой. Чтобы выйти, подержи семь."
+            if engine_state.game_id == "quiz" and not getattr(state, "quiz_rules_spoken", False)
+            else None
+        )
+        exit_hint = (
+            None if engine_state.game_id == "quiz" else
+            ("Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." if hold_exit_policy(engine_state)
+             else "Чтобы выйти, нажми семь.")
+            if engine_state.round == 0 else None
+        )
+        effect = {
+            "game_id": engine_state.game_id,
+            "prompt": prompt,
+            "rules_intro": rules_intro,
+            "options": [item for item in challenge.options if item[0] in allowed] if challenge else [],
+            "is_hint": False,
+            "phrase_id": (challenge.phrase_id if challenge else spec.instruction_phrase_id
+                          if engine_state.game_id in {"free_lights", "repeat_pattern"} else None),
+            "answer_buttons": list(allowed),
+            "exit_hint": exit_hint,
+        }
+        segments = self._game_prompt_segments(effect)
+        run_id = getattr(engine_state, "run_id", None)
+        epoch = self._session_epochs.get(session_id, 0)
+
+        async def _prewarm() -> None:
+            s2s = self.bounded_s2s
+            if s2s is None or getattr(s2s, "tts", None) is None:
+                return
+            lock = self._game_tts_synthesis_lock()
+            for raw_text, _buttons, phrase_id in segments:
+                if phrase_id:
+                    continue
+                st = self.canonical_runtime.sessions.get(session_id)
+                cur_eng = getattr(st, "game_engine_state", None) if st is not None else None
+                if (st is None or st.mode != "game_active" or not st.interaction_open
+                        or self._session_epochs.get(session_id, 0) != epoch
+                        or cur_eng is None or cur_eng.run_id != run_id):
+                    return
+                norm = s2s.normalizer.normalize(raw_text)
+                if not norm or self._get_cached_game_chunk(norm) is not None:
+                    continue
+                try:
+                    async with lock:
+                        st2 = self.canonical_runtime.sessions.get(session_id)
+                        cur_eng2 = getattr(st2, "game_engine_state", None) if st2 is not None else None
+                        if (st2 is None or st2.mode != "game_active" or not st2.interaction_open
+                                or self._session_epochs.get(session_id, 0) != epoch
+                                or cur_eng2 is None or cur_eng2.run_id != run_id):
+                            return
+                        if self._get_cached_game_chunk(norm) is not None:
+                            continue
+                        prewarm_cancelled = lambda: (
+                            (self.canonical_runtime.sessions.get(session_id) is None)
+                            or self._session_epochs.get(session_id, 0) != epoch
+                            or getattr(getattr(self.canonical_runtime.sessions.get(session_id), "game_engine_state", None), "run_id", None) != run_id
+                        )
+                        audio = await s2s.tts.synthesize(norm, 0, prewarm_cancelled)
+                        chunk = await self._to_24k_chunk(audio, 0, lambda: True, pad_s=0.05)
+                        if chunk is not None:
+                            self._put_cached_game_chunk(norm, chunk)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    return
+
+        tasks = getattr(self, "_game_prewarm_tasks", None)
+        if tasks is None:
+            tasks = {}
+            self._game_prewarm_tasks = tasks
+        task = asyncio.create_task(_prewarm(), name=f"mishka-game-prewarm-{session_id}")
+        tasks[session_id] = task
+        task.add_done_callback(lambda t: tasks.pop(session_id, None) if tasks.get(session_id) is t else None)
+
+    async def _to_24k_chunk(self, audio, token, current, *, pad_s: float = 0.05):
         from .s2s import AudioChunk
         from .voice_pipeline import peak_normalize, resample_mono
         if not current() or not valid_pcm(audio):
@@ -440,16 +632,17 @@ class GamePresentationMixin:
     async def warm_static_game_audio(self):
         engine = self.bounded_s2s
         tts = engine.tts
-        cache = self._static_game_cache()
+        lock = self._game_tts_synthesis_lock()
         for phrase in STATIC_GAME_PHRASES:
             norm = engine.normalizer.normalize(phrase)
-            if not norm or norm in cache:
+            if not norm or self._get_cached_game_chunk(norm) is not None:
                 continue
             try:
-                audio = await tts.synthesize(norm, 0, lambda: False)
-                chunk = await self._to_24k_chunk(audio, 0, lambda: True)
-                if chunk is not None:
-                    cache[norm] = chunk
+                async with lock:
+                    audio = await tts.synthesize(norm, 0, lambda: False)
+                    chunk = await self._to_24k_chunk(audio, 0, lambda: True, pad_s=0.05)
+                    if chunk is not None:
+                        self._put_cached_game_chunk(norm, chunk)
             except Exception:
                 continue
 
@@ -484,6 +677,7 @@ class GamePresentationMixin:
 
     async def _stream_game_prompt(self, session_id, effect, token, current):
         from .s2s import AudioChunk, CachedTTSProvider
+        await self._cancel_and_wait_game_prewarm(session_id)
         normalized_segments, failure_reason = await self._validate_game_segments(effect, token, current)
         if not normalized_segments:
             self._record_game_prompt_failure(session_id, effect, token, failure_reason or "empty_prompt", "validation", None, None)
@@ -493,8 +687,7 @@ class GamePresentationMixin:
         while isinstance(tts, CachedTTSProvider):
             tts = tts.delegate
         voice_mode = str(getattr(engine, "voice_mode", "off") or "off").lower()
-        can_stream_tts = hasattr(tts, "synthesize_stream") and voice_mode in {"off", "disabled"}
-        cache = self._static_game_cache()
+        can_stream_tts = hasattr(tts, "synthesize_audio_stream") and voice_mode in {"off", "disabled"}
         handle = PlaybackHandle(
             session_id=session_id,
             generation=self._session_epochs.get(session_id, 0),
@@ -513,6 +706,7 @@ class GamePresentationMixin:
             eng = getattr(st, "game_engine_state", None) if st is not None else None
             if not current() or eng is None or eng.seven_exit_phase != "idle":
                 return
+            st.game_prompt_audible = True
             target = buttons if buttons else default_buttons
             cancel = getattr(self.led, "cancel_effects", None)
             if callable(cancel):
@@ -533,34 +727,38 @@ class GamePresentationMixin:
                     except Exception:
                         audio = None
                 if audio is not None:
-                    chunk = await self._to_24k_chunk(audio, token, current)
+                    chunk = await self._to_24k_chunk(audio, token, current, pad_s=0.05)
                     if chunk is None:
                         return
                     yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), buttons
                     continue
-                cached = cache.get(text)
-                if cached is not None and valid_pcm(cached):
+                cached = self._get_cached_game_chunk(text)
+                if cached is not None:
                     yield replace(cached, token=token, session_id=session_id, generation_id=handle.generation), buttons
                     continue
-                if can_stream_tts and text not in STATIC_GAME_PHRASES:
+                if can_stream_tts:
                     first_sub = True
-                    async for sub in tts.synthesize_stream(text, token, cancelled):
+                    collected_samples = []
+                    async for sub in tts.synthesize_audio_stream(text, token, cancelled, first_chunk=True):
                         if not current():
                             return
                         chunk = await self._to_24k_chunk(sub, token, current, pad_s=0.0)
                         if chunk is None:
                             return
+                        collected_samples.extend(chunk.samples)
                         yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), (buttons if first_sub else ())
                         first_sub = False
                     if not first_sub and current():
-                        yield AudioChunk((0.,) * int(24000 * 0.14), 24000, token, session_id, handle.generation), ()
+                        tail = (0.,) * int(24000 * 0.05)
+                        yield AudioChunk(tail, 24000, token, session_id, handle.generation), ()
+                        collected_samples.extend(tail)
+                        self._put_cached_game_chunk(text, AudioChunk(tuple(collected_samples), 24000, 0))
                     continue
                 audio = await engine.tts.synthesize(text, token, cancelled)
-                chunk = await self._to_24k_chunk(audio, token, current)
+                chunk = await self._to_24k_chunk(audio, token, current, pad_s=0.05)
                 if chunk is None:
                     return
-                if text in STATIC_GAME_PHRASES and len(cache) < 32:
-                    cache[text] = replace(chunk, token=0, session_id="", generation_id=0)
+                self._put_cached_game_chunk(text, chunk)
                 yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), buttons
 
         try:

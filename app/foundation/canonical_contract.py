@@ -302,6 +302,8 @@ class CanonicalState:
     game_progress: dict[str, int] = field(default_factory=dict)
     game_entry_seed: int = 0
     game_audio_stage: str = "idle"
+    game_prompt_is_hint: bool = False
+    game_prompt_audible: bool = False
     quiz_rules_spoken: bool = False
     game_attempts: int = 0
     game_hint_stage: int = 0
@@ -1008,6 +1010,8 @@ class CanonicalRuntime(SceneMenuMixin):
         state.quiz_rules_spoken = False
         state.game_entry_seed = 0
         state.game_audio_stage = "idle"
+        state.game_prompt_is_hint = False
+        state.game_prompt_audible = False
         state.mood_result = None
         state.identity_request_id = None
         state.identity_ready_deadline = None
@@ -1115,6 +1119,8 @@ class CanonicalRuntime(SceneMenuMixin):
         state.game_return_mode = None
         state.activity_return_mode = None
         state.game_audio_stage = "idle"
+        state.game_prompt_is_hint = False
+        state.game_prompt_audible = False
         state.game_target = None
         state.game_parameters = {}
         state.selected_menu_button = None
@@ -1232,6 +1238,8 @@ class CanonicalRuntime(SceneMenuMixin):
         answer_buttons = list(game_answer_buttons(engine))
         allowed = set(answer_buttons)
         is_hint = bool(text is not None and feedback_id is None)
+        state.game_prompt_is_hint = is_hint
+        state.game_prompt_audible = False
         rules_intro = None
         if engine.game_id == "quiz" and text is None and not state.quiz_rules_spoken:
             state.quiz_rules_spoken = True
@@ -1256,8 +1264,35 @@ class CanonicalRuntime(SceneMenuMixin):
         if engine is None:
             return self._decision(state, [], "game_unavailable")
         immersive = getattr(engine, 'immersive', False)
+        button_id = int(event.payload["button_id"])
+        interrupted_prompt = False
+        can_barge_prompt = (
+            immersive
+            and engine.game_id in {'quiz', 'odd_one_out'}
+            and state.game_audio_stage == 'prompt'
+            and state.game_prompt_audible
+            and not state.game_prompt_is_hint
+            and event.payload.get('cancelled') is not True
+            and (
+                (event.event_type == 'ButtonPressed' and button_id != 7)
+                or (
+                    event.event_type == 'ButtonReleased'
+                    and button_id == 7
+                    and engine.seven_exit_phase == 'pending'
+                    and (engine.seven_exit_down_at is None or now < engine.seven_exit_down_at + 0.6)
+                )
+            )
+            and button_id in game_answer_buttons(engine)
+        )
+        if can_barge_prompt:
+            engine = finish_prompt(engine, now).state
+            if button_id == 7 and event.event_type == 'ButtonReleased':
+                engine = replace(engine, seven_answer_generation=engine.round_generation)
+            state.game_engine_state = engine
+            state.game_audio_stage = 'playing'
+            interrupted_prompt = True
         staged = immersive and engine.game_id != 'free_lights' and state.game_audio_stage in {'starting', 'prompt'}
-        outcome = advance_game(engine, edge=event.event_type, button=int(event.payload["button_id"]),
+        outcome = advance_game(engine, edge=event.event_type, button=button_id,
                                sequence=engine.last_sequence + 1, now=now, paused=staged,
                                cancelled=event.payload.get('cancelled') is True)
         state.game_engine_state = outcome.state
@@ -1314,7 +1349,9 @@ class CanonicalRuntime(SceneMenuMixin):
                            self._game_prompt(state, outcome.speech_text, outcome.feedback_id)]
             elif outcome.feedback_id and state.interaction_open:
                 effects.append({"type":"speak", "phrase_id":outcome.feedback_id})
-            return self._decision(state, effects, "game_" + outcome.status)
+            if interrupted_prompt and not any(e.get("type") == "audio_stop" for e in effects):
+                effects.insert(0, {"type": "audio_stop"})
+            return self._decision(state, effects, "game_" + outcome.status, clear_audio=interrupted_prompt)
         effects = [self._game_lighting(outcome.state)]
         if (engine.game_id == "repeat_pattern" and event.event_type == "ButtonPressed"
                 and outcome.status in {"sequence_partial", "sequence_retry", "progress", "completed"}):
@@ -1383,6 +1420,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.game_engine_state = None
             state.active_game_id = None
             state.game_audio_stage = "idle"
+            state.game_prompt_is_hint = False
             state.game_target = None
             state.game_parameters = {}
         effects = self._prepare_scene_menu(state, effects, reason)

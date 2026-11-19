@@ -326,10 +326,10 @@ class PipelineMetrics:
         self.pipeline = {
             "label": "Silero v5.5 + RVC" if tts_provider == "silero" and voice_conversion == "rvc_v2" else f"{tts_provider} + {voice_conversion}",
             "tts_provider": tts_provider,
-            "tts_model": getattr(settings, "silero_model", "v5_5_ru") if tts_provider == "silero" else ("VoxCPM2-step765" if tts_provider == "voxcpm765" else "mock"),
-            "tts_language": getattr(settings, "silero_language", "ru") if tts_provider == "silero" else ("ru" if tts_provider == "voxcpm765" else "mock"),
-            "tts_speaker": getattr(settings, "silero_speaker", "aidar") if tts_provider == "silero" else ("trained_narrator" if tts_provider == "voxcpm765" else "mock"),
-            "tts_sample_rate": getattr(settings, "silero_sample_rate", 48000) if tts_provider == "silero" else (48000 if tts_provider == "voxcpm765" else 24000),
+            "tts_model": getattr(settings, "silero_model", "v5_5_ru") if tts_provider == "silero" else ("VoxCPM2-step555" if tts_provider == "vox555" else "VoxCPM2-step765" if tts_provider == "voxcpm765" else "mock"),
+            "tts_language": getattr(settings, "silero_language", "ru") if tts_provider == "silero" else ("ru" if tts_provider in {"vox555", "voxcpm765"} else "mock"),
+            "tts_speaker": getattr(settings, "silero_speaker", "aidar") if tts_provider == "silero" else ("trained_narrator" if tts_provider in {"vox555", "voxcpm765"} else "mock"),
+            "tts_sample_rate": getattr(settings, "silero_sample_rate", 48000) if tts_provider == "silero" else (48000 if tts_provider in {"vox555", "voxcpm765"} else 24000),
             "voice_conversion": voice_conversion,
             "stream_preroll_ms": getattr(settings, "silero_leading_silence_ms", 150) if tts_provider == "silero" else 0,
         }
@@ -2639,7 +2639,7 @@ class AudioSynthesisQueue:
                     task.cancel()
             await asyncio.gather(ready_task, failure_task, return_exceptions=True)
 
-    async def submit(self,text):
+    async def submit(self,text, *, pre_stream: tuple[asyncio.Task, asyncio.Queue] | None = None):
         if self.error is not None: raise self.error
         if self.closed or self.worker is None:
             raise RuntimeError("audio synthesis queue is closed")
@@ -2652,6 +2652,12 @@ class AudioSynthesisQueue:
             await self.abort(self.session_id or "")
             raise self.error
         chunk_index=self.next_chunk_index; self.next_chunk_index+=1
+        if pre_stream is not None:
+            pre_map = getattr(self, "_pre_streams", None)
+            if pre_map is None:
+                pre_map = {}
+                self._pre_streams = pre_map
+            pre_map[chunk_index] = pre_stream
         item=(chunk_index,text)
         self._ownership[chunk_index]=_AudioOwnership(chunk_index,item_bytes)
         self.queued_bytes+=item_bytes; self.submitted_chunks+=1
@@ -2736,6 +2742,10 @@ class AudioSynthesisQueue:
         generation = self.cancel.tokens.get(session_id)
         self.closed=True
         self._drain("cancelled")
+        for pre_t, _ in list(getattr(self, "_pre_streams", {}).values()):
+            pre_t.cancel()
+        if hasattr(self, "_pre_streams"):
+            self._pre_streams.clear()
         if self.worker and not self.worker.done():
             self.worker.cancel()
             with contextlib.suppress(asyncio.CancelledError): await self.worker
@@ -2947,14 +2957,59 @@ class AudioSynthesisQueue:
                 self.metrics.event("tts_started", provider=provider, chunk_index=chunk_index, token=token,
                                    stream_preroll_ms=150 if provider == "silero" and chunk_index == 0 else 0)
                 self.metrics.mark_voice(session_id, "tts_request", generation_id=self.trace_generation_id)
-                native_method = _native_audio_stream_method(self.tts)
-                if native_method is not None:
-                    await self._run_native_stream(native_method, session_id, token, chunk_index, text, provider)
+                pre_entry = getattr(self, "_pre_streams", {}).pop(chunk_index, None)
+                if pre_entry is not None:
+                    pre_task, pre_q = pre_entry
+                    sub_idx = 0
+                    try:
+                        while True:
+                            if cancelled():
+                                self._transition(chunk_index, "cancelled")
+                                break
+                            item_kind, item_val = await asyncio.wait_for(pre_q.get(), self.config.tts_timeout_s)
+                            if item_kind == "eof":
+                                if sub_idx == 0:
+                                    raise RuntimeError("pre_stream_empty")
+                                self._transition(chunk_index, "finished")
+                                self.metrics.event("playback_finished", chunk_index=chunk_index, token=token)
+                                break
+                            if item_kind == "err":
+                                raise item_val
+                            sub_audio = item_val
+                            if sub_audio.token != token or sub_audio.session_id not in (None, session_id):
+                                self._transition(chunk_index, "cancelled")
+                                break
+                            sub_audio = AudioChunk(sub_audio.samples, sub_audio.sample_rate, token,
+                                                   session_id, self.trace_generation_id, sub_audio.state)
+                            if sub_idx == 0:
+                                self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
+                                if chunk_index == 0 and self.first_audio_ready is not None:
+                                    self.first_audio_ready.set()
+                                self._transition(chunk_index, "playing", audio_bytes=len(sub_audio.samples) * 4)
+                                self.playback.active_token = token
+                                self.metrics.event("playback_started", chunk_index=chunk_index, token=token)
+                                if not self._output_lifecycle_notified:
+                                    self._output_lifecycle_notified = True
+                                    await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
+                                self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
+                                if hasattr(self.metrics, "mark_playback_start"):
+                                    self.metrics.mark_playback_start(session_id)
+                            await asyncio.wait_for(self.playback.play(sub_audio), self.config.playback_timeout_s)
+                            sub_idx += 1
+                    finally:
+                        if not pre_task.done():
+                            pre_task.cancel()
+                        await asyncio.gather(pre_task, return_exceptions=True)
                     continue
-                stream_method = getattr(self.tts, "synthesize_stream_chunk", None)
-                synthesis = (stream_method(text, token, cancelled, first_chunk=(chunk_index == 0))
-                             if stream_method is not None else self.tts.synthesize(text, token, cancelled))
-                audio=await asyncio.wait_for(synthesis,self.config.tts_timeout_s)
+                else:
+                    native_method = _native_audio_stream_method(self.tts)
+                    if native_method is not None:
+                        await self._run_native_stream(native_method, session_id, token, chunk_index, text, provider)
+                        continue
+                    stream_method = getattr(self.tts, "synthesize_stream_chunk", None)
+                    synthesis = (stream_method(text, token, cancelled, first_chunk=(chunk_index == 0))
+                                 if stream_method is not None else self.tts.synthesize(text, token, cancelled))
+                    audio=await asyncio.wait_for(synthesis,self.config.tts_timeout_s)
                 metadata = getattr(self.tts, "request_metadata", None)
                 if metadata is not None:
                     self.metrics.event("tts_route_evidence", **metadata())
@@ -3485,7 +3540,90 @@ class BoundedConversationEngine:
                 self.metrics.mark_voice(context.session_id, "llm_first_token", generation_id=trace_generation_id)
                 self.metrics.event("token_received", token_index=token_index, chars=len(value))
 
+            async def _private_pre_stream(first_text: str, out_q: asyncio.Queue):
+                raw_tts = self.tts
+                while isinstance(raw_tts, CachedTTSProvider):
+                    raw_tts = raw_tts.delegate
+                cancelled_fn = lambda: self.cancel.cancelled(context.session_id, token)
+                try:
+                    native_fn = _native_audio_stream_method(raw_tts)
+                    if native_fn is not None:
+                        async for ch in native_fn(first_text, token, cancelled_fn, first_chunk=True):
+                            await out_q.put(("chunk", ch))
+                    else:
+                        stream_fn = getattr(raw_tts, "synthesize_stream_chunk", None)
+                        ch = await (stream_fn(first_text, token, cancelled_fn, first_chunk=True)
+                                    if stream_fn is not None
+                                    else raw_tts.synthesize(first_text, token, cancelled_fn))
+                        await out_q.put(("chunk", ch))
+                    await out_q.put(("eof", None))
+                except BaseException as exc:
+                    await out_q.put(("err", exc))
+
             async def close_chunks(values):
+                if (values and not chunks and os.getenv("MISHKA_STREAM_FIRST_JSON_CHUNK", "0") != "1"):
+                    if self.cancel.cancelled(context.session_id, token):
+                        raise asyncio.CancelledError
+                    full_candidate = " ".join(values)
+                    if len(full_candidate.split()) > age_words:
+                        raise ValueError("age_word_budget_exceeded")
+                    validation_started = time.perf_counter()
+                    options = {"spoken_requirement": spoken_requirement} if structured else {}
+                    if structured:
+                        self.metrics.event("spoken_semantic_started", chunk_index=0)
+                    val_task = asyncio.create_task(
+                        self.response_validator.validate(
+                            full_candidate, context=context.history[-4:], generation_id=token, **options
+                        )
+                    )
+                    pre_q = asyncio.Queue(maxsize=64) if (queue.voice_mode in {"off", "disabled"} and values[0]) else None
+                    pre_task = asyncio.create_task(_private_pre_stream(values[0], pre_q)) if pre_q is not None else None
+                    try:
+                        try:
+                            decision = await val_task
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            self.metrics.event("validation_error", reason=type(exc).__name__, source="response_validation")
+                            raise ResponseValidationError("validation_exception") from exc
+                        if structured:
+                            self.metrics.event("spoken_semantic_finished", chunk_index=0, allowed=not decision.blocked)
+                        self.metrics.observe_voice_stage(context.session_id, "validation", validation_started, generation_id=trace_generation_id)
+                        if self.cancel.cancelled(context.session_id, token):
+                            raise asyncio.CancelledError
+                        if decision.blocked:
+                            self.metrics.event(
+                                "validation_block",
+                                correlation_id=trace_correlation_id,
+                                reason=decision.reason,
+                                source=decision.source,
+                                latency_ms=round(decision.latency_ms, 2),
+                                timeout_ms=round(self.response_validator.timeout_s * 1000.0, 2),
+                            )
+                            raise ResponseValidationError(
+                                decision.reason,
+                                decision.source,
+                                decision.latency_ms,
+                                self.response_validator.timeout_s * 1000.0,
+                            )
+                        pre_stream_pair = (pre_task, pre_q) if (pre_task is not None and pre_q is not None) else None
+                        for idx, chunk in enumerate(values):
+                            chunks.append(chunk)
+                            self.metrics.event("chunk_closed", chunk_index=len(chunks) - 1, chars=len(chunk),
+                                               validation=decision.source, validation_ms=round(decision.latency_ms, 2))
+                            await queue.submit(chunk, pre_stream=(pre_stream_pair if idx == 0 else None))
+                            if len(chunks) == 1:
+                                self.metrics.event("first_audio_gate_entered", timeout_s=self.config.first_audio_gate_s)
+                                await queue.wait_first_audio(self.config.first_audio_gate_s)
+                                self.metrics.event("first_audio_gate_released")
+                        return
+                    except BaseException:
+                        if not val_task.done():
+                            val_task.cancel()
+                        if pre_task is not None and not pre_task.done():
+                            pre_task.cancel()
+                        await asyncio.gather(*(t for t in (val_task, pre_task) if t is not None), return_exceptions=True)
+                        raise
                 for chunk in values:
                     if self.cancel.cancelled(context.session_id, token):
                         raise asyncio.CancelledError

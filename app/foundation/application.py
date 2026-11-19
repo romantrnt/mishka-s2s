@@ -2488,6 +2488,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     # The ringtone has no S2S turn to drain. The greeting deadline
                     # must not await native preparation cleanup.
                     continue
+                if hasattr(self, "_cancel_game_prewarm"):
+                    self._cancel_game_prewarm(event.session_id)
                 if self.bounded_s2s is not None:
                     effect["audio_cleanup"] = await self._cancel_audio_owner(
                         self.bounded_s2s, event.session_id, operation="audio_stop",
@@ -2570,6 +2572,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             audio_failure = {"response_id": effect["content_id"],
                                 "playback_lease": effect["playback_lease"], "error_code": "game_prompt_dispatch_failed"}
                             _set_audio_effect_status(effect, asset_status="approved", queued=False, resolution="game_prompt_dispatch_failed")
+            elif kind == "game_started":
+                if (getattr(self.audio, "private_pcm_supported", False)
+                        and hasattr(self.audio, "play_pcm_stream_owned")
+                        and hasattr(self, "_schedule_game_prompt_prewarm")):
+                    self._schedule_game_prompt_prewarm(event.session_id, state_owner)
             elif kind == "dialogue_prompt":
                 def prompt_current():
                     return bool(still_current() and state_owner.interaction_open
