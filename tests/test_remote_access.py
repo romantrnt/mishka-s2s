@@ -131,3 +131,26 @@ def test_existing_canonical_http_and_websocket_accept_internal_auth():
             assert ws.receive_json()["type"] == "stand_state"
             ws.send_json({"type": "ping"})
             assert ws.receive_json()["type"] == "pong"
+
+
+def test_browser_html_login_page_and_cookie_session_without_basic_popup():
+    with TestClient(fixture_app(), base_url=ORIGIN, follow_redirects=False) as client:
+        page = client.get("/console", headers={"Accept": "text/html,application/xhtml+xml"})
+        assert page.status_code == 200
+        assert '<form method="post" action="/stand/login"' in page.text
+        assert TOKEN not in page.text
+        assert "set-cookie" not in page.headers
+        # Query auth still fails closed even with Accept: text/html
+        assert client.get(f"/console?token={TOKEN}", headers={"Accept": "text/html"}).status_code == 401
+        # Foreign or missing Origin on POST /stand/login is rejected
+        assert client.post("/stand/login", data={"username": "mishka", "password": TOKEN}).status_code == 403
+        assert client.post("/stand/login", data={"username": "mishka", "password": TOKEN}, headers={"Origin": "https://evil.example"}).status_code == 403
+        # Wrong password returns 401 without setting cookie
+        bad = client.post("/stand/login", data={"username": "mishka", "password": "wrong"}, headers={"Origin": ORIGIN})
+        assert bad.status_code == 401 and "set-cookie" not in bad.headers and TOKEN not in bad.text
+        # Valid login sets HttpOnly/Strict/Secure cookie and redirects to /console
+        ok = client.post("/stand/login", data={"username": "mishka", "password": TOKEN}, headers={"Origin": ORIGIN})
+        assert ok.status_code == 303 and ok.headers["location"] == "/console"
+        cookie = ok.headers["set-cookie"]
+        assert all(flag in cookie for flag in ("Path=/", "HttpOnly", "SameSite=Strict", "Secure"))
+        assert client.get("/console").json() == {"canonical_auth": True}
