@@ -39,7 +39,7 @@ button:hover { background: #f0f2f1; }
 
 /* Compact device front panel: the panel is only as large as its controls. */
 .phone-shell { padding: 2px 5px 0; }
-.tester-guide { margin: 0 7px 17px; padding: 12px 13px; border: 1px solid #d6ddda; background: #f7faf8; }
+.tester-guide { display: none; }
 .guide-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .guide-step { color: var(--ok); font: 10px ui-monospace, monospace; letter-spacing: .08em; }
 .guide-title strong { font-size: 14px; }

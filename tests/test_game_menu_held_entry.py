@@ -91,11 +91,9 @@ async def test_held_key_survives_game_exit_root_and_second_game_entry():
         assert (await h.button(7))['reason'] == 'game_exit_pending'
         clock[0] += 6.
         assert (await h.release(7))['reason'] == 'game_exited_by_long_button'
-        assert h.state.mode == 'root_menu'
-        assert h.state.game_engine_state is None and h.sid not in h.app._active_audio
-        assert 6 in h.state.accepted_buttons_down
-        await h.button(1); await h.release(1)
         assert h.state.mode == 'game_menu'
+        assert h.state.game_engine_state is None and h.app._active_audio[h.sid]["content_id"] == "PHRASE_019"
+        assert 6 in h.state.accepted_buttons_down
         await select_quiz(h)
         assert (await h.button(6))['reason'] != 'game_progress'
         assert h.state.game_engine_state.round == 0

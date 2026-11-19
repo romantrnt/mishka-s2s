@@ -33,19 +33,25 @@ class GameHarness:
 @pytest.mark.asyncio
 @pytest.mark.parametrize('handset_up',[False,True])
 @pytest.mark.parametrize('slot',[1,3,4,5])
-async def test_game_exit_is_immediate_and_returns_a_live_root_menu(handset_up,slot):
+async def test_game_exit_requires_hold_and_returns_to_game_menu(handset_up,slot):
     h=GameHarness()
     try:
         await h.start(slot,voice=handset_up)
-        result=await h.press(7)
-        assert result['reason']=='game_exited_by_button'
-        assert h.state.mode=='root_menu' and h.state.game_engine_state is None
-        assert h.sid not in h.app._active_audio
-        assert {'audio_stop','capture_close','game_exit'} <= {e['type'] for e in result['outputs']}
-        expected={str(i):0 for i in range(18)}
-        expected.update({str(i):value for i,value in LED_PRESETS['ROOT_MENU']})
-        assert h.app.led.output.snapshot()==expected
-        assert (await h.press(5))['reason']=='help_priority'
+        short=await h.press(7)
+        assert short['reason']=='game_exit_pending'
+        assert h.state.mode=='game_active'
+        await h.send('ButtonPressed',{'button_id':7})
+        h.state.game_engine_state = h.state.game_engine_state.__class__(
+            **{**h.state.game_engine_state.__dict__, 'seven_exit_phase':'ready', 'seven_exit_step':7}
+        )
+        exited=await h.send('ButtonReleased',{'button_id':7})
+        assert exited['reason']=='game_exited_by_long_button'
+        expected_mode='game_menu' if handset_up else 'root_menu'
+        assert h.state.mode==expected_mode and h.state.game_engine_state is None
+        if not handset_up:
+            assert h.sid not in h.app._active_audio
+        assert {'audio_stop','capture_close','game_exit'} <= {e['type'] for e in exited['outputs']}
+        assert (await h.press(5))['reason'] in {'help_priority', 'game_started'}
     finally:await h.close()
 
 
@@ -55,12 +61,16 @@ async def test_old_game_audio_cannot_reopen_game_after_exit(terminal):
     h=GameHarness()
     try:
         await h.start()
-        old=dict(h.app._active_audio[h.sid])
-        await h.press(7)
+        old=dict(h.app._active_audio[self_sid := h.sid])
+        await h.send('ButtonPressed',{'button_id':7})
+        h.state.game_engine_state = h.state.game_engine_state.__class__(
+            **{**h.state.game_engine_state.__dict__, 'seven_exit_phase':'ready', 'seven_exit_step':7}
+        )
+        await h.send('ButtonReleased',{'button_id':7})
         before=h.app.led.output.snapshot()
         await h.terminal(terminal,old)
-        assert h.state.mode=='root_menu' and h.state.game_engine_state is None
-        assert h.app.led.output.snapshot()==before and h.sid not in h.app._active_audio
+        assert h.state.mode=='game_menu' and h.state.game_engine_state is None
+        assert h.app.led.output.snapshot()==before
     finally:await h.close()
 
 
@@ -68,10 +78,14 @@ async def test_old_game_audio_cannot_reopen_game_after_exit(terminal):
 async def test_game_exit_needs_no_working_speaker_or_confirmation_recording():
     h=GameHarness()
     try:
-        await h.start()
+        await h.start(voice=False)
         def fail(*args,**kwargs):raise OSError('speaker unavailable')
         h.app.audio.play_owned=fail
-        assert (await h.press(7))['reason']=='game_exited_by_button'
+        await h.send('ButtonPressed',{'button_id':7})
+        h.state.game_engine_state = h.state.game_engine_state.__class__(
+            **{**h.state.game_engine_state.__dict__, 'seven_exit_phase':'ready', 'seven_exit_step':7}
+        )
+        assert (await h.send('ButtonReleased',{'button_id':7}))['reason']=='game_exited_by_long_button'
         assert h.state.mode=='root_menu'
         await h.send('HandsetPlaced')
         await h.send('HandsetLifted')

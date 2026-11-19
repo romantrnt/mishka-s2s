@@ -222,6 +222,8 @@ class RemoteDeviceSimulator:
             self._active_scan_epoch = epoch
             boundary = self.stand.application._max_client_boundary
             generation = boundary.generation
+            prior_state = self.stand.application.canonical_runtime.sessions.get(self.stand.active_session_id)
+            prior_request_id = prior_state.identity_request_id if prior_state is not None else None
             deadline = time.monotonic() + self.SCAN_TIMEOUT_S
             try:
                 scan = await asyncio.wait_for(self.scan_callback(code, self.SCAN_TIMEOUT_S), self.SCAN_TIMEOUT_S)
@@ -231,8 +233,20 @@ class RemoteDeviceSimulator:
                     changed = boundary.generation - generation
                     if not boundary._stepping and ((changed >= 1 and (self.stand.application._canonical_profiles or getattr(scan, "duplicate", False))) or changed >= 2):
                         reason = "duplicate_suppressed_by_max" if getattr(scan, "duplicate", False) else "synthetic_scan_processed"
-                        self.record("scan", reason, {"synthetic": True})
-                        return {"reason": reason}
+                        session_state = self.stand.application.canonical_runtime.sessions.get(self.stand.active_session_id)
+                        new_request_id = session_state.identity_request_id if session_state is not None else None
+                        if getattr(scan, "duplicate", False):
+                            auth_status = "duplicate_suppressed"
+                        elif (session_state is not None and session_state.profile_status == "identified"
+                              and new_request_id and new_request_id != prior_request_id):
+                            auth_status = "identified"
+                        elif (session_state is not None and session_state.mode not in {"idle", "profile_ready"}
+                              and not (session_state.mode == "session_closed" and session_state.substate == "soft_end")):
+                            auth_status = "ignored_in_current_state"
+                        else:
+                            auth_status = "no_personalization"
+                        self.record("scan", reason, {"synthetic": True, "auth_status": auth_status})
+                        return {"reason": reason, "auth_status": auth_status}
                     await asyncio.sleep(0.01)
                 self._scan_quarantined = True
                 return _error("synthetic_scan_timeout", "synthetic capture did not settle")

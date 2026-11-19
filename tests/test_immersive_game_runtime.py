@@ -81,7 +81,7 @@ async def test_odd_original_list_is_real_pcm_and_one_terminal_opens_answers():
         handle, audio = await h.start(4)
         assert handle.response_id == "GAME_PROMPT" and audio.samples
         assert h.state.game_audio_stage == "prompt"
-        assert texts[-2:] == ["Что из этого лишнее?", "Чтобы выйти, нажми семь."]
+        assert texts[-2:] == ["Что из этого лишнее?", "Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти."]
         assert len([text for text in texts if any(text.startswith(c) for c in
             ("Красный:", "Оранжевый:", "Жёлтый:", "Зелёный:", "Голубой:"))]) == 5
         cue_owner = h.app._game_prompt_cues[h.state.session_id]
@@ -150,7 +150,7 @@ async def test_game_cues_start_at_playback_and_stale_duplicate_cannot_relight():
         await asyncio.sleep(.04)
         h.app._game_audio_started(sid, handle.playback_id, handle.playback_lease, handle.generation)
         assert h.app.led.output.snapshot() == frame
-        assert h.state.mode == "root_menu" and not h.app._game_cue_tasks
+        assert h.state.mode == "game_menu" and not h.app._game_cue_tasks
     finally:
         await h.close()
 
@@ -391,7 +391,8 @@ async def test_game_utterance_survives_button_ripple_but_not_a_different_run():
         assert guard(), "ordinary ripple must not revoke the child's speech"
         result = await game_voice(h,"не хочу играть",guard)
         assert result["reason"] == "game_exited_by_voice"
-        await h.start(2)
+        assert h.state.mode == "game_menu"
+        await h.key(2)
         await h.complete()
         assert not guard(), "an old utterance cannot own a different game run"
         result = await game_voice(h,"не хочу играть",guard)
@@ -428,9 +429,13 @@ async def test_game_exit_safety_await_allows_same_run_buttons_and_fences_new_own
         if change == "button":
             await h.key(3)
         elif change == "new-run":
-            await h.key(7)
+            await h.send("ButtonPressed", {"button_id": 7})
+            h.state.game_engine_state = h.state.game_engine_state.__class__(
+                **{**h.state.game_engine_state.__dict__, "seven_exit_phase": "ready", "seven_exit_step": 7}
+            )
+            await h.send("ButtonReleased", {"button_id": 7})
             h.app.safety_classifier.classify = original
-            await h.start(2)
+            await h.key(2)
             await h.complete()
         else:
             await h.send("HandsetPlaced")
@@ -438,7 +443,7 @@ async def test_game_exit_safety_await_allows_same_run_buttons_and_fences_new_own
         result = await pending
         if change == "button":
             assert result["reason"] == "game_exited_by_voice"
-            assert h.state.mode == "root_menu"
+            assert h.state.mode == "game_menu"
         else:
             assert result["reason"] == "stale_session_generation"
             if change == "new-run":
@@ -480,7 +485,7 @@ async def test_pcm_exit_utterance_keeps_application_phase_owner_across_ripple():
         release.set()
         result = await pending
         assert result["reason"] == "game_exited_by_voice"
-        assert h.state.mode == "root_menu"
+        assert h.state.mode == "game_menu"
     finally:
         release.set()
         if pending is not None:

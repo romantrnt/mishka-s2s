@@ -205,7 +205,7 @@ def _answer_challenge(state: GameState, button: int) -> GameTransition:
 
 
 def hold_exit_policy(state: GameState) -> bool:
-    return state.game_id == 'quiz' or 7 in game_answer_buttons(state)
+    return bool(state.immersive) or state.game_id == 'quiz' or 7 in game_answer_buttons(state)
 
 
 def cancel_exit_gesture(state: GameState) -> GameState:

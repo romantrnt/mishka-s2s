@@ -125,7 +125,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
                 and target in {"idle", "session_closed"})
     if event_type == "PersonalStoryReady":
         return current == "personal_story_generating" and target == "personal_story_playing"
-    if event_type in {"AudioCompleted", "AudioFailed"} and current == "game_active" and target == "root_menu":
+    if event_type in {"AudioCompleted", "AudioFailed"} and current == "game_active" and target in {"root_menu", "game_menu"}:
         return True
     if event_type in {"AudioCompleted", "AudioFailed"} and current == "personal_story_playing":
         return target == "root_menu"
@@ -201,9 +201,9 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
         return target == "safety_stop"
     if event_type == "ButtonReleased":
         # The hold game completes its last round on a measured release.
-        return current == "game_active" and target == "root_menu"
+        return current == "game_active" and target in {"root_menu", "game_menu"}
     if event_type == "ButtonLongHeld":
-        return current == "game_active" and target == "root_menu"
+        return current == "game_active" and target in {"root_menu", "game_menu"}
     if event_type == "ButtonPressed":
         return (
             (current == "root_menu" and target == "profile_ready") or
@@ -222,7 +222,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current == "personal_story_theme" and target in {"personal_story_generating", "root_menu"})
             or (current == "automatic_mood_check" and target == "root_menu")
             or (current == "game_menu" and target == "game_active")
-            or (current == "game_active" and target == "root_menu")
+            or (current == "game_active" and target in {"root_menu", "game_menu"})
             or (current == "fixed_story_menu" and target in {"fixed_story_playing", "awaiting_handset", "root_menu"})
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_pause_announcement", "fixed_story_choice_wave", "root_menu"})
             or (current in {"story_pause_announcement", "story_resume_announcement", "story_paused"} and target in {"story_resume_announcement", "fixed_story_choice_wave", "root_menu"})
@@ -233,14 +233,14 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current == "schedule_weather" and target == "root_menu")
         )
     if event_type == "DialogueFallback":
-        return ((current == "game_active" and target == "root_menu")
+        return ((current == "game_active" and target in {"root_menu", "game_menu"})
                 or (current == "bear_dialogue" and target in {"bear_dialogue", "root_menu"})
                 or (current == "support_intake" and target in {"support_intake", "root_menu"})
                 or (current in {"personal_story_generating", "personal_story_validating", "personal_story_playing"}
                     and target == "fixed_story_menu"))
     if event_type == "VoiceIntentReady":
         return (
-            (current == "game_active" and target == "root_menu")
+            (current == "game_active" and target in {"root_menu", "game_menu"})
             or (current in {"personal_welcome_listen", "exhibition_name_capture", "exhibition_age_selection"}
              and target == "exhibition_menu_tutorial_prompt")
             or (current == "wellbeing_check" and target == "root_menu")

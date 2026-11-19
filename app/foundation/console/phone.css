@@ -16,14 +16,8 @@ body[data-phone] button:focus-visible,body[data-phone] summary:focus-visible,bod
 .phone-connection-line {display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 7px 8px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--soft);}
 #phone-connection::before {content:"";display:inline-block;margin-right:7px;width:6px;height:6px;border-radius:50%;background:var(--warn);vertical-align:1px;}
 #phone-connection[data-live="true"]::before {background:var(--ok);}
-#phone-render-mode {border-color:var(--line);min-height:36px;font-size:11px;padding:6px 10px;}
 .phone-stage {height:clamp(360px,45svh,470px);min-height:330px;position:relative;isolation:isolate;overflow:hidden;touch-action:pan-y;}
 .phone-canvas {position:absolute;inset:0;width:100%;height:100%;touch-action:none;}
-.phone-flat-body {position:absolute;left:50%;top:55%;width:min(72%,450px);height:75%;max-height:340px;transform:translate(-50%,-50%);border-radius:40% 40% 18% 18% / 55% 55% 20% 20%;background:#198c9d;box-shadow:inset 8px 9px 15px #5bc0c94f,inset -9px -10px 14px #0e5f7170,0 25px 20px -16px #41697470;border-bottom:8px solid #176e7d;}
-.phone-flat-plate {position:absolute;inset:18% 11% 8%;background:#697780;clip-path:polygon(0 65%,5% 57%,20% 55%,22% 47%,17% 25%,18% 15%,25% 9%,34% 13%,39% 26%,42% 10%,47% 0,56% 0,62% 12%,62% 25%,69% 12%,78% 10%,85% 18%,84% 36%,90% 30%,97% 33%,100% 43%,97% 58%,94% 63%,91% 79%,85% 90%,75% 97%,57% 100%,39% 97%,26% 84%,11% 85%,3% 78%);}
-body[data-phone] .phone-flat-handset {position:absolute;left:50%;top:11%;width:min(77%,465px);height:20%;max-height:82px;min-height:62px;border:0;border-radius:48% 48% 40% 40% / 63% 63% 40% 40%;background:#198c9d;box-shadow:inset 2px 6px 9px #6ac5c94f,inset -3px -8px 9px #12637670,0 8px 6px #0e536040;transform:translateX(-50%) rotate(-3deg);transition:transform .45s ease;z-index:2;}
-body[data-phone] .phone-flat-handset:hover {background:#2098a8;}
-body[data-phone] .phone-flat-handset[data-up="true"] {transform:translate(-51%,-35%) rotate(-7deg);}
 .phone-paw {position:absolute;left:50%;top:55%;width:min(62%,380px);height:58%;max-height:270px;transform:translate(-50%,-44%);z-index:3;pointer-events:none;}
 body[data-phone] .phone-key {position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;justify-content:center;align-items:center;color:#53626a;padding:0;border:3px solid #344c56;border-radius:48%;background:var(--key-color);box-shadow:inset 3px 4px 6px #ffffff30,inset -3px -4px 4px #16323e3d,0 3px 1px #334b55;min-width:44px;min-height:44px;line-height:1;pointer-events:auto;touch-action:none;transition:filter .1s,transform .1s;}
 body[data-phone] .phone-key:disabled {opacity:1;cursor:default;}
@@ -39,7 +33,6 @@ body[data-phone] .key-4 {left:72.4%;top:25%;width:13.1%;height:20%;--key-color:#
 body[data-phone] .key-5 {left:86.8%;top:42.6%;width:12.6%;height:19%;--key-color:#00d5e3;}
 body[data-phone] .key-6 {left:44.2%;top:71.1%;width:20.9%;height:51%;--key-color:#0739ef;border-radius:55% 30% 20% 75% / 28% 15% 12% 72%;}
 body[data-phone] .key-7 {left:67.7%;top:70.9%;width:21%;height:51.1%;--key-color:#ee22e8;border-radius:30% 55% 75% 20% / 15% 28% 72% 12%;}
-.phone-stage[data-renderer="three"] .phone-flat-body,.phone-stage[data-renderer="three"] .phone-flat-handset {display:none;}
 .phone-stage[data-renderer="three"] .phone-paw {inset:0;width:100%;height:100%;max-height:none;transform:none;}
 body[data-phone] .phone-stage[data-renderer="three"] .phone-key {background:transparent!important;border:0!important;color:transparent;box-shadow:none!important;filter:none!important;min-width:44px;min-height:44px;}
 .phone-stage[data-renderer="three"] .phone-key svg,.phone-stage[data-renderer="three"] .phone-key span {visibility:hidden;}
@@ -105,17 +98,9 @@ body[data-phone] .phone-primary:hover {background:#343a3a;}
  .phone-main-actions button {padding:10px 12px;font-size:12px;min-width:0;}
  .phone-shortcuts {font-size:10px;}
  .phone-tools {padding:20px;}
- .phone-flat-body {width:83%;}
- body[data-phone] .phone-flat-handset {width:87%;}
  .phone-paw {width:72%;}
  .phone-tool-section dl {grid-template-columns:110px minmax(0,1fr);}
 }
 @media(prefers-reduced-motion:reduce) {body[data-phone] *,body[data-phone] *::before {transition:none!important;scroll-behavior:auto!important;}}
 body[data-phone] .phone-key[data-digit="true"] span {color:#ffffff;text-shadow:0 0 8px #fff7;}
 body[data-phone] .phone-key[data-symbol="true"] svg {color:#ffffff;filter:drop-shadow(0 0 6px #fff8);}
-/* A continuous curved receiver in the functional WebGL fallback. */
-body[data-phone] .phone-flat-handset {
- border-radius:0;
- -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 90'%3E%3Cpath fill='white' d='M2 61C-5 29 70 5 140 5S285 28 298 58C307 80 284 92 263 76C217 48 85 46 36 78C18 89 5 83 2 61Z'/%3E%3C/svg%3E") center/100% 100% no-repeat;
- mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 90'%3E%3Cpath fill='white' d='M2 61C-5 29 70 5 140 5S285 28 298 58C307 80 284 92 263 76C217 48 85 46 36 78C18 89 5 83 2 61Z'/%3E%3C/svg%3E") center/100% 100% no-repeat;
-}

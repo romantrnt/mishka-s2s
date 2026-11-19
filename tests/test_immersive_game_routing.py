@@ -82,14 +82,25 @@ def test_invite_menu_start_and_prompt_are_ordered_and_do_not_score_early():
     assert r.state.game_audio_stage=='prompt'
 
 
-def test_free_light_release_does_not_overwrite_the_ripple_and_seven_exits():
-    r=Route();r.menu();r.start(1);r.ready()
+def test_free_light_release_does_not_overwrite_the_ripple_and_seven_requires_hold():
+    r=Route();r.menu();r.start(1)
+    # Free lights is playable immediately during the intro prompt without waiting.
+    pressed_early=r.press(1)
+    assert any(e.get('animation')=='ripple' and e['origin_button']==1 for e in pressed_early['effects'])
+    r.release(1)
+    r.ready()
     pressed=r.press(4)
     assert any(e.get('animation')=='ripple' and e['origin_button']==4 for e in pressed['effects'])
     released=r.release(4)
     assert not any(e['type'] in {'lighting_preset','game_lighting'} for e in released['effects'])
-    exited=r.press(7)
-    assert r.state.mode=='root_menu'
+    short_press=r.press(7)
+    assert short_press['reason']=='game_exit_pending' and r.state.mode=='game_active'
+    short_release=r.release(7)
+    assert short_release['reason']=='game_exit_aborted' and r.state.mode=='game_active'
+    r.press(7)
+    r.clock += 5.1
+    exited=r.release(7)
+    assert exited['reason']=='game_exited_by_long_button' and r.state.mode=='game_menu'
     assert {'audio_stop','capture_close','game_exit'} <= {e['type'] for e in exited['effects']}
 
 
@@ -122,7 +133,7 @@ def test_seven_is_an_answer_when_the_current_quiz_offers_it():
 def test_all_games_accept_natural_voice_exit_even_while_prompt_is_pending(text,slot):
     r=Route();r.menu();r.start(slot)
     result=r.send('VoiceIntentReady',{'intent':'free_speech','safety_severity':'none'},text)
-    assert result['reason']=='game_exited_by_voice' and r.state.mode=='root_menu'
+    assert result['reason']=='game_exited_by_voice' and r.state.mode=='game_menu'
     assert r.state.game_engine_state is None
 
 
@@ -137,9 +148,10 @@ def test_child_safety_preempts_game_exit_and_word_generation(severity,intent):
 def test_progress_survives_reentry_and_is_scrubbed_when_session_identity_clears():
     r=Route();r.menu();r.start(3);r.ready()
     r.state.game_engine_state=replace(r.state.game_engine_state,level=4)
-    r.press(7);r.release(7)
+    r.press(7);r.clock += 5.1;r.release(7)
     assert r.state.game_progress['repeat_pattern']==4
-    r.menu();r.start(3)
+    assert r.state.mode=='game_menu'
+    r.start(3)
     assert r.state.game_engine_state.level==4
     r.send('SessionReset')
     assert r.state.game_progress=={}

@@ -1107,17 +1107,22 @@ class CanonicalRuntime(SceneMenuMixin):
             state.game_progress[engine.game_id] = max(
                 state.game_progress.get(engine.game_id, 0), getattr(engine, 'level', 0))
         returning = (state.game_return_mode == "bear_dialogue" or state.activity_return_mode == "bear_dialogue") and state.interaction_open
-        state.mode, state.active_game_id = "bear_dialogue" if returning else "root_menu", None
+        return_to_game_menu = state.game_return_mode == "game_menu" and not returning
+        target_mode = "bear_dialogue" if returning else "game_menu" if return_to_game_menu else "root_menu"
+        state.mode, state.active_game_id = target_mode, None
         state.game_return_mode = None
         state.activity_return_mode = None
         state.game_audio_stage = "idle"
         state.game_target = None
         state.game_parameters = {}
+        state.selected_menu_button = None
+        state.scene_menu_held = []
         state.expected_inputs = (["speech", "button_7", "handset_down"] if returning else
                                  [f"button_{i}" for i in range(1, 8)] + ["handset_down"])
         state.state_version += 1
+        preset = "BEAR_DIALOGUE" if returning else "GAME_MENU" if return_to_game_menu else "ROOT_MENU"
         effects = ([] if preserve_output else [{"type":"audio_stop"}, {"type":"capture_close"}]) + [{"type":"game_exit"},
-                   {"type":"lighting_preset","preset":"BEAR_DIALOGUE" if returning else "ROOT_MENU"}]
+                   {"type":"lighting_preset","preset":preset}]
         if returning and not preserve_output:
             effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору."))
         elif reason == "word_game_finished" and not preserve_output:
@@ -1188,7 +1193,9 @@ class CanonicalRuntime(SceneMenuMixin):
         state.game_audio_stage = "starting" if state.interaction_open else "playing"
         if not state.interaction_open:
             state.game_engine_state = finish_prompt(engine, now).state
-        state.game_return_mode = "bear_dialogue" if from_dialogue else None
+        state.game_return_mode = ("bear_dialogue" if from_dialogue
+                                  else "game_menu" if state.mode == "game_menu"
+                                  else None)
         state.activity_return_mode = "bear_dialogue" if from_dialogue else None
         state.pending_game_offer = state.game_offer_id = None
         state.game_offer_ready = False
@@ -1236,7 +1243,7 @@ class CanonicalRuntime(SceneMenuMixin):
         if engine is None:
             return self._decision(state, [], "game_unavailable")
         immersive = getattr(engine, 'immersive', False)
-        staged = immersive and state.game_audio_stage in {'starting', 'prompt'}
+        staged = immersive and engine.game_id != 'free_lights' and state.game_audio_stage in {'starting', 'prompt'}
         outcome = advance_game(engine, edge=event.event_type, button=int(event.payload["button_id"]),
                                sequence=engine.last_sequence + 1, now=now, paused=staged,
                                cancelled=event.payload.get('cancelled') is True)

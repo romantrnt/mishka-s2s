@@ -125,3 +125,24 @@ async def test_old_scan_cannot_attach_after_cleanup_and_new_lift(phase, cleanup,
             release.set()
             if not request.done():
                 await asyncio.gather(request, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_rfid_reports_honest_auth_status_for_identified_unknown_and_active_guest():
+    async with demo_session(Path(MAX_SOURCE), assume_control_ready=True) as runtime:
+        simulator = runtime.api.state.remote_devices
+        simulator.scan_callback = runtime.capture.scan
+        unknown = await simulator.action({"action": "rfid", "card": "unknown"})
+        assert unknown["reason"] == "synthetic_scan_processed"
+        assert unknown["auth_status"] == "no_personalization"
+        identified = await simulator.action({"action": "rfid", "card": "demo-1"})
+        assert identified["reason"] == "synthetic_scan_processed"
+        assert identified["auth_status"] == "identified"
+        await simulator.action({"action": "handset", "state": "up"})
+        unknown_while_active = await simulator.action({"action": "rfid", "card": "unknown"})
+        assert unknown_while_active["auth_status"] == "ignored_in_current_state"
+        await simulator.action({"action": "reset"})
+        await simulator.action({"action": "handset", "state": "up"})
+        res = await simulator.action({"action": "rfid", "card": "archive"})
+        assert res["reason"] == "synthetic_scan_processed"
+        assert res["auth_status"] in {"no_personalization", "ignored_in_current_state"}

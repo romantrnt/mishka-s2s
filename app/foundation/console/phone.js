@@ -145,9 +145,12 @@ function mountPhone() {
       button.disabled=!available||pending||(action!=='end'&&Boolean(sessionPending))||!bridge.sessionActionIsCurrent(sessionScope(action));
       button.textContent=pending?{start:'Начинаем…',end:'Завершаем…',skip_interview:'Переходим к занятиям…'}[action]:{start:'Начать',end:'Завершить',skip_interview:'Сразу к занятиям'}[action];
     }
-    $('phone-flat-handset').disabled=$('phone-handset').disabled;$('phone-flat-handset').setAttribute('aria-label',handsetLabel);$('phone-flat-handset').dataset.up=String(up);
     $('phone-prompt').textContent=simulator?.prompt?.text||'Сейчас нет записанной реплики. Текст личных ответов скрыт.';
-    for(const button of document.querySelectorAll('[data-phone-card]'))button.disabled=!canMutate()||!simulator?.devices?.rfid?.available;
+    const rfidReady=canMutate()&&Boolean(simulator?.devices?.rfid?.available);
+    for(const button of document.querySelectorAll('[data-phone-card]'))button.disabled=!rfidReady;
+    if(!rfidReady&&$('phone-rfid-result').textContent==='Карта не предъявлена'){
+      $('phone-rfid-result').textContent=!connected()?'Нет соединения с телефоном':!simulator?.devices?.rfid?.available?'Синтетический RFID недоступен':'Дождитесь готовности устройства';
+    }
     $('phone-reset').disabled=!simulator||bridge.media().authBlocked;
     $('phone-input-disconnect').disabled=!connected()||!simulator?.fault?.input_connected;
     $('phone-input-reconnect').disabled=!connected()||simulator?.fault?.input_connected;
@@ -187,7 +190,7 @@ function mountPhone() {
   tools.addEventListener('close',()=>drawerReturn?.focus());
   tools.addEventListener('click',event=>{if(event.target===tools){const r=tools.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right)closeTools();}});
   tools.addEventListener('cancel',()=>input.cancel());
-  $('phone-handset').onclick=handset;$('phone-flat-handset').onclick=handset;
+  $('phone-handset').onclick=handset;
   $('phone-reset').onclick=reset;$('reset').onclick=reset;
   $('handset-up').onclick=()=>send({action:'handset',state:'up'}).catch(showError);
   $('handset-down').onclick=()=>{cleanup();send({action:'handset',state:'down'}).catch(showError);};
@@ -232,8 +235,20 @@ function mountPhone() {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){cleanup();clearTimeout(mediaTimer);}else if(!stopped)tickMedia();});
   window.addEventListener('pagehide',()=>{stopped=true;cleanup();clearTimeout(mediaTimer);rendererGeneration++;model?.destroy();model=null;});
   for(const button of document.querySelectorAll('[data-phone-card]'))button.onclick=async()=>{
-    $('phone-rfid-result').textContent=`Чтение ${button.dataset.phoneCard} через Max…`;
-    try{const value=await send({action:'rfid',card:button.dataset.phoneCard});$('phone-rfid-result').textContent=value?`Max: ${value.result?.reason||'чтение завершено'}`:'Операция отменена';}
+    const card=button.dataset.phoneCard;
+    $('phone-rfid-result').textContent=`Чтение ${card} через Max…`;
+    try{
+      const value=await send({action:'rfid',card});
+      if(!value){$('phone-rfid-result').textContent='Операция отменена';return;}
+      const status=value.result?.auth_status;
+      const messages={
+        identified:`Карта ${card}: авторизация принята`,
+        no_personalization:`Карта ${card}: профиль не найден или в архиве (гость)`,
+        ignored_in_current_state:`Карта ${card}: не применена в текущем состоянии сеанса`,
+        duplicate_suppressed:`Карта ${card}: повторное чтение подавлено Max`,
+      };
+      $('phone-rfid-result').textContent=messages[status]||`Max: ${value.result?.reason||'чтение завершено'}`;
+    }
     catch(error){$('phone-rfid-result').textContent=error.message;showError(error);}
   };
   const fault=async body=>{if(body.mode==='disconnect')cleanup();try{await send({device:'input',...body},'/stand/simulator/fault');}catch(error){showError(error);}};
@@ -243,21 +258,15 @@ function mountPhone() {
   $('phone-text-form').onsubmit=async event=>{event.preventDefault();const text=$('phone-text').value.trim();if(!text||!canMutate())return;bridge.clearMic();try{await bridge.post('/stand/text',{text});$('phone-text').value='';}catch(error){showError(error);}};
   $('phone-wav').onchange=event=>{bridge.clearMic();$('wav').onchange(event).catch(showError);};
   $('phone-refresh-journal').onclick=refreshJournal;
-  function flatView(message='') {
-    rendererGeneration++;const previous=model;model=null;previous?.destroy();stage.dataset.renderer='flat';
-    for(const key of keys.values()){key.style.removeProperty('left');key.style.removeProperty('top');key.style.removeProperty('width');key.style.removeProperty('height');}
-    $('phone-render-mode').textContent='Объёмный вид';$('phone-render-mode').setAttribute('aria-pressed','true');$('phone-render-notice').textContent=message;
-  }
   async function threeView() {
     const generation=++rendererGeneration;
     try {
       const {createPhoneModel}=await import('./phone-model.js?v=3-fill-channel-fix');
       if(generation!==rendererGeneration||stopped)return;
-      model=createPhoneModel(stage,{press:id=>input.press(id,'model'),release:(id,cancel)=>input.release(id,cancel,'model'),handset,project:(id,x,y,w,ratio)=>{const key=keys.get(id);key.style.left=`${x*100}%`;key.style.top=`${y*100}%`;key.style.width=`${w*stage.clientWidth}px`;key.style.height=`${w*stage.clientWidth*ratio}px`;},onFailure:message=>flatView(message)});
-      stage.dataset.renderer='three';model.update(simulator,input.pressed());$('phone-render-mode').textContent='Плоский вид';$('phone-render-mode').setAttribute('aria-pressed','false');$('phone-render-notice').textContent='';
-    } catch(error){if(generation===rendererGeneration)flatView('3D недоступен: плоское управление работает с тем же телефоном.');}
+      model=createPhoneModel(stage,{press:id=>input.press(id,'model'),release:(id,cancel)=>input.release(id,cancel,'model'),handset,project:(id,x,y,w,ratio)=>{const key=keys.get(id);key.style.left=`${x*100}%`;key.style.top=`${y*100}%`;key.style.width=`${w*stage.clientWidth}px`;key.style.height=`${w*stage.clientWidth*ratio}px`;},onFailure:message=>{$('phone-render-notice').textContent=message;}});
+      stage.dataset.renderer='three';model.update(simulator,input.pressed());$('phone-render-notice').textContent='';
+    } catch(error){if(generation===rendererGeneration)$('phone-render-notice').textContent='3D недоступен в этом браузере. Используйте клавиши 1–7 и Пробел.';}
   }
-  $('phone-render-mode').onclick=()=>{input.cancel();if(stage.dataset.renderer==='three')flatView();else threeView();};
   window.mishkaPhoneUpdate=update;
   window.mishkaPhoneError=showError;
   window.mishkaPhoneMedia=renderMedia;
