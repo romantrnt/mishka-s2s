@@ -137,7 +137,9 @@ def test_browser_html_login_page_and_cookie_session_without_basic_popup():
     with TestClient(fixture_app(), base_url=ORIGIN, follow_redirects=False) as client:
         page = client.get("/console", headers={"Accept": "text/html,application/xhtml+xml"})
         assert page.status_code == 200
+        assert page.headers["referrer-policy"] == "same-origin"
         assert '<form method="post" action="/stand/login"' in page.text
+        assert 'placeholder="login"' in page.text and 'placeholder="pass"' in page.text
         assert TOKEN not in page.text
         assert "set-cookie" not in page.headers
         # Query auth still fails closed even with Accept: text/html

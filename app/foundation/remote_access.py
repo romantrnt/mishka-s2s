@@ -20,31 +20,24 @@ _LOGIN_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Мишка — вход на стенд</title>
+<title>login</title>
 <style>
-  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:#f2f4f3; color:#182220; display:flex; min-height:100dvh; align-items:center; justify-content:center; padding:16px; box-sizing:border-box; }
-  .card { width:100%; max-width:360px; background:#fff; border-radius:16px; padding:24px; box-shadow:0 8px 28px rgba(0,0,0,.08); }
-  h1 { margin:0 0 8px; font-size:20px; }
-  p { margin:0 0 18px; font-size:14px; color:#52615d; }
-  label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
-  input { width:100%; box-sizing:border-box; padding:12px; border:1px solid #cfd8d5; border-radius:10px; font-size:16px; margin-bottom:14px; }
-  button { width:100%; padding:13px; border:0; border-radius:10px; background:#147d73; color:#fff; font-size:16px; font-weight:600; cursor:pointer; }
-  .err { background:#fdecec; color:#9e2222; padding:10px 12px; border-radius:10px; font-size:14px; margin-bottom:14px; }
+  html,body { margin:0; padding:0; background:#fff; color:#000; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  body { display:flex; min-height:100dvh; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; }
+  form { width:100%; max-width:280px; display:flex; flex-direction:column; gap:10px; }
+  input,button { width:100%; box-sizing:border-box; height:44px; padding:0 12px; font-size:16px; border-radius:0; outline:none; -webkit-appearance:none; appearance:none; }
+  input { background:#fff; color:#000; border:1px solid #000; }
+  button { background:#000; color:#fff; border:1px solid #000; font-weight:600; cursor:pointer; }
+  .err { font-size:14px; color:#b00020; }
 </style>
 </head>
 <body>
-<main class="card">
-  <h1>Мягкий телефон Мишки</h1>
-  <p>Введите логин и токен доступа для входа на стенд.</p>
+<form method="post" action="/stand/login" autocomplete="on">
   __ERROR__
-  <form method="post" action="/stand/login" autocomplete="on">
-    <label for="u">Логин</label>
-    <input id="u" name="username" value="mishka" autocomplete="username" required>
-    <label for="p">Токен доступа</label>
-    <input id="p" name="password" type="password" autocomplete="current-password" required autofocus>
-    <button type="submit">Войти</button>
-  </form>
-</main>
+  <input name="username" type="text" placeholder="login" autocomplete="username" required autofocus>
+  <input name="password" type="password" placeholder="pass" autocomplete="current-password" required>
+  <button type="submit">enter</button>
+</form>
 </body>
 </html>"""
 
@@ -141,7 +134,7 @@ class PrivateStandGateway:
             (b"content-type", b"text/html; charset=utf-8"),
             (b"content-length", str(len(body)).encode("ascii")),
             (b"cache-control", b"no-store"),
-            (b"referrer-policy", b"no-referrer"),
+            (b"referrer-policy", b"same-origin"),
             (b"x-content-type-options", b"nosniff"),
             (b"x-frame-options", b"DENY"),
         ]
@@ -159,6 +152,9 @@ class PrivateStandGateway:
 
     async def _handle_login(self, scope, receive, send, headers):
         if not self._allowed_origin(headers):
+            accepts_html = any(key.lower() == b"accept" and b"text/html" in value.lower() for key, value in headers)
+            if accepts_html:
+                return await self._send_login_page(scope, send, status=403, error_message="Доступ с этого источника отклонён.")
             return await self._deny(scope, send, forbidden=True)
         body = bytearray()
         while True:
