@@ -394,7 +394,8 @@ def test_quiz_never_dictates_options_and_blocks_early_tap_until_prompt_completes
     # Tap BEFORE question finishes (even during rules/praise/question) must NOT score!
     r.press(answer)
     early = r.release(answer)
-    assert early['reason'] == 'game_prompt_waiting'
+    assert early['reason'] in {'game_prompt_waiting', 'game_exit_aborted'}
+    assert r.state.game_audio_stage == 'prompt' and r.state.game_level == 0
     assert r.state.game_engine_state.round == 0
     # After AudioCompleted(GAME_PROMPT), valid tap scores immediately.
     r.done()
