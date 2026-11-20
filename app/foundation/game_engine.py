@@ -34,7 +34,7 @@ AVAILABLE_GAME_SPECS = (
 # The legacy catalog remains a compatibility seam for existing visual callers.
 # The direct chooser uses this explicit five-game order.
 IMMERSIVE_GAME_SPECS = (
-    GameSpec('free_lights', 'Живой свет', 'PHRASE_037', 'free_play', playable_buttons=(1, 2, 3, 4, 5, 6)),
+    GameSpec('free_lights', 'Живой свет', 'PHRASE_037', 'free_play', playable_buttons=tuple(range(1, 8))),
     GameSpec('quiz', 'Вопросы Мишки', 'PHRASE_020', 'quiz', playable_buttons=tuple(range(1, 8))),
     GameSpec('repeat_pattern', 'Повтори огоньки', 'PHRASE_040', 'sequence'),
     GameSpec('odd_one_out', 'Выбери лишнее', 'PHRASE_020', 'odd_one_out', playable_buttons=(1, 2, 3, 4, 5)),
@@ -111,7 +111,7 @@ def game_answer_buttons(state: GameState, *, include_narrowed: bool = True) -> t
             return state.narrowed_options
         return tuple(button for button, _ in challenge.options)
     if state.game_id == 'free_lights':
-        return (1, 2, 3, 4, 5, 6)
+        return BUTTONS
     if state.game_id == 'word_game' or state.phase == 'completed':
         return ()
     if state.game_id == 'repeat_pattern' and state.immersive:
@@ -261,7 +261,7 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
     physical_buttons = tuple(range(1, 8)) if state.immersive else BUTTONS
     if state.phase == 'completed' or type(button) is not int or button not in physical_buttons:
         return GameTransition(state, desired_buttons(state), 'ignored')
-    paused = paused or state.phase != 'playing'
+    paused = paused or (state.phase != 'playing' and state.game_id != 'free_lights')
     held, down = set(state.held), dict(state.down_times)
     if state.seven_exit_phase != 'idle' and button != 7 and edge == 'ButtonPressed':
         held.add(button)
@@ -291,6 +291,8 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
         if phase == 'ready' or now >= started + EXIT_READY_S:
             return GameTransition(state, desired_buttons(state), 'exit_requested')
         if phase == 'pending' and now < started + EXIT_RECOGNITION_S and not paused and answer_generation == state.round_generation and 7 in game_answer_buttons(state):
+            if state.game_id == 'free_lights':
+                return GameTransition(state, (), 'free_play', wave_origin=7)
             return _answer_challenge(state, 7)
         return GameTransition(state, desired_buttons(state), 'exit_aborted')
     if edge == 'ButtonReleased':

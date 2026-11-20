@@ -787,6 +787,19 @@ class GamePresentationMixin:
                                     if not current():
                                         return
                                     raise RuntimeError("incomplete_game_prompt_stream")
+                                if first_sub and chunk.samples:
+                                    vals = list(chunk.samples)
+                                    # Trim leading dead silence / resampler edge blip and apply a 10ms fade-in.
+                                    onset = 0
+                                    while onset < len(vals) and abs(vals[onset]) < 0.004:
+                                        onset += 1
+                                    lead = max(0, onset - int(chunk.sample_rate * 0.015))
+                                    if lead > 0 and lead < len(vals):
+                                        vals = vals[lead:]
+                                    fade = min(len(vals), int(chunk.sample_rate * 0.010))
+                                    for fi in range(fade):
+                                        vals[fi] *= fi / max(1, fade)
+                                    chunk = replace(chunk, samples=tuple(vals))
                                 collected_samples.extend(chunk.samples)
                                 yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), (buttons if first_sub else ())
                                 first_sub = False

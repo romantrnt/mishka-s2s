@@ -579,4 +579,33 @@ def test_hold_6_interrupted_by_handset_lifted_starts_voice_once():
     assert rt.sessions[sid].silent_hold_active is False and rt.sessions[sid].mode == 'voice_welcome'
 
 
+def test_free_lights_short_7_ripples_and_hold_7_exits_without_ripple():
+    rt = CanonicalRuntime(exhibition_mode=True, optional_identity=True)
+    sid = 'free-lights-7'
+    t = 100.0
+    s0 = rt.handle(CanonicalEvent('SessionStarted', sid, 1, 0, 'panel', {}, 's1', t), session_action_authorized=True)
+    gm = rt.handle(CanonicalEvent('ButtonPressed', sid, 2, s0['state']['state_version'], 'uart', {'button_id': 1}, 'p1', t + 0.1))
+    rt.handle(CanonicalEvent('ButtonReleased', sid, 3, gm['state']['state_version'], 'uart', {'button_id': 1}, 'r1', t + 0.2))
+    fl = rt.handle(CanonicalEvent('ButtonPressed', sid, 4, rt.sessions[sid].state_version, 'uart', {'button_id': 1}, 'p2', t + 0.3))
+    rt.handle(CanonicalEvent('ButtonReleased', sid, 5, fl['state']['state_version'], 'uart', {'button_id': 1}, 'r2', t + 0.4))
+    assert rt.sessions[sid].active_game_id == 'free_lights'
+
+    # Short tap 7 (< 0.6s) -> ripple from 7, no exit wave
+    p7 = rt.handle(CanonicalEvent('ButtonPressed', sid, 6, rt.sessions[sid].state_version, 'uart', {'button_id': 7}, 'p7', t + 1.0))
+    assert p7['reason'] == 'game_exit_pending'
+    assert not [e for e in p7['effects'] if e.get('type') == 'lighting_wave_intent']
+    r7 = rt.handle(CanonicalEvent('ButtonReleased', sid, 7, p7['state']['state_version'], 'uart', {'button_id': 7}, 'r7', t + 1.15))
+    assert r7['reason'] == 'game_free_play'
+    assert {'type': 'game_lighting', 'animation': 'ripple', 'origin_button': 7} in r7['effects']
+    assert rt.sessions[sid].active_game_id == 'free_lights'
+
+    # Long hold 7 (>= 5s) -> exits to game_menu without ripple on 7
+    p7h = rt.handle(CanonicalEvent('ButtonPressed', sid, 8, rt.sessions[sid].state_version, 'uart', {'button_id': 7}, 'p7h', t + 2.0))
+    r7h = rt.handle(CanonicalEvent('ButtonReleased', sid, 9, p7h['state']['state_version'], 'uart', {'button_id': 7}, 'r7h', t + 7.2))
+    assert r7h['reason'] == 'game_exited_by_long_button'
+    assert rt.sessions[sid].mode == 'game_menu'
+    assert not [e for e in r7h['effects'] if e.get('animation') == 'ripple']
+
+
+
 

@@ -111,14 +111,37 @@ class PrivateWelcomeMixin:
             try:
                 if cancelled():
                     return
-                phrase = f'Привет, {name}. Я Мишка.'
+                phrase = f'Привет, {name}! Я Мишка.'
                 decision = await engine.response_validator.validate_trusted(phrase)
                 if cancelled():
                     return
                 if not decision.allowed:
                     owner.status = 'personal_welcome_name_unavailable'
                     return
-                audio = await tts.synthesize(phrase, owner.epoch, cancelled)
+                stream_fn = getattr(tts, 'synthesize_audio_stream', None)
+                if callable(stream_fn):
+                    from .s2s import AudioChunk
+                    from .voice_pipeline import peak_normalize, resample_mono
+                    collected = []
+                    stream_rate = None
+                    async for sub in stream_fn(phrase, owner.epoch, cancelled, first_chunk=True):
+                        if cancelled():
+                            return
+                        if not valid_pcm(sub):
+                            continue
+                        if stream_rate is None:
+                            stream_rate = sub.sample_rate
+                        collected.extend(sub.samples)
+                    if collected and stream_rate:
+                        samples = tuple(collected)
+                        if stream_rate != 24000:
+                            samples = tuple(await asyncio.to_thread(resample_mono, samples, stream_rate, 24000))
+                            stream_rate = 24000
+                        if samples and max(map(abs, samples)) > 1.0:
+                            samples = peak_normalize(samples, safe_peak=1.0)
+                        audio = AudioChunk(samples, stream_rate, owner.epoch)
+                else:
+                    audio = await tts.synthesize(phrase, owner.epoch, cancelled)
                 phrase = None
                 if cancelled():
                     return
