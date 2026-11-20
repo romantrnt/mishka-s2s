@@ -111,7 +111,7 @@ def game_answer_buttons(state: GameState, *, include_narrowed: bool = True) -> t
             return state.narrowed_options
         return tuple(button for button, _ in challenge.options)
     if state.game_id == 'free_lights':
-        return BUTTONS
+        return next((spec.playable_buttons for spec in IMMERSIVE_GAME_SPECS if spec.game_id == 'free_lights'), BUTTONS)
     if state.game_id == 'word_game' or state.phase == 'completed':
         return ()
     if state.game_id == 'repeat_pattern' and state.immersive:

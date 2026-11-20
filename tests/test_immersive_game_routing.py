@@ -96,7 +96,8 @@ def test_free_light_release_does_not_overwrite_the_ripple_and_seven_requires_hol
     short_press=r.press(7)
     assert short_press['reason']=='game_exit_pending' and r.state.mode=='game_active'
     short_release=r.release(7)
-    assert short_release['reason']=='game_exit_aborted' and r.state.mode=='game_active'
+    assert short_release['reason']=='game_free_play' and r.state.mode=='game_active'
+    assert {'type':'game_lighting','animation':'ripple','origin_button':7} in short_release['effects']
     r.press(7)
     r.clock += 5.1
     exited=r.release(7)
@@ -580,28 +581,56 @@ def test_hold_6_interrupted_by_handset_lifted_starts_voice_once():
 
 
 def test_free_lights_short_7_ripples_and_hold_7_exits_without_ripple():
-    rt = CanonicalRuntime(exhibition_mode=True, optional_identity=True)
+    clock = [100.0]
+    rt = CanonicalRuntime(exhibition_mode=True, optional_identity=True, monotonic_now=lambda: clock[0])
     sid = 'free-lights-7'
-    t = 100.0
-    s0 = rt.handle(CanonicalEvent('SessionStarted', sid, 1, 0, 'panel', {}, 's1', t), session_action_authorized=True)
-    gm = rt.handle(CanonicalEvent('ButtonPressed', sid, 2, s0['state']['state_version'], 'uart', {'button_id': 1}, 'p1', t + 0.1))
-    rt.handle(CanonicalEvent('ButtonReleased', sid, 3, gm['state']['state_version'], 'uart', {'button_id': 1}, 'r1', t + 0.2))
-    fl = rt.handle(CanonicalEvent('ButtonPressed', sid, 4, rt.sessions[sid].state_version, 'uart', {'button_id': 1}, 'p2', t + 0.3))
-    rt.handle(CanonicalEvent('ButtonReleased', sid, 5, fl['state']['state_version'], 'uart', {'button_id': 1}, 'r2', t + 0.4))
+    s0 = rt.handle(CanonicalEvent('SessionStarted', sid, 1, 0, 'panel', {}, 's1', clock[0]), session_action_authorized=True)
+    gm = rt.handle(CanonicalEvent('ButtonPressed', sid, 2, s0['state']['state_version'], 'uart', {'button_id': 1}, 'p1', clock[0]))
+    rt.handle(CanonicalEvent('ButtonReleased', sid, 3, gm['state']['state_version'], 'uart', {'button_id': 1}, 'r1', clock[0]))
+    fl = rt.handle(CanonicalEvent('ButtonPressed', sid, 4, rt.sessions[sid].state_version, 'uart', {'button_id': 1}, 'p2', clock[0]))
+    rt.handle(CanonicalEvent('ButtonReleased', sid, 5, fl['state']['state_version'], 'uart', {'button_id': 1}, 'r2', clock[0]))
     assert rt.sessions[sid].active_game_id == 'free_lights'
 
-    # Short tap 7 (< 0.6s) -> ripple from 7, no exit wave
-    p7 = rt.handle(CanonicalEvent('ButtonPressed', sid, 6, rt.sessions[sid].state_version, 'uart', {'button_id': 7}, 'p7', t + 1.0))
-    assert p7['reason'] == 'game_exit_pending'
-    assert not [e for e in p7['effects'] if e.get('type') == 'lighting_wave_intent']
-    r7 = rt.handle(CanonicalEvent('ButtonReleased', sid, 7, p7['state']['state_version'], 'uart', {'button_id': 7}, 'r7', t + 1.15))
-    assert r7['reason'] == 'game_free_play'
-    assert {'type': 'game_lighting', 'animation': 'ripple', 'origin_button': 7} in r7['effects']
-    assert rt.sessions[sid].active_game_id == 'free_lights'
+    # Short tap for every button 1..7 gives ripple from that button, no exit wave
+    seq = 5
+    for btn in range(1, 8):
+        clock[0] += 1.0
+        seq += 1
+        p = rt.handle(CanonicalEvent('ButtonPressed', sid, seq, rt.sessions[sid].state_version, 'uart', {'button_id': btn}, f'fl-p{btn}', clock[0]))
+        assert not [e for e in p['effects'] if e.get('type') == 'lighting_wave_intent']
+        if btn == 7:
+            assert p['reason'] == 'game_exit_pending'
+            clock[0] += 0.15
+            seq += 1
+            r = rt.handle(CanonicalEvent('ButtonReleased', sid, seq, p['state']['state_version'], 'uart', {'button_id': btn}, f'fl-r{btn}', clock[0]))
+            assert r['reason'] == 'game_free_play'
+            assert {'type': 'game_lighting', 'animation': 'ripple', 'origin_button': 7} in r['effects']
+        else:
+            assert p['reason'] == 'game_free_play'
+            assert {'type': 'game_lighting', 'animation': 'ripple', 'origin_button': btn} in p['effects']
+            clock[0] += 0.15
+            seq += 1
+            rt.handle(CanonicalEvent('ButtonReleased', sid, seq, p['state']['state_version'], 'uart', {'button_id': btn}, f'fl-r{btn}', clock[0]))
+        assert rt.sessions[sid].active_game_id == 'free_lights'
 
-    # Long hold 7 (>= 5s) -> exits to game_menu without ripple on 7
-    p7h = rt.handle(CanonicalEvent('ButtonPressed', sid, 8, rt.sessions[sid].state_version, 'uart', {'button_id': 7}, 'p7h', t + 2.0))
-    r7h = rt.handle(CanonicalEvent('ButtonReleased', sid, 9, p7h['state']['state_version'], 'uart', {'button_id': 7}, 'r7h', t + 7.2))
+    # Early release of 7 in middle of hold (>= 0.6s, < 5s) -> cancels exit, no ripple
+    clock[0] += 2.0
+    seq += 1
+    p7e = rt.handle(CanonicalEvent('ButtonPressed', sid, seq, rt.sessions[sid].state_version, 'uart', {'button_id': 7}, 'fl-p7e', clock[0]))
+    clock[0] += 1.5
+    seq += 1
+    r7e = rt.handle(CanonicalEvent('ButtonReleased', sid, seq, p7e['state']['state_version'], 'uart', {'button_id': 7}, 'fl-r7e', clock[0]))
+    assert r7e['reason'] == 'game_exit_aborted'
+    assert rt.sessions[sid].active_game_id == 'free_lights'
+    assert not [e for e in r7e['effects'] if e.get('animation') == 'ripple']
+
+    # Long hold 7 (>= 5s) after cancel -> exits to game_menu without ripple on 7
+    clock[0] += 2.0
+    seq += 1
+    p7h = rt.handle(CanonicalEvent('ButtonPressed', sid, seq, rt.sessions[sid].state_version, 'uart', {'button_id': 7}, 'fl-p7h', clock[0]))
+    clock[0] += 5.2
+    seq += 1
+    r7h = rt.handle(CanonicalEvent('ButtonReleased', sid, seq, p7h['state']['state_version'], 'uart', {'button_id': 7}, 'fl-r7h', clock[0]))
     assert r7h['reason'] == 'game_exited_by_long_button'
     assert rt.sessions[sid].mode == 'game_menu'
     assert not [e for e in r7h['effects'] if e.get('animation') == 'ripple']
