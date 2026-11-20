@@ -774,7 +774,7 @@ class GamePresentationMixin:
                     continue
                 if can_stream_tts:
                     from .experimental_voice import ExperimentalVoiceUnavailable
-                    deadline = asyncio.get_running_loop().time() + 6.0
+                    deadline = asyncio.get_running_loop().time() + 12.0
                     while True:
                         first_sub = True
                         collected_samples = []
