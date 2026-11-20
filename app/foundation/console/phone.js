@@ -194,6 +194,8 @@ function mountPhone() {
     for(const button of document.querySelectorAll('[data-phone-card]'))button.disabled=!rfidReady;
     if(!rfidReady&&$('phone-rfid-result').textContent==='Карта не предъявлена'){
       $('phone-rfid-result').textContent=!connected()?'Нет соединения с телефоном':!simulator?.devices?.rfid?.available?'Синтетический RFID недоступен':'Дождитесь готовности устройства';
+    } else if(rfidReady&&['Нет соединения с телефоном','Синтетический RFID недоступен','Дождитесь готовности устройства'].includes($('phone-rfid-result').textContent)){
+      $('phone-rfid-result').textContent='Карта не предъявлена';
     }
     $('phone-reset').disabled=!simulator||bridge.media().authBlocked;
     $('phone-input-disconnect').disabled=!connected()||!simulator?.fault?.input_connected;

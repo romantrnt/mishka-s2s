@@ -2630,8 +2630,33 @@ class CanonicalRuntime(SceneMenuMixin):
                 pending = state.pending_mode
                 state.pending_mode = None
                 state.mode = pending
+                if pending == "bear_dialogue":
+                    state.substate = "dialogue_started"
+                    state.expected_inputs = ["speech", "button_7", "handset_down"]
+                    state.dialogue_memory.touch(now)
+                    return self._decision(state, [
+                        {"type": "lighting_preset", "preset": "BEAR_DIALOGUE"},
+                        {"type": "capture_open"},
+                        {"type": "speak", "phrase_id": "PHRASE_094"},
+                    ], "voice_open_pending_activity", clear_audio=True)
+                if pending == "wellbeing_check":
+                    state.support_question_kind = state.support_question_kind or "pain_or_discomfort"
+                    state.expected_inputs = ["button_1", "button_5", "button_7", "speech", "handset_down"]
+                    return self._decision(state, [
+                        {"type": "capture_open"},
+                        {"type": "lighting_preset", "preset": "HELP"},
+                        {"type": "support_question", "question": state.support_question_kind},
+                    ], "support_question_after_handset")
+                if pending == "schedule_weather":
+                    state.expected_inputs = ["button", "speech", "handset_down"]
+                    return self._decision(state, [
+                        {"type": "capture_open"},
+                        {"type": "lighting_preset", "preset": "SCHEDULE_WEATHER"},
+                        {"type": "typed_info_request", "kind": "menu"},
+                    ], "typed_menu_after_handset")
+                preset = {"support_intake": "SUPPORT", "personal_story_theme": "PERSONAL_STORY"}.get(pending, "LISTENING")
                 state.expected_inputs = ["button", "speech", "handset_down"]
-                return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": "LISTENING"}], "voice_open_pending_activity")
+                return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": preset}], "voice_open_pending_activity")
             if state.profile_status == "identified":
                 state.mode = "root_menu"
                 state.expected_inputs = ["button", "speech", "handset_down"]

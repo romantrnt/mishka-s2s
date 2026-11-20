@@ -163,3 +163,40 @@ def test_session_cancel_while_up_without_optional_identity_allows_handset_placed
     assert placed["reason"] == "closed_handset_placed" and placed["state"]["mode"] == "idle"
     reopened = runtime.handle(CanonicalEvent("HandsetLifted", sid, 4, placed["state"]["state_version"], "handset", {}, "h2", now + 3))
     assert reopened["reason"] == "exhibition_handset_lifted" and reopened["state"]["mode"] == "voice_welcome"
+
+
+def test_silent_menu_pending_help_dialogue_and_weather_emit_real_prompts_on_handset_lift():
+    runtime = CanonicalRuntime(exhibition_mode=True, optional_identity=True)
+    for button, expected_mode, expected_effect_type, expected_phrase in [
+        (5, "wellbeing_check", "support_question", "PHRASE_084"),
+        (6, "bear_dialogue", "speak", "PHRASE_094"),
+        (7, "schedule_weather", "scene_menu_page", None),
+    ]:
+        sid = f"silent-lift-{button}"
+        now = 200.0
+        started = runtime.handle(
+            CanonicalEvent("SessionStarted", sid, 1, 0, "panel", {}, "s1", now),
+            session_action_authorized=True,
+        )
+        assert started["state"]["mode"] == "menu_ready"
+        pressed = runtime.handle(
+            CanonicalEvent("ButtonPressed", sid, 2, started["state"]["state_version"], "button", {"button_id": button}, "p1", now + 1)
+        )
+        released = runtime.handle(
+            CanonicalEvent("ButtonReleased", sid, 3, pressed["state"]["state_version"], "button", {"button_id": button}, "r1", now + 2)
+        )
+        assert released["state"]["mode"] == "awaiting_handset"
+        assert released["state"]["pending_mode"] == expected_mode
+
+        lifted = runtime.handle(
+            CanonicalEvent("HandsetLifted", sid, 4, released["state"]["state_version"], "handset", {}, "h1", now + 3)
+        )
+        assert lifted["state"]["mode"] == expected_mode
+        assert lifted["state"]["handset"] == "up"
+        effect_types = [e["type"] for e in lifted["effects"]]
+        assert "capture_open" in effect_types
+        assert expected_effect_type in effect_types
+        if expected_phrase is not None:
+            matched = [e for e in lifted["effects"] if e["type"] == expected_effect_type]
+            assert matched and matched[0]["phrase_id"] == expected_phrase
+
