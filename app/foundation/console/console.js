@@ -1635,13 +1635,16 @@ function interactionGuide(state, media) {
       ? ['Сеанс завершён', 'Сеанс завершён. Положи трубку, чтобы начать заново.']
       : ['Сеанс завершён', 'Поднимите трубку'];
   }
+  if (state?.canonical_state?.silent_hold_active) {
+    return ['Тихий режим', `Держи 6 (${state.canonical_state.silent_hold_step || 1} из 6), чтобы войти без звука…`];
+  }
   if (state?.canonical_state?.mode === 'profile_ready') {
     return ['Карта принята', state?.simulator?.session?.session_actions?.includes('start')
-      ? 'Карта принята. Нажми «Начать» или подними трубку.'
+      ? 'Карта принята. Нажми «Начать» (без звука) или подними трубку.'
       : 'Карта принята. Подними трубку, чтобы начать.'];
   }
   if (!interactionActive(state)) return state?.simulator?.session?.session_actions?.includes('start')
-    ? ['Начнём?', 'Нажми «Начать» или подними трубку, чтобы поговорить с Мишкой.'] : null;
+    ? ['Начнём?', 'Нажми «Начать» (без звука), держи 6 пять секунд или подними трубку.'] : null;
   const node = state.session.node;
   const page = state.canonical_state?.scene_menu_descriptor;
   if (['game_menu', 'fixed_story_menu', 'personal_story_theme', 'schedule_weather'].includes(node) && page?.scene === node) {
@@ -1658,6 +1661,7 @@ function interactionGuide(state, media) {
       odd_one_out: 'Выбери лишнее', word_game: 'Игра в слова'}[game.active_game_id] || 'Игра';
     if (game.game_exit_hold?.phase === 'ready') return [title, 'Теперь отпускай 7, чтобы выйти из игры.'];
     if (['pending','progress'].includes(game.game_exit_hold?.phase)) return [title, 'Держи 7. Огоньки заполняются. Когда они заполнятся, можно отпустить.'];
+    if (game.game_audio_stage === 'prompt_failed') return [title, 'Не удалось озвучить вопрос. Нажми 5, чтобы повторить, или держи 7 для выхода.'];
     if (['starting', 'prompt'].includes(game.game_audio_stage)
       || ['instruction', 'awaiting_prompt'].includes(game.game_phase)) return [title,
         'Дослушай Мишку. Потом можно будет ответить. Для выхода держи 7 до подсказки «Теперь отпускай», затем отпусти.'];

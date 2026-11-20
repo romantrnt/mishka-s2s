@@ -77,18 +77,19 @@ async def test_panel_story_playing_paused_and_dialogue_survive_handset_lift(tmp_
         await h.control("start")
         await h.menu()
 
-        # Enter story, pause it, lift handset -> remains paused without restarting
+        # Selecting a story while handset is down enters awaiting_handset; lifting handset starts story
         await h.key(2)
         await h.key(1)
+        assert h.state.mode == "awaiting_handset" and h.state.pending_mode == "fixed_story_playing"
+        lifted_story = await h.simulator.action({"action": "handset", "state": "up"})
+        assert lifted_story["reason"] == "fixed_story_started_after_handset"
         assert h.state.mode == "fixed_story_playing"
         story_audio = dict(h.app._active_audio["stand"])
         await h.key(6)
         while h.state.mode == "story_pause_announcement":
             await h.done()
         assert h.state.mode == "story_paused"
-        lifted = await h.simulator.action({"action": "handset", "state": "up"})
-        assert lifted["reason"] == "panel_handset_lifted"
-        assert h.state.mode == "story_paused" and h.state.handset == "up"
+        assert h.state.handset == "up"
         assert h.state.profile_status == "identified"
         assert h.state.active_story_id is not None
         # Resume story -> plays without repeating welcome
@@ -115,14 +116,10 @@ async def test_panel_bear_dialogue_survives_handset_lift_without_second_welcome(
         await h.control("start")
         await h.menu()
         await h.key(6)
-        while "stand" in h.app._active_audio:
-            await h.done()
-        assert h.state.mode == "bear_dialogue" and h.state.handset == "down"
-        version_before = h.state.state_version
+        assert h.state.mode == "awaiting_handset" and h.state.pending_mode == "bear_dialogue"
         lifted = await h.simulator.action({"action": "handset", "state": "up"})
-        assert lifted["reason"] == "panel_handset_lifted"
+        assert lifted["reason"] == "voice_open_pending_activity"
         assert h.state.mode == "bear_dialogue" and h.state.handset == "up"
-        assert h.state.state_version == version_before
         assert h.state.profile_status == "identified"
         assert h.stand.panel_snapshot()["simulator"]["microphone"]["eligible"]
         await h.simulator.action({"action": "handset", "state": "down"})
@@ -142,7 +139,7 @@ def test_awaiting_handset_with_pending_mode_enters_activity_on_lift_without_seco
             "request_id": "req-1", "expires_monotonic": now + 100.0, "ready_deadline": now + 100.0,
         }, "c1", now), profile=profile, identity_event_authorized=True)
     started = runtime.handle(CanonicalEvent("SessionStarted", sid, 2, 1 if identified else 0, "panel", {}, "s1", now + 1), session_action_authorized=True)
-    assert started["reason"] == "panel_session_started"
+    assert started["reason"] == "panel_silent_session_started"
     state = runtime.sessions[sid]
     state.mode = "awaiting_handset"
     state.pending_mode = "support_intake"

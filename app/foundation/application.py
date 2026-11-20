@@ -291,6 +291,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             carry_panel = old.interaction_open or (old.substate == "profile_cleared"
                 and self._identity_replacements.get(sid, (None,))[0] is old)
             fresh.interaction_route = old.interaction_route if old.interaction_route != "panel" or carry_panel else None
+            fresh.silent_mode = bool(old.silent_mode and fresh.handset == "down" and carry_panel)
             fresh.state_version = old.state_version + 1
             fresh.last_sequence_by_source = dict(old.last_sequence_by_source)
             fresh.seen_correlations = set(old.seen_correlations)
@@ -1500,6 +1501,70 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     results.append(result)
         return results
 
+    def _current_silent_hold_scope(self, session_id: str) -> tuple | None:
+        state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime is not None else None
+        if (state is None or not getattr(state, "silent_hold_active", False)
+                or state.silent_hold_next_deadline is None or state.handset != "down"):
+            return None
+        return (self._session_epochs.get(session_id, 0), state.silent_hold_generation, state.silent_hold_next_deadline)
+
+    def _sync_silent_hold_timer(self, session_id: str) -> None:
+        tasks = getattr(self, "_silent_hold_tasks", None)
+        scopes = getattr(self, "_silent_hold_scopes", None)
+        if tasks is None:
+            tasks = self._silent_hold_tasks = {}
+            scopes = self._silent_hold_scopes = {}
+        scope = self._current_silent_hold_scope(session_id)
+        if scope is not None and scopes.get(session_id) == scope:
+            return
+        scopes.pop(session_id, None)
+        old = tasks.pop(session_id, None)
+        if old is not None and old is not asyncio.current_task() and not old.done():
+            old.cancel()
+        if scope is None:
+            return
+        scopes[session_id] = scope
+        if not self.background_scheduler:
+            return
+        async def wait() -> None:
+            try:
+                await asyncio.sleep(max(0.0, scope[-1] - self.monotonic_now()))
+                await self._fire_silent_hold_tick(session_id, scope)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception("silent hold timer failed")
+            finally:
+                if tasks.get(session_id) is asyncio.current_task():
+                    tasks.pop(session_id, None)
+        tasks[session_id] = asyncio.create_task(wait(), name="mishka-silent-hold-timer")
+
+    async def _fire_silent_hold_tick(self, session_id: str, scope: tuple) -> dict[str, Any] | None:
+        if self._current_silent_hold_scope(session_id) != scope:
+            self._sync_silent_hold_timer(session_id)
+            return None
+        if self.monotonic_now() < scope[-1]:
+            return None
+        seq = getattr(self, "_silent_hold_sequences", {}).get(session_id, 0) + 1
+        seqs = getattr(self, "_silent_hold_sequences", None)
+        if seqs is None:
+            seqs = self._silent_hold_sequences = {}
+        seqs[session_id] = seq
+        return await self._receive_canonical_event(Event(
+            "SilentHoldTick", session_id, seq, self.now(), "canonical_silent_hold_timer",
+            {"generation": scope[1], "deadline": scope[2]},
+            f"silent-hold:{scope[1]}:{seq}", self.monotonic_now(),
+        ))
+
+    async def flush_silent_hold_timers(self) -> list[dict[str, Any]]:
+        results = []
+        for session_id, scope in tuple(getattr(self, "_silent_hold_scopes", {}).items()):
+            if self.monotonic_now() >= scope[-1]:
+                res = await self._fire_silent_hold_tick(session_id, scope)
+                if res is not None:
+                    results.append(res)
+        return results
+
     def _cancel_welcome_timer(self, session_id: str) -> None:
         task = self._welcome_timers.pop(session_id, None)
         if task is not None and task is not asyncio.current_task() and not task.done():
@@ -1802,7 +1867,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         public_engagement = dict(self._engagement_owners[event.session_id]) if public_story and event.session_id in self._engagement_owners else None
         event_type = "VoiceIntentReady" if event.event_type == "SpeechReceived" else event.event_type
         payload = dict(event.payload)
-        accepted_monotonic = (self.monotonic_now() if event.event_type in {"GameTimer", "InteractionIdleExpired"} else
+        accepted_monotonic = (self.monotonic_now() if event.event_type in {"GameTimer", "InteractionIdleExpired", "SilentHoldTick"} else
                               event.monotonic_timestamp if event.monotonic_timestamp is not None else self.monotonic_now())
         voice_admission = None
         personal_welcome_answer_verified = False
@@ -2094,6 +2159,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self._discard_personal_story(event.session_id)
 
         self._sync_game_timer(event.session_id)
+        self._sync_silent_hold_timer(event.session_id)
         self._engagement_event(event, decision, accepted=takes_ownership, voice_activity=verified_voice_activity)
 
         reset_sync_results: dict[str, dict[str, Any]] = {}
@@ -3193,7 +3259,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             authorized_ready = bool(self.optional_identity and active is not None
                 and active.handset == "down" and active.identity_request_id
                 and (active.mode == "profile_ready" or active.interaction_idle))
-            if active is None or (not active.interaction_open and not authorized_ready):
+            silent_hold_candidate = (
+                int(event.payload.get("button_id") or 0) == 6
+                and (active is None or (
+                    active.handset == "down" and not active.interaction_open
+                    and (active.mode in {"idle", "profile_ready"}
+                         or (active.mode == "session_closed" and active.substate == "soft_end"))
+                ))
+            )
+            if not silent_hold_candidate and (active is None or (not active.interaction_open and not authorized_ready)):
                 return {"session_id": event.session_id, "state": "idle",
                         "reason": "exhibition_age_not_ready", "outputs": [],
                         "canonical_state": {"mode": "idle", "handset": "down"}}

@@ -137,7 +137,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
         return target == "root_menu"
     if event_type == "ClientProfileReady":
         return (current in {"idle", "profile_ready"} and target == "profile_ready"
-                or current == "idle" and target == "voice_welcome")
+                or current == "idle" and target in {"voice_welcome", "menu_ready", "root_menu"})
     if event_type == "ClientProfileCleared":
         return (target in {"idle", "session_closed", "safety_stop"}
                 or (current in {"fixed_story_playing", "story_paused", "story_pause_announcement", "story_resume_announcement"}
@@ -180,7 +180,9 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
     if event_type == "AnonymousStart":
         return target in {"anonymous_visual", "idle", "session_closed"}
     if event_type == "SessionStarted":
-        return target == "voice_welcome"
+        return target in {"voice_welcome", "menu_ready", "root_menu"}
+    if event_type == "SilentHoldTick":
+        return target in {"idle", "profile_ready", "menu_ready", "root_menu"}
     if event_type == "InterviewSkipped":
         return current in {"exhibition_introduction", "exhibition_name_question", "exhibition_name_capture",
             "exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"} and target == "exhibition_menu_tutorial_prompt"
@@ -196,16 +198,20 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current not in {"game_active", "safety_stop"} and target == "dialogue_suspended_ram")
         )
     if event_type == "HandsetLifted":
-        return target in {"awaiting_handset", "voice_welcome", "automatic_mood_check", "root_menu", "story_paused", "game_menu", "fixed_story_menu", "fixed_story_playing", "support_intake", "personal_story_theme", "wellbeing_check", "bear_dialogue", "schedule_weather"}
+        return target in {"awaiting_handset", "voice_welcome", "automatic_mood_check", "root_menu", "story_paused", "game_menu", "game_active", "fixed_story_menu", "fixed_story_playing", "support_intake", "personal_story_theme", "wellbeing_check", "bear_dialogue", "schedule_weather"}
     if event_type == "HardwareDisconnected":
         return target == "safety_stop"
     if event_type == "ButtonReleased":
         # The hold game completes its last round on a measured release.
-        return current == "game_active" and target in {"root_menu", "game_menu"}
+        return (
+            (current in {"idle", "profile_ready", "session_closed"} and target in {"idle", "profile_ready", "session_closed"})
+            or (current == "game_active" and target in {"root_menu", "game_menu"})
+        )
     if event_type == "ButtonLongHeld":
         return current == "game_active" and target in {"root_menu", "game_menu"}
     if event_type == "ButtonPressed":
         return (
+            (current in {"idle", "profile_ready", "session_closed"} and target in {"idle", "profile_ready", "session_closed"}) or
             (current == "root_menu" and target == "profile_ready") or
             (current == "personal_welcome_listen" and target == "exhibition_menu_tutorial_prompt")
             or
@@ -221,7 +227,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current in ROOT_ENTRY_MODES and target in BUTTON_TARGETS | {"awaiting_handset"})
             or (current == "personal_story_theme" and target in {"personal_story_generating", "root_menu"})
             or (current == "automatic_mood_check" and target == "root_menu")
-            or (current == "game_menu" and target == "game_active")
+            or (current == "game_menu" and target in {"game_active", "awaiting_handset"})
             or (current == "game_active" and target in {"root_menu", "game_menu"})
             or (current == "fixed_story_menu" and target in {"fixed_story_playing", "awaiting_handset", "root_menu"})
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_pause_announcement", "fixed_story_choice_wave", "root_menu"})
@@ -294,7 +300,7 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
     valid = current in STATE_NAMES and target in STATE_NAMES and event_type in {
         "ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired",
         "AnonymousStart", "HandsetLifted", "HandsetPlaced",
-        "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SpeechStarted",
+        "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SilentHoldTick", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
         "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected",
         "HardwareReconnected", "SessionStarted", "InterviewSkipped", "SessionCancel", "SessionReset", "InteractionIdleExpired",

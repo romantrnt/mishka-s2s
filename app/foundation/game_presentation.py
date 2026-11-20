@@ -498,11 +498,17 @@ class GamePresentationMixin:
             tasks.clear()
             return
         task = tasks.pop(session_id, None)
+        meta = getattr(self, "_game_prewarm_meta", None)
+        if meta is not None:
+            meta.pop(session_id, None)
         if task is not None:
             task.cancel()
 
     async def _cancel_and_wait_game_prewarm(self, session_id: str) -> None:
         tasks = getattr(self, "_game_prewarm_tasks", None)
+        meta = getattr(self, "_game_prewarm_meta", None)
+        if meta is not None:
+            meta.pop(session_id, None)
         if not tasks:
             return
         task = tasks.pop(session_id, None)
@@ -512,6 +518,25 @@ class GamePresentationMixin:
                 await task
             except BaseException:
                 pass
+
+    async def _await_or_cancel_game_prewarm(self, session_id: str, run_id: Any, texts: tuple[str, ...], current) -> None:
+        tasks = getattr(self, "_game_prewarm_tasks", None)
+        meta = getattr(self, "_game_prewarm_meta", None)
+        if not tasks or session_id not in tasks:
+            return
+        task = tasks.get(session_id)
+        if task is not None and not task.done() and meta and meta.get(session_id) == (run_id, texts):
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+            except BaseException:
+                pass
+            if not current() or not task.done():
+                await self._cancel_and_wait_game_prewarm(session_id)
+            else:
+                tasks.pop(session_id, None)
+                meta.pop(session_id, None)
+            return
+        await self._cancel_and_wait_game_prewarm(session_id)
 
     def _schedule_game_prompt_prewarm(self, session_id: str, state) -> None:
         from .game_engine import current_challenge, hold_exit_policy
@@ -608,6 +633,11 @@ class GamePresentationMixin:
         if tasks is None:
             tasks = {}
             self._game_prewarm_tasks = tasks
+        meta = getattr(self, "_game_prewarm_meta", None)
+        if meta is None:
+            meta = {}
+            self._game_prewarm_meta = meta
+        meta[session_id] = (run_id, tuple(raw_text for raw_text, _, pid in segments if not pid))
         task = asyncio.create_task(_prewarm(), name=f"mishka-game-prewarm-{session_id}")
         tasks[session_id] = task
         task.add_done_callback(lambda t: tasks.pop(session_id, None) if tasks.get(session_id) is t else None)
@@ -676,7 +706,12 @@ class GamePresentationMixin:
 
     async def _stream_game_prompt(self, session_id, effect, token, current):
         from .s2s import AudioChunk, CachedTTSProvider
-        await self._cancel_and_wait_game_prewarm(session_id)
+        st_pre = self.canonical_runtime.sessions.get(session_id)
+        run_id_pre = getattr(getattr(st_pre, "game_engine_state", None), "run_id", None) if st_pre is not None else None
+        raw_texts = tuple(text for text, _, pid in self._game_prompt_segments(effect) if not pid)
+        await self._await_or_cancel_game_prewarm(session_id, run_id_pre, raw_texts, current)
+        if not current():
+            return False
         normalized_segments, failure_reason = await self._validate_game_segments(effect, token, current)
         if not normalized_segments:
             self._record_game_prompt_failure(session_id, effect, token, failure_reason or "empty_prompt", "validation", None, None)
@@ -728,7 +763,9 @@ class GamePresentationMixin:
                 if audio is not None:
                     chunk = await self._to_24k_chunk(audio, token, current, pad_s=0.05)
                     if chunk is None:
-                        return
+                        if not current():
+                            return
+                        raise RuntimeError("incomplete_game_prompt_asset")
                     yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), buttons
                     continue
                 cached = self._get_cached_game_chunk(text)
@@ -736,18 +773,34 @@ class GamePresentationMixin:
                     yield replace(cached, token=token, session_id=session_id, generation_id=handle.generation), buttons
                     continue
                 if can_stream_tts:
-                    first_sub = True
-                    collected_samples = []
-                    async for sub in tts.synthesize_audio_stream(text, token, cancelled, first_chunk=True):
+                    from .experimental_voice import ExperimentalVoiceUnavailable
+                    deadline = asyncio.get_running_loop().time() + 6.0
+                    while True:
+                        first_sub = True
+                        collected_samples = []
+                        try:
+                            async for sub in tts.synthesize_audio_stream(text, token, cancelled, first_chunk=True):
+                                if not current():
+                                    return
+                                chunk = await self._to_24k_chunk(sub, token, current, pad_s=0.0)
+                                if chunk is None:
+                                    if not current():
+                                        return
+                                    raise RuntimeError("incomplete_game_prompt_stream")
+                                collected_samples.extend(chunk.samples)
+                                yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), (buttons if first_sub else ())
+                                first_sub = False
+                            break
+                        except ExperimentalVoiceUnavailable as exc:
+                            if str(exc) == "experimental_voice_busy" and first_sub and current() and asyncio.get_running_loop().time() < deadline:
+                                await asyncio.sleep(0.08)
+                                continue
+                            raise
+                    if first_sub:
                         if not current():
                             return
-                        chunk = await self._to_24k_chunk(sub, token, current, pad_s=0.0)
-                        if chunk is None:
-                            return
-                        collected_samples.extend(chunk.samples)
-                        yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), (buttons if first_sub else ())
-                        first_sub = False
-                    if not first_sub and current():
+                        raise RuntimeError("empty_game_prompt_segment")
+                    if current():
                         tail = (0.,) * int(24000 * 0.05)
                         yield AudioChunk(tail, 24000, token, session_id, handle.generation), ()
                         collected_samples.extend(tail)
@@ -756,7 +809,9 @@ class GamePresentationMixin:
                 audio = await engine.tts.synthesize(text, token, cancelled)
                 chunk = await self._to_24k_chunk(audio, token, current, pad_s=0.05)
                 if chunk is None:
-                    return
+                    if not current():
+                        return
+                    raise RuntimeError("incomplete_game_prompt_tts")
                 self._put_cached_game_chunk(text, chunk)
                 yield replace(chunk, token=token, session_id=session_id, generation_id=handle.generation), buttons
 

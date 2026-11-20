@@ -3418,6 +3418,8 @@ class HardwareIntegrationStand:
             "mode", "handset", "expected_inputs", "node", "onboarding_step",
             "menu_tutorial_step", "active_effect", "lighting_effect",
             "public_story_checkpoint_pending",
+            "silent_hold_active", "silent_hold_step", "silent_mode",
+            "pending_mode", "pending_game_id",
         ) if key in canonical}
         from .game_engine import IMMERSIVE_GAME_SPECS
         if canonical.get("pending_game_offer") in tuple(spec.game_id for spec in IMMERSIVE_GAME_SPECS):
@@ -3433,7 +3435,7 @@ class HardwareIntegrationStand:
             from .game_engine import IMMERSIVE_GAME_SPECS
             if canonical.get("active_game_id") in tuple(spec.game_id for spec in IMMERSIVE_GAME_SPECS):
                 canonical_safe["active_game_id"] = canonical["active_game_id"]
-            if canonical.get("game_audio_stage") in ("idle", "starting", "prompt", "playing"):
+            if canonical.get("game_audio_stage") in ("idle", "starting", "prompt", "playing", "prompt_failed"):
                 canonical_safe["game_audio_stage"] = canonical["game_audio_stage"]
             game = canonical.get("game_engine_state")
             phase = game.get("phase") if isinstance(game, dict) else None

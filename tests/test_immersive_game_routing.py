@@ -476,4 +476,106 @@ def test_rapid_double_tap_7_from_game_menu_does_not_enter_schedule_weather():
     assert r.state.mode == 'schedule_weather'
 
 
+def test_game_prompt_audio_failed_retries_once_then_blocks_without_opening_answers():
+    r = Route('4-5')
+    r.menu()
+    r.start(2)
+    r.done()  # PHRASE_020 -> GAME_PROMPT
+    assert r.state.game_audio_stage == 'prompt'
+    # 1st AudioFailed retries GAME_PROMPT instead of opening silent answers
+    r.seq += 1
+    fail1 = r.runtime.handle(CanonicalEvent('AudioFailed', 'games', r.seq, r.state.state_version, 'browser_private_pcm',
+        {'response_id': 'GAME_PROMPT', 'playback_lease': r.state.playback_lease}), r.clock)
+    assert fail1['reason'] == 'game_prompt_retried'
+    assert r.state.game_audio_stage == 'prompt'
+    # 2nd AudioFailed moves to prompt_failed (answers 1..4 blocked; 5 retries)
+    r.seq += 1
+    fail2 = r.runtime.handle(CanonicalEvent('AudioFailed', 'games', r.seq, r.state.state_version, 'browser_private_pcm',
+        {'response_id': 'GAME_PROMPT', 'playback_lease': r.state.playback_lease}), r.clock)
+    assert fail2['reason'] == 'game_prompt_audio_failed'
+    assert r.state.game_audio_stage == 'prompt_failed'
+    blocked = r.press(1)
+    assert blocked['reason'] == 'game_prompt_waiting'
+    r.release(1)
+    retry = r.press(5)
+    assert retry['reason'] == 'game_prompt_manual_retry'
+    assert r.state.game_audio_stage == 'prompt'
+    r.release(5)
+    r.done()
+    assert r.state.game_audio_stage == 'playing'
+
+
+def test_hold_6_for_5s_starts_silent_session_and_handset_controls_audio():
+    t = 100.0
+    rt = CanonicalRuntime(exhibition_mode=True, optional_identity=True, monotonic_now=lambda: t)
+    sid = 'silent-1'
+    seq = 0
+    # 1. Press 6 while handset down -> silent_hold_started; early release cancels
+    seq += 1
+    p1 = rt.handle(CanonicalEvent('ButtonPressed', sid, seq, 0, 'uart', {'button_id': 6}, f'c{seq}', t))
+    assert p1['reason'] == 'silent_hold_started'
+    assert rt.sessions[sid].silent_hold_active is True
+    t += 2.0
+    seq += 1
+    rel1 = rt.handle(CanonicalEvent('ButtonReleased', sid, seq, p1['state']['state_version'], 'uart', {'button_id': 6}, f'c{seq}', t))
+    assert rel1['reason'] == 'silent_hold_cancelled'
+    assert rt.sessions[sid].mode == 'idle'
+
+    # 2. Hold 6 for 5s -> silent_hold_6_started -> menu_ready without audio/ringtone
+    t += 1.0
+    seq += 1
+    p2 = rt.handle(CanonicalEvent('ButtonPressed', sid, seq, rel1['state']['state_version'], 'uart', {'button_id': 6}, f'c{seq}', t))
+    gen = rt.sessions[sid].silent_hold_generation
+    t += 5.1
+    seq += 1
+    tick = rt.handle(CanonicalEvent('SilentHoldTick', sid, seq, p2['state']['state_version'], 'timer', {'generation': gen}, f'c{seq}', t))
+    assert tick['reason'] == 'silent_hold_6_started'
+    assert rt.sessions[sid].mode == 'menu_ready' and rt.sessions[sid].silent_mode is True
+    assert not any(e.get('type') in {'play_asset', 'speak', 'capture_open'} for e in tick['effects'])
+
+    # 3. Releasing 6 after threshold does NOT open bear_dialogue
+    seq += 1
+    rel2 = rt.handle(CanonicalEvent('ButtonReleased', sid, seq, tick['state']['state_version'], 'uart', {'button_id': 6}, f'c{seq}', t + 8.3))
+    assert rel2['reason'] == 'silent_hold_release_consumed'
+    assert rt.sessions[sid].mode == 'menu_ready'
+
+    # 4. Duplicate HandsetPlaced while already down does NOT reset silent session
+    seq += 1
+    dup_down = rt.handle(CanonicalEvent('HandsetPlaced', sid, seq, rel2['state']['state_version'], 'handset', {}, f'c{seq}', t + 8.5))
+    assert dup_down['reason'] == 'handset_already_placed'
+    assert rt.sessions[sid].mode == 'menu_ready'
+
+    # 5. Sound-required game (quiz) asks for handset and resumes on HandsetLifted
+    seq += 1
+    gmenu = rt.handle(CanonicalEvent('ButtonPressed', sid, seq, rt.sessions[sid].state_version, 'uart', {'button_id': 1}, f'c{seq}', t + 9.0))
+    assert rt.sessions[sid].mode == 'game_menu'
+    seq += 1
+    rt.handle(CanonicalEvent('ButtonReleased', sid, seq, rt.sessions[sid].state_version, 'uart', {'button_id': 1}, f'c{seq}', t + 9.1))
+    seq += 1
+    qreq = rt.handle(CanonicalEvent('ButtonPressed', sid, seq, rt.sessions[sid].state_version, 'uart', {'button_id': 2}, f'c{seq}', t + 9.2))
+    assert qreq['reason'] == 'game_handset_required'
+    assert rt.sessions[sid].mode == 'awaiting_handset' and rt.sessions[sid].pending_game_id == 'quiz'
+    seq += 1
+    lift = rt.handle(CanonicalEvent('HandsetLifted', sid, seq, rt.sessions[sid].state_version, 'handset', {}, f'c{seq}', t + 10.0))
+    assert lift['reason'] == 'game_started'
+    assert rt.sessions[sid].mode == 'game_active' and rt.sessions[sid].active_game_id == 'quiz'
+    assert rt.sessions[sid].silent_mode is False
+
+    # 6. Real HandsetPlaced (up -> down) resets cleanly
+    seq += 1
+    placed = rt.handle(CanonicalEvent('HandsetPlaced', sid, seq, rt.sessions[sid].state_version, 'handset', {}, f'c{seq}', t + 11.0))
+    assert placed['reason'] == 'exhibition_reset'
+
+
+def test_hold_6_interrupted_by_handset_lifted_starts_voice_once():
+    rt = CanonicalRuntime(exhibition_mode=True, optional_identity=True)
+    sid = 'silent-lift-interrupt'
+    t = 50.0
+    p = rt.handle(CanonicalEvent('ButtonPressed', sid, 1, 0, 'uart', {'button_id': 6}, 'c1', t))
+    assert p['reason'] == 'silent_hold_started'
+    lift = rt.handle(CanonicalEvent('HandsetLifted', sid, 2, p['state']['state_version'], 'handset', {}, 'c2', t + 1.5))
+    assert lift['reason'] == 'exhibition_handset_lifted'
+    assert rt.sessions[sid].silent_hold_active is False and rt.sessions[sid].mode == 'voice_welcome'
+
+
 

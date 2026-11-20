@@ -44,6 +44,8 @@ class PanelStand(MenuStand):
         return await self.boundary.step()
 
     async def menu(self):
+        if self.state.mode == "menu_ready":
+            return
         await self.harness.advance(5)
         await self.done()  # Real owned welcome completion; no fabricated slot.
         if self.state.profile_status != "identified":
@@ -91,13 +93,16 @@ async def test_explicit_end_after_local_help_allows_fresh_auth_without_reactivat
         if physical_up:
             await h.simulator.action({"action": "handset", "state": "up"})
         await h.key(5)
+        if not physical_up:
+            assert h.state.mode == "awaiting_handset" and h.state.pending_mode == "wellbeing_check"
+            await h.simulator.action({"action": "handset", "state": "up"})
         await h.key(7)
         assert h.state.mode == "safety_stop" and h.state.active_audio_id == "PHRASE_091"
         await h.control("end")
         assert not h.state.interaction_open and not h.app._active_audio
         assert (await h.ready())["reason"] == "profile_ready"
         assert h.state.mode == "profile_ready" and not h.state.interaction_open
-        assert h.state.handset == ("up" if physical_up else "down") and not h.app._active_audio
+        assert h.state.handset == "up" and not h.app._active_audio
     finally:
         await h.close()
 
@@ -107,7 +112,7 @@ async def test_explicit_end_after_local_help_allows_fresh_auth_without_reactivat
 async def test_optional_guest_skip_is_scoped_and_late_old_audio_cannot_advance_it(tmp_path, age_step):
     h = PanelStand(tmp_path)
     try:
-        await h.control("start")
+        await h.simulator.action({"action": "handset", "state": "up"})
         await h.harness.advance(5)
         await h.done()
         assert h.state.mode == "exhibition_introduction"
@@ -142,8 +147,8 @@ async def test_explicit_start_down_opens_logical_session_without_lift(tmp_path):
         before = h.scope()
         result = await h.control("start", before)
         assert "error" not in result, result
-        assert result["reason"] == "panel_session_started"
-        assert h.state.mode == "voice_welcome" and h.state.handset == "down"
+        assert result["reason"] == "panel_silent_session_started"
+        assert h.state.mode == "menu_ready" and h.state.handset == "down" and h.state.silent_mode
         assert h.state.interaction_route == "panel" and h.state.interaction_open
         assert h.scope() == before
         assert not h.app.sessions.get("stand").handset_up
@@ -201,10 +206,14 @@ async def test_panel_down_auth_start_orders_and_ordinary_nonvoice_day(tmp_path, 
             assert h.app._identity_scope_live("stand", "personalize")
         await h.menu()
         await h.key(7)
+        if not physical_up:
+            assert h.state.mode == "awaiting_handset" and h.state.pending_mode == "schedule_weather"
+            await h.simulator.action({"action": "handset", "state": "up"})
         assert h.state.mode == "schedule_weather"
         assert h.state.active_audio_id == "MENU_DAY"
+        await h.harness.advance(0.7)
         await h.key(7)
-        assert h.state.mode == "root_menu" and h.state.handset == ("up" if physical_up else "down")
+        assert h.state.mode == "root_menu" and h.state.handset == "up"
     finally:
         await h.close()
 
@@ -251,15 +260,14 @@ async def test_panel_real_edges_duplicate_down_and_lift_do_not_restart_or_cancel
     h = PanelStand(tmp_path)
     try:
         await h.control("start")
-        original = dict(h.app._active_audio["stand"])
+        assert h.state.silent_mode and not h.app._active_audio
         scope = h.scope()
         version = h.state.state_version
         assert (await h.simulator.action({"action": "handset", "state": "down"}))["reason"] == "handset_already_placed"
-        assert h.scope() == scope and h.app._active_audio["stand"] == original
+        assert h.scope() == scope and h.state.state_version == version and h.state.silent_mode
         assert (await h.simulator.action({"action": "handset", "state": "up"}))["reason"] == "panel_handset_lifted"
-        assert h.state.state_version == version and h.state.interaction_route == "panel"
+        assert h.state.interaction_route == "panel" and not h.state.silent_mode
         assert h.app.sessions.get("stand").handset_up
-        assert h.app._active_audio["stand"] == original
         await h.simulator.action({"action": "handset", "state": "down"})
         assert h.state is None  # Existing exhibition reset fully retires the canonical context.
         assert not h.app.sessions.get("stand") or not h.app.sessions.get("stand").handset_up
@@ -288,7 +296,7 @@ async def test_end_cancels_start_waiting_at_actual_application_await(tmp_path):
         release.set()
         assert (await pending)["reason"] == "stale_session_generation"
         assert not h.state.interaction_open and not h.app._active_audio
-        assert (await h.control("start"))["reason"] == "panel_session_started"
+        assert (await h.control("start"))["reason"] == "panel_silent_session_started"
     finally:
         release.set()
         if pending:
@@ -318,8 +326,8 @@ async def test_new_start_waits_for_owned_end_cleanup_before_new_audio(tmp_path):
         assert not starting.done() and not h.app._active_audio and not h.state.interaction_open
         release.set()
         assert (await ending)["reason"] == "soft_end"
-        assert (await starting)["reason"] == "panel_session_started"
-        assert h.state.interaction_open and h.state.active_audio_id == "RINGTONE"
+        assert (await starting)["reason"] == "panel_silent_session_started"
+        assert h.state.interaction_open and h.state.silent_mode and h.state.mode == "menu_ready"
     finally:
         release.set()
         await asyncio.gather(*(t for t in (ending, starting) if t), return_exceptions=True)
@@ -422,7 +430,7 @@ def test_canonical_runtime_end_while_down_allows_ready_then_lift():
     sid = "direct-end-down"
     now = time.monotonic()
     started = runtime.handle(CanonicalEvent("SessionStarted", sid, 1, 0, "panel", {}, "s1", now), session_action_authorized=True)
-    assert started["reason"] == "panel_session_started"
+    assert started["reason"] == "panel_silent_session_started"
     ended = runtime.handle(CanonicalEvent("SessionCancel", sid, 2, started["state"]["state_version"], "panel", {}, "s2", now + 1), session_action_authorized=True)
     assert ended["reason"] == "soft_end" and ended["state"]["mode"] == "session_closed"
     ready = runtime.handle(CanonicalEvent("ClientProfileReady", sid, 3, ended["state"]["state_version"], "max", {

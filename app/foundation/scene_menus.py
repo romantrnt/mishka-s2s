@@ -47,7 +47,8 @@ class SceneMenuMixin:
                 state.game_entry_seed = uuid.uuid4().int & ((1 << 63) - 1)
             state.scene_menu_active = state.mode
             state.scene_menu_phase = 'ready'
-            if state.selected_menu_button is not None and not state.scene_menu_held:
+            if (state.selected_menu_button is not None and not state.scene_menu_held
+                    and state.selected_menu_button in getattr(state, "accepted_buttons_down", ())):
                 state.scene_menu_held = [state.selected_menu_button]
         page = self._menu_page(state)
         changed = (not entering and reason != 'scene_menu_page'
@@ -76,10 +77,10 @@ class SceneMenuMixin:
         state.expected_inputs = ['button_'+str(b) for b in page.buttons] + ['handset_down']
         if (state.mode in {'game_menu','fixed_story_menu'} and page.items) or state.scene_menu_phase == 'repeat_listen' or (state.mode in {'personal_story_theme','schedule_weather'}
                 and state.scene_menu_phase=='ready' and page.items): state.expected_inputs.append('speech')
-        if entering and state.mode == 'game_menu' and state.interaction_open:
+        if entering and state.mode == 'game_menu' and state.audio_open:
             state.scene_menu_phase = 'invite'
             effects.extend([{'type':'capture_open'}, {'type':'speak','phrase_id':'PHRASE_019'}])
-        if (state.interaction_open and getattr(self,'menu_voice_capable',False)
+        if (state.audio_open and getattr(self,'menu_voice_capable',False)
                 and state.scene_menu_phase != 'invite'
                 and (state.mode not in state.scene_menu_seen or reason in {'scene_menu_page','scene_menu_refresh'})
                 and (entering or changed or reason in {'voice_open_activity','typed_menu_after_handset','scene_menu_page','scene_menu_refresh','personal_story_failure_finished'})
