@@ -734,13 +734,19 @@ class SerialLightingAdapter:
     """
 
     def __init__(self, path: str, *, baudrate: int = 115200,
-                 timeout_s: float = 1.0, transport=None) -> None:
+                 timeout_s: float = 1.0, transport=None,
+                 inter_command_delay_s: float | None = None) -> None:
         if not path:
             raise ValueError("lighting serial path is required")
         self.path = str(path)
         self.baudrate = int(baudrate)
         self.timeout_s = max(0.01, float(timeout_s))
         self.transport = transport
+        self.inter_command_delay_s = (
+            max(0.0, float(inter_command_delay_s))
+            if inter_command_delay_s is not None
+            else (0.002 if transport is None else 0.0)
+        )
         self._lock = threading.Lock()
         # RX fault observation must never wait behind a blocking TX syscall.
         self._reader_state_lock = threading.Lock()
@@ -870,14 +876,14 @@ class SerialLightingAdapter:
             self._written_targets.clear()
             self._written_targets_epoch += 1
 
-    def _write_command(self, command: LightingCommand) -> None:
+    def _write_command(self, command: LightingCommand) -> bool:
         # The desired-output snapshot may include lines not yet sent or cancelled
         # midway through a frame. Only this sole writer knows completed lines.
         target = (command.state, command.transition_ms)
         with self._reader_state_lock:
             epoch = self._written_targets_epoch
             if command.transition_ms > 0 and self._written_targets.get(command.element_id) == target:
-                return
+                return False
         self._write_line(command.to_wire())
         self._sent += 1
         with self._reader_state_lock:
@@ -885,6 +891,17 @@ class SerialLightingAdapter:
             # Never repopulate the cache from that old in-flight line.
             if epoch == self._written_targets_epoch and self._ready and not self._closed:
                 self._written_targets[command.element_id] = target
+        return True
+
+    def _write_validated_batch(self, validated: tuple[LightingCommand, ...], is_current) -> bool:
+        last_index = len(validated) - 1
+        for index, command in enumerate(validated):
+            if callable(is_current) and not is_current():
+                return False
+            wrote = self._write_command(command)
+            if wrote and self.inter_command_delay_s > 0 and index < last_index:
+                time.sleep(self.inter_command_delay_s)
+        return True
 
     def _write_line(self, payload: bytes) -> None:
         # PosixSerialTransport already completes partial os.write calls. Also
@@ -933,11 +950,7 @@ class SerialLightingAdapter:
                         raise _IncompleteLightingLineError("lighting serial boundary recovery failed") from exc
                     self._line_boundary_pending = False
                     self._line_boundary_recoveries += 1
-                for command in validated:
-                    if callable(is_current) and not is_current():
-                        return False
-                    self._write_command(command)
-                return True
+                return self._write_validated_batch(validated, is_current)
             except Exception as exc:
                 first_error = _lighting_failure_evidence(exc, stage="serial_batch_write")
                 self._last_write_failure = dict(first_error)
@@ -962,10 +975,8 @@ class SerialLightingAdapter:
                     self.transport.open()
                     self._ready = True
                     self._start_reader_locked()
-                    for command in validated:
-                        if callable(is_current) and not is_current():
-                            return False
-                        self._write_command(command)
+                    if not self._write_validated_batch(validated, is_current):
+                        return False
                     self._last_error = None
                     return True
                 except Exception as retry_exc:
