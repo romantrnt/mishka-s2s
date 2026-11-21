@@ -518,7 +518,7 @@ function gameGuidance(){
   show(id,'playing','instruction');check(/Дослушай Мишку/);
   show(id,'playing','playing','game_exit_confirmation');check(/6 — продолжить; 7 — закончить; 5 — помощь/);
  }
- show('free_lights');check(/1–6.*держи 7.*Теперь отпускай/);
+ show('free_lights');check(/1–7.*держи 7.*Теперь отпускай/);
  show('repeat_pattern','playing','demonstrate');check(/Посмотри.*Потом повтори/);
  show('repeat_pattern');check(/Повтори подсвеченные кнопки.*держи 7.*Теперь отпускай/);
  show('odd_one_out');check(/подсвеченную кнопку.*держи 7.*Теперь отпускай/);
