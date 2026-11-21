@@ -785,6 +785,8 @@ class HardwareIntegrationStand:
         self._physical_ingress_lock = threading.Lock()
         self._physical_pending = {}
         self._physical_pending_count = 0
+        self._handset_down_timer = None
+        self.HANDSET_DOWN_SETTLE_S = 0.12
         self._admits_physical_users = None
         self._hid_generation = 0
         self._hid_status: dict[str, Any] = {"state": "not_started", "generation": 0}
@@ -1248,6 +1250,7 @@ class HardwareIntegrationStand:
             await self._stop_headless_audio_capture()
         except BaseException as exc:
             failures.append(exc)
+        self._cancel_pending_handset_down()
         led = getattr(getattr(self, "application", None), "led", None)
         cancel_effects = getattr(led, "cancel_effects", None)
         try:
@@ -1257,6 +1260,7 @@ class HardwareIntegrationStand:
             failures.append(exc)
         self._hid_generation = getattr(self, "_hid_generation", 0) + 1
         stopped_generation = self._hid_generation
+        self._cancel_pending_handset_down()
         if self.input_adapter is not None:
             try:
                 await asyncio.to_thread(self.input_adapter.close)
@@ -2079,9 +2083,59 @@ class HardwareIntegrationStand:
                 task.get_loop().call_soon_threadsafe(task.cancel)
         return pending
 
+    def _cancel_pending_handset_down(self) -> None:
+        timer = getattr(self, "_handset_down_timer", None)
+        if timer is not None:
+            self._handset_down_timer = None
+            timer.cancel()
+
+    def _dispatch_physical_payload(self, loop, owner: int, payload: dict, cleanup: bool) -> None:
+        if (self._closed or owner != self._hid_generation
+                or (getattr(self, "_capture_hid_fault", None) is not None and not cleanup)):
+            with self._physical_ingress_lock:
+                self._physical_pending_count -= 1
+            return
+        def completed(done):
+            with self._physical_ingress_lock:
+                self._physical_pending.pop(done, None)
+                self._physical_pending_count -= 1
+            self._observe_physical_input_future(done, owner)
+        task = loop.create_task(self.inject_physical(payload), name="mishka-physical-input")
+        with self._physical_ingress_lock:
+            self._physical_pending[task] = cleanup
+        task.add_done_callback(completed)
+
+    def _schedule_handset_down(self, loop, owner: int, event_type: str, event_payload: dict) -> None:
+        self._cancel_pending_handset_down()
+        if self._closed or owner != self._hid_generation:
+            return
+        def fire():
+            self._handset_down_timer = None
+            if self._closed or owner != self._hid_generation:
+                return
+            with self._physical_ingress_lock:
+                limit = self.MAX_PENDING_PHYSICAL_INPUTS + 1
+                if self._physical_pending_count >= limit:
+                    overflow = True
+                else:
+                    overflow = False
+                    self._physical_pending_count += 1
+                    self._physical_sequence += 1
+                    sequence = self._physical_sequence
+            if overflow:
+                self._on_hid_error({"kind": "dispatch_failure", "error_code": "hid_input_overflow"}, owner)
+                self._cancel_pending_physical_inputs()
+                return
+            payload = dict(event_payload)
+            payload.update(type=event_type, _source="physical_hid", _sequence=sequence,
+                           _hid_generation=owner)
+            self._dispatch_physical_payload(loop, owner, payload, True)
+        self._handset_down_timer = loop.call_later(self.HANDSET_DOWN_SETTLE_S, fire)
+
     def _on_physical_input(self, event: NormalizedInputEvent, generation: int | None = None):
         owner = self._hid_generation if generation is None else generation
         cleanup = event.type in {"SpacePressed", "handset_down", "HandsetPlaced"}
+        lift = event.type in {"SpaceReleased", "handset_up", "HandsetLifted"}
         if owner != self._hid_generation or self._closed:
             return
         if getattr(self, "_capture_hid_fault", None) is not None and not cleanup:
@@ -2089,6 +2143,17 @@ class HardwareIntegrationStand:
         loop = self._physical_loop
         if loop is None or loop.is_closed():
             return
+        if cleanup and getattr(self, "_capture_hid_fault", None) is None and getattr(self, "HANDSET_DOWN_SETTLE_S", 0.0) > 0:
+            try:
+                loop.call_soon_threadsafe(self._schedule_handset_down, loop, owner, event.type, dict(event.payload))
+            except RuntimeError:
+                pass
+            return
+        if lift:
+            try:
+                loop.call_soon_threadsafe(self._cancel_pending_handset_down)
+            except RuntimeError:
+                pass
         with self._physical_ingress_lock:
             # One extra slot is reserved for hangup when ordinary work is full.
             limit = self.MAX_PENDING_PHYSICAL_INPUTS + int(cleanup)
@@ -2104,23 +2169,8 @@ class HardwareIntegrationStand:
         payload = dict(event.payload)
         payload.update(type=event.type, _source="physical_hid", _sequence=sequence,
                        _hid_generation=owner)
-        def completed(done):
-            with self._physical_ingress_lock:
-                self._physical_pending.pop(done, None)
-                self._physical_pending_count -= 1
-            self._observe_physical_input_future(done, owner)
-        def schedule():
-            if (self._closed or owner != self._hid_generation
-                    or (getattr(self, "_capture_hid_fault", None) is not None and not cleanup)):
-                with self._physical_ingress_lock:
-                    self._physical_pending_count -= 1
-                return
-            task = loop.create_task(self.inject_physical(payload), name="mishka-physical-input")
-            with self._physical_ingress_lock:
-                self._physical_pending[task] = cleanup
-            task.add_done_callback(completed)
         try:
-            loop.call_soon_threadsafe(schedule)
+            loop.call_soon_threadsafe(self._dispatch_physical_payload, loop, owner, payload, cleanup)
         except RuntimeError:
             with self._physical_ingress_lock:
                 self._physical_pending_count -= 1
@@ -3539,6 +3589,7 @@ class HardwareIntegrationStand:
                 await shutdown_identity()
         except BaseException as exc:
             failures.append(exc)
+        self._cancel_pending_handset_down()
         led = getattr(getattr(self, "application", None), "led", None)
         cancel_effects = getattr(led, "cancel_effects", None)
         actions = [self._cancel_story_audio, self._cancel_response_audio]

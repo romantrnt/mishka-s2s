@@ -206,7 +206,13 @@ class PosixSerialTransport:
             except BlockingIOError: break
         return b"".join(chunks)
     def close(self):
-        if self.fd is not None: os.close(self.fd); self.fd=None
+        if self.fd is not None:
+            try:
+                termios.tcflush(self.fd, termios.TCOFLUSH)
+            except OSError:
+                pass
+            os.close(self.fd)
+            self.fd=None
 
 
 class PTYUARTSimulator:

@@ -85,3 +85,29 @@ async def test_real_adapter_to_stand_rapid_final_hangup_revokes_session():
         assert record is None or not record.handset_up
         assert stand.snapshot()['canonical_state']['mode']=='idle'
     finally: await stand.aclose()
+
+
+@pytest.mark.asyncio
+async def test_lift_bounce_69ms_preserves_session_while_settled_hangup_ends_it():
+    import asyncio
+    from app.foundation.input_adapters import NormalizedInputEvent
+    from app.foundation.stand import HardwareIntegrationStand
+    from app.foundation.config import Settings
+    stand=HardwareIntegrationStand(Settings(profile='mock',hardware_mode='simulator',content_root='content'),background_scheduler=False)
+    stand._physical_loop=asyncio.get_running_loop()
+    stand._hid_generation=1
+    stand._admits_physical_users=lambda:True
+    try:
+        stand._on_physical_input(NormalizedInputEvent('SpaceReleased',{}),1)
+        await asyncio.sleep(0.030)
+        stand._on_physical_input(NormalizedInputEvent('SpacePressed',{}),1)
+        await asyncio.sleep(0.039)
+        stand._on_physical_input(NormalizedInputEvent('SpaceReleased',{}),1)
+        await asyncio.sleep(0.160)
+        state=stand.snapshot()['canonical_state']
+        assert state['handset']=='up' and state['mode']!='idle'
+        stand._on_physical_input(NormalizedInputEvent('SpacePressed',{}),1)
+        await asyncio.sleep(0.180)
+        state=stand.snapshot()['canonical_state']
+        assert state['handset']=='down' and state['mode']=='idle'
+    finally: await stand.aclose()
