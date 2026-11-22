@@ -2205,12 +2205,12 @@ class SoundDevicePlaybackController:
             if self._io_future is future:
                 self._io_future = None
 
-    async def _close_stream(self, stream) -> None:
+    async def _close_stream(self, stream, *, drain: bool = False) -> None:
         async with self._close_lock:
             if self._stream is not stream:
                 return
             with contextlib.suppress(Exception):
-                await asyncio.to_thread(stream.abort)
+                await asyncio.to_thread(stream.stop if drain else stream.abort)
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(stream.close)
             if self._stream is stream:
@@ -2254,6 +2254,7 @@ class SoundDevicePlaybackController:
             if not current():
                 return outcome()
             stream = None
+            completed = False
             try:
                 import numpy as np
                 import sounddevice as sd
@@ -2278,14 +2279,21 @@ class SoundDevicePlaybackController:
                     on_started()
                 if not current():
                     return outcome()
-                samples = np.asarray(audio.samples, dtype=np.float32).reshape(-1, 1)
+                samples = np.array(audio.samples, dtype=np.float32, copy=True).reshape(-1, 1)
+                fade_len = min(len(samples) // 4, max(1, int(audio.sample_rate * 0.003)))
+                if len(samples) >= 2 * fade_len and fade_len > 1:
+                    if abs(float(samples[0, 0])) > 0.002:
+                        samples[:fade_len, 0] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+                    if abs(float(samples[-1, 0])) > 0.002:
+                        samples[-fade_len:, 0] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
                 self.position_samples = offset
                 self.start_position_samples = 0
                 self.last_playback_completed = False
-                for offset_in_audio in range(0, len(samples), 2048):
+                block = max(4096, int(audio.sample_rate) // 8)
+                for offset_in_audio in range(0, len(samples), block):
                     if not current():
                         return outcome()
-                    chunk = samples[offset_in_audio:offset_in_audio + 2048]
+                    chunk = samples[offset_in_audio:offset_in_audio + block]
                     def guarded_write(chunk=chunk):
                         if not current():
                             return False
@@ -2304,7 +2312,7 @@ class SoundDevicePlaybackController:
                 raise RuntimeError("local playback unavailable") from exc
             finally:
                 if stream is not None:
-                    await self._close_stream(stream)
+                    await self._close_stream(stream, drain=completed and current())
 
     async def stop(self):
         self._generation += 1

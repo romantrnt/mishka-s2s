@@ -17,7 +17,13 @@ RVC_SAMPLE_RATE = 40_000
 DEFAULT_PRE_ROLL_MS = 150
 SAFE_PEAK = 0.92
 
-_NUMBER_RE = re.compile(r"[0-9]+(?:[.,][0-9]+)?")
+_NUMBER_RE = re.compile(r"(?P<minus>-)?(?P<num>[0-9]+(?:[.,][0-9]+)?)")
+_DASH_PAUSE_RE = re.compile(r"\s+[—–-]\s+")
+_ELLIPSIS_RE = re.compile(r"(?:\.\.\.|…)\s*")
+_OPENER_PAUSE_RE = re.compile(
+    r"^(Знаешь|Слушай|Смотри|Ой|Ого|Хм|Ага|Погоди|Значит|Кстати),\s+",
+    re.IGNORECASE,
+)
 
 # These are deliberately small and explicit.  They cover terms that can
 # appear in the product/runtime dialogue without turning the text normalizer
@@ -32,69 +38,97 @@ _PRONUNCIATION_REPLACEMENTS = (
     (re.compile(r"\bAPI\b", re.IGNORECASE), "эй-пи-ай"),
     (re.compile(r"\bLangGraph\b", re.IGNORECASE), "лэнг-граф"),
     (re.compile(r"\bQwen\b", re.IGNORECASE), "куэн"),
+    (re.compile(r"°\s*[CС]\b"), " градусов"),
+    (re.compile(r"°"), " градусов"),
+    (re.compile(r"%"), " процентов"),
 )
 
 # Silero's automatic accentor is good, but these high-frequency product
 # words benefit from the explicit spelling used by the Russian voice model.
 _YO_REPLACEMENTS = {
-    "еще": "ещё",
-    "все": "всё",
-    "идет": "идёт",
-    "пойдет": "пойдёт",
-    "зовет": "зовёт",
-    "живет": "живёт",
+    "еще": "ещё", "все": "всё", "ее": "её", "нем": "нём", "чем": "чём",
+    "идет": "идёт", "пойдет": "пойдёт", "придет": "придёт", "найдет": "найдёт",
+    "пройдет": "пройдёт", "уйдет": "уйдёт", "ждет": "ждёт", "поет": "поёт",
+    "живет": "живёт", "зовет": "зовёт", "берет": "берёт", "дает": "даёт",
+    "ведет": "ведёт", "везет": "везёт", "плывет": "плывёт", "цветет": "цветёт",
+    "растет": "растёт", "теплый": "тёплый", "теплая": "тёплая", "теплое": "тёплое",
+    "веселый": "весёлый", "веселая": "весёлая", "легкий": "лёгкий", "зеленый": "зелёный",
+    "желтый": "жёлтый", "черный": "чёрный", "темный": "тёмный", "звездочка": "звёздочка",
+    "ежик": "ёжик", "елка": "ёлка", "мед": "мёд", "лед": "лёд",
+    "самолет": "самолёт", "вертолет": "вертолёт", "котенок": "котёнок",
+    "утенок": "утёнок", "лисенок": "лисёнок", "медвежонок": "медвежонок",
+    "зайчонок": "зайчонок", "ребенок": "ребёнок", "береза": "берёза",
+    "слезы": "слёзы", "вдвоем": "вдвоём", "втроем": "втроём",
+    "твое": "твоё", "мое": "моё", "свое": "своё", "твоем": "твоём",
+    "моем": "моём", "своем": "своём", "причем": "причём", "счет": "счёт",
+    "полет": "полёт", "прием": "приём", "подъем": "подъём",
 }
 
 
 def normalize_text(text: str) -> str:
     """Normalize Russian text for stock Silero inference.
 
-    Digits are expanded with num2words and emphatic exclamation runs are
-    softened to a sentence boundary.  No SSML or speed controls are added.
+    Digits, temperature, and percentages are expanded with num2words,
+    high-frequency 'ё' forms are restored, and emphatic runs are collapsed
+    without flattening natural exclamation or question intonation.
     """
     from num2words import num2words
 
     value = re.sub(r"\s+", " ", str(text)).strip()
     if not value:
         raise ValueError("Silero cannot synthesize empty text")
-    value = re.sub(r"!+", ".", value)
+    value = re.sub(r"!+", "!", value)
+    value = re.sub(r"\?+", "?", value)
 
     def number_to_words(match: re.Match[str]) -> str:
-        raw = match.group(0).replace(",", ".")
+        prefix = "минус " if match.group("minus") else ""
+        raw = match.group("num").replace(",", ".")
         if "." not in raw:
-            return num2words(int(raw), lang="ru")
+            return prefix + num2words(int(raw), lang="ru")
         integer, fraction = raw.split(".", 1)
         digits = " ".join(num2words(int(digit), lang="ru") for digit in fraction)
-        return f"{num2words(int(integer), lang='ru')} целых {digits}"
+        return f"{prefix}{num2words(int(integer), lang='ru')} целых {digits}"
 
     value = _NUMBER_RE.sub(number_to_words, value)
     for pattern, replacement in _PRONUNCIATION_REPLACEMENTS:
         value = pattern.sub(replacement, value)
-    for source, replacement in _YO_REPLACEMENTS.items():
-        value = re.sub(rf"\b{re.escape(source)}\b", replacement, value, flags=re.IGNORECASE)
-    return value
+
+    def restore_yo(match: re.Match[str]) -> str:
+        word = match.group(0)
+        target = _YO_REPLACEMENTS[word.lower()]
+        return target.capitalize() if word[0].isupper() else target
+
+    yo_pattern = re.compile(r"\b(" + "|".join(map(re.escape, _YO_REPLACEMENTS)) + r")\b", re.IGNORECASE)
+    value = yo_pattern.sub(restore_yo, value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _format_sentence_ssml(sentence: str) -> str:
+    escaped = html.escape(sentence, quote=False)
+    escaped = _OPENER_PAUSE_RE.sub(lambda m: f'{m.group(1)}, <break time="90ms"/>', escaped, count=1)
+    escaped = _DASH_PAUSE_RE.sub(' <break time="160ms"/> ', escaped)
+    escaped = _ELLIPSIS_RE.sub('… <break time="170ms"/> ', escaped).strip()
+    return f"<s>{escaped}</s>"
 
 
 def plan_prosody(text: str) -> str:
-    """Add restrained SSML at semantic sentence boundaries.
+    """Add natural SSML sentence boundaries and conversational micro-pauses.
 
-    SSML is intentionally applied to phrases, never individual words.  The
-    Silero model accepts this subset and keeps punctuation-driven intonation
-    while giving questions and longer explanations a stable macro-curve.
+    Preserves Silero's native punctuation-driven pitch and tempo while giving
+    sentences, dashes, ellipses, and conversational openers human breathing room.
     """
     normalized = normalize_text(text)
     sentences = [part.strip() for part in re.findall(r".+?(?:[.!?…]+|$)", normalized, re.S) if part.strip()]
     if not sentences:
         raise ValueError("Silero cannot build prosody for empty text")
-    rendered = []
-    for sentence in sentences:
-        escaped = html.escape(sentence, quote=False)
-        if sentence.rstrip().endswith("?"):
-            escaped = f'<prosody pitch="medium">{escaped}</prosody>'
-        elif len(sentence) >= 80:
-            escaped = f'<prosody rate="slow">{escaped}</prosody>'
-        rendered.append(f"<s>{escaped}</s>")
-    return "<speak>" + '<break time="110ms"/>'.join(rendered) + "</speak>"
+    parts: list[str] = []
+    for idx, sentence in enumerate(sentences):
+        if idx > 0:
+            prev = sentences[idx - 1].rstrip()
+            pause_ms = "220ms" if prev.endswith(("?", "!", "…")) else "180ms"
+            parts.append(f'<break time="{pause_ms}"/>')
+        parts.append(_format_sentence_ssml(sentence))
+    return "<speak>" + "".join(parts) + "</speak>"
 
 
 def prepend_pre_roll(samples: Iterable[float], sample_rate: int, milliseconds: int = DEFAULT_PRE_ROLL_MS) -> tuple[float, ...]:
