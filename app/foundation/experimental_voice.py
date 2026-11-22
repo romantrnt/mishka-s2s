@@ -343,6 +343,15 @@ class ExperimentalTTSProvider:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
+    def _send_cancel_sync(self, request_id: str) -> None:
+        if not self._worker_info.get("cooperative_cancel"):
+            return
+        process = self._process
+        if process is None or process.returncode is not None or process.stdin is None:
+            return
+        with contextlib.suppress(Exception):
+            process.stdin.write(json.dumps({"op": "cancel", "request_id": request_id}).encode("utf-8") + b"\n")
+
     def _schedule_recovery(self, exchange=None, deadline=None) -> None:
         if self._closed:
             return
@@ -433,7 +442,11 @@ class ExperimentalTTSProvider:
         native = info.get("native_streaming", False)
         if type(native) is not bool or (native and self.provider_name == "qwen765"):
             raise ValueError("invalid streaming capability")
-        self._worker_info = {**versions, "lora_loaded_tensors": loaded, "native_streaming": native}
+        coop = info.get("cooperative_cancel", False)
+        if type(coop) is not bool:
+            raise ValueError("invalid cancel capability")
+        self._worker_info = {**versions, "lora_loaded_tensors": loaded, "native_streaming": native,
+                             "cooperative_cancel": coop}
         self._last_reason = None
 
     async def start(self) -> None:
@@ -535,6 +548,10 @@ class ExperimentalTTSProvider:
                             raise ValueError("invalid stream timing")
                         previous_ms = float(elapsed)
                         size = reply.get("samples")
+                        if reply.get("op") == "cancelled":
+                            if type(reply.get("frames")) is not int or type(size) is not int:
+                                raise ValueError("invalid stream cancelled")
+                            return total, float(elapsed), float(elapsed)
                         if reply.get("op") == "done":
                             first_ms = reply.get("native_first_chunk_ms")
                             if (type(reply.get("frames")) is not int or reply["frames"] != frames
@@ -637,6 +654,7 @@ class ExperimentalTTSProvider:
                                          else "experimental_voice_inference_failed")
                     self._last_request.update(status="failed", reason=self._last_reason)
                 if interrupted and not self._closed and exchange_task is not None:
+                    self._send_cancel_sync(request_id)
                     self._schedule_recovery(exchange_task, deadline)
                     raise
                 await self._cancel_exchange(exchange_task)
@@ -691,6 +709,13 @@ class ExperimentalTTSProvider:
                         "text": text}).encode("utf-8") + b"\n")
                     await self._process.stdin.drain()
                     reply = await self._header()
+                    if reply.get("op") == "cancelled":
+                        if reply.get("request_id") != request_id or reply.get("route") != self.provider_name:
+                            raise ValueError("invalid worker cancelled")
+                        elapsed = reply.get("inference_ms")
+                        if type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0:
+                            elapsed = 0.0
+                        return (), float(elapsed)
                     size = reply.get("samples")
                     if (reply.get("op") != "audio" or reply.get("request_id") != request_id
                             or reply.get("route") != self.provider_name
@@ -715,6 +740,8 @@ class ExperimentalTTSProvider:
                 samples, inference_ms = await self._guard(exchange_task, cancelled, timeout, preserve_on_cancel=True)
                 if cancelled() or self._closed:
                     raise asyncio.CancelledError
+                if not samples:
+                    raise ValueError("invalid worker audio")
                 self.jobs_completed += 1
                 self._last_reason = None
                 self._last_request.update(actual_route=self.provider_name, status="completed",
@@ -734,6 +761,7 @@ class ExperimentalTTSProvider:
                     self._last_request.update(status="failed", reason=self._last_reason)
                 if isinstance(exc, asyncio.CancelledError) and not self._closed:
                     if exchange_task is not None:
+                        self._send_cancel_sync(request_id)
                         self._schedule_recovery(exchange_task, exchange_deadline)
                     else:
                         try:

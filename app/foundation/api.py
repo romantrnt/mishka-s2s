@@ -93,7 +93,10 @@ def _whisper_loader(settings: Settings):
     from faster_whisper import WhisperModel
     device="cuda" if settings.profile in {"local_gpu","production_candidate","exhibition_candidate","production_qwen_rvc"} else "cpu"
     compute="float16" if device=="cuda" else "int8"
-    return WhisperModel(settings.stt_model,device=device,compute_type=compute)
+    try:
+        return WhisperModel(settings.stt_model, device=device, compute_type=compute, local_files_only=True)
+    except Exception:
+        return WhisperModel(settings.stt_model, device=device, compute_type=compute)
 
 
 def _build_s2s(settings: Settings, root: Path, playback_override: PlaybackController | None = None):

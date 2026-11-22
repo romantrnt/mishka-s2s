@@ -55,6 +55,8 @@ class ResourceProbe:
     @classmethod
     async def _read_vram(cls) -> float | None:
         binary = shutil.which("nvidia-smi")
+        if not binary and Path("/usr/lib/wsl/lib/nvidia-smi").is_file():
+            binary = "/usr/lib/wsl/lib/nvidia-smi"
         if not binary:
             return None
         process = None

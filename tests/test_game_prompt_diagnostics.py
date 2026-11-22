@@ -104,10 +104,13 @@ async def test_actual_immediate_odd_answer_failure_records_fixed_cause(fault, re
         wrong = next(button for button, _ in challenge.options if button != challenge.answer)
         result = await h.button(wrong)
         assert result["reason"] == "game_prompt_audio_failed"
-        assert h.state.mode == "root_menu" and h.sid not in h.app._active_audio
-        [diagnostic] = diagnostics(h)
+        assert h.state.mode == "game_active" and h.state.game_audio_stage == "prompt_failed"
+        assert h.sid not in h.app._active_audio
+        assert len(diagnostics(h)) == 2
+        assert diagnostics(h)[0]["chunk_index"] == 0
+        diagnostic = diagnostics(h)[-1]
         assert diagnostic["reason"] == reason and diagnostic["stage"] == "synthesis"
-        assert diagnostic["chunk_index"] == 0 and diagnostic["elapsed_ms"] >= 0
+        assert type(diagnostic["chunk_index"]) is int and diagnostic["chunk_index"] >= 0 and diagnostic["elapsed_ms"] >= 0
         assert diagnostic.get("exception_class") == exception_class
         assert set(diagnostic) <= {"event", "event_type", "timestamp", "session_id", "generation",
             "operation", "reason", "stage", "chunk_index", "elapsed_ms", "exception_type", "exception_class"}

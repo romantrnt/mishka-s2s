@@ -18,6 +18,9 @@ for cuda_lib in "$ROOT"/.venv/lib/python*/site-packages/nvidia/*/lib; do
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$cuda_lib"
   fi
 done
+if [[ -d /usr/lib/wsl/lib && ":$PATH:" != *":/usr/lib/wsl/lib:"* ]]; then
+  export PATH="$PATH:/usr/lib/wsl/lib"
+fi
 export MISHKA_ROOT="$ROOT"
 export MISHKA_CACHE_ROOT="${MISHKA_CACHE_ROOT:-$ROOT/runtime/cache}"
 export MISHKA_ENV_FILE="${MISHKA_ENV_FILE:-$ROOT/.env}"

@@ -11,7 +11,9 @@ import importlib
 import json
 import os
 from pathlib import Path
+import queue
 import sys
+import threading
 import time
 
 MAX_INIT_BYTES = 512 * 1024
@@ -208,7 +210,7 @@ def synthesize(config, model, np, torch, text):
     return raw, int(audio.size), inference_ms
 
 
-def synthesize_stream(config, model, np, torch, text):
+def synthesize_stream(config, model, np, torch, text, is_cancelled=None):
     """Yield Vox's incremental VAE output, never cumulative or padded audio."""
     if config["route"] not in {"voxcpm765", "vox555"}:
         raise ValueError("native streaming unsupported")
@@ -220,6 +222,7 @@ def synthesize_stream(config, model, np, torch, text):
     frame_limit = config["sample_rate"]  # At most one second per binary frame.
     total = 0
     nonzero = False
+    cancelled = False
     prompt_cache = getattr(model, "_mishka_prompt_cache", None)
     with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         if prompt_cache is not None and callable(getattr(model.tts_model, "generate_with_prompt_cache_streaming", None)):
@@ -234,24 +237,66 @@ def synthesize_stream(config, model, np, torch, text):
                 max_len=300, inference_timesteps=10, cfg_value=2.0,
                 retry_badcase=False, seed=42, streaming_prefix_len=4,
             )
-        for generated in increments:
-            if isinstance(generated, tuple):
-                generated = generated[0]
-            audio = np.asarray(generated.detach().cpu().float().numpy(), dtype=np.float32).reshape(-1)
-            if not audio.size:
-                continue
-            total += int(audio.size)
-            if total > maximum or not np.isfinite(audio).all():
-                raise ValueError("invalid or oversized PCM")
-            nonzero = nonzero or bool(np.any(audio))
-            torch.cuda.synchronize()
-            elapsed = (time.perf_counter() - started) * 1000
-            for offset in range(0, int(audio.size), frame_limit):
-                frame = audio[offset:offset + frame_limit]
-                yield frame.astype("<f4", copy=False).tobytes(), int(frame.size), elapsed
+        it = iter(increments)
+        try:
+            while True:
+                if is_cancelled is not None and is_cancelled():
+                    cancelled = True
+                    break
+                try:
+                    generated = next(it)
+                except StopIteration:
+                    break
+                if isinstance(generated, tuple):
+                    generated = generated[0]
+                audio = np.asarray(generated.detach().cpu().float().numpy(), dtype=np.float32).reshape(-1)
+                if not audio.size:
+                    continue
+                total += int(audio.size)
+                if total > maximum or not np.isfinite(audio).all():
+                    raise ValueError("invalid or oversized PCM")
+                nonzero = nonzero or bool(np.any(audio))
+                torch.cuda.synchronize()
+                elapsed = (time.perf_counter() - started) * 1000
+                for offset in range(0, int(audio.size), frame_limit):
+                    frame = audio[offset:offset + frame_limit]
+                    yield frame.astype("<f4", copy=False).tobytes(), int(frame.size), elapsed
+        finally:
+            close_gen = getattr(increments, "close", None)
+            if callable(close_gen):
+                close_gen()
+    if cancelled:
+        torch.cuda.synchronize()
+        release_cuda_cache(torch)
+        return
     if not total or not nonzero:
         raise ValueError("invalid PCM")
     release_cuda_cache(torch)
+
+
+def _start_command_reader(cmd_queue, cancelled_requests, cancel_lock):
+    """Read stdin commands concurrently so cancel requests abort active streams promptly."""
+    def _reader():
+        try:
+            while True:
+                try:
+                    cmd = read_command(MAX_COMMAND_BYTES)
+                except Exception as exc:
+                    cmd_queue.put(exc)
+                    return
+                if cmd is None:
+                    cmd_queue.put(None)
+                    return
+                if cmd.get("op") == "cancel" and isinstance(cmd.get("request_id"), str):
+                    with cancel_lock:
+                        cancelled_requests.add(cmd["request_id"])
+                    continue
+                cmd_queue.put(cmd)
+        except Exception as exc:
+            cmd_queue.put(exc)
+
+    thread = threading.Thread(target=_reader, name="mishka-worker-stdin", daemon=True)
+    thread.start()
 
 
 def main():
@@ -275,9 +320,21 @@ def main():
             "torch_version": torch.__version__, "transformers_version": transformers.__version__,
             "lora_loaded_tensors": loaded_count,
             "native_streaming": config["route"] in {"voxcpm765", "vox555"},
+            "cooperative_cancel": True,
             **cuda_memory_metadata(torch)})
+        cmd_queue: queue.Queue = queue.Queue()
+        cancelled_requests: set[str] = set()
+        cancel_lock = threading.Lock()
+        _start_command_reader(cmd_queue, cancelled_requests, cancel_lock)
+
+        def is_cancelled(rid: str) -> bool:
+            with cancel_lock:
+                return rid in cancelled_requests
+
         while True:
-            command = read_command(MAX_COMMAND_BYTES)
+            command = cmd_queue.get()
+            if isinstance(command, Exception):
+                raise command
             if command is None:
                 return
             text = command.get("text")
@@ -293,19 +350,48 @@ def main():
                             **{key: config[key] for key in IDENTITY_FIELDS}}
                 frames = total = 0
                 first_ms = None
-                for raw, size, elapsed in synthesize_stream(config, model, np, torch, text):
+                elapsed = 0.0
+                for raw, size, elapsed in synthesize_stream(
+                    config, model, np, torch, text, is_cancelled=lambda rid=request_id: is_cancelled(rid)
+                ):
                     if first_ms is None:
                         first_ms = elapsed
                     send(protocol, {"op": "audio_chunk", **identity, "index": frames,
                         "samples": size, "format": "f32le", "inference_ms": elapsed}, raw)
                     frames += 1
                     total += size
-                send(protocol, {"op": "done", **identity, "frames": frames, "samples": total,
-                    "inference_ms": elapsed, "native_first_chunk_ms": first_ms})
+                if is_cancelled(request_id):
+                    with cancel_lock:
+                        cancelled_requests.discard(request_id)
+                    send(protocol, {"op": "cancelled", **identity, "frames": frames, "samples": total,
+                        "inference_ms": elapsed})
+                else:
+                    send(protocol, {"op": "done", **identity, "frames": frames, "samples": total,
+                        "inference_ms": elapsed, "native_first_chunk_ms": first_ms})
                 continue
-            raw, size, elapsed = synthesize(config, model, np, torch, text)
+            if config["route"] in {"voxcpm765", "vox555"} and (
+                callable(getattr(model.tts_model, "generate_with_prompt_cache_streaming", None))
+                or callable(getattr(model.tts_model, "generate_streaming", None))
+            ):
+                chunks = []
+                total = 0
+                elapsed = 0.0
+                for raw, size, elapsed in synthesize_stream(
+                    config, model, np, torch, text, is_cancelled=lambda rid=request_id: is_cancelled(rid)
+                ):
+                    chunks.append(raw)
+                    total += size
+                if is_cancelled(request_id):
+                    with cancel_lock:
+                        cancelled_requests.discard(request_id)
+                    send(protocol, {"op": "cancelled", "route": config["route"], "request_id": request_id,
+                        "sample_rate": config["sample_rate"], "samples": total, "inference_ms": elapsed})
+                    continue
+                raw = b"".join(chunks)
+            else:
+                raw, total, elapsed = synthesize(config, model, np, torch, text)
             send(protocol, {"op": "audio", "route": config["route"], "request_id": request_id,
-                "sample_rate": config["sample_rate"], "samples": size, "format": "f32le",
+                "sample_rate": config["sample_rate"], "samples": total, "format": "f32le",
                 "inference_ms": elapsed}, raw)
     except Exception:
         # No private paths, text, exception strings or tracebacks in protocol.

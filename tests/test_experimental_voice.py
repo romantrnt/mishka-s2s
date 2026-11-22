@@ -679,3 +679,80 @@ def test_vox555_streaming_uses_short_later_blocks_and_accepts_approved_phrase014
         assert provider.request_metadata()["native_streaming"] is True
         await provider.close()
     asyncio.run(scenario())
+
+
+def test_cooperative_cancel_sends_cancel_op_and_accepts_cancelled_reply(configured):
+    provider, _, worker = configured("vox555")
+    worker.write_text(r'''
+import json, struct, sys, threading, queue, time
+config = json.loads(sys.stdin.buffer.readline())["config"]
+fields = ("model_sha256", "model_inventory_sha256", "adapter_sha256", "reference_sha256",
+          "source_inventory_sha256", "source_revision", "runtime_profile", "sample_rate")
+def header(v):
+    sys.stdout.buffer.write(json.dumps(v).encode() + b"\n")
+    sys.stdout.buffer.flush()
+header({"op": "ready", "route": config["route"], **{k: config[k] for k in fields},
+        "torch_version": "fixture", "transformers_version": "fixture",
+        "lora_loaded_tensors": 2, "native_streaming": True, "cooperative_cancel": True})
+cmds = queue.Queue()
+cancelled = set()
+def reader():
+    for line in sys.stdin.buffer:
+        c = json.loads(line)
+        if c.get("op") == "cancel":
+            cancelled.add(c["request_id"])
+        else:
+            cmds.put(c)
+    cmds.put(None)
+threading.Thread(target=reader, daemon=True).start()
+while (cmd := cmds.get()) is not None:
+    rid = cmd["request_id"]
+    identity = {"route": config["route"], "request_id": rid, **{k: config[k] for k in fields}}
+    if cmd["op"] == "synthesize_stream":
+        for i in range(50):
+            if rid in cancelled:
+                header({"op": "cancelled", **identity, "frames": i, "samples": i * 19200, "inference_ms": i + 1.0})
+                break
+            header({"op": "audio_chunk", **identity, "index": i, "samples": 19200, "format": "f32le", "inference_ms": i + 1.0})
+            sys.stdout.buffer.write(struct.pack("<" + "f" * 19200, *([0.1] * 19200)))
+            sys.stdout.buffer.flush()
+            time.sleep(0.02)
+        else:
+            header({"op": "done", **identity, "frames": 50, "samples": 50 * 19200, "inference_ms": 50.0, "native_first_chunk_ms": 1.0})
+    else:
+        for i in range(50):
+            if rid in cancelled:
+                header({"op": "cancelled", "route": config["route"], "request_id": rid,
+                        "sample_rate": config["sample_rate"], "samples": 0, "inference_ms": i + 1.0})
+                break
+            time.sleep(0.02)
+        else:
+            header({"op": "audio", "route": config["route"], "request_id": rid,
+                    "sample_rate": config["sample_rate"], "samples": 2, "format": "f32le", "inference_ms": 50.0})
+            sys.stdout.buffer.write(struct.pack("<ff", 0.1, -0.1))
+            sys.stdout.buffer.flush()
+''')
+
+    async def scenario():
+        # 1. Cancel stream early -> cooperates and preserves worker_starts == 1
+        c1 = False
+        stream = provider.synthesize_audio_stream("hello", 1, lambda: c1, first_chunk=True)
+        ch0 = await anext(stream)
+        assert len(ch0.samples) == 19200
+        c1 = True
+        await stream.aclose()
+        await asyncio.wait_for(provider._recovery_task, 1.0)
+        assert provider.worker_starts == 1 and provider.readiness()["ready"] is True
+
+        # 2. Cancel blocking synthesize early -> cooperates and preserves worker_starts == 1
+        c2 = False
+        task = asyncio.create_task(provider.synthesize("menu", 2, lambda: c2))
+        await asyncio.sleep(0.05)
+        c2 = True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(provider._recovery_task, 1.0)
+        assert provider.worker_starts == 1 and provider.readiness()["ready"] is True
+        await provider.close()
+
+    asyncio.run(scenario())

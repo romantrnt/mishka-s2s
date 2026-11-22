@@ -204,3 +204,21 @@ def test_ready_cuda_allocator_metadata_is_bounded_and_optional():
     cuda.memory_reserved = lambda: 2 ** 61
     assert worker.cuda_memory_metadata(SimpleNamespace(cuda=cuda)) == {}
     assert worker.cuda_memory_metadata(SimpleNamespace()) == {}
+
+
+def test_native_worker_aborts_stream_early_when_cancelled():
+    config, model, torch, _, advanced = setup_stream([[1, 2], [3, 4], [5, 6], [7, 8]])
+    mark_compiled(model)
+    releases = []
+    torch.cuda.empty_cache = lambda: releases.append(tuple(advanced))
+    cancel_flag = False
+    stream = worker.synthesize_stream(
+        config, model, np, torch, "Привет", is_cancelled=lambda: cancel_flag
+    )
+    first = next(stream)
+    assert np.frombuffer(first[0], dtype="<f4").tolist() == [1, 2]
+    assert advanced == [0]
+    cancel_flag = True
+    assert list(stream) == []
+    assert advanced == [0], "cancelled stream must stop without advancing remaining steps"
+    assert releases == [(0,)]

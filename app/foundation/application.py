@@ -3160,7 +3160,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if not still_current():
             return stale_result()
         effects.extend(deferred_effects)
-        if audio_failure is not None and event.event_type != "AudioFailed":
+        if audio_failure is not None and (event.event_type != "AudioFailed" or decision.get("reason") == "game_prompt_retried"):
             failure = await self._receive_canonical_event(self._internal_followup(
                 event, "AudioFailed",
                 "canonical_audio_failure", audio_failure,
@@ -3509,6 +3509,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if session is None or session.state == Lifecycle.ENDED or self._session_epochs.get(session_id, 0) != epoch or session.correlation_id != correlation_id:
                 return
             if audio_result.stt is None or not audio_result.stt.text.strip():
+                if audio_result.barge_in:
+                    await self._set_dialogue_lighting_phase(session_id, "listening")
                 return
             payload = await self._receive_canonical_event(
                 Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio",
@@ -3624,6 +3626,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if _ingress_guard is not None and not _ingress_guard():
                 return {**self._result(session, [], "stale_session_generation"), "pending": False}
             if audio_result.turn is not None and audio_result.turn.fallback_reason:
+                if audio_result.barge_in:
+                    await self._set_dialogue_lighting_phase(session_id, "listening")
                 # This is an STT/VAD ingress retry, not a local safety reaction.
                 # Keep it visual/diagnostic until a canonical retry phrase is
                 # authorized for every mode; never dispatch untracked audio.
