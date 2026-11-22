@@ -254,7 +254,7 @@ async def test_actual_model_named_story_uses_existing_recording_without_full_men
         result = await h.send('SpeechReceived', text='Хочу послушать Айболита')
         assert h.state.mode == 'fixed_story_playing' and h.state.active_story_id == 'fixed_aibolit_v1'
         effect = next(effect for effect in result['outputs'] if effect.get('type') == 'play_fixed_story')
-        assert effect['asset'] == 'assets/stories/01_Про Бегемота, который боялся прививок_prepared.wav'
+        assert effect['asset'] == 'assets/stories/01_Айболит_prepared.wav'
         assert len(h.model.calls) == 1 and h.app._game_callers
     finally:
         await h.close()

@@ -10,8 +10,8 @@
       "availability": "available",
       "content_status": "approved_audio",
       "audio_status": "approved",
-      "audio_file": "assets/stories/01_Про Бегемота, который боялся прививок_prepared.wav",
-      "audio_sha256": "d1fc38389c88551e7eb32ee37c448f0b678a2c0b359c9ad00dcb8b259be61063",
+      "audio_file": "assets/stories/01_Айболит_prepared.wav",
+      "audio_sha256": "0672e6d8f3bd3c213d90559db40b6d2c48427f90b61088777c0a9cc7f32e650d",
       "eligible_age_bands": [
         "1-3",
         "3-5",
