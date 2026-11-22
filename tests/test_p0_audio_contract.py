@@ -359,15 +359,15 @@ def test_browser_lifecycle_route_rejects_stale_and_unidentified_execution():
         "audio_status": "queued",
     }
     stand.remote_devices.admits_users = lambda: True  # This test assumes only callback transport readiness.
-    stand.application.last_canonical_effects = [newer]
-    stand.application._session_epochs['browser-sid'] = 3
-    stand.application._active_audio['browser-sid'] = {
-        'content_id': 'PHRASE_084', 'token': 7, 'generation': 3,
-        'playback_id': 'browser-B', 'playback_lease': 'browser-lease-B'}
-    stand.application.canonical_runtime.sessions['browser-sid'] = CanonicalState('browser-sid',
-        handset='up', active_audio_id='PHRASE_084', playback_lease='browser-lease-B')
     try:
         with TestClient(api) as client:
+            stand.application.last_canonical_effects = [newer]
+            stand.application._session_epochs['browser-sid'] = 3
+            stand.application._active_audio['browser-sid'] = {
+                'content_id': 'PHRASE_084', 'token': 7, 'generation': 3,
+                'playback_id': 'browser-B', 'playback_lease': 'browser-lease-B'}
+            stand.application.canonical_runtime.sessions['browser-sid'] = CanonicalState('browser-sid',
+                handset='up', active_audio_id='PHRASE_084', playback_lease='browser-lease-B')
             client.headers.update({"x-stand-token": "test-token"})
             old = client.post("/stand/audio/lifecycle", json={
                 "session_id": "browser-sid", "response_id": "PHRASE_084",
@@ -406,18 +406,6 @@ def test_browser_pause_checkpoint_route_requires_exact_paused_playback_and_gener
     stand.remote_devices.admits_users = lambda: True  # This test assumes only callback transport readiness.
     app = stand.application
     sid = "browser-checkpoint"
-    app.canonical_runtime.handle(CanonicalEvent(
-        "AnonymousStart", sid, 1, 0, "test", {}, "start", 1.0,
-    ))
-    state = app.canonical_runtime.sessions[sid]
-    state.mode = "story_pause_announcement"
-    state.handset = "up"
-    state.active_story_id = "fixed_aibolit_v1"
-    app._session_epochs[sid] = 3
-    app._paused_story_playback = {sid: {
-        "content_id": "fixed_aibolit_v1", "playback_id": "old-play",
-        "playback_lease": "old-lease", "generation": 3,
-    }}
     payload = {
         "session_id": sid, "story_id": "fixed_aibolit_v1",
         "playback_id": "old-play", "playback_lease": "old-lease",
@@ -425,6 +413,18 @@ def test_browser_pause_checkpoint_route_requires_exact_paused_playback_and_gener
     }
     try:
         with TestClient(api) as client:
+            app.canonical_runtime.handle(CanonicalEvent(
+                "AnonymousStart", sid, 1, 0, "test", {}, "start", 1.0,
+            ))
+            state = app.canonical_runtime.sessions[sid]
+            state.mode = "story_pause_announcement"
+            state.handset = "up"
+            state.active_story_id = "fixed_aibolit_v1"
+            app._session_epochs[sid] = 3
+            app._paused_story_playback = {sid: {
+                "content_id": "fixed_aibolit_v1", "playback_id": "old-play",
+                "playback_lease": "old-lease", "generation": 3,
+            }}
             client.headers.update({"x-stand-token": "test-token"})
             accepted = client.post("/stand/audio/checkpoint", json=payload)
             assert accepted.json()["reason"] == "story_checkpoint_updated"
@@ -460,14 +460,14 @@ def test_browser_callback_route_accepts_two_executions_of_same_phrase_once_each(
     stand.remote_devices.admits_users = lambda: True  # This test assumes only callback transport readiness.
     app = stand.application
     sid = "browser-repeated-callback"
-    app.canonical_runtime.handle(CanonicalEvent(
-        "AnonymousStart", sid, 1, 0, "test", {}, "start", 1.0,
-    ))
-    state = app.canonical_runtime.sessions[sid]
-    state.mode = "wellbeing_check"
-    state.handset = "up"
     try:
         with TestClient(api) as client:
+            app.canonical_runtime.handle(CanonicalEvent(
+                "AnonymousStart", sid, 1, 0, "test", {}, "start", 1.0,
+            ))
+            state = app.canonical_runtime.sessions[sid]
+            state.mode = "wellbeing_check"
+            state.handset = "up"
             client.headers.update({"x-stand-token": "test-token"})
             for identity in ("A", "B"):
                 state.active_audio_id = "PHRASE_084"
