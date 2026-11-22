@@ -123,8 +123,9 @@ async def test_reader_unavailable_does_not_disable_anonymous_admission(rig):
 
 
 @pytest.mark.asyncio
-async def test_existing_generic_websocket_rechecks_hardware_before_each_message(rig):
+async def test_existing_generic_websocket_rechecks_hardware_before_each_message(rig, monkeypatch):
     api, stand, client, status = rig
+    monkeypatch.setattr(stand, "remote_devices", None)
     with TestClient(api).websocket_connect("/ws/stand", headers=HEADERS) as socket:
         status["lighting"] = False
         socket.send_json({"type": "handset_up"})

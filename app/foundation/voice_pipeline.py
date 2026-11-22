@@ -107,15 +107,32 @@ def prepend_pre_roll(samples: Iterable[float], sample_rate: int, milliseconds: i
 
 
 def resample_mono(samples: Iterable[float], source_rate: int, target_rate: int) -> tuple[float, ...]:
-    """High-quality mono resampling through torchaudio's band-limited kernel."""
+    """High-quality mono resampling through torchaudio's band-limited kernel, with pure-Python fallback."""
     if source_rate <= 0 or target_rate <= 0:
         raise ValueError("sample rates must be positive")
     source = tuple(float(value) for value in samples)
     if source_rate == target_rate or not source:
         return source
 
-    import torch
-    import torchaudio.functional as F
+    try:
+        import torch
+        import torchaudio.functional as F
+    except ModuleNotFoundError:
+        target_len = max(1, round(len(source) * target_rate / source_rate))
+        if len(source) == 1:
+            return (source[0],) * target_len
+        ratio = source_rate / target_rate
+        last = len(source) - 1
+        out: list[float] = []
+        for idx in range(target_len):
+            pos = idx * ratio
+            left = int(pos)
+            if left >= last:
+                out.append(source[last])
+            else:
+                frac = pos - left
+                out.append(source[left] * (1.0 - frac) + source[left + 1] * frac)
+        return tuple(out)
 
     tensor = torch.tensor(source, dtype=torch.float32)
     converted = F.resample(tensor, source_rate, target_rate)

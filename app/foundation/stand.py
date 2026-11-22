@@ -1480,9 +1480,6 @@ class HardwareIntegrationStand:
                         "playback_lease": handle.playback_lease, "error_code": "private_pcm_failed",
                     }, "private-pcm:" + handle.playback_id))
         finally:
-            if hasattr(stream_aiter, "aclose"):
-                with contextlib.suppress(Exception):
-                    await stream_aiter.aclose()
             self._response_audio_tasks.discard(task)
             audio = None
 

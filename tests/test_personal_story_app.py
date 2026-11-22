@@ -173,10 +173,10 @@ async def test_story_ram_and_playback_scope_do_not_outlive_identity(revoke):
         # Scoped identity boundary fixture. No real profile/Max implementation is changed.
         state.profile_ref='synthetic-profile';state.identity_request_id='request-a'
         owner.identity=('synthetic-profile','request-a')
-        app._identity_scope_live=lambda sid,capability: True
+        app._identity_scope_live=lambda sid,capability='personalize': True
         assert app._personal_story_scope('story-test',owner,playback=True)
         if revoke=='identity_changed':state.identity_request_id='request-b'
-        elif revoke=='expiry':app._identity_scope_live=lambda sid,capability:False
+        elif revoke=='expiry':app._identity_scope_live=lambda sid,capability='personalize':False
         else:app._drop_identity_owner('story-test')
         assert not app._personal_story_scope('story-test',owner,playback=True)
         if revoke!='explicit_revoke':await send(app,'ButtonPressed',{'button_id':7})

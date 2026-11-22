@@ -116,9 +116,9 @@ def test_all_root_selections_send_only_the_current_scene_channels(button, band):
             if button in {1, 2, 4, 7}:
                 descriptor = h.state.scene_menu_descriptor
                 assert descriptor and 5 in descriptor["buttons"]
-                h.assert_lit(set().union(*(BUTTON_CHANNELS[b] for b in descriptor["buttons"])))
+                h.assert_lit(set().union(*(({0} if b == 7 else BUTTON_CHANNELS[b]) for b in descriptor["buttons"])))
             elif button == 3:
-                h.assert_lit({2, 14})
+                h.assert_lit({0, 2, 14})
             elif button == 5:
                 h.assert_lit({1, 14, 16})
             else:

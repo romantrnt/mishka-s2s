@@ -1758,6 +1758,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 and current.mode in {'fixed_story_playing','story_paused','story_pause_announcement','story_resume_announcement'}
                 and current.active_story_id and current.active_story_id != STORY_ID)
             if not urgent and not public_story_callback:
+                self._discard_personal_story(event.session_id)
                 return self._identity_result(event.session_id, 'stale_profile_context')
         if (event.event_type == 'WelcomeTimerFired' and event.source == 'canonical_welcome_timer'
                 and event.payload.get('generation') != self._session_epochs.get(event.session_id, 0)):

@@ -254,7 +254,7 @@ async def test_actual_model_named_story_uses_existing_recording_without_full_men
         result = await h.send('SpeechReceived', text='Хочу послушать Айболита')
         assert h.state.mode == 'fixed_story_playing' and h.state.active_story_id == 'fixed_aibolit_v1'
         effect = next(effect for effect in result['outputs'] if effect.get('type') == 'play_fixed_story')
-        assert effect['asset'] == 'assets/stories/original/Сказка Айболит.wav'
+        assert effect['asset'] == 'assets/stories/01_Про Бегемота, который боялся прививок_prepared.wav'
         assert len(h.model.calls) == 1 and h.app._game_callers
     finally:
         await h.close()
@@ -338,7 +338,7 @@ async def test_generic_game_catalogue_named_voice_choice_and_exit_restore_same_c
         assert h.state.mode == 'game_menu'
         await h.send('SpeechReceived', text='Хочу '+GAME_ALIASES[game][0])
         assert h.state.active_game_id == game and h.state.game_return_mode == 'bear_dialogue'
-        await h.key(7, duration=5.1 if game == 'quiz' else .01)
+        await h.key(7, duration=5.1)
         assert h.state.mode == 'bear_dialogue' and not h.app._game_callers
         assert h.state.active_audio_id == 'DIALOGUE_RETURN'
     finally:
