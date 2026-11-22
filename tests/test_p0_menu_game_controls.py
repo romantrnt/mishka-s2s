@@ -208,3 +208,20 @@ def test_game_pending_exit_keeps_help_priority_and_hangup_cleanup():
         assert down["canonical_state"]["game_success_streak"] == 0
         assert any(effect.get("type") == "game_continue_visual" for effect in down["outputs"])
     asyncio.run(run())
+
+
+def test_submenu_exit_seven_is_digit_only_and_game_menu_turns_off_six():
+    from app.foundation.canonical_services import LED_PRESETS
+    from app.foundation.lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, PICTOGRAM_ELEMENTS
+    game_menu = dict(LED_PRESETS["GAME_MENU"])
+    for b in range(1, 6):
+        assert game_menu.get(BUTTON_FILL_ELEMENTS[b]) == 1
+        assert game_menu.get(BUTTON_DIGIT_ELEMENTS[b][1]) == 1
+    assert BUTTON_FILL_ELEMENTS[6] not in game_menu
+    assert BUTTON_DIGIT_ELEMENTS[6][1] not in game_menu
+    assert PICTOGRAM_ELEMENTS[6] not in game_menu
+    for preset_name in ("GAME_MENU", "STORY_MENU", "SUPPORT", "PERSONAL_STORY", "SCHEDULE_WEATHER", "GAME_OFFER"):
+        preset = dict(LED_PRESETS[preset_name])
+        assert preset.get(BUTTON_DIGIT_ELEMENTS[7][1]) == 1, preset_name
+        assert BUTTON_FILL_ELEMENTS[7] not in preset, preset_name
+        assert PICTOGRAM_ELEMENTS[7] not in preset, preset_name
