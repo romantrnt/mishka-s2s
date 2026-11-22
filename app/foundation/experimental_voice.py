@@ -575,7 +575,7 @@ class ExperimentalTTSProvider:
                 emitted = 0
                 first_block_s = 0.4 if self.provider_name == "vox555" else _NATIVE_FIRST_BLOCK_SECONDS
                 target = max(1, int(self._config["sample_rate"] * (
-                    first_block_s if first_chunk else _NATIVE_LATER_BLOCK_SECONDS)))
+                    first_block_s if (first_chunk or self.provider_name == "vox555") else _NATIVE_LATER_BLOCK_SECONDS)))
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:

@@ -41,7 +41,7 @@ def _project_path(value: str | Path) -> Path:
 
 from .config import public_model_reference
 from app.metrics.latency import VoiceTurnTrace
-from app.foundation.voice_pipeline import RVC_SAMPLE_RATE, peak_normalize, prepend_pre_roll, resample_mono
+from app.foundation.voice_pipeline import RVC_SAMPLE_RATE, normalize_text, peak_normalize, prepend_pre_roll, resample_mono
 
 
 @dataclass
@@ -2314,6 +2314,82 @@ class SoundDevicePlaybackController:
                 if stream is not None:
                     await self._close_stream(stream, drain=completed and current())
 
+    async def play_stream(self, chunk_aiter, *, on_chunk=None):
+        """Play an async stream of AudioChunks through a single continuous OutputStream."""
+        task = asyncio.current_task()
+        def current(token):
+            return (not task.cancelling()
+                    and generation == self._generation and token == self.active_token
+                    and (self.hardware_current is None or self.hardware_current()))
+        async with self._play_lock:
+            generation = self._generation
+            self.last_playback_completed = False
+            stream = None
+            completed = False
+            first_token = None
+            sample_rate = None
+            written = 0
+            stream_started = False
+            try:
+                import numpy as np
+                import sounddevice as sd
+                chunk_idx = 0
+                async for audio in chunk_aiter:
+                    if first_token is None:
+                        first_token = audio.token
+                        sample_rate = audio.sample_rate
+                    if not current(first_token):
+                        return PCMPlaybackResult(0, written, False, stream_started)
+                    if on_chunk is not None:
+                        await on_chunk(chunk_idx, audio)
+                    if not current(first_token):
+                        return PCMPlaybackResult(0, written, False, stream_started)
+                    if stream is None:
+                        stream = sd.OutputStream(
+                            samplerate=sample_rate,
+                            channels=1,
+                            dtype="float32",
+                            device=self._device_arg(),
+                        )
+                        self._stream = stream
+                        def guarded_start():
+                            if not current(first_token):
+                                return False
+                            stream.start()
+                            return True
+                        stream_started = bool(await self._run_io(guarded_start))
+                        if not stream_started:
+                            return PCMPlaybackResult(0, written, False, stream_started)
+                    samples = np.array(audio.samples, dtype=np.float32, copy=True).reshape(-1, 1)
+                    if chunk_idx == 0:
+                        fade_len = min(len(samples) // 4, max(1, int(sample_rate * 0.003)))
+                        if len(samples) >= 2 * fade_len and fade_len > 1 and abs(float(samples[0, 0])) > 0.002:
+                            samples[:fade_len, 0] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+                    block = max(4096, int(sample_rate) // 8)
+                    for offset_in_audio in range(0, len(samples), block):
+                        if not current(first_token):
+                            return PCMPlaybackResult(0, written, False, stream_started)
+                        part = samples[offset_in_audio:offset_in_audio + block]
+                        def guarded_write(part=part):
+                            if not current(first_token):
+                                return False
+                            stream.write(part)
+                            return True
+                        if not await self._run_io(guarded_write):
+                            return PCMPlaybackResult(0, written, False, stream_started)
+                        written += len(part)
+                    chunk_idx += 1
+                completed = first_token is not None and current(first_token)
+                self.last_playback_completed = completed
+                return PCMPlaybackResult(0, written, bool(completed), stream_started)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                raise RuntimeError("local playback unavailable") from exc
+            finally:
+                if stream is not None:
+                    await self._close_stream(stream, drain=completed and first_token is not None and current(first_token))
+
     async def stop(self):
         self._generation += 1
         stream = self._stream
@@ -2787,6 +2863,8 @@ class AudioSynthesisQueue:
         # The currently playing chunk is the only additional PCM owner.
         slots = asyncio.Semaphore(2)
         cancelled = lambda: self.cancel.cancelled(session_id, token)
+        if provider == "vox555":
+            text = normalize_text(text)
         iterator = stream_method(text, token, cancelled, first_chunk=(chunk_index == 0)).__aiter__()
         rate = None
         seconds = 0.0
@@ -2889,46 +2967,98 @@ class AudioSynthesisQueue:
         playing = False
         try:
             async with asyncio.timeout(self.config.max_turn_seconds):
-                while True:
-                    audio = await pcm_queue.get()
-                    slots.release()
-                    if audio is None:
-                        break
-                    if isinstance(audio, BaseException):
-                        raise audio
-                    self._native_pcm_queued_bytes -= audio.size_bytes
-                    check_audio(audio, output=True)
-                    audio = AudioChunk(audio.samples, audio.sample_rate, token,
-                                       session_id, self.trace_generation_id, audio.state)
-                    self.metrics.event("audio_ready", provider=provider, chunk_index=chunk_index, token=token,
-                                       sample_rate=audio.sample_rate, samples=len(audio.samples), native_streaming=True)
-                    if not playing:
-                        self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
-                        if chunk_index == 0 and self.first_audio_ready is not None:
-                            self.first_audio_ready.set()
-                        self._transition(chunk_index, "playing", audio_bytes=audio.size_bytes)
-                        playing = True
-                        self.playback.active_token = token
-                        self.metrics.event("playback_started", chunk_index=chunk_index, token=token, native_streaming=True)
-                        if not self._output_lifecycle_notified:
-                            self._output_lifecycle_notified = True
-                            await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
-                        if cancelled():
-                            raise asyncio.CancelledError
-                        self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
-                        if hasattr(self.metrics, "mark_playback_start"):
-                            self.metrics.mark_playback_start(session_id)
-                    else:
-                        ownership = self._ownership[chunk_index]
-                        self.active_audio_bytes += audio.size_bytes - ownership.active_audio_bytes
-                        ownership.active_audio_bytes = audio.size_bytes
+                if hasattr(self.playback, "play_stream"):
+                    async def _native_chunks():
+                        while True:
+                            audio = await pcm_queue.get()
+                            slots.release()
+                            if audio is None:
+                                break
+                            if isinstance(audio, BaseException):
+                                raise audio
+                            self._native_pcm_queued_bytes -= audio.size_bytes
+                            check_audio(audio, output=True)
+                            audio = AudioChunk(audio.samples, audio.sample_rate, token,
+                                               session_id, self.trace_generation_id, audio.state)
+                            self.metrics.event("audio_ready", provider=provider, chunk_index=chunk_index, token=token,
+                                               sample_rate=audio.sample_rate, samples=len(audio.samples), native_streaming=True)
+                            yield audio
+                            audio = None
+
+                    async def _on_chunk(idx, audio):
+                        nonlocal playing
+                        if idx == 0:
+                            self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
+                            if chunk_index == 0 and self.first_audio_ready is not None:
+                                self.first_audio_ready.set()
+                            self._transition(chunk_index, "playing", audio_bytes=audio.size_bytes)
+                            playing = True
+                            self.playback.active_token = token
+                            self.metrics.event("playback_started", chunk_index=chunk_index, token=token, native_streaming=True)
+                            if not self._output_lifecycle_notified:
+                                self._output_lifecycle_notified = True
+                                await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
+                            if cancelled():
+                                raise asyncio.CancelledError
+                            self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
+                            if hasattr(self.metrics, "mark_playback_start"):
+                                self.metrics.mark_playback_start(session_id)
+                        else:
+                            ownership = self._ownership[chunk_index]
+                            self.active_audio_bytes += audio.size_bytes - ownership.active_audio_bytes
+                            ownership.active_audio_bytes = audio.size_bytes
+
+                    self.playback.active_token = token
                     started = time.perf_counter()
-                    await asyncio.wait_for(self.playback.play(audio), self.config.playback_timeout_s)
+                    await asyncio.wait_for(
+                        self.playback.play_stream(_native_chunks(), on_chunk=_on_chunk),
+                        self.config.playback_timeout_s,
+                    )
                     self.metrics.observe("playback", started)
                     self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
                     if cancelled():
                         raise asyncio.CancelledError
-                    audio = None
+                else:
+                    while True:
+                        audio = await pcm_queue.get()
+                        slots.release()
+                        if audio is None:
+                            break
+                        if isinstance(audio, BaseException):
+                            raise audio
+                        self._native_pcm_queued_bytes -= audio.size_bytes
+                        check_audio(audio, output=True)
+                        audio = AudioChunk(audio.samples, audio.sample_rate, token,
+                                           session_id, self.trace_generation_id, audio.state)
+                        self.metrics.event("audio_ready", provider=provider, chunk_index=chunk_index, token=token,
+                                           sample_rate=audio.sample_rate, samples=len(audio.samples), native_streaming=True)
+                        if not playing:
+                            self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
+                            if chunk_index == 0 and self.first_audio_ready is not None:
+                                self.first_audio_ready.set()
+                            self._transition(chunk_index, "playing", audio_bytes=audio.size_bytes)
+                            playing = True
+                            self.playback.active_token = token
+                            self.metrics.event("playback_started", chunk_index=chunk_index, token=token, native_streaming=True)
+                            if not self._output_lifecycle_notified:
+                                self._output_lifecycle_notified = True
+                                await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
+                            if cancelled():
+                                raise asyncio.CancelledError
+                            self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
+                            if hasattr(self.metrics, "mark_playback_start"):
+                                self.metrics.mark_playback_start(session_id)
+                        else:
+                            ownership = self._ownership[chunk_index]
+                            self.active_audio_bytes += audio.size_bytes - ownership.active_audio_bytes
+                            ownership.active_audio_bytes = audio.size_bytes
+                        started = time.perf_counter()
+                        await asyncio.wait_for(self.playback.play(audio), self.config.playback_timeout_s)
+                        self.metrics.observe("playback", started)
+                        self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
+                        if cancelled():
+                            raise asyncio.CancelledError
+                        audio = None
                 if cancelled():
                     raise asyncio.CancelledError
                 self._transition(chunk_index, "finished")
