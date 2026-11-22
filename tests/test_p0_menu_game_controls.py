@@ -225,3 +225,22 @@ def test_submenu_exit_seven_is_digit_only_and_game_menu_turns_off_six():
         assert preset.get(BUTTON_DIGIT_ELEMENTS[7][1]) == 1, preset_name
         assert BUTTON_FILL_ELEMENTS[7] not in preset, preset_name
         assert PICTOGRAM_ELEMENTS[7] not in preset, preset_name
+
+
+def test_scene_menu_page_lights_exit_seven_as_digit_only():
+    async def run():
+        app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="exhibition"))
+        sid = "submenu-digit-7"
+        from app.foundation.canonical_contract import CanonicalState
+        from app.foundation.lighting import BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, PICTOGRAM_ELEMENTS
+        app.canonical_runtime.sessions[sid] = CanonicalState(sid, mode="menu_ready", handset="up")
+        await app.receive_async(_event("ButtonPressed", sid, 1, {"button_id": 1}))
+        snapshot = app.led.output.snapshot()
+        assert snapshot[str(BUTTON_DIGIT_ELEMENTS[7][1])] == 1
+        assert snapshot[str(BUTTON_FILL_ELEMENTS[7])] == 0
+        assert snapshot[str(PICTOGRAM_ELEMENTS[7])] == 0
+        assert snapshot[str(BUTTON_FILL_ELEMENTS[6])] == 0
+        for b in range(1, 6):
+            assert snapshot[str(BUTTON_FILL_ELEMENTS[b])] == 1
+            assert snapshot[str(BUTTON_DIGIT_ELEMENTS[b][1])] == 1
+    asyncio.run(run())

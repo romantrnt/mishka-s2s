@@ -2582,7 +2582,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 cancel_effects=getattr(self.led,"cancel_effects",None)
                 if callable(cancel_effects): cancel_effects(clear=False)
                 buttons=descriptor["buttons"]
-                lit={element for button in buttons for element in BUTTON_ELEMENTS.get(int(button),())}
+                lit={
+                    element
+                    for button in buttons
+                    for element in (
+                        (BUTTON_DIGIT_ELEMENTS[7][1],)
+                        if int(button) == 7
+                        else BUTTON_ELEMENTS.get(int(button), ())
+                    )
+                }
                 self.led.set_elements(tuple(LightingCommand(element,int(element in lit),0)
                     for element in LIGHTING_ELEMENT_IDS))
             elif kind == "narrate_scene_menu":
