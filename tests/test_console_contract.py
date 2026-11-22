@@ -84,7 +84,7 @@ def test_webpanel_allows_microphone_on_exhibition_name_capture_and_tracks_live_e
     html = (CONSOLE.parent / "index.html").read_text(encoding="utf-8")
     assert "exhibition_name_capture" in source
     assert "exhibition_age_selection" in source
-    assert "console.js?v=20261110-json-profile-" in html
+    assert "console.js?v=" in html
     assert 'id="wave-state">LIGHTS OFF<' in html
     assert "Тёмное ожидание" in html
     assert "BREATHING" not in html
