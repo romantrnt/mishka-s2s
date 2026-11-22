@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import binascii
 import asyncio
+import contextlib
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import json
 import logging
 import math
@@ -706,6 +708,13 @@ class _HeadlessTurnTakingPlaybackController(SoundDevicePlaybackController):
         finally:
             self._output_finished(owner)
 
+    async def play_stream(self, chunk_aiter, *, on_chunk=None, owner_current=None):
+        owner = self._output_started(None)
+        try:
+            return await super().play_stream(chunk_aiter, on_chunk=on_chunk, owner_current=owner_current)
+        finally:
+            self._output_finished(owner)
+
 
 class HeadlessAudioOutput:
     """Scenario audio port that delegates playback to the local USB device."""
@@ -716,14 +725,21 @@ class HeadlessAudioOutput:
         self.on_play = None
         self.on_asset_play = None
         self.on_pcm_play = None
+        self.on_pcm_stream_play = None
         self.on_pause = None
         self.on_resume = None
         self.on_cancel = None
+        self.owned_render_timeout_s = 45.0
 
     def play_pcm_owned(self, handle: PlaybackHandle, audio: AudioChunk):
         if not callable(self.on_pcm_play):
             raise RuntimeError("private_pcm_unavailable")
         self.on_pcm_play(handle, audio)
+
+    def play_pcm_stream_owned(self, handle: PlaybackHandle, stream_aiter, *, on_cue=None):
+        if not callable(self.on_pcm_stream_play):
+            raise RuntimeError("private_pcm_stream_unsupported")
+        self.on_pcm_stream_play(handle, stream_aiter, on_cue=on_cue)
 
     def play_owned(self, handle: PlaybackHandle, asset_id: str, offset_ms: int = 0):
         if not callable(self.on_asset_play):
@@ -885,6 +901,7 @@ class HardwareIntegrationStand:
         if isinstance(self.audio_output, HeadlessAudioOutput):
             self.audio_output.on_play = self._headless_audio_play
             self.audio_output.on_pcm_play = self._headless_pcm_play
+            self.audio_output.on_pcm_stream_play = self._headless_pcm_stream_play
             self.audio_output.on_asset_play = self._headless_asset_play
             self.audio_output.on_pause = self._pause_story_playback
             self.audio_output.on_resume = self._resume_story_playback
@@ -1582,6 +1599,112 @@ class HardwareIntegrationStand:
                 with contextlib.suppress(Exception):
                     await stream_aiter.aclose()
             self._response_audio_tasks.discard(task)
+
+    def _headless_pcm_stream_play(self, handle: PlaybackHandle, stream_aiter, *, on_cue=None) -> None:
+        from .owned_speech import OWNED_PCM_IDS
+        if handle.response_id not in OWNED_PCM_IDS:
+            raise RuntimeError("private_pcm_invalid_owner")
+        state = self.application.canonical_runtime.sessions.get(handle.session_id)
+        identity_binding = (state.profile_ref, state.identity_request_id) if state is not None else None
+        previous = tuple(self._response_audio_tasks)
+        task = asyncio.create_task(
+            self._play_pcm_stream_audio(handle, stream_aiter, previous, identity_binding,
+                hid_generation=getattr(self, "_hid_generation", 0), on_cue=on_cue),
+            name="mishka-private-pcm-stream",
+        )
+        self._response_audio_tasks.add(task)
+        def observe(done):
+            self._response_audio_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(observe)
+
+    async def _play_pcm_stream_audio(self, handle: PlaybackHandle, stream_aiter, previous=(),
+                                     identity_binding=None, *, hid_generation=None, on_cue=None):
+        from .private_welcome import valid_pcm
+        from .s2s import PCMPlaybackResult
+        def current():
+            return bool((hid_generation is None or getattr(self, "_hid_generation", 0) == hid_generation)
+                and self._pcm_owner_current(handle, identity_binding))
+        async def report(kind):
+            if not current():
+                return
+            self._audio_event_sequence += 1
+            payload = {"response_id": handle.response_id, "token": handle.token,
+                       "generation": handle.generation, "playback_id": handle.playback_id,
+                       "playback_lease": handle.playback_lease}
+            if kind == "AudioFailed":
+                payload["error_code"] = "private_pcm_failed"
+            await self.application.receive_async(Event(kind, handle.session_id,
+                self._audio_event_sequence, time.time(), "physical_audio", payload,
+                "private-pcm:" + handle.playback_id))
+        def diagnostic(code):
+            recorder = getattr(self.application, "record_audio_diagnostic", None)
+            if callable(recorder):
+                recorder(code, session_id=handle.session_id, response_id=handle.response_id)
+        try:
+            if not current():
+                return
+            for task in previous:
+                task.cancel()
+            if previous:
+                await asyncio.gather(*previous, return_exceptions=True)
+            if not current():
+                return
+            self.playback.active_token = handle.token
+            diagnostic("private_pcm_started")
+            play_stream = getattr(self.playback, "play_stream", None)
+            if not callable(play_stream):
+                raise RuntimeError("private_pcm_stream_unsupported")
+            cues_by_idx: dict[int, tuple[int, ...]] = {}
+            sent_any = False
+
+            async def audio_chunks():
+                nonlocal sent_any
+                idx = 0
+                async for chunk_audio, cue_buttons in stream_aiter:
+                    if not current():
+                        return
+                    if not valid_pcm(chunk_audio):
+                        raise RuntimeError("invalid_stream_game_pcm")
+                    cues_by_idx[idx] = tuple(cue_buttons or ())
+                    idx += 1
+                    sent_any = True
+                    yield replace(chunk_audio, token=handle.token, session_id=handle.session_id,
+                                  generation_id=handle.generation)
+
+            async def on_chunk(idx, _audio):
+                if idx == 0 and handle.response_id in {"GAME_PROMPT", "GAME_HINT"} and current():
+                    self.application._game_audio_started(
+                        handle.session_id, handle.playback_id, handle.playback_lease, handle.generation)
+                btns = cues_by_idx.pop(idx, ())
+                if callable(on_cue) and (idx == 0 or btns) and current():
+                    on_cue(btns)
+
+            result = await play_stream(audio_chunks(), on_chunk=on_chunk, owner_current=current)
+            completed = (sent_any and isinstance(result, PCMPlaybackResult) and result.completed)
+            if not current():
+                return
+            if not completed:
+                diagnostic("private_pcm_incomplete")
+                await report("AudioFailed")
+                return
+            diagnostic("private_pcm_finished")
+            await report("AudioCompleted")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if current():
+                diagnostic("private_pcm_failed")
+                try:
+                    await report("AudioFailed")
+                except Exception:
+                    pass
+        finally:
+            aclose = getattr(stream_aiter, "aclose", None)
+            if callable(aclose):
+                with contextlib.suppress(Exception):
+                    await aclose()
 
     def _headless_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
         from .owned_speech import OWNED_PCM_IDS

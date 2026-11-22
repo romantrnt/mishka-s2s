@@ -656,3 +656,26 @@ def test_qwen_stream_interface_reports_complete_block_honestly(configured):
         assert provider.request_metadata()["inference_mode"] == "full_block"
         await provider.close()
     asyncio.run(scenario())
+
+
+def test_vox555_streaming_uses_short_later_blocks_and_accepts_approved_phrase014_hash(configured, monkeypatch):
+    provider, manifest, _ = configured("vox555")
+    # Also verify unpatched _REFERENCE_HASH compatibility when PHRASE_014 hash is configured.
+    spec = json.loads(manifest.read_text())
+    ref_path = Path(spec["routes"]["vox555"]["reference_audio"])
+    phrase014_digest = "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c"
+    assert phrase014_digest in voice._APPROVED_VOX555_REFERENCE_HASHES
+
+    async def scenario():
+        # FAKE_WORKER yields 12 * 12000 = 144000 samples at 48000 Hz.
+        # With _VOX555_FIRST_BLOCK_SECONDS=0.4 (19200 samples) and _VOX555_LATER_BLOCK_SECONDS=0.32
+        # (15360 samples), streaming emits 6 incremental blocks (not 3 blocks from a 2.0s stall).
+        chunks = [chunk async for chunk in provider.synthesize_audio_stream(
+            "valid_stream", 7, lambda: False, first_chunk=True)]
+        assert sum(len(c.samples) for c in chunks) == 144000
+        assert len(chunks) >= 5
+        assert len(chunks[0].samples) == 19200  # 0.40s first block at 48 kHz
+        assert len(chunks[1].samples) == 15360  # 0.32s later block at 48 kHz (not 2.0s stall)
+        assert provider.request_metadata()["native_streaming"] is True
+        await provider.close()
+    asyncio.run(scenario())

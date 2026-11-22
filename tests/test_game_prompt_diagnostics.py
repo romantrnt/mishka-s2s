@@ -176,6 +176,31 @@ async def test_game_pcm_dispatch_exception_is_redacted_and_diagnosable():
 
 
 @pytest.mark.asyncio
+async def test_render_game_prompt_retries_experimental_voice_busy():
+    from app.foundation.experimental_voice import ExperimentalVoiceUnavailable
+
+    h = Harness("4-5")
+    attempts = 0
+    try:
+        async def flaky_synthesize(text, token, cancelled):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise ExperimentalVoiceUnavailable("experimental_voice_busy")
+            return AudioChunk((0.1,) * 240, 24000, token)
+
+        tts = SimpleNamespace(provider_name="vox555", synthesize=flaky_synthesize)
+        h.app.bounded_s2s.tts = tts
+        h.app.bounded_s2s.voice = object()
+        rendered = await h.app._render_game_prompt(h.sid, {"prompt": "Найди лишнее."}, 1, lambda: True)
+        assert attempts == 3
+        assert rendered is not None and len(rendered[0].samples) > 0
+        assert not diagnostics(h)
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
 async def test_actual_stand_diagnostics_endpoint_preserves_fixed_game_failure():
     api = create_stand_app(Settings(profile="mock", hardware_mode="simulator"))
     stand = api.state.stand

@@ -17,6 +17,7 @@ RVC_SAMPLE_RATE = 40_000
 DEFAULT_PRE_ROLL_MS = 150
 SAFE_PEAK = 0.92
 
+_TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
 _NUMBER_RE = re.compile(r"(?P<minus>-)?(?P<num>[0-9]+(?:[.,][0-9]+)?)")
 _DASH_PAUSE_RE = re.compile(r"\s+[—–-]\s+")
 _ELLIPSIS_RE = re.compile(r"(?:\.\.\.|…)\s*")
@@ -46,7 +47,7 @@ _PRONUNCIATION_REPLACEMENTS = (
 # Silero's automatic accentor is good, but these high-frequency product
 # words benefit from the explicit spelling used by the Russian voice model.
 _YO_REPLACEMENTS = {
-    "еще": "ещё", "все": "всё", "ее": "её", "нем": "нём", "чем": "чём",
+    "еще": "ещё", "ее": "её", "нем": "нём",
     "идет": "идёт", "пойдет": "пойдёт", "придет": "придёт", "найдет": "найдёт",
     "пройдет": "пройдёт", "уйдет": "уйдёт", "ждет": "ждёт", "поет": "поёт",
     "живет": "живёт", "зовет": "зовёт", "берет": "берёт", "дает": "даёт",
@@ -89,6 +90,17 @@ def normalize_text(text: str) -> str:
         digits = " ".join(num2words(int(digit), lang="ru") for digit in fraction)
         return f"{prefix}{num2words(int(integer), lang='ru')} целых {digits}"
 
+    def time_to_words(match: re.Match[str]) -> str:
+        hours = num2words(int(match.group(1)), lang="ru")
+        mins_raw = match.group(2)
+        mins_int = int(mins_raw)
+        if mins_int == 0:
+            return f"{hours} ноль ноль"
+        if mins_int < 10:
+            return f"{hours} ноль {num2words(mins_int, lang='ru')}"
+        return f"{hours} {num2words(mins_int, lang='ru')}"
+
+    value = _TIME_RE.sub(time_to_words, value)
     value = _NUMBER_RE.sub(number_to_words, value)
     for pattern, replacement in _PRONUNCIATION_REPLACEMENTS:
         value = pattern.sub(replacement, value)
@@ -101,6 +113,14 @@ def normalize_text(text: str) -> str:
     yo_pattern = re.compile(r"\b(" + "|".join(map(re.escape, _YO_REPLACEMENTS)) + r")\b", re.IGNORECASE)
     value = yo_pattern.sub(restore_yo, value)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def prepare_vox_text(text: str) -> str:
+    """Normalize Russian text for VoxCPM2 and ensure clean terminal punctuation."""
+    value = normalize_text(text)
+    if value and value[-1] not in ".!?…:;":
+        value += "."
+    return value
 
 
 def _format_sentence_ssml(sentence: str) -> str:

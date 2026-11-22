@@ -29,6 +29,8 @@ _MAX_MANIFEST_BYTES = 256 * 1024
 _HEADER_BYTES = 8192
 _NATIVE_FIRST_BLOCK_SECONDS = 0.8
 _NATIVE_LATER_BLOCK_SECONDS = 2.0
+_VOX555_FIRST_BLOCK_SECONDS = 0.4
+_VOX555_LATER_BLOCK_SECONDS = 0.32
 _NATIVE_QUEUE_FRAMES = 2
 _SOURCE_REVISIONS = {
     "qwen765": "022e286b98fbec7e1e916cb940cdf532cd9f488e",
@@ -47,6 +49,10 @@ _ADAPTER_HASHES = {
     "vox555": "1142e35de2eb2bcad19bae70a35a5360b90a2909834c83c7a7ffb41e226c5270",
 }
 _REFERENCE_HASH = "ecc44ef9e2d77f4bc92f456670b4964fb8f519d4ee6cf0731491f36a589a9a48"
+_APPROVED_VOX555_REFERENCE_HASHES = frozenset({
+    _REFERENCE_HASH,
+    "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c",  # PHRASE_014 narrator clip
+})
 _QWEN_FILES = {"config.json", "generation_config.json", "merges.txt", "vocab.json",
                "model.safetensors", "preprocessor_config.json", "tokenizer_config.json",
                "speech_tokenizer/config.json", "speech_tokenizer/configuration.json",
@@ -162,9 +168,12 @@ def _load_route(route: str, manifest_path: str | Path) -> dict[str, Any]:
                 or not source_files <= identities["source"].keys()):
             raise ValueError("source package not fully pinned")
         if not is_qwen:
+            ref_digest = identities["reference"].get(reference.name)
+            ref_ok = (ref_digest == _REFERENCE_HASH
+                      or (route == "vox555" and ref_digest in _APPROVED_VOX555_REFERENCE_HASHES))
             if (set(identities["adapter"]) != {"lora_config.json", "lora_weights.safetensors"}
                     or identities["adapter"]["lora_weights.safetensors"] != _ADAPTER_HASHES[route]
-                    or identities["reference"].get(reference.name) != _REFERENCE_HASH):
+                    or not ref_ok):
                 raise ValueError("wrong adapter or reference")
         supplied_limits = spec.get("limits", {})
         if not isinstance(supplied_limits, dict) or set(supplied_limits) - {
@@ -186,7 +195,7 @@ def _load_route(route: str, manifest_path: str | Path) -> dict[str, Any]:
             "model_sha256": identities["model"]["model.safetensors"],
             "model_inventory_sha256": digest("model"), "source_inventory_sha256": digest("source"),
             "adapter_sha256": None if is_qwen else identities["adapter"]["lora_weights.safetensors"],
-            "reference_sha256": None if is_qwen else _REFERENCE_HASH,
+            "reference_sha256": None if is_qwen else ref_digest,
             "adapter_root": None if is_qwen else str(roots["adapter"]),
             "reference_audio": None if is_qwen else str(reference),
             "files": validated, "limits": limits,
@@ -206,6 +215,8 @@ def create_experimental_tts_provider(route: str, manifest_path: str | Path) -> "
 
 class ExperimentalTTSProvider:
     """One resident model and at most one active command; no internal job queue."""
+
+    _shares_local_gpu = True
 
     def __init__(self, validated_config: dict[str, Any]):
         self._config = validated_config
@@ -573,9 +584,10 @@ class ExperimentalTTSProvider:
                 self._active_stream_exchange = exchange_task
                 pending = array.array("f")
                 emitted = 0
-                first_block_s = 0.4 if self.provider_name == "vox555" else _NATIVE_FIRST_BLOCK_SECONDS
+                first_block_s = _VOX555_FIRST_BLOCK_SECONDS if self.provider_name == "vox555" else _NATIVE_FIRST_BLOCK_SECONDS
+                later_block_s = _VOX555_LATER_BLOCK_SECONDS if self.provider_name == "vox555" else _NATIVE_LATER_BLOCK_SECONDS
                 target = max(1, int(self._config["sample_rate"] * (
-                    first_block_s if (first_chunk or self.provider_name == "vox555") else _NATIVE_LATER_BLOCK_SECONDS)))
+                    first_block_s if (first_chunk or self.provider_name == "vox555") else later_block_s)))
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
@@ -596,7 +608,7 @@ class ExperimentalTTSProvider:
                         if emitted == 1:
                             self._last_request["native_first_chunk_ms"] = ready_ms
                         yield AudioChunk(samples, self._config["sample_rate"], token)
-                        target = max(1, int(self._config["sample_rate"] * _NATIVE_LATER_BLOCK_SECONDS))
+                        target = max(1, int(self._config["sample_rate"] * later_block_s))
                 total, inference_ms, worker_first_ms = exchange_task.result()
                 if cancelled() or self._closed:
                     raise asyncio.CancelledError

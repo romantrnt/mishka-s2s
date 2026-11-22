@@ -41,7 +41,7 @@ def _project_path(value: str | Path) -> Path:
 
 from .config import public_model_reference
 from app.metrics.latency import VoiceTurnTrace
-from app.foundation.voice_pipeline import RVC_SAMPLE_RATE, normalize_text, peak_normalize, prepend_pre_roll, resample_mono
+from app.foundation.voice_pipeline import RVC_SAMPLE_RATE, normalize_text, peak_normalize, prepare_vox_text, prepend_pre_roll, resample_mono
 
 
 @dataclass
@@ -2314,13 +2314,14 @@ class SoundDevicePlaybackController:
                 if stream is not None:
                     await self._close_stream(stream, drain=completed and current())
 
-    async def play_stream(self, chunk_aiter, *, on_chunk=None):
+    async def play_stream(self, chunk_aiter, *, on_chunk=None, owner_current=None):
         """Play an async stream of AudioChunks through a single continuous OutputStream."""
         task = asyncio.current_task()
         def current(token):
             return (not task.cancelling()
                     and generation == self._generation and token == self.active_token
-                    and (self.hardware_current is None or self.hardware_current()))
+                    and (self.hardware_current is None or self.hardware_current())
+                    and (owner_current is None or owner_current()))
         async with self._play_lock:
             generation = self._generation
             self.last_playback_completed = False
@@ -2360,11 +2361,14 @@ class SoundDevicePlaybackController:
                         stream_started = bool(await self._run_io(guarded_start))
                         if not stream_started:
                             return PCMPlaybackResult(0, written, False, stream_started)
+                    last_sample = 0.0
                     samples = np.array(audio.samples, dtype=np.float32, copy=True).reshape(-1, 1)
                     if chunk_idx == 0:
                         fade_len = min(len(samples) // 4, max(1, int(sample_rate * 0.003)))
                         if len(samples) >= 2 * fade_len and fade_len > 1 and abs(float(samples[0, 0])) > 0.002:
                             samples[:fade_len, 0] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+                    if len(samples):
+                        last_sample = float(samples[-1, 0])
                     block = max(4096, int(sample_rate) // 8)
                     for offset_in_audio in range(0, len(samples), block):
                         if not current(first_token):
@@ -2379,6 +2383,11 @@ class SoundDevicePlaybackController:
                             return PCMPlaybackResult(0, written, False, stream_started)
                         written += len(part)
                     chunk_idx += 1
+                if first_token is not None and current(first_token) and abs(last_sample) > 0.002:
+                    fade_len = max(2, int(sample_rate * 0.003))
+                    tail = np.linspace(last_sample, 0.0, fade_len, dtype=np.float32).reshape(-1, 1)
+                    if await self._run_io(lambda tail=tail: current(first_token) and (stream.write(tail) or True)):
+                        written += len(tail)
                 completed = first_token is not None and current(first_token)
                 self.last_playback_completed = completed
                 return PCMPlaybackResult(0, written, bool(completed), stream_started)
@@ -2864,7 +2873,7 @@ class AudioSynthesisQueue:
         slots = asyncio.Semaphore(2)
         cancelled = lambda: self.cancel.cancelled(session_id, token)
         if provider == "vox555":
-            text = normalize_text(text)
+            text = prepare_vox_text(text)
         iterator = stream_method(text, token, cancelled, first_chunk=(chunk_index == 0)).__aiter__()
         rate = None
         seconds = 0.0
@@ -3098,42 +3107,94 @@ class AudioSynthesisQueue:
                 pre_entry = getattr(self, "_pre_streams", {}).pop(chunk_index, None)
                 if pre_entry is not None:
                     pre_task, pre_q = pre_entry
-                    sub_idx = 0
                     try:
-                        while True:
+                        if hasattr(self.playback, "play_stream"):
+                            async def _pre_chunks():
+                                sub_idx = 0
+                                while True:
+                                    if cancelled():
+                                        raise asyncio.CancelledError
+                                    item_kind, item_val = await asyncio.wait_for(pre_q.get(), self.config.tts_timeout_s)
+                                    if item_kind == "eof":
+                                        if sub_idx == 0:
+                                            raise RuntimeError("pre_stream_empty")
+                                        break
+                                    if item_kind == "err":
+                                        raise item_val
+                                    sub_audio = item_val
+                                    if sub_audio.token != token or sub_audio.session_id not in (None, session_id):
+                                        raise asyncio.CancelledError
+                                    sub_idx += 1
+                                    yield AudioChunk(sub_audio.samples, sub_audio.sample_rate, token,
+                                                     session_id, self.trace_generation_id, sub_audio.state)
+
+                            async def _on_pre_chunk(sub_idx, sub_audio):
+                                nonlocal playback_started
+                                if sub_idx == 0:
+                                    self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
+                                    if chunk_index == 0 and self.first_audio_ready is not None:
+                                        self.first_audio_ready.set()
+                                    self._transition(chunk_index, "playing", audio_bytes=len(sub_audio.samples) * 4)
+                                    self.playback.active_token = token
+                                    self.metrics.event("playback_started", chunk_index=chunk_index, token=token)
+                                    if not self._output_lifecycle_notified:
+                                        self._output_lifecycle_notified = True
+                                        await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
+                                    self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
+                                    if hasattr(self.metrics, "mark_playback_start"):
+                                        self.metrics.mark_playback_start(session_id)
+                                    playback_started = True
+
+                            self.playback.active_token = token
+                            pb_started = time.perf_counter()
+                            await asyncio.wait_for(
+                                self.playback.play_stream(_pre_chunks(), on_chunk=_on_pre_chunk),
+                                self.config.playback_timeout_s,
+                            )
+                            self.metrics.observe("playback", pb_started)
+                            self.metrics.observe_voice_stage(session_id, "playback", pb_started, generation_id=self.trace_generation_id)
                             if cancelled():
                                 self._transition(chunk_index, "cancelled")
-                                break
-                            item_kind, item_val = await asyncio.wait_for(pre_q.get(), self.config.tts_timeout_s)
-                            if item_kind == "eof":
-                                if sub_idx == 0:
-                                    raise RuntimeError("pre_stream_empty")
+                            else:
                                 self._transition(chunk_index, "finished")
                                 self.metrics.event("playback_finished", chunk_index=chunk_index, token=token)
-                                break
-                            if item_kind == "err":
-                                raise item_val
-                            sub_audio = item_val
-                            if sub_audio.token != token or sub_audio.session_id not in (None, session_id):
-                                self._transition(chunk_index, "cancelled")
-                                break
-                            sub_audio = AudioChunk(sub_audio.samples, sub_audio.sample_rate, token,
-                                                   session_id, self.trace_generation_id, sub_audio.state)
-                            if sub_idx == 0:
-                                self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
-                                if chunk_index == 0 and self.first_audio_ready is not None:
-                                    self.first_audio_ready.set()
-                                self._transition(chunk_index, "playing", audio_bytes=len(sub_audio.samples) * 4)
-                                self.playback.active_token = token
-                                self.metrics.event("playback_started", chunk_index=chunk_index, token=token)
-                                if not self._output_lifecycle_notified:
-                                    self._output_lifecycle_notified = True
-                                    await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
-                                self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
-                                if hasattr(self.metrics, "mark_playback_start"):
-                                    self.metrics.mark_playback_start(session_id)
-                            await asyncio.wait_for(self.playback.play(sub_audio), self.config.playback_timeout_s)
-                            sub_idx += 1
+                        else:
+                            sub_idx = 0
+                            while True:
+                                if cancelled():
+                                    self._transition(chunk_index, "cancelled")
+                                    break
+                                item_kind, item_val = await asyncio.wait_for(pre_q.get(), self.config.tts_timeout_s)
+                                if item_kind == "eof":
+                                    if sub_idx == 0:
+                                        raise RuntimeError("pre_stream_empty")
+                                    self._transition(chunk_index, "finished")
+                                    self.metrics.event("playback_finished", chunk_index=chunk_index, token=token)
+                                    break
+                                if item_kind == "err":
+                                    raise item_val
+                                sub_audio = item_val
+                                if sub_audio.token != token or sub_audio.session_id not in (None, session_id):
+                                    self._transition(chunk_index, "cancelled")
+                                    break
+                                sub_audio = AudioChunk(sub_audio.samples, sub_audio.sample_rate, token,
+                                                       session_id, self.trace_generation_id, sub_audio.state)
+                                if sub_idx == 0:
+                                    self.metrics.mark_voice(session_id, "first_audio_chunk", generation_id=self.trace_generation_id)
+                                    if chunk_index == 0 and self.first_audio_ready is not None:
+                                        self.first_audio_ready.set()
+                                    self._transition(chunk_index, "playing", audio_bytes=len(sub_audio.samples) * 4)
+                                    self.playback.active_token = token
+                                    self.metrics.event("playback_started", chunk_index=chunk_index, token=token)
+                                    if not self._output_lifecycle_notified:
+                                        self._output_lifecycle_notified = True
+                                        await self._notify_lifecycle("output", chunk_index=chunk_index, token=token)
+                                    self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
+                                    if hasattr(self.metrics, "mark_playback_start"):
+                                        self.metrics.mark_playback_start(session_id)
+                                    playback_started = True
+                                await asyncio.wait_for(self.playback.play(sub_audio), self.config.playback_timeout_s)
+                                sub_idx += 1
                     finally:
                         if not pre_task.done():
                             pre_task.cancel()
@@ -3682,6 +3743,8 @@ class BoundedConversationEngine:
                 raw_tts = self.tts
                 while isinstance(raw_tts, CachedTTSProvider):
                     raw_tts = raw_tts.delegate
+                if getattr(raw_tts, "provider_name", None) == "vox555":
+                    first_text = prepare_vox_text(first_text)
                 cancelled_fn = lambda: self.cancel.cancelled(context.session_id, token)
                 try:
                     native_fn = _native_audio_stream_method(raw_tts)
@@ -3699,7 +3762,7 @@ class BoundedConversationEngine:
                     await out_q.put(("err", exc))
 
             async def close_chunks(values):
-                if (values and not chunks and os.getenv("MISHKA_STREAM_FIRST_JSON_CHUNK", "0") != "1"):
+                if values and not chunks:
                     if self.cancel.cancelled(context.session_id, token):
                         raise asyncio.CancelledError
                     full_candidate = " ".join(values)
@@ -3714,7 +3777,18 @@ class BoundedConversationEngine:
                             full_candidate, context=context.history[-4:], generation_id=token, **options
                         )
                     )
-                    pre_q = asyncio.Queue(maxsize=64) if (queue.voice_mode in {"off", "disabled"} and values[0]) else None
+                    raw_tts_provider = self.tts
+                    while isinstance(raw_tts_provider, CachedTTSProvider):
+                        raw_tts_provider = raw_tts_provider.delegate
+                    can_parallel_pre = (
+                        queue.voice_mode in {"off", "disabled"}
+                        and bool(values[0])
+                        and (
+                            not getattr(raw_tts_provider, "_shares_local_gpu", False)
+                            or os.environ.get("MISHKA_PARALLEL_GPU_PRE_STREAM") == "1"
+                        )
+                    )
+                    pre_q = asyncio.Queue(maxsize=64) if can_parallel_pre else None
                     pre_task = asyncio.create_task(_private_pre_stream(values[0], pre_q)) if pre_q is not None else None
                     try:
                         try:

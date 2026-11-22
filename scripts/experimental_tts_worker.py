@@ -153,6 +153,9 @@ def load_model(config):
         model.tts_model.eval()
         loaded_count = len(loaded)
         warm_native_model(config, model, np, torch)
+        build_cache = getattr(model.tts_model, "build_prompt_cache", None)
+        if callable(build_cache):
+            model._mishka_prompt_cache = build_cache(reference_wav_path=config["reference_audio"])
     torch.cuda.synchronize()
     if config["route"] != "qwen765":
         release_cuda_cache(torch)
@@ -176,12 +179,22 @@ def synthesize(config, model, np, torch, text):
         else:
             # The exact trained-model API/settings used by the preserved
             # post-training comparison; no continuation prompt/normalizer.
+            prompt_cache = getattr(model, "_mishka_prompt_cache", None)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                generated = model.tts_model.generate(
-                    target_text=text, reference_wav_path=config["reference_audio"],
-                    max_len=300, inference_timesteps=10, cfg_value=2.0,
-                    retry_badcase=False, seed=42,
-                )
+                if prompt_cache is not None and callable(getattr(model.tts_model, "generate_with_prompt_cache", None)):
+                    generated = model.tts_model.generate_with_prompt_cache(
+                        target_text=text, prompt_cache=prompt_cache,
+                        max_len=300, inference_timesteps=10, cfg_value=2.0,
+                        retry_badcase=False, seed=42,
+                    )
+                else:
+                    generated = model.tts_model.generate(
+                        target_text=text, reference_wav_path=config["reference_audio"],
+                        max_len=300, inference_timesteps=10, cfg_value=2.0,
+                        retry_badcase=False, seed=42,
+                    )
+                if isinstance(generated, tuple):
+                    generated = generated[0]
             audio = generated.detach().cpu().float().numpy()
     torch.cuda.synchronize()
     inference_ms = (time.perf_counter() - started) * 1000
@@ -207,13 +220,23 @@ def synthesize_stream(config, model, np, torch, text):
     frame_limit = config["sample_rate"]  # At most one second per binary frame.
     total = 0
     nonzero = False
+    prompt_cache = getattr(model, "_mishka_prompt_cache", None)
     with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        increments = model.tts_model.generate_streaming(
-            target_text=text, reference_wav_path=config["reference_audio"],
-            max_len=300, inference_timesteps=10, cfg_value=2.0,
-            retry_badcase=False, seed=42, streaming_prefix_len=4,
-        )
+        if prompt_cache is not None and callable(getattr(model.tts_model, "generate_with_prompt_cache_streaming", None)):
+            increments = model.tts_model.generate_with_prompt_cache_streaming(
+                target_text=text, prompt_cache=prompt_cache,
+                max_len=300, inference_timesteps=10, cfg_value=2.0,
+                retry_badcase=False, seed=42, streaming_prefix_len=4,
+            )
+        else:
+            increments = model.tts_model.generate_streaming(
+                target_text=text, reference_wav_path=config["reference_audio"],
+                max_len=300, inference_timesteps=10, cfg_value=2.0,
+                retry_badcase=False, seed=42, streaming_prefix_len=4,
+            )
         for generated in increments:
+            if isinstance(generated, tuple):
+                generated = generated[0]
             audio = np.asarray(generated.detach().cpu().float().numpy(), dtype=np.float32).reshape(-1)
             if not audio.size:
                 continue

@@ -215,8 +215,22 @@ class GamePresentationMixin:
                 if not pending_tts:
                     return True
                 joined = " ".join(item[0] for item in pending_tts)
+                tts_text = joined
+                if getattr(tts, "provider_name", None) == "vox555":
+                    from .voice_pipeline import prepare_vox_text
+                    tts_text = prepare_vox_text(joined)
                 stage = "synthesis"
-                audio = await tts.synthesize(joined, token, cancelled)
+                from .experimental_voice import ExperimentalVoiceUnavailable
+                busy_deadline = asyncio.get_running_loop().time() + 12.0
+                while True:
+                    try:
+                        audio = await tts.synthesize(tts_text, token, cancelled)
+                        break
+                    except ExperimentalVoiceUnavailable as exc:
+                        if str(exc) == "experimental_voice_busy" and current() and asyncio.get_running_loop().time() < busy_deadline:
+                            await asyncio.sleep(0.08)
+                            continue
+                        raise
                 if not current():
                     return False
                 if not valid_pcm(audio):
@@ -592,6 +606,12 @@ class GamePresentationMixin:
             s2s = self.bounded_s2s
             if s2s is None or getattr(s2s, "tts", None) is None:
                 return
+            raw_tts = s2s.tts.delegate if hasattr(s2s.tts, "delegate") else s2s.tts
+            vc_mode = str(getattr(s2s, "voice_mode", getattr(getattr(s2s, "settings", None), "voice_conversion", "off")) or "off").lower()
+            # Streaming TTS yields the first 0.4s block in ~250ms; running a blocking full-segment
+            # synthesize() prewarm contends for the single worker lock after short intro WAVs.
+            if hasattr(raw_tts, "synthesize_audio_stream") and vc_mode in {"off", "disabled"}:
+                return
             lock = self._game_tts_synthesis_lock()
             for raw_text, _buttons, phrase_id in segments:
                 if phrase_id:
@@ -620,10 +640,19 @@ class GamePresentationMixin:
                             or self._session_epochs.get(session_id, 0) != epoch
                             or getattr(getattr(self.canonical_runtime.sessions.get(session_id), "game_engine_state", None), "run_id", None) != run_id
                         )
-                        audio = await s2s.tts.synthesize(norm, 0, prewarm_cancelled)
+                        raw_tts = s2s.tts.delegate if hasattr(s2s.tts, "delegate") else s2s.tts
+                        tts_norm = norm
+                        if getattr(raw_tts, "provider_name", None) == "vox555":
+                            from .voice_pipeline import prepare_vox_text
+                            tts_norm = prepare_vox_text(norm)
+                        audio = await s2s.tts.synthesize(tts_norm, 0, prewarm_cancelled)
                         chunk = await self._to_24k_chunk(audio, 0, lambda: True, pad_s=0.05)
                         if chunk is not None:
                             self._put_cached_game_chunk(norm, chunk)
+                        # Only prewarm the leading uncached segment when streaming TTS is available
+                        # so subsequent prompt segments start streaming immediately after intro playback.
+                        if hasattr(raw_tts, "synthesize_audio_stream"):
+                            return
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -774,12 +803,16 @@ class GamePresentationMixin:
                     continue
                 if can_stream_tts:
                     from .experimental_voice import ExperimentalVoiceUnavailable
+                    tts_text = text
+                    if getattr(tts, "provider_name", None) == "vox555":
+                        from .voice_pipeline import prepare_vox_text
+                        tts_text = prepare_vox_text(text)
                     deadline = asyncio.get_running_loop().time() + 12.0
                     while True:
                         first_sub = True
                         collected_samples = []
                         try:
-                            async for sub in tts.synthesize_audio_stream(text, token, cancelled, first_chunk=True):
+                            async for sub in tts.synthesize_audio_stream(tts_text, token, cancelled, first_chunk=True):
                                 if not current():
                                     return
                                 chunk = await self._to_24k_chunk(sub, token, current, pad_s=0.0)

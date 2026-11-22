@@ -224,3 +224,107 @@ async def test_toggle_defaults_scoping_and_direct_browser_ingress(monkeypatch):
         operation.cancel()
         await asyncio.gather(operation, return_exceptions=True)
         await close(stand)
+
+
+@run_async
+async def test_headless_turn_taking_play_stream_mutes_mic_until_finished(monkeypatch):
+    stand, _calls = await active_stand(monkeypatch)
+    app, sid = stand.application, stand.active_session_id
+    chunk_gate = asyncio.Event()
+    ingress = AudioIngressPipeline(app.s2s_audio.vad, app.s2s_audio.config)
+    app.s2s_audio.ingress[sid] = ingress
+    ingress.feed((.1,) * 600, 0)
+    assert ingress.active and ingress._vad_pending
+
+    async def fake_super_play_stream(self, chunk_aiter, *, on_chunk=None, owner_current=None):
+        played = 0
+        assert not stand._headless_audio_accepting()
+        assert not ingress.active and not ingress._vad_pending and not ingress._pre_roll
+        async for chunk in chunk_aiter:
+            assert not stand._headless_audio_accepting()
+            if callable(on_chunk):
+                res = on_chunk(played, chunk)
+                if asyncio.iscoroutine(res):
+                    await res
+            played += len(chunk.samples)
+            await chunk_gate.wait()
+        return PCMPlaybackResult(0, played, True, True)
+
+    monkeypatch.setattr(SoundDevicePlaybackController, "play_stream", fake_super_play_stream)
+
+    async def chunks():
+        yield AudioChunk((.1,) * 256, 16000, 1, sid)
+        yield AudioChunk((.1,) * 256, 16000, 1, sid)
+
+    assert stand._headless_audio_accepting()
+    task = asyncio.create_task(stand.playback.play_stream(chunks()))
+    try:
+        await asyncio.sleep(0.02)
+        assert not stand._headless_audio_accepting()
+        chunk_gate.set()
+        result = await asyncio.wait_for(task, 2)
+        assert result.completed and result.written_samples == 512
+        await asyncio.sleep(HEADLESS_OUTPUT_TAIL_S + 0.05)
+        assert stand._headless_audio_accepting()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await close(stand)
+
+
+@run_async
+async def test_headless_audio_output_play_pcm_stream_owned_cues_and_completion(monkeypatch):
+    stand = HardwareIntegrationStand(
+        Settings(profile="mock", hardware_mode="physical", allow_degraded_hardware=True, headless_turn_taking=True),
+        background_scheduler=False,
+    )
+    app, sid = stand.application, stand.active_session_id
+    await app.receive_async(Event("HandsetLifted", sid, 1, 1., "test", {}, "lift"))
+    app._cancel_welcome_timer(sid)
+    state = app.canonical_runtime.sessions[sid]
+    state.mode = "game_active"
+    state.game_audio_stage = "prompt"
+    app.sessions.get(sid).current_node = "bear_dialogue"
+    app._active_audio.clear()
+    handle = PlaybackHandle(sid, app._session_epochs.get(sid, 0), "GAME_PROMPT", "lease-gp", "GAME_PROMPT", 21)
+    state.active_audio_id, state.playback_lease = handle.response_id, handle.playback_lease
+    app._active_audio[sid] = dict(content_id=handle.response_id, token=handle.token, generation=handle.generation,
+                                  playback_id=handle.playback_id, playback_lease=handle.playback_lease)
+    events, game_started, cues = [], [], []
+    orig_receive = app.receive_async
+    async def capture_receive(ev):
+        events.append(ev.event_type)
+        return await orig_receive(ev)
+    monkeypatch.setattr(app, "receive_async", capture_receive)
+    monkeypatch.setattr(app, "_game_audio_started", lambda *a: game_started.append(a))
+
+    async def fake_super_play_stream(self, chunk_aiter, *, on_chunk=None, owner_current=None):
+        idx = 0
+        total = 0
+        async for chunk in chunk_aiter:
+            if callable(on_chunk):
+                res = on_chunk(idx, chunk)
+                if asyncio.iscoroutine(res):
+                    await res
+            idx += 1
+            total += len(chunk.samples)
+        return PCMPlaybackResult(0, total, True, True)
+
+    monkeypatch.setattr(SoundDevicePlaybackController, "play_stream", fake_super_play_stream)
+
+    async def stream_items():
+        yield AudioChunk((.1,) * 480, 24000, handle.token, sid, handle.generation), (1, 2)
+        yield AudioChunk((.1,) * 480, 24000, handle.token, sid, handle.generation), ()
+
+    try:
+        assert stand.audio_output.owned_render_timeout_s >= 45.0
+        stand.audio_output.play_pcm_stream_owned(handle, stream_items(), on_cue=lambda btns: cues.append(btns))
+        for _ in range(50):
+            if "AudioCompleted" in events:
+                break
+            await asyncio.sleep(0.02)
+        assert cues == [(1, 2)]
+        assert len(game_started) == 1
+        assert "AudioCompleted" in events
+    finally:
+        await close(stand)
