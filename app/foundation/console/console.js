@@ -1636,7 +1636,7 @@ function interactionGuide(state, media) {
       : ['Сеанс завершён', 'Поднимите трубку'];
   }
   if (state?.canonical_state?.silent_hold_active) {
-    return ['Тихий режим', `Держи 6 (${state.canonical_state.silent_hold_step || 1} из 6), чтобы войти без звука…`];
+    return ['Тихий режим', `Держи 6 (${state.canonical_state.silent_hold_step || 1} из 7), чтобы войти без звука…`];
   }
   if (state?.canonical_state?.mode === 'profile_ready') {
     return ['Карта принята', state?.simulator?.session?.session_actions?.includes('start')

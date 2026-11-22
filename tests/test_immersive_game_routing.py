@@ -517,9 +517,16 @@ def test_hold_6_for_5s_starts_silent_session_and_handset_controls_audio():
     p1 = rt.handle(CanonicalEvent('ButtonPressed', sid, seq, 0, 'uart', {'button_id': 6}, f'c{seq}', t))
     assert p1['reason'] == 'silent_hold_started'
     assert rt.sessions[sid].silent_hold_active is True
-    t += 2.0
+    from app.foundation.lighting import BUTTON_WAVE_ELEMENTS
+    assert p1['effects'][0]['elements'] == list(BUTTON_WAVE_ELEMENTS[6])
+    t += 0.72
     seq += 1
-    rel1 = rt.handle(CanonicalEvent('ButtonReleased', sid, seq, p1['state']['state_version'], 'uart', {'button_id': 6}, f'c{seq}', t))
+    tick2 = rt.handle(CanonicalEvent('SilentHoldTick', sid, seq, p1['state']['state_version'], 'timer', {'generation': rt.sessions[sid].silent_hold_generation}, f'c{seq}', t))
+    assert tick2['reason'] == 'silent_hold_progress'
+    assert tick2['effects'][0]['elements'] == list(BUTTON_WAVE_ELEMENTS[6]) + list(BUTTON_WAVE_ELEMENTS[7])
+    t += 1.28
+    seq += 1
+    rel1 = rt.handle(CanonicalEvent('ButtonReleased', sid, seq, tick2['state']['state_version'], 'uart', {'button_id': 6}, f'c{seq}', t))
     assert rel1['reason'] == 'silent_hold_cancelled'
     assert rt.sessions[sid].mode == 'idle'
 

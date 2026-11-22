@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 from .game_engine import GameState, AVAILABLE_GAME_SPECS, start as start_game, advance as advance_game, desired_buttons, pause as pause_game, arm_wait, next_deadline, timer_step, begin_demonstration, IMMERSIVE_GAME_SPECS, current_challenge, game_answer_buttons, finish_prompt, hold_exit_policy, cancel_exit_gesture
 from .age_policy import age_details, policy_for, policy_for_band
+from .lighting import BUTTON_WAVE_ELEMENTS
 from .voice_catalog import load_phrase_catalog
 
 RAM_TTL_SECONDS = 300
@@ -33,6 +34,13 @@ BUTTON_MODES = {
     7: "schedule_weather",
 }
 LIGHTING_ELEMENT_IDS = tuple(range(18))
+SILENT_HOLD_WAVE_ORDER = (6, 7, 5, 4, 3, 2, 1)
+SILENT_HOLD_STEP_SECONDS = 5.0 / len(SILENT_HOLD_WAVE_ORDER)
+
+
+def _silent_hold_wave_elements(step: int) -> list[int]:
+    count = max(1, min(len(SILENT_HOLD_WAVE_ORDER), int(step)))
+    return [element_id for btn in SILENT_HOLD_WAVE_ORDER[:count] for element_id in BUTTON_WAVE_ELEMENTS[btn]]
 GAME_CATALOG = (
     {"game_id": "catch_light", "level": 0, "input": "button"},
     {"game_id": "find_pair", "level": 2, "input": "button"},
@@ -1693,13 +1701,12 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.silent_entry_completed = True
                 state.silent_hold_generation += 1
                 return self._start_silent_session(state, monotonic_now, reason="silent_hold_6_started")
-            step = min(6, max(state.silent_hold_step + 1, int(elapsed / 0.85) + 1))
+            step = min(len(SILENT_HOLD_WAVE_ORDER), max(state.silent_hold_step + 1, int(elapsed / SILENT_HOLD_STEP_SECONDS) + 1))
             state.silent_hold_step = step
             state.silent_hold_next_deadline = min(state.silent_hold_started_monotonic + 5.0,
-                                                  state.silent_hold_started_monotonic + step * 0.85)
+                                                  state.silent_hold_started_monotonic + step * SILENT_HOLD_STEP_SECONDS)
             state.state_version += 1
-            elements = [i for b in range(1, step + 1) for i in ((b - 1) * 2, (b - 1) * 2 + 1)]
-            return self._decision(state, [{"type": "lighting", "elements": elements, "state": 1}], "silent_hold_progress")
+            return self._decision(state, [{"type": "lighting", "elements": _silent_hold_wave_elements(step), "state": 1}], "silent_hold_progress")
         if (event.event_type in {"ButtonHeld", "ButtonLongHeld"}
                 and int(event.payload['button_id']) in state.readiness_held_buttons):
             return self._decision(state, [], "readiness_button_held")
@@ -1711,12 +1718,12 @@ class CanonicalRuntime(SceneMenuMixin):
                 if not state.silent_hold_active:
                     state.silent_hold_active = True
                     state.silent_hold_started_monotonic = monotonic_now
-                    state.silent_hold_next_deadline = monotonic_now + 0.85
+                    state.silent_hold_next_deadline = monotonic_now + SILENT_HOLD_STEP_SECONDS
                     state.silent_hold_step = 1
                     state.silent_hold_generation += 1
                     state.silent_entry_completed = False
                     state.state_version += 1
-                    return self._decision(state, [{"type": "lighting", "elements": [0, 1], "state": 1}], "silent_hold_started")
+                    return self._decision(state, [{"type": "lighting", "elements": _silent_hold_wave_elements(1), "state": 1}], "silent_hold_started")
                 return self._decision(state, [], "silent_hold_active")
             if button in state.readiness_held_buttons:
                 return self._decision(state, [], "readiness_button_held")
