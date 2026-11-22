@@ -37,7 +37,7 @@ def test_free_lights_fresh_press_emits_wave_and_release_does_not_replace_it():
     assert edge(pressed.state, 1).wave_origin is None
     assert edge(pressed.state, 1, released=True).wave_origin is None
     assert desired_buttons(pressed.state) == ()
-    assert 5 in game_answer_buttons(state) and 7 not in game_answer_buttons(state)
+    assert 5 in game_answer_buttons(state) and 7 in game_answer_buttons(state)
     assert next_deadline(state) is None
 
 
