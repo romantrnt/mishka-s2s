@@ -2147,6 +2147,18 @@ class MockPlaybackController:
     async def stop(self): self.stops+=1; self.played.clear()
 
 
+def _ensure_sounddevice_ready(sd, device, kind: str, *, min_channels: int = 1) -> None:
+    """Fail with a Python error before PortAudio aborts on a missing ALSA device."""
+    key = "max_output_channels" if kind == "output" else "max_input_channels"
+    try:
+        info = sd.query_devices(device, kind)
+        channels = int((info or {}).get(key, 0))
+    except Exception as exc:
+        raise RuntimeError(f"local audio {kind} unavailable") from exc
+    if channels < int(min_channels):
+        raise RuntimeError(f"local audio {kind} unavailable")
+
+
 class SoundDevicePlaybackController:
     """Lazy local speaker adapter with serialized, cancellation-safe PortAudio I/O."""
 
@@ -2260,6 +2272,7 @@ class SoundDevicePlaybackController:
                 import sounddevice as sd
                 if not current():
                     return outcome()
+                _ensure_sounddevice_ready(sd, self._device_arg(), "output")
                 stream = sd.OutputStream(
                     samplerate=audio.sample_rate,
                     channels=1,
@@ -2346,6 +2359,7 @@ class SoundDevicePlaybackController:
                     if not current(first_token):
                         return PCMPlaybackResult(0, written, False, stream_started)
                     if stream is None:
+                        _ensure_sounddevice_ready(sd, self._device_arg(), "output")
                         stream = sd.OutputStream(
                             samplerate=sample_rate,
                             channels=1,
@@ -2473,6 +2487,7 @@ class SoundDeviceCaptureController:
         self._frame_context = frame_context
         self._last_error = None
         try:
+            _ensure_sounddevice_ready(sd, self._device_arg(), "input", min_channels=self.channels)
             self._stream = sd.InputStream(
                 samplerate=self.sample_rate, channels=self.channels,
                 dtype="float32", blocksize=self.blocksize, device=self._device_arg(),

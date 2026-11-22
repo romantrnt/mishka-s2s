@@ -34,4 +34,5 @@ if [[ -z "${PULSE_SERVER:-}" && -S /mnt/wslg/PulseServer ]]; then
   export PULSE_SERVER="unix:/mnt/wslg/PulseServer"
 fi
 
-exec "$ROOT/.venv/bin/python" "$ROOT/scripts/run_stand.py"
+export PYTHONUNBUFFERED=1
+exec "$ROOT/.venv/bin/python" -u "$ROOT/scripts/run_stand.py"

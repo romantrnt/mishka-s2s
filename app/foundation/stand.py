@@ -2348,6 +2348,16 @@ class HardwareIntegrationStand:
                       "canonical_state": current.snapshot() if current else {"mode": "idle", "handset": "down"},
                       "host_write_completed": False, "firmware_acknowledged": False}
         self._collect_events()
+        if event.event_type in {"HandsetLifted", "HandsetPlaced", "ButtonPressed", "HardwareDisconnected"}:
+            snap = result.get("canonical_state") if isinstance(result, dict) else None
+            logger.info(
+                "physical_event type=%s button=%s reason=%s mode=%s handset=%s",
+                event.event_type,
+                event.payload.get("button_id") if isinstance(event.payload, dict) else None,
+                result.get("reason") if isinstance(result, dict) else None,
+                snap.get("mode") if isinstance(snap, dict) else None,
+                snap.get("handset") if isinstance(snap, dict) else None,
+            )
         await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
         return result
 

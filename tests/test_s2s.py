@@ -1000,3 +1000,17 @@ def test_hangup_during_first_audio_gate_cancels_generation_without_orphans():
         assert not engine.active_tasks and not engine.active_queues
         assert not [task for task in asyncio.all_tasks() if task is not asyncio.current_task() and not task.done()]
     asyncio.run(flow())
+
+
+def test_sounddevice_missing_device_raises_runtime_error_before_stream_open():
+    from app.foundation.s2s import _ensure_sounddevice_ready
+
+    class FakeSD:
+        def query_devices(self, device, kind):
+            return {"max_output_channels": 0, "max_input_channels": 0}
+
+    with pytest.raises(RuntimeError, match="local audio output unavailable"):
+        _ensure_sounddevice_ready(FakeSD(), None, "output")
+    with pytest.raises(RuntimeError, match="local audio input unavailable"):
+        _ensure_sounddevice_ready(FakeSD(), None, "input")
+
