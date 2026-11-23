@@ -157,13 +157,15 @@ class S2SConfig:
     channels: int = 1
     audio_format: str = "float32"
     # Use start/continue hysteresis so quiet word beginnings are not lost.
-    vad_threshold: float = 0.25
-    vad_continue_threshold: float = 0.15
+    vad_threshold: float = 0.35
+    vad_continue_threshold: float = 0.20
     vad_preroll_ms: int = 320
-    # Production latency calibration: 250 ms keeps turn-taking snappy while
-    # avoiding word-mid truncation on quiet handset microphones.
-    vad_silence_ms: int = 250
-    min_speech_ms: int = 200
+    # Production latency calibration: 200 ms is the minimum accepted
+    # hangover.  It keeps the real end-of-speech -> first audio budget under
+    # one second on the warmed local-GPU path; exhibition tuning may raise it
+    # if microphones are unusually noisy.
+    vad_silence_ms: int = 200
+    min_speech_ms: int = 300
     max_speech_ms: int = 12_000
     max_buffer_seconds: int = 15
     stt_timeout_s: float = 8.0

@@ -24,7 +24,7 @@ def _build_app():
 
 
 def test_quiz_single_button_gives_two_retries_then_advances_once():
-    state = start_game("quiz", age_band="5-7", seed=1, now=1.0, immersive=True)
+    state = start_game("quiz", age_band="5-7", seed=1, now=1.0, immersive=True, sequence=0, selection_button=2)
     ch0 = current_challenge(state)
     wrong = next(b for b, _ in ch0.options if b != ch0.answer)
     # 3 misses to narrow to 1 button
@@ -57,7 +57,7 @@ def test_correct_quiz_answer_button_and_voice_trigger_success_wave_without_overw
         await app.receive_async(Event("HandsetLifted", sid, 1, 1.0, "hid", {}, "c1", 1.0), None)
         # Enter quiz directly via canonical runtime
         st = app.canonical_runtime.sessions[sid]
-        eng = start_game("quiz", age_band="5-7", seed=1, now=2.0, immersive=True)
+        eng = start_game("quiz", age_band="5-7", seed=1, now=2.0, immersive=True, sequence=0, selection_button=2)
         eng = replace_phase(eng)
         st.mode = "game_active"
         st.active_game_id = "quiz"
