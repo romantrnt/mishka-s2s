@@ -62,7 +62,7 @@ async def test_actual_native_stream_does_not_write_after_hid_fault(monkeypatch):
         def write(self, chunk): writes.append(len(chunk))
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream, query_devices=lambda *_: {'max_output_channels': 1}))
     stand.playback = SoundDevicePlaybackController()
     try:
         await asyncio.gather(*start(stand))

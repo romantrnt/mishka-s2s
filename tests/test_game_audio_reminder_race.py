@@ -1,10 +1,12 @@
 """Actual VAD/STT ingress retains its current game's input before a reminder."""
 import asyncio
 from dataclasses import replace
+from math import ceil
 
 import pytest
 
 from app.foundation.s2s import STTResult
+from app.foundation.config import Settings
 from app.foundation.input_safety import InputSafetyDecision
 from test_contextual_game_flow import Harness
 
@@ -31,7 +33,9 @@ class DelayedRecognizer:
 
 
 SPEECH = (.1,) * (512 * 10)
-SILENCE = (0.,) * (512 * 7)
+_CAPTURE_SETTINGS = Settings(profile='mock')
+SILENCE = (0.,) * (512 * ceil(
+    _CAPTURE_SETTINGS.vad_silence_ms * _CAPTURE_SETTINGS.audio_sample_rate / (1000 * 512)))
 
 
 @pytest.mark.asyncio
@@ -226,7 +230,7 @@ async def test_late_recognition_after_explicit_change_cannot_advance_old_game(ch
         await asyncio.wait_for(recognizer.entered.wait(), 2)
         calls = len(h.model.calls)
         if change == 'exit':
-            await h.key(7)
+            await h.key(7, duration=6.)
         elif change == 'typed':
             await h.send('SpeechReceived', text='Лиса')
         else:

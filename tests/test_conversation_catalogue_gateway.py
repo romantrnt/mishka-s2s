@@ -10,6 +10,7 @@ from test_game_audio_reminder_race import DelayedRecognizer
 from app.foundation.s2s import ResponseTagParser
 from app.foundation.domain import Event
 from test_scene_menu_runtime import Render
+from story_catalogue_fixtures import tiny_stories
 
 
 def quick_public_audio(h):
@@ -362,8 +363,9 @@ async def test_catalogue_voice_cancel_returns_its_conversation_caller(catalogue,
 
 
 @pytest.mark.asyncio
-async def test_pending_catalogue_slot_semantics_cannot_remap_to_a_new_page():
+async def test_pending_catalogue_slot_semantics_cannot_remap_to_a_new_page(tmp_path):
     h = Harness(mode='root_menu', band='1-3')
+    h.app.canonical_runtime.stories = tiny_stories(tmp_path)
     entered, release = asyncio.Event(), asyncio.Event()
     task = None
     original = h.app.safety_classifier.classify
@@ -437,8 +439,9 @@ async def test_uncertain_negated_unknown_titles_never_launch_a_model_guessed_rec
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('text,target', [('Хочу Телефон','fixed_neznayka_v1'), ('Кнопка один',None)])
-async def test_actual_audio_can_name_another_page_but_pending_slot_cannot_be_remapped(text, target):
+async def test_actual_audio_can_name_another_page_but_pending_slot_cannot_be_remapped(tmp_path, text, target):
     h = Harness(mode='root_menu', band='1-3')
+    h.app.canonical_runtime.stories = tiny_stories(tmp_path)
     recognizer = DelayedRecognizer(text)
     task = None
     try:

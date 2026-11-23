@@ -270,15 +270,18 @@ def test_webpanel_disconnect_does_not_reset_exhibition_session(monkeypatch):
     stand = api.state.stand
     sid = "disconnect-lifecycle"
     try:
-        result = run(stand.inject("handset", {"state": "up"}, sid))
-        assert result["reason"] == "exhibition_handset_lifted"
         with TestClient(api) as client:
+            api.state.lifecycle.admits_users = lambda: True  # Isolate disconnect from model warmup.
+            response = client.post("/stand/handset", json={"state": "up", "session_id": sid},
+                                   headers={"x-stand-token": "disconnect-secret"})
+            assert response.status_code == 200
+            assert response.json()["reason"] == "exhibition_handset_lifted"
             with client.websocket_connect("/stand/ws", headers={"x-stand-token": "disconnect-secret"}) as websocket:
                 websocket.receive_json()
             assert not stand.hub.clients
-        session = stand.application.sessions.get(sid)
-        assert session is not None
-        assert session.handset_up is True
+            session = stand.application.sessions.get(sid)
+            assert session is not None
+            assert session.handset_up is True
     finally:
         stand.close()
 

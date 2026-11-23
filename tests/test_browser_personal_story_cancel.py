@@ -26,7 +26,7 @@ async def test_published_generating_state_allows_browser_cancel_before_provider_
     app.bounded_s2s = engine()
     app._owned_menu_voice_capable = lambda: False
     entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    original = app.bounded_s2s.llm.stream_story
+    original = app.bounded_s2s.response_validator.validate_trusted
     async def blocked(*args):
         entered.set()
         try:
@@ -34,9 +34,7 @@ async def test_published_generating_state_allows_browser_cancel_before_provider_
         except asyncio.CancelledError:
             cancelled.set()
             await release.wait()  # Native work may return after cancellation.
-        async for part in original(*args):
-            yield part
-    app.bounded_s2s.llm.stream_story = blocked
+        return await original(*args)
     browser, pending = await QueueBrowser().start(), None
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
             base_url="http://stand", headers={"x-stand-token": "private-pcm-unit-test"}) as client:
@@ -55,8 +53,10 @@ async def test_published_generating_state_allows_browser_cancel_before_provider_
             app._discard_private_welcome(sid);app._invalidate_audio_lease(sid)
             state = app.canonical_runtime.sessions[sid]
             state.mode, state.active_audio_id, state.playback_lease = "root_menu", None, None
-            await action(4);await action(4,"release")
-            await action(6);await action(6,"release")
+            await action(3);await action(3,"release")
+            assert state.mode == "personal_story_theme"
+            entered.clear()
+            app.bounded_s2s.response_validator.validate_trusted = blocked
             prior_tts = list(app.bounded_s2s.tts.calls)
             await browser.call(op="snapshot", state=stand.panel_snapshot())
             first = await browser.call(op="post", path="/stand/simulator/action", payload={
@@ -73,7 +73,7 @@ async def test_published_generating_state_allows_browser_cancel_before_provider_
             payload = {**payload,"button_id":7,"press":"press"}
             outgoing = await browser.call(op="post",path="/stand/simulator/action",payload=payload)
             await browser.call(op="post",path="/stand/simulator/action",payload={**payload,"press":"release"})
-            assert len(outgoing["requests"])==2 and outgoing["requests"][0]["aborted"], "7 bypasses the blocked model POST"
+            assert len(outgoing["requests"])==2 and outgoing["requests"][0]["aborted"], "7 bypasses the blocked authored-story POST"
             result = await asyncio.wait_for(deliver(outgoing["requests"][1]),2)
             assert result["result"]["reason"]=="activity_back"
             await asyncio.wait_for(cancelled.wait(),2)
@@ -87,6 +87,7 @@ async def test_published_generating_state_allows_browser_cancel_before_provider_
             release.set();await asyncio.wait_for(pending,2);await drain(stand)
             assert state.mode=="root_menu" and not app._personal_stories
             assert app.bounded_s2s.tts.calls==prior_tts
+            assert not app.bounded_s2s.llm.calls
             assert not any(item.get("type")=="audio_pcm_output" and item.get("playback",{}).get("response_id")==STORY_ID
                            for item in writer.messages)
         finally:

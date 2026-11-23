@@ -243,7 +243,13 @@ def test_ringtone_failure_is_owned_and_does_not_cancel_welcome():
 @pytest.mark.parametrize("payload", [[], None, True, 1, "text", {"type": []}])
 @pytest.mark.parametrize("path", ["/stand/ws", "/ws/audit"])
 def test_ws_invalid_shapes_do_not_disconnect(payload, path):
-    api = create_stand_app(Settings(profile="mock", stand_access_token="test-token"))
+    settings = Settings(profile="mock", stand_access_token="test-token")
+    if path == "/stand/ws":
+        api = create_stand_app(settings)
+    else:
+        # Generic canonical ingress is intentionally blocked on a simulator stand.
+        application, *_ = build_application(settings=settings, background_scheduler=False)
+        api = create_app(application)
     api.state.lifecycle.admits_users = lambda: True
     try:
         with TestClient(api) as client:
@@ -263,7 +269,10 @@ def test_ws_invalid_shapes_do_not_disconnect(payload, path):
                     assert ws.receive_json()["error"]["code"] == "session_binding"
                     ws.send_json({"type": "HandsetLifted", "sequence": 1})
                     assert ws.receive_json()["reason"] == "exhibition_handset_lifted"
-    finally: api.state.stand.close()
+    finally:
+        stand = getattr(api.state, "stand", None)
+        if stand is not None:
+            stand.close()
 
 
 def test_public_ready_hides_private_config_without_nonexistent_delivery_dependency():

@@ -10,7 +10,7 @@ from test_personal_story_service import engine
 async def start_app():
     app,*_=build_application(settings=Settings(profile='mock',runtime_mode='clinical'))
     app.bounded_s2s=engine()
-    # These tests isolate generated-story service/ownership. The real menu
+    # These tests isolate authored-story playback/ownership. The real menu
     # narrator is independently exercised in test_scene_menu_runtime.
     app._owned_menu_voice_capable=lambda:False
     app._story_seq=0
@@ -21,12 +21,10 @@ async def send(app,kind,payload=None,text=None):
     return await app.receive_async(event,text) if text is not None else await app.receive_async(event)
 async def enter(app):
     await send(app,'HandsetLifted')
-    result=await send(app,'ButtonPressed',{'button_id':4})
+    result=await send(app,'ButtonPressed',{'button_id':3})
     assert app.canonical_runtime.sessions['story-test'].mode=='personal_story_theme',result
-    await send(app,'ButtonReleased',{'button_id':4})
-    await send(app,'ButtonPressed',{'button_id':6})
-    await send(app,'ButtonReleased',{'button_id':6})
-    # Forest is the first choice on page two for the default 3-5 age band.
+    await send(app,'ButtonReleased',{'button_id':3})
+    assert len(app.canonical_runtime.sessions['story-test'].scene_menu_descriptor['items']) == 5
 
 @pytest.mark.asyncio
 async def test_actual_app_select_generate_play_complete_no_private_effects():
@@ -106,9 +104,10 @@ async def test_unavailable_generates_one_honest_080(unavailable):
         await enter(app)
         result=await send(app,'ButtonPressed',{'button_id':1})
         if unavailable=='provider':
-            assert not app.canonical_runtime.sessions['story-test'].scene_menu_descriptor['items']
+            assert result['reason'] == 'personal_story_ready'
+            assert len(app.canonical_runtime.sessions['story-test'].personal_story_selection) == 5
             assert not app.bounded_s2s.llm.calls
-            assert not any(c.get('response_id')==STORY_ID for c in app.audio.commands)
+            assert any(c.get('response_id') == STORY_ID for c in app.audio.commands)
         else:
             assert result['reason']=='personal_story_unavailable',result
             assert app.canonical_runtime.sessions['story-test'].mode=='fixed_story_menu'
@@ -126,13 +125,17 @@ async def test_external_ready_result_not_authority():
     finally:await app.shutdown_identity()
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('text,untrusted,expected',[('Расскажи сказку про лес',False,True),('Расскажи сказку про космос',False,True),('Что угодно неизвестное',False,False),('Расскажи сказку про лес',True,False),('Не хочу жить',False,False)])
+@pytest.mark.parametrize('text,untrusted,expected',[('catalogue_title',False,True),('slot',False,True),('Что угодно неизвестное',False,False),('catalogue_title',True,False),('Не хочу жить',False,False)])
 async def test_voice_theme_still_requires_safe_trusted_admission(text,untrusted,expected):
     app=await start_app()
     try:
         await enter(app)
+        if text == 'catalogue_title':
+            text = app.canonical_runtime.sessions['story-test'].scene_menu_descriptor['items'][0]['title']
+        elif text == 'slot':
+            text = 'Кнопка один'
         result=await send(app,'SpeechReceived',{'_stt_untrusted':untrusted},text)
-        assert bool(app.bounded_s2s.llm.calls)==expected,result
+        assert not app.bounded_s2s.llm.calls,result
         if expected:assert app.canonical_runtime.sessions['story-test'].mode=='personal_story_playing'
         else:assert not any(c.get('response_id')==STORY_ID for c in app.audio.commands)
     finally:await app.shutdown_identity()
@@ -158,7 +161,7 @@ async def test_actual_pause_resume_reuses_ram_pcm_and_new_lease():
         await complete('PHRASE_062');await send(app,'ButtonPressed',{'button_id':6});await complete('PHRASE_064')
         assert app.canonical_runtime.sessions['story-test'].mode=='personal_story_playing'
         assert owner.audio is audio and owner.offset_ms==1000
-        assert len(app.bounded_s2s.llm.calls)==1
+        assert not app.bounded_s2s.llm.calls
         assert app._active_audio['story-test']['playback_id']!=old['playback_id']
     finally:await app.shutdown_identity()
 
@@ -197,12 +200,13 @@ async def test_failed_pcm_port_has_honest_fallback_and_discards_private_owner():
     finally:await app.shutdown_identity()
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('offset,expected',[(60000,'root_menu'),(60001,'fixed_story_menu')])
-async def test_resume_at_full_native_checkpoint_finishes_not_empty_pcm(offset,expected):
+@pytest.mark.parametrize('beyond_end,expected',[(0,'root_menu'),(1,'fixed_story_menu')])
+async def test_resume_at_full_native_checkpoint_finishes_not_empty_pcm(beyond_end,expected):
     app=await start_app()
     try:
         await enter(app);await send(app,'ButtonPressed',{'button_id':1})
         owner=app._personal_stories['story-test'];plays=[]
+        offset = int(1000 * len(owner.audio.samples) / owner.audio.sample_rate) + beyond_end
         async def pause():return {'story_id':STORY_ID,'offset_ms':offset}
         app.audio.pause=pause
         await send(app,'ButtonPressed',{'button_id':6})
@@ -215,7 +219,7 @@ async def test_resume_at_full_native_checkpoint_finishes_not_empty_pcm(offset,ex
         result=await complete('PHRASE_064')
         assert app.canonical_runtime.sessions['story-test'].mode==expected,result
         assert not plays and not app._personal_stories
-        if offset==60000:
+        if beyond_end == 0:
             assert result['reason']=='personal_story_finished'
             assert not any(c.get('response_id')=='PHRASE_080' for c in app.audio.commands)
         else:assert result['reason']=='personal_story_unavailable'

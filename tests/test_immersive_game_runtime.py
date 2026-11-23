@@ -81,7 +81,7 @@ async def test_odd_original_list_is_real_pcm_and_one_terminal_opens_answers():
         handle, audio = await h.start(4)
         assert handle.response_id == "GAME_PROMPT" and audio.samples
         assert h.state.game_audio_stage == "prompt"
-        assert "Что из этого лишнее?" in texts[-1] and "Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." in texts[-1]
+        assert "Что из этого лишнее?" in texts[-1] and 'зажми семёрку' in texts[-1] and 'скажу отпускать' in texts[-1]
         assert all(c in texts[-1] for c in
             ("Красный:", "Оранжевый:", "Жёлтый:", "Зелёный:", "Голубой:"))
         cue_owner = h.app._game_prompt_cues[h.state.session_id]
@@ -249,7 +249,7 @@ async def test_native_start_callback_follows_stream_start_and_owner(monkeypatch,
         def write(self, values): order.append("write")
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream, query_devices=lambda *_: {'max_output_channels': 1}))
     controller = SoundDevicePlaybackController()
     controller.active_token = 1
     if mode == "failed":
@@ -314,7 +314,7 @@ async def test_turntaking_native_wrapper_forwards_start_callback(monkeypatch):
         def write(self, values): order.append("write")
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules,"sounddevice",SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules,"sounddevice",SimpleNamespace(OutputStream=Stream, query_devices=lambda *_: {'max_output_channels': 1}))
     controller = _HeadlessTurnTakingPlaybackController(None,
         lambda sid:order.append("closed-mic"), lambda owner:order.append("resume-mic"))
     controller.active_token = 1

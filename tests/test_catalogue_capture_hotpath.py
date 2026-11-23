@@ -1,32 +1,16 @@
 """Capture ownership uses a committed menu; exact asset admission stays fresh."""
 import asyncio
-import hashlib
-import json
 from pathlib import Path
-import wave
 
 import pytest
 
+from story_catalogue_fixtures import tiny_stories
 from app.foundation.canonical_contract import FixedStoryManifest
 from app.foundation.domain import Event
 from test_contextual_game_flow import Harness
 from test_conversation_catalogue_gateway import quick_public_audio
 
 
-def tiny_stories(tmp_path):
-    rows = {}
-    for story_id, title in [('fixed_aibolit_v1','Айболит'), ('fixed_squirrel_v1','Как бельчонок страх преодолел')]:
-        path = tmp_path / (story_id+'.wav')
-        with wave.open(str(path),'wb') as output:
-            output.setparams((1,2,16000,1600,'NONE','not compressed'))
-            output.writeframes(b'\0\0'*1600)
-        rows[story_id] = {'display_title':title, 'audio_file':path.name,
-            'audio_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
-            'rights_status':'operator_approved', 'availability':'available',
-            'eligible_age_bands':['1-3','3-5','5-7']}
-    path = tmp_path/'manifest.json'
-    path.write_text(json.dumps({'stories':rows}), encoding='utf-8')
-    return FixedStoryManifest(path,tmp_path)
 
 
 async def catalogue(tmp_path):

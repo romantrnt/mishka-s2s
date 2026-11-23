@@ -130,7 +130,8 @@ async def test_generic_native_playback_hardware_fence_covers_bounded_dialogue(mo
         def write(self,chunk):writes.append(len(chunk))
         def abort(self):pass
         def close(self):pass
-    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(
+        OutputStream=Stream,query_devices=lambda *_:{'max_output_channels':1}))
     original=playback._run_io
     async def delayed(operation):
         if boundary=='native_write' and operation.__name__=='guarded_write':
@@ -140,13 +141,16 @@ async def test_generic_native_playback_hardware_fence_covers_bounded_dialogue(mo
     try:
         if boundary=='queued':await playback._play_lock.acquire()
         task=asyncio.create_task(playback.play(AudioChunk((.1,)*4096,16000,1,'stand')))
-        if boundary=='native_write':await entered.wait()
+        if boundary=='native_write':await asyncio.wait_for(entered.wait(),1)
         elif boundary=='queued':await asyncio.sleep(0)
         if boundary!='success':await fault(parts,monkeypatch)
         release.set()
         if playback._play_lock.locked() and boundary=='queued':playback._play_lock.release()
         await task
-        assert writes==([2048,2048] if boundary=='success' else [])
+        if boundary == 'success':
+            assert sum(writes) == 4096
+        else:
+            assert not writes
     finally:
         release.set()
         if task:await asyncio.gather(task,return_exceptions=True)

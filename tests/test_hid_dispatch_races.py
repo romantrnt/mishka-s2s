@@ -8,11 +8,11 @@ async def settle_physical_inputs(stand):
     async def settled():
         # Reservation precedes the loop callback that creates the owned task.
         await asyncio.sleep(0)
-        while stand._physical_pending_count:
+        while stand._physical_pending_count or getattr(stand, '_handset_down_timer', None) is not None:
             tasks = tuple(stand._physical_pending)
             if tasks:
                 await asyncio.gather(*tasks)
-            await asyncio.sleep(0)
+            await asyncio.sleep(.001)
         pending_loss = getattr(stand, '_hid_loss_future', None)
         if pending_loss is not None:
             await asyncio.wrap_future(pending_loss)
@@ -32,6 +32,11 @@ async def test_capture_rejected_during_identity_hangup_cleanup(cancel_cleanup):
         entered.set();await release.wait();return await original(*args,**kwargs)
     try:
         await start(h);await deadline(h);await h.complete()
+        await h.complete()  # The welcome opens the real menu tutorial before listening.
+        for _ in range(2):  # Skip the tutorial, then enter the conversation from root.
+            await h.send('ButtonPressed', {'button_id': 6})
+            await h.send('ButtonReleased', {'button_id': 6})
+        assert h.state.mode == 'bear_dialogue'
         assert stand._headless_audio_accepting()
         h.app._cleanup_session_resources=blocked
         task=asyncio.create_task(h.send('HandsetPlaced'))

@@ -1,4 +1,4 @@
-"""Meaningful root-3 answers, typed day speech and scoped wellbeing replies."""
+"""Meaningful root-4 answers, typed day speech and scoped wellbeing replies."""
 import asyncio
 
 import pytest
@@ -13,12 +13,12 @@ from test_scene_menu_runtime import Harness as Menu
 
 
 @pytest.mark.asyncio
-async def test_root_three_answers_two_actual_safe_questions_in_bounded_engine():
+async def test_root_four_answers_two_actual_safe_questions_in_bounded_engine():
     h = GameHarness(mode='root_menu')
     model = Model('<say>Облака состоят из капелек воды.</say>', '<say>Листья помогают дереву получать свет.</say>')
     h.app.bounded_s2s.llm = model
     try:
-        await h.key(3)
+        await h.key(4)
         for text in ('Почему облака белые?', 'А зачем деревьям листья?'):
             result = await h.send('SpeechReceived', text=text)
             assert result['reason'] == 'support_dialogue_turn'

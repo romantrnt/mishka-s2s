@@ -38,7 +38,7 @@ async def test_actual_native_pause_retains_nonzero_checkpoint_and_resumes_from_i
         def write(self, values): writes.append((self.index, len(values)))
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream, query_devices=lambda *_: {'max_output_channels': 1}))
     blocked, release = asyncio.Event(), asyncio.Event()
     old_run_io = playback._run_io
     native_writes = 0
@@ -74,7 +74,9 @@ async def test_actual_native_pause_retains_nonzero_checkpoint_and_resumes_from_i
         app._play_owned_audio(sid, story, "synthetic.wav", 1,
             {"playback_lease": state.playback_lease}, offset_ms=200)
         await asyncio.wait_for(blocked.wait(), 2)
-        assert writes == [(0, 2048)]
+        first_written = writes[0][1]
+        assert first_written > 0 and writes == [(0, first_written)]
+        checkpoint_ms = 200 + first_written * 1000 // 16000
         pause = asyncio.create_task(send("ButtonPressed", {"button_id": 6}))
         for _ in range(100):
             if playback._generation: break
@@ -86,8 +88,8 @@ async def test_actual_native_pause_retains_nonzero_checkpoint_and_resumes_from_i
         release.set()
         result = await asyncio.wait_for(pause, 2)
         assert result["reason"] == "story_pause_requested"
-        assert writes == [(0, 2048)]
-        assert state.dialogue_memory.story_checkpoint == {"story_id": story, "offset_ms": 328}
+        assert writes == [(0, first_written)]
+        assert state.dialogue_memory.story_checkpoint == {"story_id": story, "offset_ms": checkpoint_ms}
         assert sid not in app._paused_story_playback
         await complete("PHRASE_062")
         assert state.mode == "story_paused"
@@ -96,10 +98,10 @@ async def test_actual_native_pause_retains_nonzero_checkpoint_and_resumes_from_i
         assert state.mode == "story_resume_announcement"
         await complete("PHRASE_064")
         resumed = [item for item in dispatched if item[0] == story]
-        assert len(resumed) == 2 and resumed[-1][1] == 328
+        assert len(resumed) == 2 and resumed[-1][1] == checkpoint_ms
         assert resumed[0][2].playback_id != resumed[-1][2].playback_id
         await asyncio.wait_for(asyncio.gather(*tuple(stand._response_audio_tasks)), 2)
-        assert sum(n for stream, n in writes if stream == 1) == 16000 - 5248
+        assert sum(n for stream, n in writes if stream == 1) == 16000 - checkpoint_ms * 16000 // 1000
     finally:
         release.set()
         stand.hardware_mode = "simulator"

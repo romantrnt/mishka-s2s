@@ -133,7 +133,7 @@ async def test_word_game_return_restores_only_committed_caller_history_and_budge
         await h.send('SpeechReceived', text='Лиса')
         assert h.state.mode == 'game_active'
         assert getattr(h.app.conversation_contexts[h.state.session_id], '_game_id') == 'word_game'
-        await h.key(7)
+        await h.key(7, duration=6.)
         assert h.state.mode == 'bear_dialogue'
         restored = h.app.conversation_contexts[h.state.session_id]
         assert restored.history == saved_history
@@ -465,7 +465,7 @@ async def test_rejected_stale_lifecycle_edge_cannot_erase_saved_caller(kind):
         result = await h.app.receive_async(Event(kind, sid, 0, 1., 'test', {}, 'stale-boundary', h.clock))
         assert result['reason'] == 'stale_sequence'
         assert h.app._game_callers[sid] is caller
-        await h.key(7)
+        await h.key(7, duration=6.)
         assert h.state.mode == 'bear_dialogue'
         assert h.app.conversation_contexts[sid].history == history
     finally:
@@ -482,17 +482,20 @@ def test_initial_word_rules_match_age_specific_voice_game(band, required):
         selection_button=0, age_band=band, immersive=True))
     effect = CanonicalRuntime()._game_prompt(state)
     assert required in effect['prompt']
-    assert effect['exit_hint'] == 'Чтобы выйти, нажми семь.'
+    assert effect['exit_hint'] == 'А если захочешь выйти, зажми семёрку и подержи, пока я не скажу отпускать.'
 
 
-def test_first_quiz_prompt_explains_hold_exit_even_when_first_answer_has_no_seven():
+def test_first_quiz_prompt_explains_hold_exit_even_when_correct_answer_is_not_seven():
     from app.foundation.canonical_contract import CanonicalRuntime
     from app.foundation.game_engine import start
     engine = start('quiz', sequence=0, now=1., selection_button=0, age_band='1-3', immersive=True)
     state = CanonicalState('quiz-exit', mode='game_active', handset='up', age_band='1-3',
         active_game_id='quiz', game_engine_state=engine)
-    assert 7 not in game_answer_buttons(engine)
-    assert CanonicalRuntime()._game_prompt(state)['exit_hint'] == 'Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти.'
+    assert 7 in game_answer_buttons(engine)
+    assert current_challenge(engine).answer != 7
+    effect = CanonicalRuntime()._game_prompt(state)
+    assert 'зажми семёрку и подержи, пока я не скажу отпускать' in effect['rules_intro']
+    assert effect['exit_hint'] is None  # The first owned rules already explain the exit.
 
 
 @pytest.mark.asyncio
@@ -514,7 +517,7 @@ async def test_control_only_offer_preserves_last_spoken_caller_turn_without_rese
         assert h.app._game_callers[sid]['context'].turns == limit - 1
         await h.done()
         await h.done()
-        await h.key(7)
+        await h.key(7, duration=6.)
         await h.done()
         result = await h.send('SpeechReceived', text='А кот умеет мурлыкать?')
         assert h.state.mode == 'bear_dialogue'
@@ -533,11 +536,11 @@ async def test_actual_bear_prompt_limits_action_only_exception_to_meaningful_cap
     h = Harness('<say>Облака состоят из капелек воды.</say>')
     try:
         result = await h.send('SpeechReceived', text='Почему облака белые?')
-        prompt = h.model.calls[0][0]['content']
+        prompt = ' '.join(h.model.calls[0][0]['content'].split())
         assert 'only for a meaningful request to use an available activity or sourced information' in prompt
         assert 'Ordinary conversation, including fictional Mishka home, uses SPEECH_FORM.' in prompt
-        assert 'quiz здесь только пример' in prompt
-        assert 'кроме одного описанного выше действия по просьбе ребёнка' in prompt
+        assert 'quiz не является выбором по умолчанию.' in prompt
+        assert 'Без осмысленной просьбы ребёнка используй речевую форму, не предлагай действие каталога самовольно.' in prompt
         assert result['reason'] == 'dialogue_turn'
         assert h.state.mode == 'bear_dialogue' and h.state.pending_game_offer is None
         assert h.app.conversation_contexts[h.state.session_id].turns == 1
