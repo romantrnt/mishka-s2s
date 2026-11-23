@@ -152,11 +152,17 @@ def test_native_pty_peer_hangup_is_not_mistaken_for_idle_rx():
     serial = PosixSerialTransport(os.ttyname(slave))
     try:
         serial.open()
+        opened_fd = serial.fd
         assert serial.read_available() == b""
         os.close(master)
         master = None
         with pytest.raises(ConnectionError, match="disconnected"):
             serial.read_available()
+        serial.close()
+        assert serial.fd is None
+        with pytest.raises(OSError):
+            os.fstat(opened_fd)
+        serial.close()
     finally:
         serial.close()
         if master is not None:
