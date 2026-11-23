@@ -93,16 +93,17 @@ async def test_explicit_end_after_local_help_allows_fresh_auth_without_reactivat
         if physical_up:
             await h.simulator.action({"action": "handset", "state": "up"})
         await h.key(5)
-        if not physical_up:
-            assert h.state.mode == "awaiting_handset" and h.state.pending_mode == "wellbeing_check"
-            await h.simulator.action({"action": "handset", "state": "up"})
+        assert h.state.mode == "wellbeing_check"
+        assert h.state.handset == ("up" if physical_up else "down")
         await h.key(7)
-        assert h.state.mode == "safety_stop" and h.state.active_audio_id == "PHRASE_091"
+        assert h.state.mode == "safety_stop"
+        if physical_up:
+            assert h.state.active_audio_id == "PHRASE_091"
         await h.control("end")
         assert not h.state.interaction_open and not h.app._active_audio
         assert (await h.ready())["reason"] == "profile_ready"
         assert h.state.mode == "profile_ready" and not h.state.interaction_open
-        assert h.state.handset == "up" and not h.app._active_audio
+        assert h.state.handset == ("up" if physical_up else "down") and not h.app._active_audio
     finally:
         await h.close()
 
@@ -206,14 +207,16 @@ async def test_panel_down_auth_start_orders_and_ordinary_nonvoice_day(tmp_path, 
             assert h.app._identity_scope_live("stand", "personalize")
         await h.menu()
         await h.key(7)
-        if not physical_up:
-            assert h.state.mode == "awaiting_handset" and h.state.pending_mode == "schedule_weather"
-            await h.simulator.action({"action": "handset", "state": "up"})
         assert h.state.mode == "schedule_weather"
-        assert h.state.active_audio_id == "MENU_DAY"
+        assert h.state.handset == ("up" if physical_up else "down")
+        if physical_up:
+            assert h.state.active_audio_id == "MENU_DAY"
+        else:
+            assert h.state.silent_mode
+            assert h.stand.panel_snapshot()["canonical_state"]["scene_menu_descriptor"]["scene"] == "schedule_weather"
         await h.harness.advance(0.7)
         await h.key(7)
-        assert h.state.mode == "root_menu" and h.state.handset == "up"
+        assert h.state.mode == "root_menu" and h.state.handset == ("up" if physical_up else "down")
     finally:
         await h.close()
 

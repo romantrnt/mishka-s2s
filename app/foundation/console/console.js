@@ -1741,16 +1741,25 @@ function interactionGuide(state, media) {
     story_pause_announcement: ['Сказка на паузе', 'Дослушай Мишку. Затем можно будет продолжить сказку.'],
     story_paused: ['Сказка на паузе', '6 — продолжить сказку; 7 — выйти из сказки.'],
     story_resume_announcement: ['Сказка', 'Дослушай Мишку. Сказка скоро продолжится.'],
-    awaiting_handset: ['Подними трубку', 'Подними трубку, чтобы Мишка начал.'],
+    awaiting_handset: ['Подними трубку', 'Подними трубку, чтобы Мишка начал. 7 — вернуться в меню.'],
     session_closed: state.session?.handset_up
       ? ['Сеанс завершён', 'Сеанс завершён. Положи трубку, чтобы начать заново.']
       : ['Сеанс завершён', 'Поднимите трубку'],
     safety_stop: ['Позови взрослого', 'Позови взрослого рядом. Положи трубку, чтобы завершить разговор.'],
-    wellbeing_check: ['Нужна помощь?', 'Ответь на вопрос Мишки: 1 — нет; 7 — да, нужна помощь; 5 — повторить вопрос.'],
+    wellbeing_check: ['Нужна помощь?', (state.canonical_state?.support_question === 'fear' ? 'Тебе страшно?' : 'Что-то болит или неприятно?') + ' 1 — нет; 7 — нужна помощь взрослого; 5 — повторить вопрос.'],
   }[node] || null;
 }
 
 function updateGuide(state, contract = validateButtonContract(state.button_contract)) {
+  const helpAlert = $('phone-support-alert');
+  const support = state.canonical_state?.support_alert;
+  if (helpAlert) {
+    const visible = state.canonical_state?.mode === 'safety_stop'
+      && ['help_requested', 'urgent_safety'].includes(support?.kind);
+    helpAlert.hidden = !visible;
+    helpAlert.textContent = visible
+      ? 'Нужна помощь взрослого рядом. Подтверждение взрослого не получено.' : '';
+  }
   const skipHint = 'Нажмите любую кнопку, чтобы пропустить подсказку. Затем нажмите нужную кнопку для выбора.';
     const labels = {
     profile_ready: ['Карта принята', 'Поднимите трубку, чтобы начать.'],
@@ -1795,7 +1804,7 @@ function updateGuide(state, contract = validateButtonContract(state.button_contr
     content[1] = '6 — продолжить; 7 — закончить; 5 — помощь.';
   }
   if (normalizedState !== 'ENDED' && node === 'wellbeing_check' && !interactionActive(state)) {
-    content[1] = 'Поднимите трубку, чтобы услышать вопрос. 5 — помощь.';
+    content[1] = (state.canonical_state?.support_question === 'fear' ? 'Тебе страшно?' : 'Что-то болит или неприятно?') + ' 1 — нет; 7 — нужна помощь взрослого; 5 — повторить.';
   }
   const unavailable = state.simulator && (!state.simulator.admission?.input_ready || !state.simulator.admission?.connected);
   $('guide-title').textContent = unavailable ? 'Телефон пока недоступен' : content[0];

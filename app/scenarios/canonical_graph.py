@@ -225,6 +225,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
                 "exhibition_menu_replay_buttons",
             } and target == "menu_ready")
             or (current in ROOT_ENTRY_MODES and target in BUTTON_TARGETS | {"awaiting_handset"})
+            or (current == "awaiting_handset" and target == "root_menu")
             or (current == "personal_story_theme" and target in {"personal_story_generating", "root_menu"})
             or (current == "automatic_mood_check" and target == "root_menu")
             or (current == "game_menu" and target in {"game_active", "awaiting_handset"})

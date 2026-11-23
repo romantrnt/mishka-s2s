@@ -100,7 +100,8 @@ async def test_onboarding_decline_does_not_hide_danger():
     finally:await h.close()
 
 @pytest.mark.asyncio
-async def test_onhook_help_is_deferred_not_failed_and_question_is_spoken_after_lift():
+@pytest.mark.parametrize("confirm_before_lift", [False, True])
+async def test_onhook_help_has_button_confirmation_and_question_after_optional_lift(confirm_before_lift):
     app,*_=build_application(settings=Settings(profile='mock',runtime_mode='clinical'),background_scheduler=False)
     seq=0
     async def send(kind,payload=None):
@@ -108,14 +109,16 @@ async def test_onhook_help_is_deferred_not_failed_and_question_is_spoken_after_l
         seq+=1
         return await app.receive_async(Event(kind,'onhook-help',seq,1.,'test',payload or {},f'h:{seq}',1.))
     try:
-        await send('ButtonPressed',{'button_id':2})
         result=await send('ButtonPressed',{'button_id':5})
         state=app.canonical_runtime.sessions['onhook-help']
         assert result['reason']=='help_priority' and state.mode=='wellbeing_check'
         assert not app.audio.commands and not state.active_audio_id
         assert not state.audio_failure_code
-        assert (await send('ButtonPressed',{'button_id':7}))['reason']=='support_handset_required'
         assert state.support_question_kind=='pain_or_discomfort'
-        assert (await send('HandsetLifted'))['reason']=='support_question_after_handset'
-        assert app.audio.commands[-1]['response_id']=='PHRASE_084'
+        if confirm_before_lift:
+            assert (await send('ButtonPressed',{'button_id':7}))['reason']=='help_requested'
+            assert state.mode=='safety_stop' and state.support_alert_kind=='help_requested'
+        else:
+            assert (await send('HandsetLifted'))['reason']=='support_question_after_handset'
+            assert app.audio.commands[-1]['response_id']=='PHRASE_084'
     finally: await app.reset_session('onhook-help')

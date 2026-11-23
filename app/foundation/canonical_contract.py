@@ -306,6 +306,7 @@ class CanonicalState:
     welcome_deadline_monotonic: float | None = None
     welcome_status: str = "idle"
     safety_severity: str = "none"
+    support_alert_kind: str | None = None
     active_story_id: str | None = None
     story_checkpoint_confirmed: bool = False
     public_story_checkpoint_pending: bool = False
@@ -1136,6 +1137,8 @@ class CanonicalRuntime(SceneMenuMixin):
                             reason: str, guidance: bool = True) -> dict[str, Any]:
         state.mode = "safety_stop"
         state.safety_severity = severity
+        if reason in {"help_requested", "urgent_safety"}:
+            state.support_alert_kind = reason
         state.expected_inputs = ["handset_down", "reset"]
         state.pending_tool = state.pending_mode = state.support_question_kind = None
         state.active_story_id = state.active_game_id = None
@@ -1688,6 +1691,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 severity = str(event.payload.get("safety_severity", "none"))
                 if severity == "urgent" and state.safety_severity != "urgent":
                     state.safety_severity = "urgent"
+                    state.support_alert_kind = "urgent_safety"
                     state.state_version += 1
                     return self._decision(state, [], "safety_severity_raised")
             elif event.event_type == "HandsetLifted" and state.handset != "up":
@@ -2853,7 +2857,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 if button in {1, 3, 4, 5, 7}:
                     mode = BUTTON_MODES[button]
                     state.menu_pressed_buttons = []
-                    if button in {4, 5, 7} and not state.audio_open:
+                    if button == 4 and not state.audio_open:
                         state.pending_mode = mode
                         state.mode = "awaiting_handset"
                         selection["target_state"] = "awaiting_handset"
@@ -2934,9 +2938,13 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.support_question_kind = question or "pain_or_discomfort"
                 state.mode, state.expected_inputs, state.state_version = "wellbeing_check", ["button_1", "button_5", "button_7", "speech", "handset_down"], state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "lighting_preset", "preset": "HELP"}, {"type": "support_question", "question": state.support_question_kind}], "help_priority")
-            if state.mode == "wellbeing_check" and not state.interaction_open:
-                state.expected_inputs = ["handset_up", "button_5"]
-                return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "support_handset_required")
+            if state.mode == "awaiting_handset" and button == 7:
+                state.pending_mode = state.pending_game_id = None
+                state.active_story_id = None
+                state.mode, state.state_version = "root_menu", state.state_version + 1
+                state.expected_inputs = ["button", "handset_up", "handset_down"]
+                return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"},
+                    {"type": "lighting_preset", "preset": "ROOT_MENU"}], "handset_wait_cancelled", clear_audio=True)
             if state.mode == "personal_welcome_listen":
                 if state.audio_status == "failed":
                     return self._decision(state, [], "personal_welcome_audio_failed")
@@ -3034,7 +3042,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 mode = BUTTON_MODES[button]
                 if mode in {"game_menu", "fixed_story_menu", "personal_story_theme", "schedule_weather"}:
                     state.scene_menu_held = [button]
-                if button in {4, 5, 6, 7} and not state.audio_open:
+                if button in {4, 6} and not state.audio_open:
                     state.pending_mode = mode
                     state.mode, state.state_version = "awaiting_handset", state.state_version + 1
                     return self._decision(state, [{"type": "lighting", "elements": [14], "state": 1}, {"type": "visual", "view": "lift_handset"}], "handset_required")

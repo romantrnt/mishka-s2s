@@ -22,7 +22,13 @@ assert(guide('fixed_story_menu','',true,stories)[1].includes('1 — Про Бе�
 assert(guide('fixed_story_menu','',true,stories)[1].includes('2 — Как бельчонок страх преодолел'));
 const day=page('schedule_weather',[{slot:1,id:'where_now',title:'Текущее занятие'}],[1,5,7]);
 assert(guide('schedule_weather','',true,day)[1].includes('1 — Текущее занятие'));
-assert(guide('wellbeing_check','',false)[1].includes('Поднимите трубку'));
+assert(guide('wellbeing_check','',false)[1].includes('7 — нужна помощь взрослого'));
+context.updateGuide({canonical_state:{mode:'safety_stop',support_alert:{kind:'help_requested',message:'PRIVATE_INJECTED_MESSAGE',adult_acknowledged:true}},session:{node:'safety_stop',state:'ACTIVE'}},{});
+assert(fields['phone-support-alert'].hidden === false);
+assert(fields['phone-support-alert'].textContent.includes('Подтверждение взрослого не получено'));
+assert(!fields['phone-support-alert'].textContent.includes('PRIVATE_'));
+guide('root_menu');
+assert(fields['phone-support-alert'].hidden === true && fields['phone-support-alert'].textContent === '');
 assert(!guide('schedule_weather')[1].includes('4 — куда идти'));
 assert(!guide('game_menu')[1].includes('Повтори паттерн'));
 assert(!guide('fixed_story_menu')[1].includes('Прививок'));
@@ -38,3 +44,9 @@ for(const stage of ['prompt','playing']) {
  assert(context.interactionGuide(quiz,media)[1].includes('держи 7 до подсказки «Теперь отпускай», затем отпусти'));
 }
 console.log('console guide regression: contextual offer, nonvoice exit and existing guidance passed');
+
+for (const active of [true,false]) {
+ context.updateGuide({canonical_state:{mode:'wellbeing_check',support_question:'fear',interaction_active:active},session:{node:'wellbeing_check',state:'ACTIVE',handset_up:false}},{});
+ assert(fields['guide-text'].textContent.includes('Тебе страшно?'));
+ assert(fields['guide-text'].textContent.includes('7 — нужна помощь взрослого'));
+}

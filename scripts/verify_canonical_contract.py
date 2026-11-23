@@ -51,7 +51,7 @@ def main() -> None:
         stories=FixedStoryManifest("content/stories/fixed_manifest.json", "."))
     state = runtime.handle(event("AnonymousStart", 1, version=0), None)["state"]
     assert state["age_band"] == "3-5"
-    down = runtime.handle(event("ButtonPressed", 2, version=1, payload={"button_id": 3}), None)
+    down = runtime.handle(event("ButtonPressed", 2, version=1, payload={"button_id": 4}), None)
     assert down["reason"] == "handset_required"
     lifted = runtime.handle(event("HandsetLifted", 3, version=2), None)
     assert lifted["state"]["mode"] == "support_intake"

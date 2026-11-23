@@ -3643,6 +3643,15 @@ class HardwareIntegrationStand:
             "silent_hold_active", "silent_hold_step", "silent_mode",
             "pending_mode", "pending_game_id",
         ) if key in canonical}
+        if canonical.get("mode") == "wellbeing_check" and canonical.get("support_question_kind") in {"pain_or_discomfort", "fear"}:
+            canonical_safe["support_question"] = canonical["support_question_kind"]
+        alert_kind = canonical.get("support_alert_kind")
+        if canonical.get("mode") == "safety_stop" and alert_kind in {"help_requested", "urgent_safety"}:
+            canonical_safe["support_alert"] = {
+                "kind": alert_kind,
+                "message": "Нужна помощь взрослого рядом.",
+                "adult_acknowledged": False,
+            }
         if canonical.get('mode') in {'personal_story_generating', 'personal_story_playing'}:
             owner = self.application._personal_stories.get(self.active_session_id)
             canonical_safe['story_audio_phase'] = ('accepted' if owner is None else
