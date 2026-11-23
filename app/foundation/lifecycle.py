@@ -74,7 +74,11 @@ class StartupLifecycle:
             release()
 
     def _cancel_maintenance(self):
-        for task in {self._warmup, self._maintenance_task} - {None}:
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        for task in {self._warmup, self._maintenance_task} - {None, current}:
             if not task.done() and not task.cancelling():
                 task.cancel()
 
