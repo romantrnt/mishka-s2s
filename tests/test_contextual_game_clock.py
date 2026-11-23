@@ -24,7 +24,7 @@ async def test_long_active_game_preserves_remaining_caller_time_without_reset(mo
             h.clock += 75
             await h.key(button)
         assert h.state.mode == "game_active"
-        await h.key(7)
+        await h.key(7, duration=6)
         await h.done()
         restored = h.app.conversation_contexts[h.state.session_id]
         assert 40 <= h.clock - restored.started_at < 41

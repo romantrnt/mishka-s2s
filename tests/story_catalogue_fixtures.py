@@ -25,4 +25,3 @@ def tiny_stories(tmp_path):
     path = tmp_path/'manifest.json'
     path.write_text(json.dumps({'stories':rows}), encoding='utf-8')
     return FixedStoryManifest(path,tmp_path)
-

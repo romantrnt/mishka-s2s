@@ -38,6 +38,11 @@ async def test_canonical_onhook_blocks_fresh_capture_during_cleanup(cancel_clean
         entered.set();await release.wait();return await original(*args,**kwargs)
     try:
         await start(h);await deadline(h);await h.complete()
+        await h.complete()
+        for _ in range(2):
+            await h.send('ButtonPressed', {'button_id':6})
+            await h.send('ButtonReleased', {'button_id':6})
+        assert h.state.mode=='bear_dialogue'
         assert stand._headless_audio_accepting()
         h.app._cleanup_session_resources=blocked
         task=asyncio.create_task(h.send('HandsetPlaced'))

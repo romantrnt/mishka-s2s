@@ -102,7 +102,7 @@ async def test_late_old_game_check_cannot_hush_new_game_timer_or_replace_its_pro
         h.app.safety_classifier.classify = delayed
         task = asyncio.create_task(h.send('SpeechReceived', text='Кот'))
         await entered.wait()
-        await h.key(7)
+        await h.key(7, duration=6)
         await h.done()
         await h.launch('quiz')
         scope = h.app._game_timer_scopes[sid]

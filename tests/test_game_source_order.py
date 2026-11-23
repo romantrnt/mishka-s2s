@@ -44,13 +44,13 @@ async def test_admitted_sources_have_game_local_ordinal_and_duplicate_is_rejecte
         assert state.game_engine_state.round == 1
         assert state.game_engine_state.last_sequence==ordinal
         await send('ButtonPressed',97,button=7)
-        assert state.mode=='root_menu' and state.game_engine_state is None
+        assert state.mode=='game_active'
+        tick += 5
+        await send('ButtonReleased',98,button=7)
+        assert state.mode=='game_menu' and state.game_engine_state is None
         await send('ButtonReleased',2,'panel',answer)
         assert answer not in state.accepted_buttons_down
-        assert state.mode=='root_menu' and state.game_engine_state is None
-        await send('ButtonReleased',98,button=7)
-        await send('ButtonPressed',99,button=1)
-        await send('ButtonReleased',100,button=1)
+        assert state.mode=='game_menu' and state.game_engine_state is None
         assert (await send('ButtonPressed',101,button=4))['reason']=='game_started'
         await send('ButtonReleased',102,button=4)
         await finish_prompt()
