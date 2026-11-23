@@ -756,3 +756,37 @@ while (cmd := cmds.get()) is not None:
         await provider.close()
 
     asyncio.run(scenario())
+
+@pytest.mark.parametrize('cancel_next', [False, True, 'during_drain'])
+def test_private_story_synthesis_waits_for_cancelled_menu_drain(configured, cancel_next):
+    """Real IPC owner with synthetic PCM: a new story may follow menu cancellation."""
+    from app.foundation.name_audio import synthesize_private_text
+    provider, _, _ = configured('voxcpm765')
+    async def scenario():
+        try:
+            stream = provider.synthesize_audio_stream('stream_close', 1, lambda: False, first_chunk=True)
+            await anext(stream)
+            pid = provider._process.pid
+            await stream.aclose()
+            assert provider.readiness()['reason'] == 'experimental_voice_draining'
+            if cancel_next:
+                if cancel_next == 'during_drain':
+                    cancelled = asyncio.Event()
+                    pending = asyncio.create_task(synthesize_private_text(provider, 'stream', 2, cancelled.is_set))
+                    await asyncio.sleep(.01)
+                    cancelled.set()
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(pending, .1)
+                    assert not provider._recovery_task.cancelled()
+                else:
+                    assert await synthesize_private_text(provider, 'stream', 2, lambda: True) is None
+                assert provider.jobs_submitted == 1
+                await provider._recovery_task
+            else:
+                audio = await synthesize_private_text(provider, 'stream', 2, lambda: False)
+                assert audio.token == 2 and len(audio.samples) == 144000
+                assert provider.jobs_submitted == 2 and provider.jobs_completed == 1
+            assert provider.worker_starts == 1 and provider._process.pid == pid
+        finally:
+            await provider.close()
+    asyncio.run(scenario())

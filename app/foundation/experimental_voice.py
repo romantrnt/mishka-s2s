@@ -462,6 +462,29 @@ class ExperimentalTTSProvider:
                     raise
                 raise ExperimentalVoiceUnavailable(self._last_reason) from exc
 
+    async def wait_for_idle(self, cancelled: Callable[[], bool]) -> None:
+        """Let an owned successor wait for cancellation drain without replaying old text."""
+        deadline = asyncio.get_running_loop().time() + self._config["limits"]["inference_timeout_s"]
+        async def released():
+            async with self._job_lock:
+                pass
+        while True:
+            if cancelled():
+                raise asyncio.CancelledError
+            if self._closed:
+                raise ExperimentalVoiceUnavailable("experimental_voice_closed")
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise ExperimentalVoiceUnavailable("experimental_voice_idle_timeout")
+            recovery = self._recovery_task
+            if recovery is not None and not recovery.done():
+                # A newer session cancelling its wait must not cancel maintenance.
+                await self._guard(asyncio.shield(recovery), cancelled, remaining)
+            elif self._job_lock.locked():
+                await self._guard(released(), cancelled, remaining)
+            else:
+                return
+
     async def synthesize(self, text: str, token: int, cancelled: Callable[[], bool]) -> AudioChunk:
         return await self._synthesize(text, token, cancelled, first_chunk=None)
 

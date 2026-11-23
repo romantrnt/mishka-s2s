@@ -19,9 +19,12 @@ THEMES = {'dinosaurs':'динозавры', 'космос':'космос', 'ле
 _DIAGNOSTIC_ATTEMPTS=count(1)
 _logger=logging.getLogger('mishka.personal_story')
 _ERROR_CLASSES={'StoryContextError','TimeoutError','CancelledError','RuntimeError','ValueError',
-                'TypeError','AttributeError','OSError','HTTPStatusError','ConnectError','ReadTimeout','other'}
+                'TypeError','AttributeError','OSError','HTTPStatusError','ConnectError','ReadTimeout','ExperimentalVoiceUnavailable','other'}
 _ERROR_CODES={'story_backend_unverified','story_backend_changed','story_backend_metadata',
-              'story_backend_endpoint','story_context_budget'}
+              'story_backend_endpoint','story_context_budget', 'experimental_voice_busy',
+              'experimental_voice_idle_timeout','experimental_voice_closed','experimental_voice_text_limit',
+              'experimental_voice_inference_failed','experimental_voice_timeout','experimental_voice_start_failed',
+              'experimental_voice_recovery_failed'}
 _DIAGNOSTIC_STAGES={'admission','prepare','generation','structure','semantic','tts','voice','pcm'}
 _DIAGNOSTIC_REASONS={'begin','render_unavailable','owner_stale','invalid_part','wire_limit','invalid_json',
     'invalid_keys','invalid_plot','invalid_paragraph','duplicate_paragraph','body_limit','contract_rejected',
@@ -358,7 +361,9 @@ class PersonalStoryMixin:
         except Exception as exc:
             from .story_context import StoryContextError
             error=type(exc).__name__
-            code=exc.args[0] if isinstance(exc,StoryContextError) and exc.args else None
+            from .experimental_voice import ExperimentalVoiceUnavailable
+            code=(exc.args[0] if isinstance(exc,StoryContextError) and exc.args
+                  else exc.reason if isinstance(exc,ExperimentalVoiceUnavailable) else None)
             service._diagnostic(service._stage,'exception',error=error if error in _ERROR_CLASSES else 'other',code=code)
             owner.close();return None
 

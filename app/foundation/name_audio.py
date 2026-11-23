@@ -321,6 +321,11 @@ async def synthesize_private_text(tts, text, token, cancelled):
         tts = tts.delegate
     if cancelled():
         return None
+    wait_idle = getattr(tts, "wait_for_idle", None)
+    if callable(wait_idle):
+        await wait_idle(cancelled)
+        if cancelled():
+            return None
     stream = getattr(tts, "synthesize_audio_stream", None)
     if not callable(stream):
         audio = await tts.synthesize(text, token, cancelled)
