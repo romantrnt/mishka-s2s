@@ -214,3 +214,11 @@ def test_repeat_pattern_uses_button_7_and_lively_exit_hints():
     st.game_engine_state = start_game("free_lights", age_band="5-7", seed=1, now=1.0, immersive=True, sequence=0, selection_button=1)
     f_prompt = app.canonical_runtime._game_prompt(st)
     assert "зажми семёрку" in f_prompt["exit_hint"].lower()
+
+
+def test_exhibition_name_ignores_greetings_and_extracts_real_name():
+    from app.foundation.canonical_contract import normalize_exhibition_name
+    assert normalize_exhibition_name("привет мишка") is None
+    assert normalize_exhibition_name("Привет, Мишка!") is None
+    assert normalize_exhibition_name("привет мишка я вася") == "Вася"
+    assert normalize_exhibition_name("Я Миша") == "Миша"

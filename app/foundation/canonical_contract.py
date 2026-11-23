@@ -869,6 +869,14 @@ def normalize_exhibition_name(value: str) -> str | None:
     if not text or len(text) > 160 or onboarding_declined(text):
         return None
     text = _strip_explicit_name_reply_prefix(text)
+    text = re.sub(
+        r"^(?:(?:привет|приветик|здравствуй(?:те)?|хай|алло|"
+        r"добр(?:ое|ый)\s+(?:утро|день|вечер)|мишка|медведь|медвежонок|"
+        r"ну|ээ+|эм+)(?:\s*[,;:—–-]\s*|\s+))+",
+        "", text, flags=re.IGNORECASE,
+    ).strip()
+    if not text:
+        return None
     # Stop at normal sentence punctuation so a natural answer such as
     # ``меня зовут Вася, мне семь`` cannot absorb the second clause.
     text = re.split(r"[,.;!?…]", text, maxsplit=1)[0].strip(" -—:;")
@@ -881,7 +889,11 @@ def normalize_exhibition_name(value: str) -> str | None:
     stopwords = {
         "меня", "зовут", "моё", "мое", "имя", "я", "это", "и", "мне",
         "лет", "года", "год", "летний", "летняя",
+        "привет", "приветик", "здравствуй", "здравствуйте", "хай", "алло",
+        "хорошо", "окей", "да", "нет", "спасибо", "пожалуйста",
     }
+    if not cue:
+        stopwords |= {"мишка", "медведь", "медвежонок"}
     parts = re.findall(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё-]*", candidate)
     if not parts:
         return None
@@ -3336,7 +3348,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 name = normalize_exhibition_name(transient_text or "")
                 if name is None:
                     mic_unavailable = bool(event.payload.get("mic_unavailable"))
-                    if not mic_unavailable and state.voice_retry_count < 1:
+                    if not mic_unavailable and state.voice_retry_count < 2:
                         state.voice_retry_count += 1
                         state.state_version += 1
                         return self._decision(state, [
