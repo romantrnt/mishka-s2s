@@ -120,6 +120,9 @@ def test_repeat_pattern_progresses_beyond_old_three_round_limit_and_resumes_leve
             state = edge(state, button, released=True).state
             outcome = edge(state, button)
             state = outcome.state
+            if button == 7:
+                outcome = edge(state, button, released=True)
+                state = outcome.state
         assert not outcome.completed
     assert state.level == 8 and state.round == 5
     resumed = start('repeat_pattern', sequence=0, now=state.last_time, selection_button=7,

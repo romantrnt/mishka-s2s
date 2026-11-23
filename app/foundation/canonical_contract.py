@@ -1196,6 +1196,8 @@ class CanonicalRuntime(SceneMenuMixin):
                    {"type":"lighting_preset","preset":preset}]
         if returning and not preserve_output:
             effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору."))
+        elif returning and preserve_output:
+            effects.append({"type": "capture_open"})
         elif reason == "word_game_finished" and not preserve_output:
             effects.append(self._dialogue_prompt("DIALOGUE_FINISH", "Хорошо поиграли! Теперь можно выбрать другое занятие."))
         return self._decision(state, effects, reason, clear_audio=True)
@@ -1313,9 +1315,9 @@ class CanonicalRuntime(SceneMenuMixin):
         rules_intro = None
         if engine.game_id == "quiz" and text is None and not state.quiz_rules_spoken:
             state.quiz_rules_spoken = True
-            rules_intro = "Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь."
+            rules_intro = "Нажимай нужный цвет или цифру. А если захочешь выйти, зажми семёрку и подержи, пока я не скажу отпускать."
         exit_hint = (None if engine.game_id == "quiz" else
-                     ("Чтобы выйти, держи семь. Когда скажу «Теперь отпускай», отпусти." if hold_exit_policy(engine)
+                     ("А если захочешь выйти, зажми семёрку и подержи, пока я не скажу отпускать." if hold_exit_policy(engine)
                       else "Чтобы выйти, нажми семь.") if engine.round == 0 and text is None else None)
         return {"type":"game_prompt", "content_id":"GAME_PROMPT", "game_id":engine.game_id,
             "challenge_id":challenge.id if challenge else None, "prompt":prompt,
@@ -2302,6 +2304,11 @@ class CanonicalRuntime(SceneMenuMixin):
             if (state.active_audio_id != "PERSONAL_STORY" or not event.payload.get("playback_lease")
                     or event.payload["playback_lease"] != state.playback_lease):
                 return self._decision(state, [], "personal_story_completion_stale")
+            if state.activity_return_mode == "bear_dialogue" and state.interaction_open:
+                return self._activity_back(
+                    state,
+                    "personal_story_finished" if event.event_type == "AudioCompleted" else "personal_story_playback_failed",
+                )
             state.mode = "root_menu"
             state.active_story_id = None
             state.state_version += 1
@@ -2311,7 +2318,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 and (response_id.startswith("TYPED_") or response_id in {"PHRASE_100", "PHRASE_101"})):
             state.state_version += 1
             return self._decision(state, [], "typed_information_finished", clear_audio=True)
-        if (event.event_type == 'AudioCompleted' and state.mode == 'bear_dialogue'
+        if (event.event_type in {'AudioCompleted', 'AudioFailed'} and state.mode == 'bear_dialogue'
                 and state.dialogue_information_kind and response_id in {
                     'TYPED_'+state.dialogue_information_kind.upper(), 'PHRASE_100', 'PHRASE_101'}):
             state.dialogue_information_kind = None

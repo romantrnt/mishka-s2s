@@ -8,6 +8,9 @@ import copy
 class DialogueMemoryMixin:
     def _drop_dialogue_context(self, session_id: str) -> None:
         self.conversation_contexts.pop(session_id, None)
+        suspended = getattr(self, "_suspended_dialogue_contexts", None)
+        if isinstance(suspended, dict):
+            suspended.pop(session_id, None)
         task = self._dialogue_expiry_tasks.pop(session_id, None)
         if task is not None and not task.done():
             try:

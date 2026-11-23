@@ -151,3 +151,66 @@ def test_submenus_never_expose_button5_help_and_silent_hold_has_no_clear_all_fli
         assert st.active_story_id == "fixed_neznayka_v1"
 
     asyncio.run(scenario())
+
+
+def test_s2s_transfer_preserves_dialogue_history_and_reopens_capture():
+    async def scenario():
+        app, _ = _build_app()
+        sid = "s2s-transfer"
+        await app.receive_async(Event("HandsetLifted", sid, 1, 1.0, "hid", {}, "c1", 1.0), None)
+        st = app.canonical_runtime.sessions[sid]
+        st.mode = "bear_dialogue"
+        ctx = app._bounded_dialogue_context(sid)
+        ctx.history.append(("Привет", "Привет! Как дела?"))
+        app.conversation_contexts[sid] = ctx
+
+        # Open game_menu from bear_dialogue and press 7 -> returns to bear_dialogue
+        r_cat = await app._receive_canonical_event(
+            Event("DialogueFallback", sid, 2, 2.0, "internal", {"reason": "catalogue_request", "action": "open_catalog", "target": "games"}, "c2", 2.0),
+            dialogue_fallback_authorized=True,
+        )
+        assert st.mode == "game_menu"
+        assert st.activity_return_mode == "bear_dialogue"
+        r_back = await app.receive_async(Event("ButtonPressed", sid, 3, 3.0, "hid", {"button_id": 7}, "c3", 3.0), None)
+        assert r_back["reason"] == "game_menu_back"
+        assert st.mode == "bear_dialogue"
+
+        # Start word_game from bear_dialogue -> preserves suspended dialogue history, restores on exit
+        app.canonical_runtime._start_game(st, "word_game", 4.0, from_dialogue=True)
+        w_ctx = app._bounded_dialogue_context(sid, game_id="word_game")
+        assert w_ctx._game_id == "word_game"
+        assert sid in app._suspended_dialogue_contexts
+        res_exit = app.canonical_runtime._game_exit(st, "word_game_finished", preserve_output=True)
+        assert st.mode == "bear_dialogue"
+        assert any(e.get("type") == "capture_open" for e in res_exit["effects"])
+        restored = app._bounded_dialogue_context(sid)
+        assert restored.history == [("Привет", "Привет! Как дела?")]
+
+        # request_information AudioFailed in bear_dialogue still reopens capture_open
+        st.dialogue_information_kind = "weather"
+        st.active_audio_id = "TYPED_WEATHER"
+        r_fail = await app._receive_canonical_event(
+            Event("AudioFailed", sid, 5, 6.0, "audio", {
+                "response_id": "TYPED_WEATHER",
+                "playback_lease": st.playback_lease,
+            }, "c5", 6.0),
+        )
+        assert r_fail["reason"] == "typed_information_finished"
+        assert any(e.get("type") == "capture_open" for e in r_fail.get("outputs", []))
+
+    asyncio.run(scenario())
+
+
+def test_repeat_pattern_uses_button_7_and_lively_exit_hints():
+    for band in ("3-5", "5-7"):
+        eng = start_game("repeat_pattern", age_band=band, seed=1, now=1.0, immersive=True, sequence=0, selection_button=3)
+        assert 7 in game_answer_buttons(eng)
+    app, _ = _build_app()
+    st = app.canonical_runtime._new_state("exit-hints", None)
+    st.mode = "game_active"
+    st.game_engine_state = start_game("quiz", age_band="5-7", seed=1, now=1.0, immersive=True, sequence=0, selection_button=2)
+    q_prompt = app.canonical_runtime._game_prompt(st)
+    assert "зажми семёрку" in q_prompt["rules_intro"].lower()
+    st.game_engine_state = start_game("free_lights", age_band="5-7", seed=1, now=1.0, immersive=True, sequence=0, selection_button=1)
+    f_prompt = app.canonical_runtime._game_prompt(st)
+    assert "зажми семёрку" in f_prompt["exit_hint"].lower()

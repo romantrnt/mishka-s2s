@@ -341,7 +341,7 @@ def test_quiz_rules_spoken_once_and_third_miss_highlights_answer_without_autosco
     r.start(2)
     first_prompt = r.done()
     eff1 = next(e for e in first_prompt['effects'] if e['type'] == 'game_prompt')
-    assert eff1['rules_intro'] == 'Нажимай нужный цвет или цифру. Чтобы выйти, подержи семь.'
+    assert eff1['rules_intro'] == 'Нажимай нужный цвет или цифру. А если захочешь выйти, зажми семёрку и подержи, пока я не скажу отпускать.'
     assert eff1['exit_hint'] is None
     r.done()
     ch = current_challenge(r.state.game_engine_state)

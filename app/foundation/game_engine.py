@@ -116,7 +116,7 @@ def game_answer_buttons(state: GameState, *, include_narrowed: bool = True) -> t
     if state.game_id == 'word_game' or state.phase == 'completed':
         return ()
     if state.game_id == 'repeat_pattern' and state.immersive:
-        return BUTTONS if state.age_band == '1-3' else (1, 2, 3, 4, 5, 6)
+        return BUTTONS if state.age_band == '1-3' else tuple(range(1, 8))
     return BUTTONS
 
 
@@ -254,6 +254,44 @@ def cancel_exit_gesture(state: GameState) -> GameState:
         timer_generation=state.timer_generation + 1)
 
 
+def _apply_game_button(state: GameState, button: int, now: float,
+                       held: set[int], down: dict[int, float]) -> GameTransition:
+    """Apply a validated in-game button press across all supported game mechanics."""
+    if button not in game_answer_buttons(state):
+        return GameTransition(state, desired_buttons(state), 'ignored')
+    if state.game_id == 'free_lights':
+        return GameTransition(state, (), 'free_play', wave_origin=button)
+    if state.game_id == 'visual_free_play':
+        return GameTransition(state, desired_buttons(state), 'free_play')
+    if state.game_id in {'quiz', 'odd_one_out'}:
+        return _answer_challenge(state, button)
+    if state.game_id == 'repeat_pattern':
+        if button != state.pattern[state.answer_index]:
+            state = begin_demonstration(state, now)
+            return GameTransition(state, desired_buttons(state), 'sequence_retry')
+        index = state.answer_index + 1
+        if index == len(state.pattern):
+            return _progress(state)
+        state = replace(state, answer_index=index)
+        return GameTransition(state, desired_buttons(state), 'sequence_partial')
+    if state.game_id == 'find_pair':
+        if button not in desired_buttons(state):
+            return GameTransition(state, desired_buttons(state), 'retry')
+        state = replace(state, found=tuple(sorted(set(state.found) | {button})))
+        return _progress(state) if len(state.found) == 2 else GameTransition(state, desired_buttons(state), 'pair_partial')
+    if state.game_id == 'press_together':
+        pair = set(desired_buttons(state))
+        # Two observed down intervals must overlap; an extra wrong held key cannot score.
+        if held == pair and pair <= down.keys():
+            return _progress(state)
+        return GameTransition(state, desired_buttons(state), 'waiting_overlap')
+    if state.game_id == 'hold_light':
+        return GameTransition(state, desired_buttons(state), 'holding' if button == state.target else 'retry')
+    if button != state.target:
+        return GameTransition(state, desired_buttons(state), 'retry')
+    return _progress(state)
+
+
 def advance(state: GameState, *, edge: str, button: int, sequence: int, now: float, paused: bool = False,
             cancelled: bool = False) -> GameTransition:
     if (not math.isfinite(now) or now < state.last_time or sequence <= state.last_sequence
@@ -293,9 +331,7 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
         if phase == 'ready' or now >= started + EXIT_READY_S:
             return GameTransition(state, desired_buttons(state), 'exit_requested')
         if phase == 'pending' and now < started + EXIT_RECOGNITION_S and not paused and answer_generation == state.round_generation and 7 in game_answer_buttons(state):
-            if state.game_id == 'free_lights':
-                return GameTransition(state, (), 'free_play', wave_origin=7)
-            return _answer_challenge(state, 7)
+            return _apply_game_button(state, 7, now, held, down)
         return GameTransition(state, desired_buttons(state), 'exit_aborted')
     if edge == 'ButtonReleased':
         started = down.pop(button, None)
@@ -325,39 +361,7 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
     if paused:
         # Pause is not part of an active hold; no fabricated duration on resume.
         return GameTransition(replace(state, down_times=(), hold_ready=False), desired_buttons(state), 'paused')
-    if button not in game_answer_buttons(state):
-        return GameTransition(state, desired_buttons(state), 'ignored')
-    if state.game_id == 'free_lights':
-        return GameTransition(state, (), 'free_play', wave_origin=button)
-    if state.game_id == 'visual_free_play':
-        return GameTransition(state, desired_buttons(state), 'free_play')
-    if state.game_id in {'quiz', 'odd_one_out'}:
-        return _answer_challenge(state, button)
-    if state.game_id == 'repeat_pattern':
-        if button != state.pattern[state.answer_index]:
-            state = begin_demonstration(state, now)
-            return GameTransition(state, desired_buttons(state), 'sequence_retry')
-        index = state.answer_index + 1
-        if index == len(state.pattern):
-            return _progress(state)
-        state = replace(state, answer_index=index)
-        return GameTransition(state, desired_buttons(state), 'sequence_partial')
-    if state.game_id == 'find_pair':
-        if button not in desired_buttons(state):
-            return GameTransition(state, desired_buttons(state), 'retry')
-        state = replace(state, found=tuple(sorted(set(state.found) | {button})))
-        return _progress(state) if len(state.found) == 2 else GameTransition(state, desired_buttons(state), 'pair_partial')
-    if state.game_id == 'press_together':
-        pair = set(desired_buttons(state))
-        # Two observed down intervals must overlap; an extra wrong held key cannot score.
-        if held == pair and pair <= down.keys():
-            return _progress(state)
-        return GameTransition(state, desired_buttons(state), 'waiting_overlap')
-    if state.game_id == 'hold_light':
-        return GameTransition(state, desired_buttons(state), 'holding' if button == state.target else 'retry')
-    if button != state.target:
-        return GameTransition(state, desired_buttons(state), 'retry')
-    return _progress(state)
+    return _apply_game_button(state, button, now, held, down)
 
 
 def pause(state: GameState) -> GameState:

@@ -140,6 +140,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._idle_expiration_count = 0
         self._last_idle_cleanup: dict[str, Any] | None = None
         self.conversation_contexts: dict[str, Any] = {}
+        self._suspended_dialogue_contexts: dict[str, Any] = {}
         self._game_callers: dict[str, Any] = {}
         self._dialogue_expiry_tasks: dict[str, asyncio.Task[Any]] = {}
         self.s2s_audio: Any = None
@@ -3463,6 +3464,13 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             fresh.allowed_topics = ("__all__",)
             fresh.system_prompt += self._word_game_instructions(fresh.profile.age_band)
         current = self.conversation_contexts.get(session_id)
+        if game_id == "word_game" and current is not None and getattr(current, "_game_id", None) is None:
+            self._suspended_dialogue_contexts[session_id] = current
+        if game_id is None and (current is None or getattr(current, "_game_id", None) is not None):
+            restored = self._suspended_dialogue_contexts.pop(session_id, None)
+            if restored is not None:
+                current = restored
+                self.conversation_contexts[session_id] = current
         if current is not None and getattr(current, "_owner", None) == owner:
             self._resume_dialogue_context(session_id, current)
             current.node_id = fresh.node_id
