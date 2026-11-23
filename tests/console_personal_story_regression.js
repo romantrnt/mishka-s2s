@@ -90,6 +90,26 @@ async function regression() {
   result=await operate({op:'expire_receipt'});assert(!result.personalRetained,'completed receipt is removed after five seconds');
   result=await operate({op:'pause',node:'story_pause_announcement'});
   assert.strictEqual(result.posts.length,0);assert.strictEqual(result.active,0,'expired receipt cannot checkpoint or restart audio');
+  await operate({op:'cleanup'});
+  const growing=frame({...identity,playback_id:'growing',playback_lease:'growing-lease'},true,true);
+  growing.generation=6;growing.story_duration_ms=null;
+  growing.story_streaming=true;growing.story_duration_limit_ms=180000;
+  await operate({op:'frames',node:'personal_story_playing',frames:[growing],time:40});
+  await operate({op:'end',indices:[sources.length-1],time:40.5});
+  result=await operate({op:'pause',node:'story_pause_announcement',time:40.6});
+  assert.strictEqual(result.posts.find(item=>item.path==='/stand/audio/checkpoint').payload.offset_ms,1500,
+    'a growing stream retains actual played position, never a null duration as checkpoint');
+  await operate({op:'cleanup'});
+  const tiny=frame({...identity,playback_id:'tiny',playback_lease:'tiny-lease'},true,false);
+  tiny.generation=7;tiny.story_duration_ms=null;tiny.story_streaming=true;tiny.story_duration_limit_ms=180000;
+  tiny.data_b64=Buffer.alloc(15*2).toString('base64');
+  const sentinel={...tiny,first:false,final:true,stream_end:true,data_b64:Buffer.alloc(2).toString('base64')};
+  const tinyStart=sources.length;
+  await operate({op:'frames',node:'personal_story_playing',frames:[tiny,sentinel],time:60});
+  await operate({op:'end',indices:[tinyStart,tinyStart+1],time:60.1});
+  result=await operate({op:'pause',node:'story_pause_announcement',time:60.2});
+  assert.strictEqual(result.posts.find(item=>item.path==='/stand/audio/checkpoint').payload.offset_ms,1000,
+    'a stream end sentinel is not a sample of the story or an extra millisecond');
   console.log('personal PCM pause, exact scheduled position, late chunks/new lease and cleanup passed');
 }
 if (process.argv.includes('--bridge')) {

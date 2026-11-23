@@ -2113,7 +2113,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.active_story_id = "PERSONAL_STORY"
             state.state_version += 1
             state.expected_inputs = ["button_5", "button_6", "button_7", "handset_down"]
-            story_wave = {"type": "lighting_wave_intent", "pattern": "story_playback_wave", "groups": "story_playback", "source": "canonical", "loop": True, "stage_ms": 620}
+            story_wave = {"type": "lighting_wave_intent", "pattern": "story_preparing_wave", "source": "canonical"}
             return self._decision(state, [story_wave, {"type":"play_personal_story", "content_id":"PERSONAL_STORY"}], "personal_story_ready")
         if event.event_type == "DialogueFallback":
             if event.payload.get('reason') == 'catalogue_request':
@@ -3071,7 +3071,9 @@ class CanonicalRuntime(SceneMenuMixin):
                 if theme is not None:
                     state.mode, state.state_version = "personal_story_generating", state.state_version + 1
                     brief = {"age_band": state.age_band, "theme": theme, "catalogue_story_id": theme if any(item["id"] == theme for item in state.personal_story_selection) else None, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
-                    return self._decision(state, [{"type": "generate_personal_story", "brief": brief}], "personal_story_requested_by_button")
+                    return self._decision(state, [
+                        {"type":"lighting_wave_intent", "pattern":"story_preparing_wave", "button_id":button},
+                        {"type": "generate_personal_story", "brief": brief}], "personal_story_requested_by_button")
             if state.mode == "story_paused" and button == 6:
                 if state.public_story_checkpoint_pending:
                     return self._decision(state, [], "public_story_checkpoint_pending")
@@ -3418,7 +3420,9 @@ class CanonicalRuntime(SceneMenuMixin):
                     return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_075"}], "story_choice_unrecognized")
                 state.mode, state.state_version = "personal_story_generating", state.state_version + 1
                 brief = {"age_band": state.age_band, "theme": intent, "catalogue_story_id": selected['id'], "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
-                return self._decision(state, [{"type": "generate_personal_story", "brief": brief}], "personal_story_requested")
+                return self._decision(state, [
+                    {"type":"lighting_wave_intent", "pattern":"story_preparing_wave"},
+                    {"type": "generate_personal_story", "brief": brief}], "personal_story_requested")
             if state.mode == "bear_dialogue":
                 pending_information = state.dialogue_information_kind is not None
                 state.dialogue_information_kind = None

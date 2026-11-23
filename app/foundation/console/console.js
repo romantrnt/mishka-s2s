@@ -1285,7 +1285,8 @@ function renderStoryStatus(state) {
   const storyId = canonical.active_story_id || '—';
   const playing = ['fixed_story_playing', 'personal_story_playing'].includes(node);
   const paused = node === 'story_paused';
-  const mode = playing ? 'playing' : paused ? 'paused'
+  const pending = ['accepted', 'preparing'].includes(canonical.story_audio_phase);
+  const mode = pending ? canonical.story_audio_phase : playing ? 'playing' : paused ? 'paused'
     : node === 'personal_story_generating' ? 'preparing'
     : node === 'story_pause_announcement' ? 'pausing'
     : node === 'story_resume_announcement' ? 'resuming'
@@ -1419,7 +1420,7 @@ function freezePersonalStoryPosition() {
   if (!playback || playback.paused || !audioContext) return;
   let played = playback.played;
   for (const segment of playback.segments) played += Math.min(segment.duration, Math.max(0, audioContext.currentTime - segment.start));
-  playback.offsetMs = Math.min(playback.durationMs, playback.offsetMs + Math.floor(played * 1000));
+  playback.offsetMs = Math.min(playback.durationMs ?? 180000, playback.offsetMs + Math.floor(played * 1000));
   playback.paused = true;
   playback.revoked.add(playback.identity.playback_lease);
   playback.segments.clear();
@@ -1628,6 +1629,9 @@ function speakCommands(state) {
 }
 
 function interactionGuide(state, media) {
+  if (['accepted', 'preparing'].includes(state?.canonical_state?.story_audio_phase)) {
+    return ['Выбор принят', 'Готовлю сказку. Можно подождать или нажать 7, чтобы вернуться.'];
+  }
   if (state?.canonical_state?.personal_story_checkpoint_pending) {
     return ['Сказка на паузе', 'Сохраняем место в сказке. Подожди немного. Если продолжить не получилось, нажми 7 и выбери новую сказку.'];
   }
@@ -1867,8 +1871,10 @@ async function playPCM(message, generation = audioGeneration) {
       if (current?.session.node !== 'personal_story_playing' || !interactionActive(current)
           || message.generation < minimumPCMGeneration) return;
       const offsetMs = message.story_offset_ms, durationMs = message.story_duration_ms;
-      if (!Number.isSafeInteger(offsetMs) || !Number.isSafeInteger(durationMs)
-          || offsetMs < 0 || offsetMs > durationMs || durationMs <= 0 || durationMs > 300000) throw new Error('Private story position is invalid');
+      const growing = message.story_streaming === true && durationMs === null && message.story_duration_limit_ms === 180000;
+      if (!Number.isSafeInteger(offsetMs) || offsetMs < 0
+          || (growing ? offsetMs > 180000 : (!Number.isSafeInteger(durationMs)
+            || offsetMs > durationMs || durationMs <= 0 || durationMs > 300000))) throw new Error('Private story position is invalid');
       const previous = personalStoryPlayback;
       const same = previous && Object.keys(identity).every(key => previous.identity[key] === identity[key]);
       if (same) {
@@ -1911,10 +1917,11 @@ async function playPCM(message, generation = audioGeneration) {
       if (!activeSources.size) $('audio-state').textContent = audioReady ? 'AUDIO: READY' : 'AUDIO: LOCKED';
       if (identity && message.final === true) {
         if (personal) {
+          freezePersonalStoryPosition();
           personal.segments.clear(); personal.revoked.add(identity.playback_lease);
           // A server-admitted pause can arrive after the final chunk ended.
           // Retain only its position receipt until canonical cleanup, never PCM/source authority.
-          personalStoryPlayback = {identity, offsetMs: personal.durationMs, durationMs: personal.durationMs,
+          personalStoryPlayback = {identity, offsetMs: personal.durationMs ?? personal.offsetMs, durationMs: personal.durationMs,
             paused: true, checkpointSent: false, segments: new Set(), revoked: personal.revoked, expires: Date.now() + 5000};
           const receipt = personalStoryPlayback;
           personalStoryReceiptTimer = window.setTimeout(() => {
@@ -1928,7 +1935,11 @@ async function playPCM(message, generation = audioGeneration) {
     nextAudioTime = Math.max(context.currentTime, nextAudioTime);
     source.start(nextAudioTime);
     if (owner && pcmPlaybackError?.owner && !samePCMOwner(owner, pcmPlaybackError.owner)) clearPCMPlaybackError();
-    if (personal) { segment = {start: nextAudioTime, duration: buffer.duration}; personal.segments.add(segment); }
+    if (personal) {
+      const endMarker = message.stream_end === true && message.final === true && sampleCount === 1 && channel[0] === 0;
+      segment = {start: nextAudioTime, duration: endMarker ? 0 : buffer.duration};
+      personal.segments.add(segment);
+    }
     nextAudioTime += buffer.duration;
     if (identity && message.first === true) {
       post('/stand/audio/lifecycle', {...identity, status: 'playing'}).catch(() => {});

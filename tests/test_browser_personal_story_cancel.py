@@ -11,6 +11,12 @@ from test_personal_story_service import engine
 
 
 class QueueBrowser(Browser):
+    async def call(self, **kwargs):
+        if not hasattr(self, "_ipc_lock"):
+            self._ipc_lock = asyncio.Lock()
+        async with self._ipc_lock:
+            return await super().call(**kwargs)
+
     async def start(self):
         self.process = await asyncio.create_subprocess_exec(
             "node", "tests/console_queue_regression.js", "app/foundation/console/console.js", "--bridge",
@@ -63,6 +69,7 @@ async def test_published_generating_state_allows_browser_cancel_before_provider_
                 "action":"button", "button_id":1, "press":"press", "epoch":stand.remote_devices.epoch})
             pending = asyncio.create_task(deliver(first["requests"][0]))
             await asyncio.wait_for(entered.wait(),2)
+            render_job = next(iter(app._personal_story_jobs))
             await drain(stand)
             published = [item["state"] for item in writer.messages if item.get("type")=="stand_state"
                          and item["state"]["session"]["node"]=="personal_story_generating"]
@@ -77,14 +84,16 @@ async def test_published_generating_state_allows_browser_cancel_before_provider_
             result = await asyncio.wait_for(deliver(outgoing["requests"][1]),2)
             assert result["result"]["reason"]=="activity_back"
             await asyncio.wait_for(cancelled.wait(),2)
-            assert state.mode=="root_menu" and not app._personal_stories and not pending.done()
+            assert state.mode=="root_menu" and not app._personal_stories and not render_job.done()
             # Release callbacks survive the scoped cancellation and stay ordered.
             for index in (2,3):
                 outgoing = await browser.call(op="inspect")
                 assert outgoing["requests"][index]["payload"]["press"]=="release"
                 await deliver(outgoing["requests"][index])
             assert not state.accepted_buttons_down, "the original choice and cancel keys are both released"
-            release.set();await asyncio.wait_for(pending,2);await drain(stand)
+            release.set();await asyncio.wait_for(pending,2)
+            await asyncio.wait_for(asyncio.gather(render_job, return_exceptions=True),2)
+            await drain(stand)
             assert state.mode=="root_menu" and not app._personal_stories
             assert app.bounded_s2s.tts.calls==prior_tts
             assert not app.bounded_s2s.llm.calls

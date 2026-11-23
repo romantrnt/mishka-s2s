@@ -9,4 +9,9 @@ for (const [node, expected] of [['personal_story_theme','menu'],['personal_story
   assert.strictEqual(fields['story-playback-badge'].textContent, expected.toUpperCase(), node);
 }
 assert.strictEqual(fields['story-id'].textContent, '—', 'new session must not retain the previous story');
+for(const phase of ['accepted','preparing','playing']) {
+ context.renderStoryStatus({session:{node:'personal_story_playing'},canonical_state:{story_audio_phase:phase}});
+ assert.strictEqual(fields['story-playback-badge'].textContent,phase.toUpperCase());
+}
+
 console.log('story status: authored/recorded playback, pause/resume, completion and new-session reset passed');

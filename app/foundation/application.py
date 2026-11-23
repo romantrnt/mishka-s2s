@@ -2384,6 +2384,14 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     elif pattern == "menu_buttons_wave":
                         wave_groups = EXHIBITION_MENU_WAVE_GROUPS
                         lighting = start_wave(now=accepted_monotonic, groups=wave_groups, hold_on_complete=True)
+                    elif pattern == "story_preparing_wave":
+                        selected = effect.get('button_id', 3)
+                        selected = selected if type(selected) is int and 1 <= selected <= 5 else 3
+                        order = [selected] + [b for b in range(1,7) if b != selected]
+                        lighting = start_wave(now=accepted_monotonic,
+                            groups=tuple((BUTTON_FILL_ELEMENTS[b],) for b in order),
+                            base_elements=(BUTTON_DIGIT_ELEMENTS[7][1],),
+                            hold_on_complete=False, loop=True, stage_duration_ms=900)
                     elif pattern == "story_playback_wave":
                         wave_groups = STORY_PLAYBACK_WAVE_GROUPS
                         lighting = start_wave(

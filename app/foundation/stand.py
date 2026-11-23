@@ -663,6 +663,10 @@ class BrowserUARTAudioOutput(UARTAudioOutput):
     """Keep public UART assets, with a separate lease-bound private PCM port."""
     browser_story_checkpoints = True
 
+    @property
+    def private_pcm_stream_supported(self):
+        return callable(self._private_stream_play)
+
     def __init__(self, adapter, available, play_pcm, *, owned_render_timeout_s=8.,
                  owned_voice_timeout_s=1.5, play_pcm_stream=None):
         super().__init__(adapter)
@@ -740,6 +744,10 @@ class HeadlessAudioOutput:
         if not callable(self.on_pcm_stream_play):
             raise RuntimeError("private_pcm_stream_unsupported")
         self.on_pcm_stream_play(handle, stream_aiter, on_cue=on_cue)
+
+    @property
+    def private_pcm_stream_supported(self):
+        return callable(self.on_pcm_stream_play)
 
     def play_owned(self, handle: PlaybackHandle, asset_id: str, offset_ms: int = 0):
         if not callable(self.on_asset_play):
@@ -1508,6 +1516,9 @@ class HardwareIntegrationStand:
         from .private_welcome import valid_pcm
         task = asyncio.current_task()
         cue_tasks = []
+        story_owner = self.application._personal_stories.get(handle.session_id) if handle.response_id == 'PERSONAL_STORY' else None
+        story_position = ({'story_offset_ms':story_owner.offset_ms, 'story_duration_ms':None,
+                           'story_streaming':True, 'story_duration_limit_ms':180000} if story_owner is not None else {})
         def current():
             return bool(not self._closed and self.hub.owner_binding_current(binding)
                         and self._pcm_owner_current(handle, identity_binding))
@@ -1526,7 +1537,7 @@ class HardwareIntegrationStand:
             if not current():
                 return
             self._response_audio_tasks.add(task)
-            self._browser_pcm_playback = (handle, binding, identity_binding, None)
+            self._browser_pcm_playback = (handle, binding, identity_binding, story_owner)
             self.playback.active_token = handle.token
             transport_generation = self.playback._generation
             playback = {"session_id": handle.session_id, "response_id": handle.response_id,
@@ -1567,6 +1578,7 @@ class HardwareIntegrationStand:
                         "sample_rate": chunk_audio.sample_rate, "token": handle.token,
                         "session_id": handle.session_id, "generation": transport_generation,
                         "first": first_frame, "final": False,
+                        **story_position,
                         "data_b64": base64.b64encode(pcm).decode("ascii"),
                     }, binding, current):
                         return
@@ -1581,6 +1593,8 @@ class HardwareIntegrationStand:
                     "sample_rate": last_rate, "token": handle.token,
                     "session_id": handle.session_id, "generation": transport_generation,
                     "first": False, "final": True,
+                    "stream_end": True,
+                    **story_position,
                     "data_b64": base64.b64encode(b"\x00\x00").decode("ascii"),
                 }, binding, current)
         except asyncio.CancelledError:
@@ -1617,6 +1631,9 @@ class HardwareIntegrationStand:
             name="mishka-private-pcm-stream",
         )
         self._response_audio_tasks.add(task)
+        if handle.response_id == 'PERSONAL_STORY':
+            self._story_pause_requested = False
+            self._active_story_task, self._active_story_id = task, handle.response_id
         def observe(done):
             self._response_audio_tasks.discard(done)
             if not done.cancelled():
@@ -1627,6 +1644,9 @@ class HardwareIntegrationStand:
                                      identity_binding=None, *, hid_generation=None, on_cue=None):
         from .private_welcome import valid_pcm
         from .s2s import PCMPlaybackResult
+        story_owner = self.application._personal_stories.get(handle.session_id) if handle.response_id == 'PERSONAL_STORY' else None
+        offset_samples = (int(story_owner.offset_ms * story_owner.audio.sample_rate / 1000)
+                          if story_owner is not None else 0)
         def current():
             return bool((hid_generation is None or getattr(self, "_hid_generation", 0) == hid_generation)
                 and self._pcm_owner_current(handle, identity_binding))
@@ -1686,6 +1706,18 @@ class HardwareIntegrationStand:
                     on_cue(btns)
 
             result = await play_stream(audio_chunks(), on_chunk=on_chunk, owner_current=current)
+            if (story_owner is not None and isinstance(result, PCMPlaybackResult)
+                    and getattr(self, '_story_pause_requested', False)
+                    and self._personal_story_checkpoint_current(handle, story_owner, hid_generation)):
+                self._story_pause_requested = False
+                position = offset_samples + result.written_samples
+                total = len(story_owner.audio.samples)
+                tail = max(2, int(story_owner.audio.sample_rate * .003)) if story_owner.complete else 0
+                if not offset_samples <= position <= total + tail:
+                    raise RuntimeError('personal_story_progress_invalid')
+                position = min(position, total)
+                return {'story_id':'PERSONAL_STORY',
+                        'offset_ms':int(position * 1000 / story_owner.audio.sample_rate)}
             completed = (sent_any and isinstance(result, PCMPlaybackResult) and result.completed)
             if not current():
                 return
@@ -1848,6 +1880,9 @@ class HardwareIntegrationStand:
         if task is None or task.done():
             return
         self._story_pause_requested = True
+        if self._active_story_id == 'PERSONAL_STORY':
+            owner = self.application._personal_stories.get(self.active_session_id)
+            if owner is not None:owner.changed.set()
         await self.playback.stop()
         return await task
 
@@ -3608,6 +3643,10 @@ class HardwareIntegrationStand:
             "silent_hold_active", "silent_hold_step", "silent_mode",
             "pending_mode", "pending_game_id",
         ) if key in canonical}
+        if canonical.get('mode') in {'personal_story_generating', 'personal_story_playing'}:
+            owner = self.application._personal_stories.get(self.active_session_id)
+            canonical_safe['story_audio_phase'] = ('accepted' if owner is None else
+                'playing' if owner.started else 'preparing')
         from .game_engine import IMMERSIVE_GAME_SPECS
         if canonical.get("pending_game_offer") in tuple(spec.game_id for spec in IMMERSIVE_GAME_SPECS):
             canonical_safe["pending_game_offer"] = canonical["pending_game_offer"]

@@ -267,8 +267,15 @@ class StoryOwner:
     offset_ms: int = 0
     checkpoint_ms: int | None = None
     closed: bool = False
+    streaming: bool = False
+    parts: list = field(default_factory=list, repr=False)
+    changed: object = field(default_factory=asyncio.Event, repr=False)
+    complete: bool = False
+    failed: bool = False
+    started: bool = False
     def close(self):
         self.closed=True;self.audio=None
+        self.parts.clear();self.changed.set()
         self.offset_ms=0;self.checkpoint_ms=None
         task,self.task=self.task,None
         if task is not None and not task.done(): task.cancel()
@@ -278,13 +285,14 @@ class PersonalStoryMixin:
         owner=self._personal_stories.pop(sid,None)
         if owner: owner.close()
 
-    def _personal_story_scope(self,sid,owner,*,playback=False,checkpoint=False):
+    def _personal_story_scope(self,sid,owner,*,playback=False,checkpoint=False,rendering=False):
         state=self.canonical_runtime.sessions.get(sid)
         if not (owner and not owner.closed and self._personal_stories.get(sid) is owner
                 and state and state.interaction_open and state.mode in STORY_MODES
                 and self._session_epochs.get(sid,0)==owner.epoch
                 and (state.profile_ref,state.identity_request_id)==owner.identity):return False
         if owner.identity[0] and not self._identity_scope_live(sid,'personalize'):return False
+        if rendering:return self.monotonic_now()<owner.deadline
         if checkpoint:return (state.mode in {'story_pause_announcement','story_paused'}
                               and state.active_story_id==STORY_ID and owner.audio is not None)
         if playback:return (state.mode=='personal_story_playing' and state.active_story_id==STORY_ID
@@ -324,20 +332,47 @@ class PersonalStoryMixin:
         owner=StoryOwner(self._session_epochs.get(sid,0),uuid.uuid4().hex,
                          (state.profile_ref,state.identity_request_id),band,self.monotonic_now()+budget)
         self._personal_stories[sid]=owner
-        current=lambda:self._personal_story_scope(sid,owner)
+        owner.streaming = bool(local and getattr(self.audio, 'private_pcm_stream_supported', False))
+        current=lambda:self._personal_story_scope(sid,owner,rendering=owner.streaming)
+        def observe(stage, **fields):
+            self.record_audio_diagnostic('story_prepare_'+stage, **fields)
+        def part_ready(audio):
+            if not current():return
+            owner.parts.append(audio)
+            prior = owner.audio.samples if owner.audio is not None else ()
+            owner.audio = replace(audio, samples=prior + audio.samples)
+            owner.changed.set()
         if local:
             from .demo_story_audio import render
             coroutine = render(e, entry, state.visit_profile(self._canonical_profiles.get(sid)),
-                               token, current, getattr(self, 'name_audio_registry', None))
+                               token, current, getattr(self, 'name_audio_registry', None),
+                               on_chunk=part_ready if owner.streaming else None, observe=observe)
         else:
             coroutine = service.render(theme,band,brief.get('content_constraints',()),token,current)
-        task=asyncio.create_task(coroutine,name='mishka-personal-story')
+        async def bounded_render():
+            async with asyncio.timeout(budget):
+                return await coroutine
+        task=asyncio.create_task(bounded_render(),name='mishka-personal-story')
         owner.task=task;self._personal_story_jobs.add(task)
         def observed(done):
             self._personal_story_jobs.discard(done)
-            if not done.cancelled():done.exception()
+            error = None if done.cancelled() else done.exception()
+            if owner.streaming:
+                owner.complete = True
+                owner.failed = bool(done.cancelled() or error is not None or done.result() is None)
+                owner.changed.set()
         task.add_done_callback(observed)
         try:
+            if owner.streaming:
+                first = asyncio.create_task(owner.changed.wait())
+                try:
+                    await asyncio.wait({first, task}, timeout=budget, return_when=asyncio.FIRST_COMPLETED)
+                    if not current() or owner.audio is None or owner.failed:
+                        owner.close();return None
+                    return owner
+                finally:
+                    first.cancel()
+                    await asyncio.gather(first, return_exceptions=True)
             done,_=await asyncio.wait({task},timeout=budget)
             if not done or task.cancelled() or not current():
                 reason='job_timeout' if not done else 'job_cancelled' if task.cancelled() else 'owner_stale'
@@ -367,6 +402,37 @@ class PersonalStoryMixin:
             service._diagnostic(service._stage,'exception',error=error if error in _ERROR_CLASSES else 'other',code=code)
             owner.close();return None
 
+    async def _personal_story_stream(self, sid, owner, token, offset_ms):
+        offset = int(offset_ms * owner.audio.sample_rate / 1000)
+        index = 0
+        while self._personal_story_scope(sid, owner, playback=True):
+            if owner.failed:
+                raise RuntimeError('personal_story_stream_failed')
+            if index < len(owner.parts):
+                audio = owner.parts[index];index += 1
+                if offset >= len(audio.samples):
+                    offset -= len(audio.samples);continue
+                audio = replace(audio, samples=audio.samples[offset:], token=token,
+                                session_id=sid, generation_id=owner.epoch)
+                offset = 0
+                yield audio, ()
+            elif owner.complete:
+                return
+            else:
+                owner.changed.clear()
+                # No await separates the queue check and clearing this signal.
+                await owner.changed.wait()
+
+    def _personal_story_started(self, sid, owner):
+        if not self._personal_story_scope(sid, owner, playback=True) or owner.started:return
+        owner.started = True
+        self.record_audio_diagnostic('story_playback_dispatch')
+        start = getattr(self.led, 'start_wave', None)
+        if callable(start):
+            from .lighting import BUTTON_FILL_ELEMENTS
+            start(now=self.monotonic_now(), groups=tuple((BUTTON_FILL_ELEMENTS[b],) for b in range(1,8)),
+                  hold_on_complete=True, loop=True, stage_duration_ms=620)
+
     def _play_personal_story(self,sid,effect,token):
         owner=self._personal_stories.get(sid)
         if not self._personal_story_scope(sid,owner,playback=True):return False
@@ -379,10 +445,17 @@ class PersonalStoryMixin:
         owner.offset_ms=offset_ms
         offset=int(owner.offset_ms*audio.sample_rate/1000)
         handle=PlaybackHandle(sid,owner.epoch,f'{sid}:{uuid.uuid4().hex}',effect['playback_lease'],STORY_ID,token)
-        self._register_audio_lease(sid,STORY_ID,token,handle.playback_id,handle.playback_lease,duration_ms=max(1,duration_ms-offset_ms))
+        self._register_audio_lease(sid,STORY_ID,token,handle.playback_id,handle.playback_lease,
+            duration_ms=max(1,(180000 if owner.streaming and not owner.complete else duration_ms)-offset_ms))
         effect.update(playback_id=handle.playback_id,generation=handle.generation,session_id=sid)
         owner.checkpoint_ms=None
-        if checkpoint and offset_ms==duration_ms:
+        if checkpoint and offset_ms==duration_ms and (not owner.streaming or owner.complete):
             return 'completed'
-        self.audio.play_pcm_owned(handle,replace(audio,samples=audio.samples[offset:],token=token,session_id=sid,generation_id=owner.epoch))
+        if owner.streaming:
+            owner.started = False
+            self.audio.play_pcm_stream_owned(handle, self._personal_story_stream(sid,owner,token,offset_ms),
+                on_cue=lambda _:self._personal_story_started(sid,owner))
+        else:
+            self.audio.play_pcm_owned(handle,replace(audio,samples=audio.samples[offset:],token=token,session_id=sid,generation_id=owner.epoch))
+            self._personal_story_started(sid, owner)
         return True

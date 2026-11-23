@@ -314,7 +314,7 @@ async def render_phrase_with_name(
     return None, "name_unavailable"
 
 
-async def synthesize_private_text(tts, text, token, cancelled):
+async def synthesize_private_text(tts, text, token, cancelled, *, observe=None):
     """Use the configured primary voice without caching visit-private text."""
     from .s2s import CachedTTSProvider
     while isinstance(tts, CachedTTSProvider):
@@ -323,9 +323,11 @@ async def synthesize_private_text(tts, text, token, cancelled):
         return None
     wait_idle = getattr(tts, "wait_for_idle", None)
     if callable(wait_idle):
+        if callable(observe):observe('voice_idle_wait')
         await wait_idle(cancelled)
         if cancelled():
             return None
+        if callable(observe):observe('voice_idle_ready')
     stream = getattr(tts, "synthesize_audio_stream", None)
     if not callable(stream):
         audio = await tts.synthesize(text, token, cancelled)
@@ -338,6 +340,7 @@ async def synthesize_private_text(tts, text, token, cancelled):
             return None
         if rate is None:
             rate = chunk.sample_rate
+            if callable(observe):observe('first_pcm')
         if rate != chunk.sample_rate or len(samples) + len(chunk.samples) > rate * 180:
             return None
         samples.extend(chunk.samples)
