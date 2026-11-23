@@ -2994,7 +2994,7 @@ class HardwareIntegrationStand:
         if session is None:
             return list(range(1, 8))
         mode = str(session.current_node or "idle")
-        if mode in {"fixed_story_menu", "schedule_weather"}:
+        if mode in {"fixed_story_menu", "personal_story_theme", "schedule_weather"}:
             state = self.application.canonical_runtime.sessions.get(session.session_id)
             if (state is None or state.mode != mode or state.scene_menu_active != mode
                     or state.safety_severity != "none"):
@@ -3552,7 +3552,6 @@ class HardwareIntegrationStand:
 
     def _panel_scene_menu(self, canonical):
         """Expose only chooser labels from public catalogues, never context."""
-        from .menu_content import STORY_THEME_ITEMS
         from .game_engine import IMMERSIVE_GAME_SPECS
         mode = canonical.get("mode")
         page = canonical.get("scene_menu_descriptor")
@@ -3564,7 +3563,11 @@ class HardwareIntegrationStand:
             titles = {key: item.get("display_title") for key, item in self.application.canonical_runtime.stories.stories.items()
                       if isinstance(item, dict)}
         elif mode == "personal_story_theme":
-            titles = dict(STORY_THEME_ITEMS)
+            from .demo_story_catalog import load_catalog
+            try:
+                titles = {entry["id"]: entry["title"] for entry in load_catalog()}
+            except (OSError, ValueError):
+                return None
         elif mode == "schedule_weather":
             titles = {"date": "Дата", "weather": "Погода", "what_next": "Следующее занятие", "where_now": "Текущее занятие",
                       "card_doctors": "Врачи в моей карточке"}
@@ -3612,6 +3615,14 @@ class HardwareIntegrationStand:
         if (canonical.get("active_story_id") == "PERSONAL_STORY"
                 and canonical.get("mode") in {"story_pause_announcement", "story_paused"}):
             canonical_safe["personal_story_checkpoint_pending"] = not canonical.get("story_checkpoint_confirmed", False)
+        if canonical.get("mode") in {"fixed_story_playing", "personal_story_playing", "story_speech_analysis",
+                                      "story_pause_announcement", "story_paused", "story_resume_announcement"}:
+            story_id = canonical.get("active_story_id")
+            # self.stories contains startup-verified public assets; snapshots do not re-read audio.
+            fixed = self.stories.get(story_id) if isinstance(story_id, str) else None
+            if story_id == "PERSONAL_STORY" or (isinstance(fixed, dict)
+                    and fixed.get("rights_status") in {"licensed", "public_domain", "owner_authored", "operator_approved"}):
+                canonical_safe["active_story_id"] = story_id
         menu = self._panel_scene_menu(canonical)
         if menu is not None:
             canonical_safe["scene_menu_descriptor"] = menu

@@ -1283,9 +1283,13 @@ function renderStoryStatus(state) {
   const node = String(state.session?.node || '');
   const canonical = state.canonical_state || {};
   const storyId = canonical.active_story_id || '—';
-  const playing = node === 'fixed_story_playing';
+  const playing = ['fixed_story_playing', 'personal_story_playing'].includes(node);
   const paused = node === 'story_paused';
-  const mode = playing ? 'playing' : paused ? 'paused' : node === 'fixed_story_menu' ? 'menu' : 'inactive';
+  const mode = playing ? 'playing' : paused ? 'paused'
+    : node === 'personal_story_generating' ? 'preparing'
+    : node === 'story_pause_announcement' ? 'pausing'
+    : node === 'story_resume_announcement' ? 'resuming'
+    : ['fixed_story_menu', 'personal_story_theme'].includes(node) ? 'menu' : 'inactive';
   const last = [...(state.results || [])].reverse().find(item => /story|fixed_story|audio/i.test(String(item.reason || '') + JSON.stringify(item.result || {})));
   const checkpoint = canonical.dialogue_memory?.story_checkpoint;
   if ($('story-id')) $('story-id').textContent = storyId;
