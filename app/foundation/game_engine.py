@@ -358,7 +358,12 @@ def advance(state: GameState, *, edge: str, button: int, sequence: int, now: flo
     if paused:
         # Pause is not part of an active hold; no fabricated duration on resume.
         return GameTransition(replace(state, down_times=(), hold_ready=False), desired_buttons(state), 'paused')
-    if button not in game_answer_buttons(state):
+    allowed_buttons = (
+        game_answer_buttons(state, include_narrowed=False)
+        if state.game_id in {'quiz', 'odd_one_out'} and len(state.narrowed_options) == 1
+        else game_answer_buttons(state)
+    )
+    if button not in allowed_buttons:
         return GameTransition(state, desired_buttons(state), 'ignored')
     if state.game_id == 'free_lights':
         return GameTransition(state, (), 'free_play', wave_origin=button)
