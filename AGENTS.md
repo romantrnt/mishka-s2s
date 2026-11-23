@@ -10,7 +10,7 @@
   - Ordinary actions (menu, games, stories, "Мой день", return, end, new session) must work via buttons even without microphone access; live voice is primary for free dialogue and word game.
   - Recorded stories must play from verified assets, never improvised by LLM. Active playing story is not cut by idle timer; paused story ends after 120s idle.
   - Button 7: short press performs contextual action (answer 7 in quiz, etc.); hold shows clear light progress and exits on release after threshold without requiring millisecond precision.
-  - 18-LED board protocol (`element_id,state,transition_ms`, IDs 0..17, binary 0/1) — fill, digit, and emblem are independent; off-state is dim/gray.
+  - 18-LED board logical state stays binary (`element_id,state,transition_ms`, IDs 0..17). Fill, digit, and emblem are independent; off-state is dim/gray. Serial digit wire state 2 is opt-in via LIGHTING_DIGIT_MODE=fill_color only; default legacy remains 0/1. See docs/digit-contract.md; physical firmware/color acceptance is separate.
 - **Coordination**: One writer per overlapping file set. Independent QA/reviewer inspects actual diffs and edge-case scenarios, not author summaries.
 
 ## 2026-11-23 demo takeover

@@ -161,6 +161,9 @@ class Settings:
     audio_policy: str = "recorded_catalog"
     hid_policy: str = "space_lifecycle"
     lighting_policy: str = "canonical_effects"
+    lighting_digit_mode: str = "legacy"
+    dialogue_journal_enabled: bool = False
+    dialogue_journal_dir: str = "runtime/private/session-journal"
     webpanel_enabled: bool = True
     diagnostics_level: str = "standard"
     allow_degraded_hardware: bool = True
@@ -347,6 +350,12 @@ class Settings:
             raise SettingsError("MISHKA_HID_POLICY is unsupported")
         if self.lighting_policy not in {"canonical_effects"}:
             raise SettingsError("MISHKA_LIGHTING_POLICY is unsupported")
+        if type(self.lighting_digit_mode) is not str or self.lighting_digit_mode not in {"legacy", "fill_color"}:
+            raise SettingsError("LIGHTING_DIGIT_MODE must be legacy or fill_color")
+        if type(self.dialogue_journal_enabled) is not bool:
+            raise SettingsError("DIALOGUE_JOURNAL_ENABLED must be a boolean")
+        if not isinstance(self.dialogue_journal_dir, str) or not self.dialogue_journal_dir.strip():
+            raise SettingsError("DIALOGUE_JOURNAL_DIR must not be empty")
         if self.diagnostics_level not in {"quiet", "standard", "verbose"}:
             raise SettingsError("MISHKA_DIAGNOSTICS_LEVEL is unsupported")
         if self.mutation_auth_policy != "token_required":
@@ -463,7 +472,7 @@ class Settings:
         # This projection is public (/ready), including on a mock runtime.
         # Keep location, local filesystem/device names and endpoint credentials
         # out of it; presence flags are sufficient for operational diagnostics.
-        private = {"stand_access_token", "history_db", "story_backend_receipt_path", "yandex_weather_api_key",
+        private = {"stand_access_token", "history_db", "story_backend_receipt_path", "yandex_weather_api_key", "dialogue_journal_dir",
                    "content_root", "max_client_bundle", "max_demo_state", "host",
                    "audio_output_device", "audio_input_device", "lighting_device", "hid_device",
                    "ollama_base_url", "vllm_base_url", "weather_endpoint",
@@ -556,6 +565,9 @@ class Settings:
         object.__setattr__(settings, "lighting_device", _text("MISHKA_LIGHTING_DEVICE", ""))
         object.__setattr__(settings, "lighting_baudrate", _int("MISHKA_LIGHTING_BAUDRATE", 115200))
         object.__setattr__(settings, "lighting_timeout_s", _float("MISHKA_LIGHTING_TIMEOUT_S", 1.0))
+        object.__setattr__(settings, "lighting_digit_mode", _text("LIGHTING_DIGIT_MODE", "legacy").lower())
+        object.__setattr__(settings, "dialogue_journal_enabled", _bool("DIALOGUE_JOURNAL_ENABLED", False))
+        object.__setattr__(settings, "dialogue_journal_dir", _text("DIALOGUE_JOURNAL_DIR", "runtime/private/session-journal"))
         object.__setattr__(settings, "hid_device", _text("MISHKA_HID_DEVICE", ""))
         return settings.validate() if validate else settings
 

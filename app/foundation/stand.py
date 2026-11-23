@@ -865,7 +865,7 @@ class HardwareIntegrationStand:
             try:
                 if not getattr(self.settings, "lighting_device", ""):
                     raise RuntimeError("MISHKA_LIGHTING_DEVICE is required in physical hardware mode")
-                self.lighting_serial = SerialLightingAdapter(self.settings.lighting_device, baudrate=self.settings.lighting_baudrate, timeout_s=self.settings.lighting_timeout_s)
+                self.lighting_serial = SerialLightingAdapter(self.settings.lighting_device, baudrate=self.settings.lighting_baudrate, timeout_s=self.settings.lighting_timeout_s, digit_mode=self.settings.lighting_digit_mode)
                 self.lighting_serial.open()
                 self.lighting_output = PhysicalLightingOutput(self.lighting_serial, auto_dark_recovery=True, on_fault=self._on_lighting_fault)
                 self._lighting_status = {"state": "available", "backend": "physical_serial_lighting"}

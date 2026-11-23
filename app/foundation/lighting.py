@@ -772,15 +772,20 @@ class SerialLightingAdapter:
 
     This is separate from the legacy JSONL/CRC32 simulator transport. The
     only bytes written here are canonical CSV/LF lighting lines:
-    <element_id>,<state>,<transition_ms>\n. The word "binary" in older
-    notes describes the state field (0/1), not the wire framing.
+    <element_id>,<state>,<transition_ms>\n. Logical state is always binary;
+    only explicit fill_color mode projects a digit's wire state to 0/1/2.
     """
 
     def __init__(self, path: str, *, baudrate: int = 115200,
                  timeout_s: float = 1.0, transport=None,
-                 inter_command_delay_s: float | None = None) -> None:
+                 inter_command_delay_s: float | None = None,
+                 digit_mode: str = "legacy") -> None:
         if not path:
             raise ValueError("lighting serial path is required")
+        if type(digit_mode) is not str or digit_mode not in {"legacy", "fill_color"}:
+            raise ValueError("lighting digit mode must be legacy or fill_color")
+        self.digit_mode = digit_mode
+        self._logical_targets = dict.fromkeys(LIGHTING_ELEMENT_IDS, 0)
         self.path = str(path)
         self.baudrate = int(baudrate)
         self.timeout_s = max(0.01, float(timeout_s))
@@ -919,15 +924,16 @@ class SerialLightingAdapter:
             self._written_targets.clear()
             self._written_targets_epoch += 1
 
-    def _write_command(self, command: LightingCommand) -> bool:
+    def _write_command(self, command: LightingCommand, wire_state: int | None = None) -> bool:
         # The desired-output snapshot may include lines not yet sent or cancelled
         # midway through a frame. Only this sole writer knows completed lines.
-        target = (command.state, command.transition_ms)
+        state = command.state if wire_state is None else wire_state
+        target = (state, command.transition_ms)
         with self._reader_state_lock:
             epoch = self._written_targets_epoch
             if command.transition_ms > 0 and self._written_targets.get(command.element_id) == target:
                 return False
-        self._write_line(command.to_wire())
+        self._write_line(f"{command.element_id},{state},{command.transition_ms}\n".encode("ascii"))
         self._sent += 1
         with self._reader_state_lock:
             # RX can revoke this owner while its native TX call is blocked.
@@ -937,13 +943,39 @@ class SerialLightingAdapter:
         return True
 
     def _write_validated_batch(self, validated: tuple[LightingCommand, ...], is_current) -> bool:
-        last_index = len(validated) - 1
-        for index, command in enumerate(validated):
+        logical = None
+        projected = tuple((command, None) for command in validated)
+        if self.digit_mode == "fill_color":
+            logical = dict(self._logical_targets)
+            latest = {command.element_id: command for command in validated}
+            logical.update({channel: command.state for channel, command in latest.items()})
+            digits = {pair[1] for pair in BUTTON_DIGIT_ELEMENTS.values()}
+            # Fills precede digits; every digit is computed from the final pair,
+            # including when this batch changed only its fill channel.
+            projected = [(latest[i], None) for i in sorted(latest) if i not in digits]
+            for button in BUTTON_FILL_ELEMENTS:
+                fill, digit = BUTTON_FILL_ELEMENTS[button], BUTTON_DIGIT_ELEMENTS[button][1]
+                if fill not in latest and digit not in latest:
+                    continue
+                transition = latest[digit] if digit in latest else latest[fill]
+                if fill not in latest:
+                    # Reconcile both halves after a superseded partial frame.
+                    projected.append((LightingCommand(fill, logical[fill], transition.transition_ms), None))
+                command = LightingCommand(digit, logical[digit], transition.transition_ms)
+                projected.append((command, 1 if logical[digit] else 2 if logical[fill] else 0))
+        last_index = len(projected) - 1
+        for index, (command, wire_state) in enumerate(projected):
             if callable(is_current) and not is_current():
                 return False
-            wrote = self._write_command(command)
+            wrote = self._write_command(command, wire_state)
             if wrote and self.inter_command_delay_s > 0 and index < last_index:
                 time.sleep(self.inter_command_delay_s)
+        if logical is not None:
+            if not self.is_ready() or (callable(is_current) and not is_current()):
+                return False
+            # A superseded or failed partial frame cannot become the next
+            # generation's logical pair state. Reconnect retains this baseline.
+            self._logical_targets = logical
         return True
 
     def _write_line(self, payload: bytes) -> None:
@@ -1041,6 +1073,7 @@ class SerialLightingAdapter:
         return {
             "ready": self.is_ready(),
             "backend": "serial",
+            "digit_mode": self.digit_mode,
             "path": self.path,
             "baudrate": self.baudrate,
             "timeout_s": self.timeout_s,
