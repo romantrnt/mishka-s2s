@@ -2162,7 +2162,7 @@ class ResilientVoiceProvider:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.last_fallback_reason = f"{type(exc).__name__}: {str(exc)[:160]}"
+            self.last_fallback_reason = type(exc).__name__
             logger.warning("RVC conversion unavailable; returning clean Silero audio: %s", self.last_fallback_reason)
             return audio
 
@@ -3286,7 +3286,7 @@ class AudioSynthesisQueue:
                         if self.fallback_mode == "fail_closed":
                             self.metrics.event("rvc_v2_failed_closed", provider="rvc_v2", chunk_index=chunk_index, token=token)
                             raise
-                        self.last_fallback_reason=f"{type(exc).__name__}: {str(exc)[:160]}"
+                        self.last_fallback_reason=type(exc).__name__
                         audio=original_audio
                         logger.warning("RVC chunk failed; returning clean Silero audio: %s", self.last_fallback_reason)
                         self.metrics.event("rvc_v2_fallback", reason=self.last_fallback_reason, provider="passthrough", policy="passthrough")
@@ -3738,10 +3738,14 @@ class BoundedConversationEngine:
         trace_correlation_id = self.metrics.begin_voice_turn(context.session_id, generation_id=trace_generation_id).correlation_id
         self.metrics.mark_voice(context.session_id, "llm_request", generation_id=trace_generation_id)
         turn_tts = self.tts
+        # Conversation audio is private, including guest answers. Never retain it
+        # in the shared cache used by public application phrases.
+        while isinstance(turn_tts, CachedTTSProvider):
+            turn_tts = turn_tts.delegate
         registry = getattr(self, "name_audio_registry", None)
         if registry is not None and context.profile.display_name:
             from .name_audio import VisitNameTTSProvider
-            turn_tts = VisitNameTTSProvider(self.tts, context.profile.display_name, registry)
+            turn_tts = VisitNameTTSProvider(turn_tts, context.profile.display_name, registry)
         queue=AudioSynthesisQueue(turn_tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"), lifecycle_hook=self.lifecycle_hook,retire_hook=self._retire_queue)
         queue_started=time.perf_counter(); await queue.start(context.session_id,token)
         task = current
@@ -4038,7 +4042,16 @@ class BoundedConversationEngine:
             return TurnResult((),(),True,"provider_or_validation_failure")
         except ValueError as exc:
             self.metrics.event("validation_failure", correlation_id=trace_correlation_id,
-                               reason=str(exc)[:120], source="stream_parser")
+                               reason=(str(exc) if str(exc) in {
+                                   "unknown or invalid model action", "unknown or unclosed tag", "unknown model tag",
+                                   "unclosed <say> tag", "LLM stream exceeded limit", "total model speech exceeded limit",
+                                   "unsafe or oversized model output", "age_word_budget_exceeded",
+                                   "game_offer_mixed_with_speech", "game_offer_mixed_or_out_of_context",
+                                   "game_offer_mixed_actions", "empty_model_speech",
+                                   "dialogue_json_invalid", "dialogue_json_prefix_mismatch",
+                                   "dialogue_invalid_provider_frame", "dialogue_invalid_provider_content",
+                                   "dialogue_incomplete_terminal",
+                               } else "validation_exception"), source="stream_parser")
             await queue.abort(context.session_id, invalidate=False)
             self.metrics.finish_voice_turn(context.session_id, "provider_or_validation_failure", generation_id=trace_generation_id)
             return TurnResult((),(),True,"provider_or_validation_failure")
