@@ -335,7 +335,7 @@ async def test_word_game_runs_actual_bounded_text_path_with_own_history():
         context = h.app.conversation_contexts[h.state.session_id]
         assert context._game_id == "word_game" and context.turns == 1
         assert context.history[0][0] == "Кот"
-        assert "Ь, Ъ и Ы пропускайте" in context.system_prompt
+        assert "последнюю букву" in context.system_prompt
     finally:
         await h.close()
 

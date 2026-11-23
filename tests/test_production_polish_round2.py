@@ -23,7 +23,7 @@ def _build_app():
     return app, led
 
 
-def test_quiz_single_button_gives_two_retries_then_advances_once():
+def test_quiz_single_button_ignores_unlit_buttons_and_accepts_lit_button():
     state = start_game("quiz", age_band="5-7", seed=1, now=1.0, immersive=True, sequence=0, selection_button=2)
     state = finish_prompt(state, 1.0).state
     ch0 = current_challenge(state)
@@ -35,24 +35,17 @@ def test_quiz_single_button_gives_two_retries_then_advances_once():
         state = finish_prompt(tr_rel.state, 1.2 + seq).state
     assert state.narrowed_options == (ch0.answer,)
     wrong = next(b for b, _ in ch0.options if b != ch0.answer)
-    # Miss 1 and 2 on single visible button -> "Попробуй ещё раз", hint stays visible
+    # Unlit buttons must remain logically ignored when only 1 hint button is lit
     tr1 = advance_game(state, edge="ButtonPressed", button=wrong, sequence=10, now=5.0)
-    assert tr1.status == "retry"
-    assert tr1.speech_text == "Попробуй ещё раз"
+    assert tr1.status == "ignored"
     assert tr1.state.narrowed_options == (ch0.answer,)
-    s1 = finish_prompt(advance_game(tr1.state, edge="ButtonReleased", button=wrong, sequence=11, now=5.1).state, 5.2).state
-    tr2 = advance_game(s1, edge="ButtonPressed", button=wrong, sequence=12, now=6.0)
-    assert tr2.status == "retry"
-    assert tr2.speech_text == "Попробуй ещё раз"
-    assert tr2.state.narrowed_options == (ch0.answer,)
-    s2 = finish_prompt(advance_game(tr2.state, edge="ButtonReleased", button=wrong, sequence=13, now=6.1).state, 6.2).state
-    # Miss 3 on single visible button -> "Давай попробуем следующий" and advance once
-    tr3 = advance_game(s2, edge="ButtonPressed", button=wrong, sequence=14, now=7.0)
-    assert tr3.status == "skipped_next"
-    assert tr3.speech_text.startswith("Давай попробуем следующий.")
-    assert tr3.state.challenge_index == 1
-    assert tr3.state.round == 1
-    assert tr3.state.narrowed_options == ()
+    s1 = advance_game(tr1.state, edge="ButtonReleased", button=wrong, sequence=11, now=5.1).state
+    # Pressing the single lit button advances to the next challenge
+    tr_ok = advance_game(s1, edge="ButtonPressed", button=ch0.answer, sequence=12, now=6.0)
+    assert tr_ok.status == "progress"
+    assert tr_ok.state.challenge_index == 1
+    assert tr_ok.state.round == 1
+    assert tr_ok.state.narrowed_options == ()
 
 
 def test_correct_quiz_answer_button_and_voice_trigger_success_wave_without_overwrite():
@@ -129,5 +122,32 @@ def test_input_retry_stops_after_one_repeat_and_skips_voice_retry_when_mic_unava
         r3 = await app.receive_async(Event("SpeechReceived", sid, 4, 4.0, "audio", {}, "c4", 4.0), "")
         assert r3["reason"] == "exhibition_age_button_hint"
         assert not any(e.get("phrase_id") == "PHRASE_074" for e in r3.get("outputs", []))
+
+    asyncio.run(scenario())
+
+
+def test_submenus_never_expose_button5_help_and_silent_hold_has_no_clear_all_flicker():
+    async def scenario():
+        app, led = _build_app()
+        sid = "submenu-and-hold"
+        # Button 6 hold step 1 and step 2 must not emit clear_all() batches (all 0s)
+        await app.receive_async(Event("ButtonPressed", sid, 1, 1.0, "hid", {"button_id": 6}, "c1", 1.0), None)
+        await app.receive_async(Event("SilentHoldTick", sid, 2, 2.0, "timer", {"generation": 1}, "c2", 2.0), None)
+        assert not any(all(cmd.state == 0 for cmd in batch) for batch in led.output.batches)
+
+        # Enter fixed_story_menu -> all 5 stories on 1 page, button 5 plays 5th story (not wellbeing_check)
+        await app.receive_async(Event("ButtonReleased", sid, 3, 2.5, "hid", {"button_id": 6}, "c2r", 2.5), None)
+        await app.receive_async(Event("HandsetLifted", sid, 4, 2.6, "hid", {}, "c2h", 2.6), None)
+        st = app.canonical_runtime.sessions[sid]
+        st.mode = "menu_ready"
+        r_menu = await app.receive_async(Event("ButtonPressed", sid, 5, 3.0, "hid", {"button_id": 2}, "c3", 3.0), None)
+        await app.receive_async(Event("ButtonReleased", sid, 6, 3.1, "hid", {"button_id": 2}, "c4", 3.1), None)
+        desc = st.scene_menu_descriptor
+        assert desc["buttons"] == [1, 2, 3, 4, 5, 7]
+        assert "помощь" not in desc["spoken_text"].lower()
+        r_story5 = await app.receive_async(Event("ButtonPressed", sid, 7, 4.0, "hid", {"button_id": 5}, "c5", 4.0), None)
+        assert r_story5["reason"] == "fixed_story_started"
+        assert st.mode == "fixed_story_playing"
+        assert st.active_story_id == "fixed_neznayka_v1"
 
     asyncio.run(scenario())

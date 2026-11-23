@@ -2152,6 +2152,16 @@ class MockPlaybackController:
 
 def _ensure_sounddevice_ready(sd, device, kind: str, *, min_channels: int = 1) -> None:
     """Fail with a Python error before PortAudio aborts on a missing ALSA device."""
+    if os.path.exists("/proc/asound/cards"):
+        try:
+            with open("/proc/asound/cards", "r", encoding="utf-8", errors="replace") as handle:
+                cards_text = handle.read()
+            if "no soundcards" in cards_text or not cards_text.strip():
+                raise RuntimeError(f"local audio {kind} unavailable")
+        except RuntimeError:
+            raise
+        except OSError:
+            pass
     key = "max_output_channels" if kind == "output" else "max_input_channels"
     try:
         info = sd.query_devices(device, kind)

@@ -70,7 +70,8 @@ async def test_current_selection_interrupts_narration_without_hidden_skip(button
 async def test_current_next_page_owns_fresh_press_and_old_audio_cannot_finish_it(phase):
     h = Harness('1-3')
     try:
-        await enter(h, 2, phase)
+        h.state.day_capabilities = [('date', 'Дата'), ('weather', 'Погода')]
+        await enter(h, 7, phase)
         old = dict(h.app._active_audio.get(h.sid) or {})
         assert 6 in h.state.scene_menu_descriptor['buttons']
         result = await h.button(6)

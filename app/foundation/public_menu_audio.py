@@ -44,9 +44,11 @@ async def menu_validation_text(application, page, text):
                     '239c1c3d0308d2a20693c8818dfd5c77a04a1d030f0e69554b2c3cd4971637db',
                     # Operator-approved original: assets/stories/original/Сказка Телефон.wav.
                     '21a29500591e0e085b4d78a6e715167e92e7e3fa87594cee617d39793e9574ec',
+                    # Operator-approved skazki_og: assets/stories/05_Телефон_prepared.wav.
+                    'e5906e4b10c04cd0b32c7124a08760b0c8e58b4479bc0665ce81add9313ed8f7',
                 }):
             return None
-        words = {1:'один',2:'два',3:'три',4:'четыре'}
+        words = {1:'один',2:'два',3:'три',4:'четыре',5:'пять'}
         span = f'{words[item.slot].capitalize()} — Телефон.'
         if validation_text.count(span) != 1:
             return None

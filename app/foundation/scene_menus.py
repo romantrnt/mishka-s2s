@@ -97,11 +97,6 @@ class SceneMenuMixin:
             if button in state.scene_menu_held: state.scene_menu_held.remove(button)
             return None
         if state.mode not in SCENE_AUDIO: return None
-        if button == 5 and state.mode != 'game_menu':
-            if event.event_type == 'ButtonPressed' and state.scene_menu_phase in {'invite','narrating','repeat_prompt','repeat_listen'}:
-                state.scene_menu_answers[state.mode]='skipped'
-                state.scene_menu_phase='ready'
-            return None
         if event.event_type != 'ButtonPressed':
             return self._decision(state, [], 'scene_menu_hold_ignored')
         if button in state.scene_menu_held:

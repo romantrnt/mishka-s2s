@@ -9,29 +9,25 @@ def manifest():
     return FixedStoryManifest('content/stories/fixed_manifest.json', '.')
 
 
-@pytest.mark.parametrize('band,size', [('1-3',1),('3-5',2),('4-5',2),('5-7',3),('6-7',3)])
-def test_all_five_verified_stories_are_reachable_without_stealing_help(band,size):
+@pytest.mark.parametrize('band', ['1-3', '3-5', '4-5', '5-7', '6-7'])
+def test_all_five_verified_stories_are_reachable_directly_without_help_button(band):
     stories=manifest()
     first=build_menu_page('fixed_story_menu',band,stories=stories)
     assert len(stories.stories)==5
-    seen=[]
-    for index in range(first.page_count):
-        page=build_menu_page('fixed_story_menu',band,index,stories=stories)
-        assert 0 < len(page.items) <= size
-        assert all(item.slot in (1,2,3,4) for item in page.items)
-        assert page.buttons==tuple(item.slot for item in page.items)+(5,6,7)
-        assert page.action_for(5)==('help',None)
-        assert page.action_for(6)==('next_page',None)
-        assert page.action_for(7)==('back',None)
-        for item in page.items:
-            assert page.action_for(item.slot)==('select',item.id)
-            assert item.title==stories.get_verified(item.id)['display_title']
-            assert item.title in page.spoken_text
-        assert len(page.spoken_text)<=320
-        assert page.as_dict()['items']==[item.as_dict() for item in page.items]
-        seen += [item.id for item in page.items]
-    assert seen==list(stories.stories)
-    assert build_menu_page('fixed_story_menu',band,first.page_count,stories=stories)==first
+    assert first.page_count==1
+    assert [item.slot for item in first.items]==[1,2,3,4,5]
+    assert first.buttons==(1,2,3,4,5,7)
+    assert first.action_for(5)==('select','fixed_neznayka_v1')
+    assert first.action_for(6) is None
+    assert first.action_for(7)==('back',None)
+    assert 'помощь' not in first.spoken_text.lower()
+    for item in first.items:
+        assert first.action_for(item.slot)==('select',item.id)
+        assert item.title==stories.get_verified(item.id)['display_title']
+        assert item.title in first.spoken_text
+    assert len(first.spoken_text)<=320
+    assert first.as_dict()['items']==[item.as_dict() for item in first.items]
+    assert [item.id for item in first.items]==list(stories.stories)
 
 
 @pytest.mark.parametrize('a,b',[('3-5','4-5'),('5-7','6-7')])
@@ -50,7 +46,7 @@ def test_unverified_unavailable_or_age_ineligible_entries_are_not_advertised():
     stories=SimpleNamespace(stories=items,get_verified=items.get)
     page=build_menu_page('fixed_story_menu','3-5',stories=stories)
     assert [item.id for item in page.items]==['eligible']
-    assert page.buttons==(1,5,7)
+    assert page.buttons==(1,7)
     assert page.action_for(6) is None
     assert 'Нет' not in page.spoken_text and 'Старше' not in page.spoken_text
 
@@ -100,8 +96,8 @@ def test_descriptors_are_immutable_and_json_values_do_not_mutate_them():
 
 def test_existing_story_themes_all_have_page_slots():
     first=build_menu_page('personal_story_theme','1-3')
-    assert [build_menu_page('personal_story_theme','1-3',i).items[0].id
-            for i in range(first.page_count)]==[value[0] for value in STORY_THEME_ITEMS]
+    assert [item.id for item in first.items]==[value[0] for value in STORY_THEME_ITEMS]
+    assert first.buttons==(1,2,3,4,5,7)
 
 
 @pytest.mark.parametrize('scene,band,page',[('unknown','3-5',0),('game_menu','8-9',0),('game_menu','3-5',-1),('game_menu','3-5',True)])

@@ -59,11 +59,11 @@ async def test_interrupt_hold_needs_release_and_help_preempts():
     h=Harness()
     try:
         await h.button(2)
-        assert (await h.button(4))['reason']=='scene_menu_skipped'  # Unadvertised key only skips.
+        assert (await h.button(6))['reason']=='scene_menu_skipped'  # Unadvertised key only skips.
         assert h.state.scene_menu_phase=='ready'
-        assert (await h.button(4))['reason']=='scene_menu_release_required'
+        assert (await h.button(6))['reason']=='scene_menu_release_required'
         assert h.state.mode=='fixed_story_menu'
-        await h.release(4);await h.button(1)
+        await h.release(6);await h.button(1)
         assert h.state.mode=='fixed_story_playing'
     finally:await h.close()
 
@@ -96,10 +96,8 @@ async def test_all_five_verified_stories_are_reachable_without_button_five(index
     h=Harness('3-5')
     try:
         await h.button(2);await h.release(2)
-        for _ in range(index//2):
-            await h.button(6);await h.release(6)
-        item=h.state.scene_menu_descriptor['items'][index%2]
-        assert item['slot']!=5
+        item=h.state.scene_menu_descriptor['items'][index]
+        assert item['slot']==index+1
         await h.button(item['slot'])
         assert h.state.active_story_id==item['id']
         assert h.state.mode=='fixed_story_playing'
@@ -109,9 +107,8 @@ async def test_all_five_verified_stories_are_reachable_without_button_five(index
 async def test_help_during_narration_is_immediate_not_skip_only():
     h=Harness()
     try:
-        await h.button(2);await h.button(5)
+        await h.button(5)
         assert h.state.mode=='wellbeing_check'
-        assert h.state.scene_menu_answers['fixed_story_menu']=='skipped'
     finally:await h.close()
 
 @pytest.mark.asyncio

@@ -31,7 +31,7 @@ async def test_unavailable_story_shows_no_theme_choices_and_never_calls_generati
     try:
         await h.button(4);await h.release(4)
         assert h.state.scene_menu_descriptor['items']==[]
-        assert h.state.scene_menu_descriptor['buttons']==[5,7]
+        assert h.state.scene_menu_descriptor['buttons']==[7]
         await h.button(1);await h.release(1);await h.button(1)
         assert h.state.mode=='personal_story_theme'
         assert not h.app._personal_stories

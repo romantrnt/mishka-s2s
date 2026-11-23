@@ -2888,7 +2888,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 "game_menu", "support_intake", "personal_story_theme", "bear_dialogue",
                 "schedule_weather", "personal_story_generating",
                 "personal_story_validating", "personal_story_playing", "story_pause_announcement", "story_resume_announcement",
-            } and state.mode != "game_menu" and not (
+            } and state.mode not in {"game_menu", "fixed_story_menu", "personal_story_theme", "schedule_weather"} and not (
                 state.mode == "game_active" and state.game_engine_state is not None
                 and getattr(state.game_engine_state, 'immersive', False)
                 and button in game_answer_buttons(state.game_engine_state, include_narrowed=False)

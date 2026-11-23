@@ -35,16 +35,21 @@ def test_menu_any_fresh_press_interrupt_and_stale_audio_inert(button):
     send(r,'ButtonPressed',{'button_id':2});send(r,'ButtonReleased',{'button_id':2})
     s=r.sessions['s'];old={'response_id':s.active_audio_id,'playback_lease':s.playback_lease}
     result=send(r,'ButtonPressed',{'button_id':button})
-    assert result['reason']=='scene_menu_skipped' and s.mode=='fixed_story_menu'
-    assert send(r,'ButtonPressed',{'button_id':button})['reason']=='scene_menu_release_required'
+    if button==7:
+        assert result['reason']=='story_menu_back' and s.mode=='root_menu'
+    else:
+        assert result['reason']=='scene_menu_skipped' and s.mode=='fixed_story_menu'
+        assert send(r,'ButtonPressed',{'button_id':button})['reason']=='scene_menu_release_required'
     assert not any(x['type']=='speak' for x in send(r,'AudioCompleted',old)['effects'])
 
 
 def test_help_and_back_mapping_without_narration():
-    for button,reason,mode in [(5,'help_priority','wellbeing_check'),(7,'story_menu_back','root_menu')]:
-        r=setup();send(r,'ButtonPressed',{'button_id':2})
-        result=send(r,'ButtonPressed',{'button_id':button})
-        assert result['reason']==reason and result['state']['mode']==mode
+    r=setup();send(r,'ButtonPressed',{'button_id':2})
+    result=send(r,'ButtonPressed',{'button_id':7})
+    assert result['reason']=='story_menu_back' and result['state']['mode']=='root_menu'
+    send(r,'ButtonReleased',{'button_id':7})
+    help_res=send(r,'ButtonPressed',{'button_id':5})
+    assert help_res['reason']=='help_priority' and help_res['state']['mode']=='wellbeing_check'
 
 
 def test_session_and_identity_reset_restore_one_time_menu():
@@ -108,8 +113,7 @@ async def test_actual_application_hint_completion_and_help():
         assert (await dispatch('AudioCompleted',callback))['reason']=='scene_menu_repeat_question'
         assert app._active_audio['menus']['content_id']=='PHRASE_009'
         result=await dispatch('ButtonPressed',{'button_id':5})
-        assert result['reason']=='help_priority'
-        assert app._active_audio['menus']['content_id']=='PHRASE_084'
+        assert result['reason']=='fixed_story_started'
         await dispatch('HandsetPlaced')
         assert 'menus' not in app._active_audio
     finally: await app._cleanup_session_resources('menus')
@@ -131,10 +135,9 @@ async def test_help_button_immediately_interrupts_hint_and_old_callback_cannot_s
         old={key:lease[key] for key in ("token","generation","playback_lease","playback_id")}
         old["response_id"]="MENU_FIXED_STORY"
         result=await app.receive_async(event("ButtonPressed",3,{"button_id":5}))
-        assert result["reason"]=="help_priority"
-        assert app.canonical_runtime.sessions["hint-help"].mode=="wellbeing_check"
-        assert app._active_audio["hint-help"]["content_id"]=="PHRASE_084"
+        assert result["reason"]=="fixed_story_started"
+        assert app.canonical_runtime.sessions["hint-help"].mode=="fixed_story_playing"
         await app.receive_async(event("AudioCompleted",4,old))
-        assert app._active_audio["hint-help"]["content_id"]=="PHRASE_084"
+        assert app.canonical_runtime.sessions["hint-help"].mode=="fixed_story_playing"
     finally:
         await app._cleanup_session_resources("hint-help")

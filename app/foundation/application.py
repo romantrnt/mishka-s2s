@@ -2577,9 +2577,20 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         cleanup_tasks=local_safety_cleanup_tasks if local_safety_batch else None,
                     )
             elif kind == "lighting":
-                self.led.clear_all()
-                for element_id in effect.get("elements", ()):
-                    self.led.set_element(int(element_id), int(effect.get("state", 0)))
+                elements = tuple(int(element_id) for element_id in effect.get("elements", ()))
+                target_state = int(effect.get("state", 0))
+                if target_state == 1:
+                    cancel_effects = getattr(self.led, "cancel_effects", None)
+                    if callable(cancel_effects):
+                        cancel_effects(clear=False)
+                    active_set = set(elements)
+                    self.led.set_elements(tuple(
+                        LightingCommand(element_id, int(element_id in active_set), 0)
+                        for element_id in LIGHTING_ELEMENT_IDS
+                    ))
+                else:
+                    for element_id in elements:
+                        self.led.set_element(element_id, target_state)
             elif kind == "scene_menu_page":
                 descriptor=effect["descriptor"]
                 cancel_effects=getattr(self.led,"cancel_effects",None)

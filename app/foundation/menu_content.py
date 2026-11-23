@@ -190,18 +190,16 @@ def build_menu_page(scene: str, band: str, page: int = 0, *,
         choices = STORY_THEME_ITEMS if personal_story_available else ()
     if len({item_id for item_id, _ in choices}) != len(choices):
         raise ValueError("menu_duplicate_item")
-    size = 5 if scene == "game_menu" else min(4, policy.max_choices)
+    size = 5 if scene in {"game_menu", "fixed_story_menu", "personal_story_theme"} else min(4, policy.max_choices)
     count = max(1, (len(choices) + size - 1) // size)
     page %= count
     items = tuple(MenuItem(slot, item_id, title)
                   for slot, (item_id, title) in enumerate(choices[page * size:(page + 1) * size], 1))
-    buttons = tuple(item.slot for item in items) + (() if scene in {"game_menu", "schedule_weather"} else (5,)) + ((6,) if count > 1 else ()) + (7,)
+    buttons = tuple(item.slot for item in items) + ((6,) if count > 1 else ()) + (7,)
     parts = [f"{_BUTTON_WORDS[item.slot].capitalize()} — {item.title}." for item in items]
     if not items:
         parts.append("Сейчас здесь нет доступных вариантов.")
-    if scene not in {"game_menu", "schedule_weather"}:
-        parts.append("Пять — помощь.")
-    elif scene == "game_menu":
+    if scene == "game_menu":
         parts.append("Можно сказать: не хочу играть.")
     if count > 1:
         parts.append("Шесть — следующие варианты.")
