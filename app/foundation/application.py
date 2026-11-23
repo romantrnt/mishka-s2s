@@ -126,6 +126,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._identity_requests: dict[str, dict[str, Any]] = {}
         self._identity_replacements: dict[str, tuple[Any, asyncio.Task[Any] | None]] = {}
         self._identity_shutdown = False
+        self._dialogue_journal = None
+        self._journal_visits = {}
+        self._journal_jobs = set()
+        self._journal_shutdown_task = None
+        if getattr(settings, "dialogue_journal_enabled", False) is True:
+            from pathlib import Path
+            from .session_journal import SessionJournal
+            self._dialogue_journal = SessionJournal(
+                enabled=True, root=Path(settings.dialogue_journal_dir))
         profile = str(getattr(settings, "profile", None) or "mock").strip().lower()
         self.display = display
         self.schedule_weather = schedule_weather
@@ -398,6 +407,82 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 record.current_node = state.mode
             self.sessions.save(record)
 
+    def _journal_visit(self, session_id):
+        if self._dialogue_journal is None or self._identity_shutdown:
+            return None
+        visit = self._journal_visits.get(session_id)
+        if visit is None:
+            visit = {"id": uuid.uuid4().hex, "lock": asyncio.Lock(), "closed": False}
+            self._journal_visits[session_id] = visit
+        return visit
+
+    async def _journal_io(self, operation, *args):
+        # Keep native write ownership until it settles, even if ingress is cancelled.
+        work = asyncio.create_task(asyncio.to_thread(operation, *args))
+        interrupted = False
+        while True:
+            try:
+                result = await asyncio.shield(work)
+                break
+            except asyncio.CancelledError:
+                if work.cancelled():
+                    raise
+                interrupted = True
+            except Exception:
+                result = False
+                break
+        if interrupted:
+            raise asyncio.CancelledError
+        return result
+
+    async def _append_journal_turn(self, session_id, visit, role, text, current):
+        if visit is None or self._dialogue_journal is None:
+            return False
+        async with visit["lock"]:
+            if (self._identity_shutdown or visit["closed"] or asyncio.current_task().cancelling()
+                    or self._journal_visits.get(session_id) is not visit or not current()):
+                return False
+            return await self._journal_io(self._dialogue_journal.append_turn, visit["id"], role, text)
+
+    async def _finish_journal_visit(self, visit):
+        async with visit["lock"]:
+            return await self._journal_io(self._dialogue_journal.finish, visit["id"])
+
+    def _end_journal_visit(self, session_id):
+        # Canonical acceptance revokes authority before any provider/disk await.
+        visit = self._journal_visits.pop(session_id, None)
+        if visit is None:
+            return
+        visit["closed"] = True
+        task = asyncio.create_task(self._finish_journal_visit(visit))
+        self._journal_jobs.add(task)
+        def finished(done):
+            self._journal_jobs.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+
+    def _close_dialogue_journal(self):
+        journal = self._dialogue_journal
+        if journal is None or self._journal_shutdown_task is not None:
+            return
+        visits = tuple(self._journal_visits.values())
+        self._journal_visits.clear()
+        for visit in visits:
+            visit["closed"] = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Stand.close also supports a caller with no running event loop.
+            with contextlib.suppress(Exception):
+                journal.close()
+            return
+        async def close():
+            await asyncio.gather(*(self._finish_journal_visit(visit) for visit in visits),
+                                 *tuple(self._journal_jobs), return_exceptions=True)
+            await self._journal_io(journal.close)
+        self._journal_shutdown_task = loop.create_task(close(), name="mishka-session-journal-close")
+
     def cancel_identity_work(self) -> None:
         """Synchronous authority revocation for Stand.close, also outside a loop."""
         if self._engagement_task is not None:
@@ -405,6 +490,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._engagement_owners.clear()
         self._game_callers.clear()
         self._identity_shutdown = True
+        self._close_dialogue_journal()
         for session_id in tuple(self.conversation_contexts):
             self._drop_dialogue_context(session_id)
         for session_id in tuple(self._personal_stories):
@@ -419,6 +505,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self._drop_identity_owner(session_id)
     async def shutdown_identity(self) -> dict[str, int]:
         """Revoke first, then drain a bounded amount of provider work."""
+        self._identity_shutdown = True
+        self._close_dialogue_journal()
         tasks = set(self._identity_deadline_tasks.values()) | self._private_welcome_tasks | self._owned_text_jobs | self._personal_story_jobs
         tasks.discard(asyncio.current_task())
         try:
@@ -426,6 +514,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 await self._max_client_boundary.close()
         finally:
             self.cancel_identity_work()
+            if self._journal_shutdown_task is not None:
+                await asyncio.shield(self._journal_shutdown_task)
         if tasks:
             _, pending = await asyncio.wait(tasks, timeout=self.audio_cleanup_timeout_seconds)
         else:
@@ -992,7 +1082,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 "session_id": session_id,
                 "operation": operation,
                 "exception_type": type(exc).__name__,
-                "detail": str(exc)[:160],
+                "detail": type(exc).__name__,
             }
             self.audio_runtime_diagnostics.append(diagnostic)
             logger.warning("audio owner cleanup failed; continuing reset: %s", diagnostic["detail"])
@@ -2132,6 +2222,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 and self._max_client_boundary.session_id == event.session_id):
             self._max_client_boundary.clear_client()
         if (takes_ownership and event.event_type in {"SessionStarted", "HandsetPlaced", "SessionCancel", "SessionReset", "AnonymousStart", "HardwareDisconnected", "InteractionIdleExpired"}) or exhibition_reset or identity_cleanup:
+            self._end_journal_visit(event.session_id)
             self._session_epochs[event.session_id] = self._session_epochs.get(event.session_id, 0) + 1
             self._paused_story_playback.pop(event.session_id, None)
             self._discard_private_welcome(event.session_id)
@@ -2975,10 +3066,19 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         if not still_current():
                             return stale_result()
                         turn_context = copy.deepcopy(self._bounded_dialogue_context(event.session_id, game_id=effect.get("game_id")))
+                        journal_visit = self._journal_visit(event.session_id)
+                        if journal_visit is not None:
+                            await self._append_journal_turn(event.session_id, journal_visit, "user", str(transient_text), still_current)
+                            if not still_current() or self._identity_shutdown:
+                                return stale_result()
                         turn = await self.bounded_s2s.run_text_turn(str(transient_text), turn_context)
                         await self.expire_identity_leases()
                         if not still_current():
                             return stale_result()
+                        if journal_visit is not None and not turn.fallback_reason and turn.chunks:
+                            await self._append_journal_turn(event.session_id, journal_visit, "assistant", " ".join(turn.chunks), still_current)
+                            if not still_current() or self._identity_shutdown:
+                                return stale_result()
                         # Commit only the current generation. A cancelled or late
                         # provider owns a detached copy, never retained RAM.
                         self.conversation_contexts[event.session_id] = turn_context
@@ -3034,7 +3134,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     except Exception as exc:
                         if not still_current():
                             return stale_result()
-                        logger.exception("bounded dialogue turn failed", extra={"session_id": event.session_id})
+                        logger.warning("bounded dialogue turn failed: %s", type(exc).__name__)
                         effect["resolution"] = "bounded_dialogue_fallback"
                         effect["fallback_reason"] = type(exc).__name__
                         fallback_reason = "provider_or_validation_failure"
@@ -4007,6 +4107,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     completion.set_result(None)
 
     async def _reset_session_inner(self, session_id: str) -> dict[str, Any]:
+        self._end_journal_visit(session_id)
         self._identity_replacements.pop(session_id, None)
         self._drop_public_story_transfer(session_id)
         self._drop_identity_owner(session_id)
