@@ -1,0 +1,3137 @@
+{
+  "schema_version": 1,
+  "default_case": "nominative",
+  "source_folder": "https://drive.google.com/drive/folders/1aO0rjuDSLINPkfMSf7hJHGOBlB5aBSKS",
+  "verification": "WAV integrity verified; pronunciation and usage rights not independently verified",
+  "entries": [
+    {
+      "key": "Ярослав",
+      "case": "nominative",
+      "file": "1d3bbLIjbB2GyllTPo1PYLYUW5H75caP3.wav",
+      "sha256": "85de133a936d26a6d944e0443d7bba7cba340078bbc955e805a10c2565a1cd83",
+      "aliases": [],
+      "source_sha256": "1eb7b03a6b58006d68ebe8569dc270138019ef9bbc04d3fcf9bf2c29ead310bf",
+      "trim_frames": [
+        143766,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ян",
+      "case": "nominative",
+      "file": "19UjACjd-mDdeg1o4fvg0BchveiidPV7u.wav",
+      "sha256": "f5b47b6410fd4a07ea211b5092039e5f1e2cc584d3ede9f57b7f530880d6f177",
+      "aliases": [],
+      "source_sha256": "c87a062917984442655049bd1151966b790e48665e390d516c00d0bee766fbf7",
+      "trim_frames": [
+        142443,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Юрий",
+      "case": "nominative",
+      "file": "1eht1Qlz4RMYj9rzVTe2NQycFH2mrLctd.wav",
+      "sha256": "7d0f76f94d26e7581a1747b98de286aa00d1994c1e8d20b0f96d44e2486e6eaa",
+      "aliases": [],
+      "source_sha256": "ef9dcecf7d50c2b48377ab7542289c9096347f952410bf862918dfd3e944e789",
+      "trim_frames": [
+        143325,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Фёдор",
+      "case": "nominative",
+      "file": "1N_EB4FplKggMlCodGM5zNRe1bb7UFl5O.wav",
+      "sha256": "9872b7c3834cfe807385f6548053824120df2f791f346a76b0a7226a82aeae30",
+      "aliases": [],
+      "source_sha256": "f1c81484bf2ddccde7e9b016a35c23016f47c7ca2eb3b422bdc800b311771676",
+      "trim_frames": [
+        143766,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Филипп",
+      "case": "nominative",
+      "file": "1H5uCHBvHw7TWmS80NfUeI5h68109UXsv.wav",
+      "sha256": "129e9eeebdebd978239701265e77983a221513846a5b06bb66dbac50206de10d",
+      "aliases": [],
+      "source_sha256": "5d421ebdae746f3d8284d5a2d33da3de10da811a702ae0261e59327095f45906",
+      "trim_frames": [
+        138915,
+        189630
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Тимур",
+      "case": "nominative",
+      "file": "1Roht2bUxdhE1NXInjIxVqzcAfLcT5op7.wav",
+      "sha256": "51f364f002e271193088d1c52323b60c00ea6ff29b179969fd0746514e1c1b2d",
+      "aliases": [],
+      "source_sha256": "1275f85c3b293261f1ca9bfdd93c72d96177c10cf9201b57924111519edb84ed",
+      "trim_frames": [
+        145530,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Тимофей",
+      "case": "nominative",
+      "file": "1tv9fXd2JZ1rVCvEgYuOoOTJkrC4qMQ-S.wav",
+      "sha256": "2fd1106ef71182e677ced2c06d49f10a4eab1790171e71a0e2e4ff22da55a3cd",
+      "aliases": [],
+      "source_sha256": "078c092c8e9ef66b06d44d3ba774c5fda6270b3d90a71a9ae3f561fddba7d4f9",
+      "trim_frames": [
+        145089,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Степан",
+      "case": "nominative",
+      "file": "1MjoGF8-6b6uuFyobwk7EyPRxF-hrwUNm.wav",
+      "sha256": "8c9bb34626c85d7bc76ac59389f73f849aa2485f0a3456092e4930ef5003ab2a",
+      "aliases": [],
+      "source_sha256": "184aff6ff802dd7e80a4f195f3bc9ee4a41ccf5a42aa8b3cce27e8077371dc0c",
+      "trim_frames": [
+        149058,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Сергей",
+      "case": "nominative",
+      "file": "1emSMvo_D4-Pk69N0LF09WumpXQBjrYZy.wav",
+      "sha256": "017601d61409d01a0a113ce6ce8c5d9a1e2599ff9920140c6225b0d012f8ec1d",
+      "aliases": [],
+      "source_sha256": "92fa4f6ed73ee2b076dc53bf8580e6ab09874c93b96b07e7455f1beeb48656ac",
+      "trim_frames": [
+        145089,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Семён",
+      "case": "nominative",
+      "file": "150aUOEeQY7jAs4aKN99iPYNh3ft5qv75.wav",
+      "sha256": "c052753582f1700e5c0c6c9d79446d8bb86fa9442b793810b257dcbc05944cde",
+      "aliases": [],
+      "source_sha256": "7093dfc6e80dba10746512bc47c537d8a2379ad9f5311d60d982f447646ea745",
+      "trim_frames": [
+        144648,
+        188748
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Святослав",
+      "case": "nominative",
+      "file": "1fosQbMoCKWGYB5F0C2RQKSwvltqz6-ja.wav",
+      "sha256": "fe03e90eeb890ecf048433fc578e14fdee91db0a721af654e45ded51b8415908",
+      "aliases": [],
+      "source_sha256": "f860c360cdb1ae42f6f1e434612364e6a58e7fe5079d94bec70b2d01b916d7b1",
+      "trim_frames": [
+        142884,
+        201978
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Савелий",
+      "case": "nominative",
+      "file": "1QtRvUH_OUbn2vj2CX7HLV6VqG1Cj5ZsD.wav",
+      "sha256": "1bec07420fcffd7955b5d6e5186a1221be6e8deab47a7271eff0844388d6c217",
+      "aliases": [],
+      "source_sha256": "ca99b79868716ee772acb34ed47ed79e4c1b4cc722f2d8829ecdc90bce093f6b",
+      "trim_frames": [
+        142002,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Руслан",
+      "case": "nominative",
+      "file": "10LLcsg8GQnyJahWYEk0TXUgEpLJmjCKH.wav",
+      "sha256": "d92ec119a570541ce6a5882d77a9a48be874e1b2ff5d0be3bdbf69c1a41493fa",
+      "aliases": [],
+      "source_sha256": "2ad7a1f9c38f84238ae3a9e2ec5bae4a78911c0e166fa076d03e5046dec32301",
+      "trim_frames": [
+        141120,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ростислав",
+      "case": "nominative",
+      "file": "1l7a_Ky4ycMDNTkNdqbEtKjwHVM-u2lii.wav",
+      "sha256": "56de7ee87aa24b4ccb1c8a9ef23ccee226f037b2f55d0610d9daaeca892028ef",
+      "aliases": [],
+      "source_sha256": "f05b78e0f105bf362c21040a8e6d69aba6fc17ad58b57afc2871e981f08fe5dd",
+      "trim_frames": [
+        142002,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Роман",
+      "case": "nominative",
+      "file": "1KPZKu-cn1tpDQT2dHF58H2YIHgPrRFoo.wav",
+      "sha256": "e823a1e55973c5fb4770f7fde31661973838bd7e26667b37f68e88d507e68fc3",
+      "aliases": [],
+      "source_sha256": "59d976d3b15730bf7f1837805acbdbcba231b12f5d2f1b0b928cb07f6b6383d9",
+      "trim_frames": [
+        148176,
+        198009
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Роберт",
+      "case": "nominative",
+      "file": "1VCmkPLmZB0g3vzoNopCNxUHI-Elz5CN7.wav",
+      "sha256": "65382b435d7aba2ef3c5b8a7dca64826c0186fc7b2fa8075933ef8762783836e",
+      "aliases": [],
+      "source_sha256": "4dec08e801773e000584daaa72d0c9f5c395c635e611597a68f3be003f4298ef",
+      "trim_frames": [
+        145971,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Пётр",
+      "case": "nominative",
+      "file": "13O0TcyxKgmZyVF6HEktIWfFb2KmfsBkh.wav",
+      "sha256": "9f36e8f5d9a77d7e2e69218eb689de51f6ee6e6a3ca6728f623f5892e7af5ee9",
+      "aliases": [],
+      "source_sha256": "3ceb6002cdee9f6297cb844e1f306df29bd8f919fe855b95812310233f834e24",
+      "trim_frames": [
+        146412,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Платон",
+      "case": "nominative",
+      "file": "16dyNJJqBhew4snfHvA-XgPbPoET0izL7.wav",
+      "sha256": "5f521fb91e79cb30e83eb178fb9c789e23bd7fa589ab04f6fda9e1f7a3829c7c",
+      "aliases": [],
+      "source_sha256": "9e0abe0a8f4d5a9eb7c8ec0dc5b56612a75ff44ce4fd964ae19ac10bcad4364c",
+      "trim_frames": [
+        140679,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Павел",
+      "case": "nominative",
+      "file": "1hoilN8T3kePekm6RaLUIU4YG_yK1xA__.wav",
+      "sha256": "9a8b5830546f591b2b679c02a565e33614b670abcda9176070cc55be0e137fdc",
+      "aliases": [],
+      "source_sha256": "d949da3c40d70ddb99e11c7076eb6e5ae7d0d062535dce04d02f6f60d2309f02",
+      "trim_frames": [
+        142443,
+        191835
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Олег",
+      "case": "nominative",
+      "file": "1Jp28BrWzmLb6UQfqattLwypHl3565UUp.wav",
+      "sha256": "025884f6aa4a13aea328886d6ea05971d130aec9d84b8e0a183c99eee56ab07d",
+      "aliases": [],
+      "source_sha256": "5ce9b0efc07052af6d6898f9ae188ec4a285033e585e1dd9a24e87fd41e3caf3",
+      "trim_frames": [
+        143325,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Николай",
+      "case": "nominative",
+      "file": "1fSvD_746uWDwmO_23pJXKFrRBIugOX_f.wav",
+      "sha256": "8924deb219e51f0621a6da478d4a9774bec45e9d01f5674b6914a98ff4acac52",
+      "aliases": [],
+      "source_sha256": "12708a2dda77d096f9be015666ebc3e6dc896f6f4ccb2ed39757e5ba96c3f6f9",
+      "trim_frames": [
+        142443,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Никита",
+      "case": "nominative",
+      "file": "1AD8oLilLczUGmdJ6t_HEWLcUSjm-V4w1.wav",
+      "sha256": "da02f2d745cd9bb8945e8b39efa8b3b2dede7b167108fbb405573d0f38eba48b",
+      "aliases": [],
+      "source_sha256": "72787e9e631001a55db0c8c9f285e8736f64322189de90de83131cd871434228",
+      "trim_frames": [
+        147294,
+        198891
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Михаил",
+      "case": "nominative",
+      "file": "1DiJQUcyMoZkjn09MxGJauZjENraHpeXz.wav",
+      "sha256": "abaa48aa372745b1c16555a31770ef3ddd2115c335a37d118e141e2187242303",
+      "aliases": [],
+      "source_sha256": "7a7e5c5119afff4fbd03e64f1a0a9900916829ab3c9e9391c6a21565ff6187c9",
+      "trim_frames": [
+        141120,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мирослав",
+      "case": "nominative",
+      "file": "19fep8eX7Pi3BXLdO5Z3lGVTh4DM3-EGk.wav",
+      "sha256": "346ffadabba48f5b6963cd2561ab71db0df183e9456b0cad2be68a5b375956bc",
+      "aliases": [],
+      "source_sha256": "1407062b6869662b6ed4e8e12a19700442359f893ece4182ea793640f2900560",
+      "trim_frames": [
+        144207,
+        200214
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мирон",
+      "case": "nominative",
+      "file": "1DmTRAjot0d99s3ycFzgqqqWHiFbxWnC9.wav",
+      "sha256": "ec14fe3265712fb8bd1dbe8d982fc23b7f8ba892d47d484b07ca45d04f7f6aca",
+      "aliases": [],
+      "source_sha256": "c8ecfbf8842ad7c32d3f72d0b628637d884596f438c4484d856ccc6fb4aa0932",
+      "trim_frames": [
+        145971,
+        189630
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Матвей",
+      "case": "nominative",
+      "file": "1VvdaI6ZE3FfjPTOvBnpcRU9ovA_oNT1C.wav",
+      "sha256": "3480247a25252f5e96ff3e31d3493ecde5e27380fd6a58ab9526e8bd27948d9a",
+      "aliases": [],
+      "source_sha256": "ed57f6fe8c860c1b974bcfa75e71cc4603dcdb54278cf36410ad37c009622de7",
+      "trim_frames": [
+        145530,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Марк",
+      "case": "nominative",
+      "file": "1zL_SFHXOjAaHnYf5xvFMFfZKHdBo4BKz.wav",
+      "sha256": "40934d72ce9382cc564f3eacc2d3923d2e85c0c506ce02f71e1d4c2cb392cd41",
+      "aliases": [],
+      "source_sha256": "70627bd8e6492301e1ec4142250ef2bc1ee171c81dc490bdd8bcd3e3906a79cb",
+      "trim_frames": [
+        146412,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Максим",
+      "case": "nominative",
+      "file": "1T7zNZUpyQjs3JuOo9iyvixO-g3yR639s.wav",
+      "sha256": "4f1d06b7afdc7b1f0c0edd01adb0824996cf603606665bb95da99e01972027ac",
+      "aliases": [],
+      "source_sha256": "bf79c7874f9b0774c92b43c94f30296883e9d771eceb33499cadf67a88d4fa8e",
+      "trim_frames": [
+        148617,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Макар",
+      "case": "nominative",
+      "file": "1QP6ZwCviyyfbkjddxfOzyo13GC57Dt3F.wav",
+      "sha256": "b66cd079e6252e63856188273ceed47fd70a8ac329367533b1c9a7cee52768f0",
+      "aliases": [],
+      "source_sha256": "ba7ea252adb9c599badb5ffa3d426ae5f12233cdffd6c111737761c00b42d7e9",
+      "trim_frames": [
+        142002,
+        194040
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Лука",
+      "case": "nominative",
+      "file": "1i0gVZKbXvHfBH9N39n8Hu6304FCQ5gUK.wav",
+      "sha256": "b98119a3a6d73a421b1b56622466a0e8091c4f8cb579cfe1a0dcfb86095add1a",
+      "aliases": [],
+      "source_sha256": "41aba2f1814e530ebed3c02ae5fed80f5c05e6929c146354ff3eb1258750c824",
+      "trim_frames": [
+        142002,
+        192276
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Леонид",
+      "case": "nominative",
+      "file": "1f3cfqMWjUiQPLIapDKW5-4SG7JOTPJ9m.wav",
+      "sha256": "b0e257d326b926869f3f8d30e40eb158968b2b4fc827b5bc88836499e1c4b5cc",
+      "aliases": [],
+      "source_sha256": "fd19776a27cac5bd2e80d397d136cfdb2f6503085219be6eead4d781307f5c47",
+      "trim_frames": [
+        143766,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Леон",
+      "case": "nominative",
+      "file": "1XRfMmdohP48d475Le1hnmPHJU6hPxLSd.wav",
+      "sha256": "a63cf914a051fbe68a0bafdaffc6cd014a53e343c7e448d4fb7df4a9e9004d9d",
+      "aliases": [],
+      "source_sha256": "67586f5cbf07e59ce5b424dcf3e8a3752c04e53b44f469173505a0cacb2e74fc",
+      "trim_frames": [
+        144207,
+        192276
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Лев",
+      "case": "nominative",
+      "file": "1G8L_Mu28L0Jynr0WUVZTAIFiwVbXAmm2.wav",
+      "sha256": "8695ea5fd0d457f75020bdba53434e4d57ea134596f4e34f28ceaf419bd6b855",
+      "aliases": [],
+      "source_sha256": "a29d33a23d821fd449381dfd4188301460e312b99d5a4706ae70d85c2c7aac15",
+      "trim_frames": [
+        146412,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Константин",
+      "case": "nominative",
+      "file": "1QNjFoz8p55wp1NE6zPQ9ahS-89yxuw05.wav",
+      "sha256": "03febdd9006e5aa264493145901fed8b29c43f0df1b0a281fbadc2e6ebdaaa0e",
+      "aliases": [],
+      "source_sha256": "c5523a8dfae1f887737b89695934ff6b8bb6d3fb633471ca575cdfd3623e6c8b",
+      "trim_frames": [
+        142443,
+        198891
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Кирилл",
+      "case": "nominative",
+      "file": "1sV_y52YAvorbboTf5gDTZpOMNmEBripk.wav",
+      "sha256": "1e8c6026af4d0e30f122ab3bb0c6bad75918087fa54f567d45ea550fe6ebbc38",
+      "aliases": [],
+      "source_sha256": "d2a9725ed5b37d2eed9e6f80303f771c26d195135ba7bb4711ef61397c369bf8",
+      "trim_frames": [
+        146412,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Илья",
+      "case": "nominative",
+      "file": "1_sywq4_crqcRbxxgGeinp7fjtjcvylSZ.wav",
+      "sha256": "5efbe0ee963bd45e8f0dd01daa82005f64819f1a2102aad1825bca5c5d6bd64f",
+      "aliases": [],
+      "source_sha256": "43c70ae7b50d9a2946a46381bf1ee4e85b2e5f46769e1941adc365ffd751d2ea",
+      "trim_frames": [
+        146853,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Игорь",
+      "case": "nominative",
+      "file": "1o_ZiqBcN_SElPIbYQRmI5xEd9yWflaTR.wav",
+      "sha256": "153c2b406777e43ca9050784e12f7a4d11874467b93c68ae15dd4ab89b9ef9eb",
+      "aliases": [],
+      "source_sha256": "ee5328896c1ca613d3a49738de899476b08d387bd25b0dfc05df2e808efd1bda",
+      "trim_frames": [
+        144648,
+        187425
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Иван",
+      "case": "nominative",
+      "file": "1rAbvGmBTtqP86MMjlzqckPOEPauatUnJ.wav",
+      "sha256": "43f74032df550a8d573ac4f0854d0cd896a34d81787ef62dd1b7e86a984c68b9",
+      "aliases": [],
+      "source_sha256": "3cc408866998a76c2bc6df93439511d3c03fa1dea63d742639dd43a4e6958250",
+      "trim_frames": [
+        148176,
+        196245
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Захар",
+      "case": "nominative",
+      "file": "15vprJ2vrsd5udLv_FLQP9xOEGJxgeoRn.wav",
+      "sha256": "6534651c578cddd9e2eada1201f27f984f287b61d6d574524eb7a9e7d62990f6",
+      "aliases": [],
+      "source_sha256": "a9a2d76367fdbe1dc35c5893b73ebeb70f36053d6c43705c8e95c0bf7a7a42be",
+      "trim_frames": [
+        144648,
+        191835
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Елисей",
+      "case": "nominative",
+      "file": "1bAjjoT7fX9Ja9hzV83GULIk017c_T1N-.wav",
+      "sha256": "c90139875fcb72b779a09aa1bd73518d26d561d27547552366e1765722a9bd49",
+      "aliases": [],
+      "source_sha256": "0d62a7d49b29757855180bbe58fdd3d5b2fd9f6a40a284bc53fc16f487d53c92",
+      "trim_frames": [
+        141120,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Егор",
+      "case": "nominative",
+      "file": "1Kgot6BDR40a0wts_vF67jWyF9zWwyG5R.wav",
+      "sha256": "f7e423c446c6f7a676e84f4ae368e4241e9be6bb56730547928b63f67abad949",
+      "aliases": [],
+      "source_sha256": "1434ffcd52db426644d697ac3242829382bac96696193b591c1d70269d742238",
+      "trim_frames": [
+        144648,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Евгений",
+      "case": "nominative",
+      "file": "1rmJReclk6OGugB-yqOEgdS_5kJWMDsPN.wav",
+      "sha256": "191098b8c9f7a4e380346ad31568cfb0f4c6ec737d61a3c492e1331ff75ecefa",
+      "aliases": [],
+      "source_sha256": "e291de176a08458b5d3c211dff3f1257e78a4f41fe965745df6752fb1dfa821a",
+      "trim_frames": [
+        144207,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Дмитрий",
+      "case": "nominative",
+      "file": "1fpYP9MaH11zhLIsSzB2b2JCv7KIweWhP.wav",
+      "sha256": "7c007af320aa9e1d4f0c29e63bfddbe4da224fbb4c10530aa62ac18407412682",
+      "aliases": [],
+      "source_sha256": "6fb65ed8c6fceb07569fb2ae1de9139ae780ebad70b2358fb06340815fbfdc7f",
+      "trim_frames": [
+        143766,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Денис",
+      "case": "nominative",
+      "file": "1Cf6rTvT2qbzleySB0Fn4mcHEbe1MKhxb.wav",
+      "sha256": "dd336c8f22e51ee2ca74413e02339980c628c5b6f1e51401b0a4724655215c83",
+      "aliases": [],
+      "source_sha256": "9f9ac3e442e67f6f11a1eab975dbe89658f1db206f971358de06fa020f6a50ff",
+      "trim_frames": [
+        143325,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Демид",
+      "case": "nominative",
+      "file": "1w-mId-LYJi2bV6QXlZTnTysqXv-NeSA2.wav",
+      "sha256": "c818e007167062ad5d3eaa6ff0ea883a42a53b1d55759d0ce2a1ce6d470d3693",
+      "aliases": [],
+      "source_sha256": "c5ab2f1196efd4c93e1f32c37d4d9f1904f8638153f88acb88c006e3ebddbe99",
+      "trim_frames": [
+        138915,
+        191835
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Данила",
+      "case": "nominative",
+      "file": "1pU-pFx2QQhyBoaClsbSgbzAyeSiTxKVj.wav",
+      "sha256": "e30626c756af0a436e106d42769aa31bad90c3c0211a78bb5871b651af2d40fe",
+      "aliases": [],
+      "source_sha256": "9cb3b1bcc7df80d600721add89e71adcb8b17812cf98bb675751fd987834fe32",
+      "trim_frames": [
+        142884,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Даниил",
+      "case": "nominative",
+      "file": "180j7m7FNQRnOa_zLwlKKlSJ_kPVnxlpm.wav",
+      "sha256": "c055bae4b64769286ad37d9427a3459a90d68482cc1e73bf142e4975097058bd",
+      "aliases": [],
+      "source_sha256": "6e6f9532cac3e06d39b34bb01f656a7e27347723bda3924c85bed60a7db0fb1d",
+      "trim_frames": [
+        143325,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Давид",
+      "case": "nominative",
+      "file": "1GQO1HC-3H53eFAoLFidrZN0KE5XADSRI.wav",
+      "sha256": "4c6c442e9389e0c19dc8dd434c5b6177e8782edec1e1f1a765c4034c50ac4a08",
+      "aliases": [],
+      "source_sha256": "ae213d33d7a0c8878b480b4ad090808ee0f65f1082d42ffd790648e138082bcc",
+      "trim_frames": [
+        144648,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Григорий",
+      "case": "nominative",
+      "file": "1EuIQqsaDPYoii3FfBZYip7H2-WfsJCGp.wav",
+      "sha256": "bf4153c6f50283cb0fe6e9f3c7fe8939c26863576f4a873d1662490c5e8c0179",
+      "aliases": [],
+      "source_sha256": "73d7c2df993310b933bfd85295ef3071e6d7e8c80570a1bb6bbbbb8d0963a0da",
+      "trim_frames": [
+        144207,
+        196245
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Глеб",
+      "case": "nominative",
+      "file": "1LjiBjhAHnRyIWzaAMlkApar4jZjaN2HN.wav",
+      "sha256": "bf13a8ff2c325a4d2aefc93b476d151e9edd8ded690b49b7a62aa2bd7211430b",
+      "aliases": [],
+      "source_sha256": "790c0942da6d2870b7207faf476a165fdb4dcf650e241ace1bcb6e20a865fdc5",
+      "trim_frames": [
+        145089,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Георгий",
+      "case": "nominative",
+      "file": "1DVvQFahTLsqw252nJBbn7I7n6Hd071WK.wav",
+      "sha256": "dee547c0232393b7dc88ba87659a8f7fb36a4ce6db295746a2bfdbbea53c0f85",
+      "aliases": [],
+      "source_sha256": "448133893edf4634c092c31c349559edc4a4c33920fedf709150e5c759828bee",
+      "trim_frames": [
+        142443,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Всеволод",
+      "case": "nominative",
+      "file": "1eBOjaaCRnG4LdbYDV1rHk6jXlRGds69E.wav",
+      "sha256": "34da0a04612750ea868cf3d94ed0dbe7c5e2529b4c684826f3aedfe4ff50fab6",
+      "aliases": [],
+      "source_sha256": "9a1346b654f895742a4dae4aa72b242b39c0e38050f37ea14f77ddbcf54a69fe",
+      "trim_frames": [
+        146853,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Вячеслав",
+      "case": "nominative",
+      "file": "1XJrv_TlHRfdbTdddkhhi7kbSW9d_WVsx.wav",
+      "sha256": "c87136f68c96476d0f8abfa4cda0fbbb2ca604720d77523b60755eff8930dcba",
+      "aliases": [],
+      "source_sha256": "5100724a499bf9b40ed74d7d2fbf01ed13b1fff7385c091d6b92d674b0023eae",
+      "trim_frames": [
+        143325,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Владимир",
+      "case": "nominative",
+      "file": "1QJTmZ88_Mak_4Dhfefhvv20vfAEv9H1F.wav",
+      "sha256": "9fedb38551286b43897a9dee9541ebe09bdc38f172e08924c404e2f03fad3a50",
+      "aliases": [],
+      "source_sha256": "3f0e959809a0805318b0fdb9ac2c7731977abea3d82671f5facc8dbc4cd08088",
+      "trim_frames": [
+        140679,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Владислав",
+      "case": "nominative",
+      "file": "1EfBOM2_LEMmu2DN6psdqBj8h8ZMq-_Gz.wav",
+      "sha256": "3fc355a72e4eb76dfad79f5aa020a54b03465f4b1757b5bfd7c7bdb5c955dd0a",
+      "aliases": [],
+      "source_sha256": "92ec501abe3383218245f5cc37db1f12615a7cf853e83de8553f6e9e14cff45f",
+      "trim_frames": [
+        142884,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Виктор",
+      "case": "nominative",
+      "file": "1q0kPZPuJ2mBj1c22nz-Xupjuk_-wiAAF.wav",
+      "sha256": "4cc11d35e01c544aae7620691e93284ab169bbd2a9a2e3a028b2d733cc10a88c",
+      "aliases": [],
+      "source_sha256": "755eb30177ff7a5b1e0372d9d76f4bd273dc792930d2d7de28c79e271796e37c",
+      "trim_frames": [
+        144207,
+        191394
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Василий",
+      "case": "nominative",
+      "file": "1kbmleBqPWXAIHcqCsAagzn1hsFvl_ssa.wav",
+      "sha256": "5068e1107730bc50fadba535c72e3947ff68c15d5224c9c99af1ce51a01b3e7a",
+      "aliases": [],
+      "source_sha256": "e38f883785b45929119e1e2e2b25e64ebab1620cb10fc8d42e98e1ac0db2ee16",
+      "trim_frames": [
+        144648,
+        199773
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Вадим",
+      "case": "nominative",
+      "file": "1xUtcN_n5GQY9Dv7W13UHMH2ZSgCdNGPS.wav",
+      "sha256": "eb6f7371a419ae589ee8c26725e94efd8c35bae4a793f0734bb491f05ba5cbfd",
+      "aliases": [],
+      "source_sha256": "71ab0b917770fad5ee5ffa97518c022ae616b775eedb112d60903c370f3dbd3d",
+      "trim_frames": [
+        149058,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Богдан",
+      "case": "nominative",
+      "file": "1pVtU5I4tGQRvi_i-p45d0kHaTJdEIUgP.wav",
+      "sha256": "4bb23e234034ff7279dd470dc73af3dd8622936e355158ab9ad9aab72a20264f",
+      "aliases": [],
+      "source_sha256": "ce632f780528ac51df41175e0145ac36601c9b8d699c80a354c217f51b7d44f4",
+      "trim_frames": [
+        144648,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Артём",
+      "case": "nominative",
+      "file": "1UKlLcieuvLU0_LnuYnD8yZ-6fIfg1jj_.wav",
+      "sha256": "eef68e13364136f059e36dd3b0d69999e4c5294d4bd5fe58c91f81785a20f6e9",
+      "aliases": [],
+      "source_sha256": "c7f02c53a58d15649c056fd37451692bffc94146e9ecb007d0d969e26695f2d0",
+      "trim_frames": [
+        147735,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Артур",
+      "case": "nominative",
+      "file": "1cO7UBiM4LGQRkOo0zbvbC4UvKquaYB_K.wav",
+      "sha256": "8a8d5b7a55e09a353e76507c1df2fbcc89c453d92c49efc6f7c91f659f1b4a50",
+      "aliases": [],
+      "source_sha256": "79f9b665880e55bc91310cb11bff066b3955e4708589d8e879f49e25ea144357",
+      "trim_frames": [
+        141561,
+        191394
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Артемий",
+      "case": "nominative",
+      "file": "1cTImo1Pek_VOETpWa48m28bAZsz--MGM.wav",
+      "sha256": "2decea4a8daccc6072961e56bc95fec8c693868becf0b5c9d73d1a146d441f44",
+      "aliases": [],
+      "source_sha256": "a43939173ffa6f46336ed3187e9e48f2a8ef3aeaedfea361717a48515bc7ab23",
+      "trim_frames": [
+        145530,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Арсений",
+      "case": "nominative",
+      "file": "1I8nUpqiN-Pu5RXPVWsa58z638VySDU7M.wav",
+      "sha256": "78f86b28fd39e5651081108e6c0e02d4e56ffb23234822f919c73a34091cbd63",
+      "aliases": [],
+      "source_sha256": "b6e48c06b5d980f02da3dd558b38f4120f9f9f068708a22b5bd66518e69ae947",
+      "trim_frames": [
+        144648,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Антон",
+      "case": "nominative",
+      "file": "1l8rr00dZEw0BI1xWk7DuM3568BY-a2uV.wav",
+      "sha256": "5110f38af31d6c7ba7a38a5eff12d045554a987cf60bfc899a8c128cf81f8fad",
+      "aliases": [],
+      "source_sha256": "b42c6d80b953a85e12181798e21637e50eeb7b891b49e86b568213fbd5dddc59",
+      "trim_frames": [
+        145971,
+        198891
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Андрей",
+      "case": "nominative",
+      "file": "1itlagnO6CyEAlO9dz4YL1Pal5EL-VOCJ.wav",
+      "sha256": "3ff789f063e0ebd8070054776973546a52d91b67f830e9b51d519ed41a567fa3",
+      "aliases": [],
+      "source_sha256": "643c797522d5d665aef378fdaf61c827a38f34d18ede0a889a2710a97c62a17b",
+      "trim_frames": [
+        144648,
+        196245
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Алексей",
+      "case": "nominative",
+      "file": "1oa1PvyFnvJbojDk0zdBlv1I65dvAl1H1.wav",
+      "sha256": "38f2f3fe4b099bf2a9bfba46751b22576f4882c6eba88042792a2ba0e3d38771",
+      "aliases": [],
+      "source_sha256": "d7a62c025801bfdae1cb6687a65d5d9af6feb0029ed573ec051aa586dd499cd9",
+      "trim_frames": [
+        145089,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Александр",
+      "case": "nominative",
+      "file": "1DYiPpUCCDeOJDW-VevzwvTYt59j_BQAb.wav",
+      "sha256": "3c98dd5d22facba6b556ce120eab319981459b0aca56389654df1e6698f43179",
+      "aliases": [],
+      "source_sha256": "a88eae7d9c26d6a8f1545cf1a8b24ccab0d7c8197d87888fc7428aa547eb1719",
+      "trim_frames": [
+        143325,
+        200214
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ярослава",
+      "case": "nominative",
+      "file": "1fdOjjCYVQ0GhXsW6WWCl6FGPAnH2TLbG.wav",
+      "sha256": "725943a124435006ae7121c80b89acdb8ef4877a114d273c17d59352a49bcf5a",
+      "aliases": [],
+      "source_sha256": "85e93adbc461280d143a48f8d6d51b305b3e5cdcb4e5435f388b6a032271b9a2",
+      "trim_frames": [
+        136269,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Яна",
+      "case": "nominative",
+      "file": "1Tj_6mITT19WQolZtX5_QiuyM1LIRXn9H.wav",
+      "sha256": "c208bc3de374ec929130cba1dbe9330510deb83f6d2aded2ea08d4d670d0ab81",
+      "aliases": [],
+      "source_sha256": "04da3fc6aeed48a94fd54fdbb4f11c738946b5e9d8c082ae10557240d484b4f5",
+      "trim_frames": [
+        141561,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Юлия",
+      "case": "nominative",
+      "file": "1fZCuG7r9uvfadrSW0iMnXFs8SGx-Bshp.wav",
+      "sha256": "79b0a1f1ffcb7b5cf8013456f893ba2354d5190d96e4ad7649971f34941bb0cb",
+      "aliases": [],
+      "source_sha256": "443a30dd93e69de4d56bd37145e08365f93b8251f8069a99dc222601d11844af",
+      "trim_frames": [
+        143766,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Эмилия",
+      "case": "nominative",
+      "file": "16qzaKI4BNspVZG0gP4owob5GwZTFCyPx.wav",
+      "sha256": "105f809e697180b7d86a872f580c94e94ee53e7f6d4eb64b72c4fac44d6a81af",
+      "aliases": [],
+      "source_sha256": "b110d30df2135dfb7a67339e741b27b3a6d93e68b46a6e7ed6996ba5b415d33f",
+      "trim_frames": [
+        139797,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Элина",
+      "case": "nominative",
+      "file": "14exXKAKWUI5jo-oPFDFJ2lH_L4Lpdq-m.wav",
+      "sha256": "ed9e2f39146ef4448724684cb15728fbe8f644359a93d9e37c325a1ab59065c6",
+      "aliases": [],
+      "source_sha256": "0f66a606dad3d036f7181f712ae44185f17e7582b8369095e6352badd4c6f81e",
+      "trim_frames": [
+        144207,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ульяна",
+      "case": "nominative",
+      "file": "1T6OH5nD-tgIaeqnua3GdTufZbUC9Az31.wav",
+      "sha256": "cb0938ea5802e12f457fb0970d538b195f1575fce1c0512ee3a96bc4b3565c26",
+      "aliases": [],
+      "source_sha256": "0d507afd8b705689cbed5ce5df607ccb0dbd797915851accaab792321afd14c7",
+      "trim_frames": [
+        145530,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Татьяна",
+      "case": "nominative",
+      "file": "1jdfdiYQo_ZZyVsY0tG3AZBHDeCv9He69.wav",
+      "sha256": "726c7a70e225a65534634e1b0456ecd1fe4e1e00323fe4dd1b7936d3af5e3a1e",
+      "aliases": [],
+      "source_sha256": "a80342cd66cea53fddef15787ca9c876d0fdf987fbc83bc9572bb0e5d6647c2b",
+      "trim_frames": [
+        144648,
+        198891
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Таисия",
+      "case": "nominative",
+      "file": "1fytj51PDnpc-_xTEujIGbc9DknMCCGFd.wav",
+      "sha256": "6f62ad972886bd223249532d67d9a9b631baa4ab08fcb9d3602f51e7e2decd45",
+      "aliases": [],
+      "source_sha256": "e15fd7d789a2031b6e05062ae69320233faaf41fecaf3e3636de97f09d121d29",
+      "trim_frames": [
+        137592,
+        199332
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Стефания",
+      "case": "nominative",
+      "file": "1owhrkKCzhR8EBI642lrNrMpZnK2qr57V.wav",
+      "sha256": "205e1a0091e6ae34130d2a161d9a8fad5fc04bb373c8a3cae3d1cb1d5da1bb23",
+      "aliases": [],
+      "source_sha256": "0a4f441136bb57151bf2cbdc6145812ae9f14e735f10e48e240d527abba8dee6",
+      "trim_frames": [
+        139356,
+        200214
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Софья",
+      "case": "nominative",
+      "file": "1-cjT0sm8eCOdzDsjGVbCd4rtwmvXgT7k.wav",
+      "sha256": "c4f3c5b00df76d236e6cc1166052c1d750cbc16ce326d267cb02a9d6087182ca",
+      "aliases": [],
+      "source_sha256": "fd99dc679e47f7c2780d8c7ebb3db55634a9f433768b67cdeea65879367802c0",
+      "trim_frames": [
+        145089,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "София",
+      "case": "nominative",
+      "file": "1-dLZAW91eDYQo0GDzFljMb1YNh7FClv9.wav",
+      "sha256": "ebe88778aac6b2289483b7c22acc2354f768bbf9b5dbcb4ac369bb7a21fae163",
+      "aliases": [],
+      "source_sha256": "5254983006b7218f01cce81b9326fc9852e3b601c23edc813bd307fd69a3514d",
+      "trim_frames": [
+        142443,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Снежана",
+      "case": "nominative",
+      "file": "1BHW3my9V6lhUG-VyJ9tDFJ7xGWcDV6e2.wav",
+      "sha256": "42bc6746f265f389d807b7d9eb7427dfd28c159d8b70f88aa9542a1f9c1b4427",
+      "aliases": [],
+      "source_sha256": "0612b68f0abb6f6374203b1011bbb30232f2144b4343e70b4c2ce3af958354e6",
+      "trim_frames": [
+        138915,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Светлана",
+      "case": "nominative",
+      "file": "1aakJ0PUFWyDW8Ks9UaUfSdCxK_-NmPvw.wav",
+      "sha256": "201ca4809969e5ee60c7853106013dc1f2886637792099268f0e148e94134910",
+      "aliases": [],
+      "source_sha256": "105bccbe5aa139a8c0cd84428194e098803162c52a2264b4880fb71e6acbf32b",
+      "trim_frames": [
+        142443,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Полина",
+      "case": "nominative",
+      "file": "1i0n-UMRGJx2R1hCKiu-95E5xay3YBjME.wav",
+      "sha256": "333ab8294242f26dc13851572b68925f5b411342ba25be8f7a32a0b6681f9d50",
+      "aliases": [],
+      "source_sha256": "f2d7dcfe78fbf6785f87595cb65586bf108870b3a1f139bf029cb82c0a1350b9",
+      "trim_frames": [
+        144648,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ольга",
+      "case": "nominative",
+      "file": "1m28gGFqskShccmeLuxIsLOk3IsDcpgxU.wav",
+      "sha256": "553fbf1c2069a349e093ac00db8dbd9c443f416d9c6f5a610101d8cf420127eb",
+      "aliases": [],
+      "source_sha256": "1804a00eb0bcef076c5cb95ddc784c1c551625ad1025cb4ba41c02abf08320b7",
+      "trim_frames": [
+        143325,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Оливия",
+      "case": "nominative",
+      "file": "18oQOPB73mNhxpfQQlVjKLubgyQXAb52D.wav",
+      "sha256": "77c1f09e796960ffad59ac33c5645780a22f82fa367ee8525f08dfab2324f8e7",
+      "aliases": [],
+      "source_sha256": "1f2587d8450b542b649ee8edf46613bec6c93fe94fa14c6e9503270b1a590b1e",
+      "trim_frames": [
+        138915,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Олеся",
+      "case": "nominative",
+      "file": "1BWRhIa09s7khhV1fOWros3p2kBW7_70N.wav",
+      "sha256": "cfd7b84fa9d2a73833af8e386c608f83853af3767cf6283585974a7ea29fa0c4",
+      "aliases": [],
+      "source_sha256": "6f8e5efc42ad5fc8df89b14ee98c4278e2895e638b13e0990c85b21e8b0ab8df",
+      "trim_frames": [
+        145530,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Нина",
+      "case": "nominative",
+      "file": "1utmeBlAPm3NiFEzVKXkyGQWfn8uc8wiU.wav",
+      "sha256": "5e51f8f44de86849258c4a55c47d8517f559a53db3f798cc9c989a822c6d5b48",
+      "aliases": [],
+      "source_sha256": "59853df0dedcd713d3211930ec5c5534039d7ad33108955157310d894df8f794",
+      "trim_frames": [
+        141561,
+        188307
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Николь",
+      "case": "nominative",
+      "file": "1iXCt6623vKN_wMt3L0Jzab2dRwPcCr9M.wav",
+      "sha256": "a17e28415f10d03040ad609c66680b648134a4afaaafd57205fd9d37c467a28f",
+      "aliases": [],
+      "source_sha256": "5fc5dd386e96705ea3e5f333ac2aee214391bb8ec22e2386a1cdbe5e76645ea9",
+      "trim_frames": [
+        145089,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ника",
+      "case": "nominative",
+      "file": "1ywcjWgDd_mcraremcaDPZubjd4KV9KLT.wav",
+      "sha256": "4090d73fd4a6e73f4b76497fe1a02d39b5df0ba7967accf2f6e2ed79bae077a6",
+      "aliases": [],
+      "source_sha256": "16705ebceda55ece127134887f65743199db9f7240bfd5e708f7c1aeca2087b3",
+      "trim_frames": [
+        143766,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Наталья",
+      "case": "nominative",
+      "file": "1lmIrTLIA8sd5jZV4cpob_UO14Viyr21V.wav",
+      "sha256": "49dadf30125c6cec9d365272be0d57e5b4dd92ce99f63b405087b4fb19beeb66",
+      "aliases": [],
+      "source_sha256": "3e0a246962d6c457ee9c67e09da5e6e2c65cbec5f9f71960bd1906c9ab6e19c5",
+      "trim_frames": [
+        139797,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Надежда",
+      "case": "nominative",
+      "file": "1qmMzo-LAiB6RoUPGEjCADIY-7zKH0b-L.wav",
+      "sha256": "4fa0332e9f25626bd877b3c58d01bfd3ecd2d99f7f2749890a2b0ff8ec675d8a",
+      "aliases": [],
+      "source_sha256": "c297474887d0afe9a4024b97eb312dbb7101c6f80d230ba0ff0c23dd5ee15b7f",
+      "trim_frames": [
+        142884,
+        200214
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мия",
+      "case": "nominative",
+      "file": "1wR1UzObit1HPkOBWtEv9mIgJ5lOJJ-p3.wav",
+      "sha256": "adf68916ee0a8d9ea75151c3dbe273df384f709fa3284668d780e13dee98e8ec",
+      "aliases": [],
+      "source_sha256": "55b80f43b6a4530e9b701db89c5e3bf08443bc909056d55fdfd73279e1b6d0cf",
+      "trim_frames": [
+        145089,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мирослава",
+      "case": "nominative",
+      "file": "1_1XwpfnuwMIH5bYGpd_lAn09H2GcbJYj.wav",
+      "sha256": "04defa56a0592334b4273078d6abbfca73a64d3003bc7e8ee3fb4c0bb2691254",
+      "aliases": [],
+      "source_sha256": "3720a4c84abdff8a27bfb5741698263c3895e459753969eb6e5377abff0680ea",
+      "trim_frames": [
+        145089,
+        198891
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мира",
+      "case": "nominative",
+      "file": "1F01Z7JWT3IGR0hDKapMoo_sqNum3Q-tB.wav",
+      "sha256": "a94b854d45f24313a794d08529d929bf316f34e89840fe2fb9c20cef3c391772",
+      "aliases": [],
+      "source_sha256": "4e69a79f37b3c1f2c4f342d41daa23a5b2c636e18d9b5501f244656e176bb0f8",
+      "trim_frames": [
+        145530,
+        191394
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Милана",
+      "case": "nominative",
+      "file": "13JnRAPxJLFYmzQumYc1DUYyBclxZSI0I.wav",
+      "sha256": "18cc4372e771a8ed721f40d17ecc65003f301053cd7f8eae9871bca47803253e",
+      "aliases": [],
+      "source_sha256": "d3db9625a3a563dcaf60274676734e9dee52328cb5cdef9b18160b986df7619f",
+      "trim_frames": [
+        137151,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мария",
+      "case": "nominative",
+      "file": "185c4tLedQLOkpIkttCTAt4zJpBC7NEz0.wav",
+      "sha256": "bcce853110432b3b674db13f1dbfe408111a69ce5b8320b3efeb6e2e07ed082c",
+      "aliases": [],
+      "source_sha256": "2c0b22166f123cfc68115e4addd7a5947bbdea963be37c66ff7e713afe957c31",
+      "trim_frames": [
+        145530,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Марина",
+      "case": "nominative",
+      "file": "15414hi60-HSGt_AxJ1Ih6FJli1Aqqogt.wav",
+      "sha256": "991ecebff30b91efb0d5f582cff6b434dbc298d65d9a9dd9cd4071a5c4fe260a",
+      "aliases": [],
+      "source_sha256": "6ca6d5ad90e1095e81f614205e8a02cfd371411a8529785a663633b27cd31469",
+      "trim_frames": [
+        141561,
+        191835
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Маргарита",
+      "case": "nominative",
+      "file": "1VkQrvTXwqp4OMvtKSIaA1KAm0PmE8nqy.wav",
+      "sha256": "e2a68a04e99f11c12e08154ec2cf96dc4a05f34447069d9d5930121e0c8d2188",
+      "aliases": [],
+      "source_sha256": "353dde1f51375bd20590ee7349dadd1a9390bf7ed6933a77ad139895e9f7de66",
+      "trim_frames": [
+        142443,
+        199773
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Майя",
+      "case": "nominative",
+      "file": "1aD5Pw1z_qPGsUASp1E0LSb_JQAV9v2Yu.wav",
+      "sha256": "aad93932d72ec2df16c18664ced715c916613136bab5401aacd16d1545c2b4ae",
+      "aliases": [],
+      "source_sha256": "735a585332797ee5733cc77f1ee16bcd06fa1fd0dd6d7c09ed9ba4d897f0b04e",
+      "trim_frames": [
+        143766,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Любовь",
+      "case": "nominative",
+      "file": "1Jd2MyhszYypwgnwGHrYMAsjOr1ncWYI7.wav",
+      "sha256": "bd17d4b24318452fc638da27de1eb4d379da6cd1df4ba3289192bd4249df49bf",
+      "aliases": [],
+      "source_sha256": "853922bebe50d51f7992b94191c3cb85f15300db7cd41c4871fbe363dbd7ce57",
+      "trim_frames": [
+        141120,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Лилия",
+      "case": "nominative",
+      "file": "1flBGQWBxoLRIqM3_zQ5w_cbeuYMWfYVt.wav",
+      "sha256": "e00845ec252bc3fd14b16862eb142e304109fb883f00c15d38f2842989dd60bb",
+      "aliases": [],
+      "source_sha256": "e2c3f4dd7bf32a8b268aabfb7897cfc4f78657844adff61ed5d1489551972ead",
+      "trim_frames": [
+        143766,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ксения",
+      "case": "nominative",
+      "file": "1j8bL-4mpCPzGjSJNH0kqk0cYAaaNvU3o.wav",
+      "sha256": "a9315436f40d3a1744354e21857879e10202be65c4ea5c2a9006678d3112803f",
+      "aliases": [],
+      "source_sha256": "fa22e9fc46f307aa979a69a84ec2b39573efd40066511bf13128084963667a83",
+      "trim_frames": [
+        144207,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Лариса",
+      "case": "nominative",
+      "file": "1MQyWvjHI4XmTt3lmyn7Ep-5ZeP3IAlHt.wav",
+      "sha256": "dc61c0169aea234b1ff410e300b32eecc9f64acb3becc05284976990d4277184",
+      "aliases": [],
+      "source_sha256": "20499f887165db1fb99096f4280198238e858440b4f8e0b8d28242f7454d0249",
+      "trim_frames": [
+        144648,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Кристина",
+      "case": "nominative",
+      "file": "1SKJA9OAdt5Q-qW4hgLOhU8BVnLYIWTvG.wav",
+      "sha256": "f746b2fe11b21b3181da0a410531cf990aa905b2d203643f12a62b68cf186137",
+      "aliases": [],
+      "source_sha256": "ec3d85db0bc06c98222b9e176fdb3053184303a1fe111bc21755e88e0e6258f3",
+      "trim_frames": [
+        141561,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Кира",
+      "case": "nominative",
+      "file": "1mHMVoAOCcu_w8I9a4gw2SLxswgvqSdOk.wav",
+      "sha256": "910e638456e40cb97694ab4e19c6405ad6be47739e0b68608f2b85556fb76940",
+      "aliases": [],
+      "source_sha256": "51818417efbd97404ac184bb4d0a7eadf61c6b32108f552314ab788dec65604e",
+      "trim_frames": [
+        143325,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Камилла",
+      "case": "nominative",
+      "file": "1A7KRMQHTmpds4BZCK6QmzcyJ6FgiSgAg.wav",
+      "sha256": "933f41396d65940ec995f7e6df6c9897bcffd48539aeba4bd8749b365e6f28ac",
+      "aliases": [],
+      "source_sha256": "384eb8eb68a8981957c9ac5ef0a55c7431e59489c9c82b3c875f6b3cd2fe73a7",
+      "trim_frames": [
+        144648,
+        196245
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ирина",
+      "case": "nominative",
+      "file": "1OVrCDm7XzTDlxTY-2DTm0xDraeJROTyd.wav",
+      "sha256": "95ce30183910bf2557b69beff1ddd4a9d7c4cb22888b62757b91025d4c84a00a",
+      "aliases": [],
+      "source_sha256": "b97da6caddc122e184d9296ffccae353a54ed0e73b7833497b73fc5a992be7f3",
+      "trim_frames": [
+        142884,
+        190071
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Злата",
+      "case": "nominative",
+      "file": "1W5L0S576nfE0c9UkHjvUeprZLB0KGq2W.wav",
+      "sha256": "04d1464f6f1a9d4629a46dd666c05204880925721c7a3cb34225e4132aef6167",
+      "aliases": [],
+      "source_sha256": "566752f8157e0fd214fd01db14f1255b34916f4f4be73f5b40b6732b70937425",
+      "trim_frames": [
+        146853,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Есения",
+      "case": "nominative",
+      "file": "11ScbxR1n5yXN_ZEiQ-bxTvzIT7ro2ltH.wav",
+      "sha256": "0ce1d6dbd60099aeaae12274703389f83d6e2c49b8165fe442f5272c92d0ae3c",
+      "aliases": [],
+      "source_sha256": "e17c5fe84ec96602d339e3cebaaa4513d7cc4b26f93a1b0a244948b89663a892",
+      "trim_frames": [
+        143325,
+        198891
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Елизавета",
+      "case": "nominative",
+      "file": "1Ig0CC78b3-kp7jmlmi0_E3ZeP2kAYn4P.wav",
+      "sha256": "13e90ef775b4351ecd1d7a9f3ee41484faa7fc4532c3ca819da4fbaa90816854",
+      "aliases": [],
+      "source_sha256": "469263593c992a1fee13b31d75b06cfd50f9f2af18a1a61621843574fd0872db",
+      "trim_frames": [
+        139356,
+        201537
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Елена",
+      "case": "nominative",
+      "file": "1yimJ8uBsDZU9wqzdzqCD2lKd4eKnf9lF.wav",
+      "sha256": "26b968b9a29d138ebc8bc21101993fd02e9a2fbd3b1e8a507cfdb9440a58c69a",
+      "aliases": [],
+      "source_sha256": "06eb798bfc738b0ffa6f396abcf4a605b282dbc4355149504224467fa80e8026",
+      "trim_frames": [
+        145971,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Екатерина",
+      "case": "nominative",
+      "file": "1Li5iCY0VAaD5EWtt7uc8PrrM6ytDhdoZ.wav",
+      "sha256": "0cf9ac7b6e8e983c684299da3a45a65d9508074790889b2e7dc656ac10f5828e",
+      "aliases": [],
+      "source_sha256": "18fd36336707757aca791a1098309339744972f6028f1e4246984feb6792d214",
+      "trim_frames": [
+        142884,
+        198009
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Евгения",
+      "case": "nominative",
+      "file": "1AhlUajzbwX0faJdPMmHwRJISXkxYJScw.wav",
+      "sha256": "d229a875fb3d0e27ae36682ee00fa6fb51effdddd84707bfbf8dab0fd28d6bf6",
+      "aliases": [],
+      "source_sha256": "1dde14bf6a078d8d52549f1de97566a6cb6aeb6bbdc66dbba5627d3eaf6411b2",
+      "trim_frames": [
+        138915,
+        199332
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ева",
+      "case": "nominative",
+      "file": "1CSsCXurcBapGBO4tq2jggOV9ll-8lY3c.wav",
+      "sha256": "26f89b497bb0657ae846bfca19a49df9fb3b5d7a95fd116ea03798d111560341",
+      "aliases": [],
+      "source_sha256": "1dd135fc8c160dcc613cf6aa8419fdd9635c916411bad3b54e642849ad1fe000",
+      "trim_frames": [
+        142443,
+        190071
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Диана",
+      "case": "nominative",
+      "file": "15XTPsgWSZF3DeGToCyZAFRUZi07lFAVY.wav",
+      "sha256": "c03d7a06c9f33bfe056931ba59683a265f06a8c56863176111b2bebe70be2b6c",
+      "aliases": [],
+      "source_sha256": "783ab93c2dd754223e30f2d3fa857dea2ea32f1b589acdcc97a46bc8114c2900",
+      "trim_frames": [
+        142002,
+        190071
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Дарья",
+      "case": "nominative",
+      "file": "1V7wXzftAHqVeWuwsXMX7cRbkt4AtqIs1.wav",
+      "sha256": "d29d841dcbc40ccaebd4e1a8ffed04e442060a8bcec48cc30a0b443f54188f38",
+      "aliases": [],
+      "source_sha256": "4eba95ab68f3382504366b2136e85990de09cc2c3fc5fb4a06b5e1b59b7287b0",
+      "trim_frames": [
+        144207,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Дарина",
+      "case": "nominative",
+      "file": "1jryLdA7A6Y3tFUgD3ZWIhv6PGBQl3SkN.wav",
+      "sha256": "0dce4b3862107d6552104c55f0ea479e0847c62090498e6bd40175ebe7127ab3",
+      "aliases": [],
+      "source_sha256": "2cc0a4aa617622659b7b1962110026fb4992975ca4e8454a8969ef39de4fcf50",
+      "trim_frames": [
+        143325,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Виолетта",
+      "case": "nominative",
+      "file": "17Ocd3AHja7afuMthQrTKudzM-mcBr7jL.wav",
+      "sha256": "ba08fdaf0dcb91521f7ab9e63145dbe56718450b3bcfb9bc603f7a7022e23473",
+      "aliases": [],
+      "source_sha256": "aa3ca077ee0d53b1058628b05b303c7b19f02427ca67a7131798ba84f83142bf",
+      "trim_frames": [
+        136710,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Виктория",
+      "case": "nominative",
+      "file": "18hLJ2-To1paiCwI6O94rl8Z3E6gDhTD5.wav",
+      "sha256": "024971e12cf694bce8f8a5806a25743f1317495cabbe1d33be0d9efa19fee66c",
+      "aliases": [],
+      "source_sha256": "b128f31004f0514f69fe12d1733cd39654b421942f6bbfe94d04eb7660a77f35",
+      "trim_frames": [
+        140238,
+        194040
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Вероника",
+      "case": "nominative",
+      "file": "1vfKilGd_1uu0maSGv80-5UPZUt90Pt0_.wav",
+      "sha256": "bdaafd41ef28d2b19d784f72f6986f6c4ca26d483cf87cd7644b3cf8eb41e03e",
+      "aliases": [],
+      "source_sha256": "e1c5ad0575e93e43031b3b71daa0f4c04947289fd796ec93c4396581d97de5d9",
+      "trim_frames": [
+        140679,
+        200214
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Вера",
+      "case": "nominative",
+      "file": "1RosI4Ir7UPs3GwZnNEpzkMwbXPoH7BME.wav",
+      "sha256": "b455080322fdb0b67ba47148ce0dbede2625d173c9e62608a072218ecda8a312",
+      "aliases": [],
+      "source_sha256": "cf1b43ea99a46fa25373b74f6b513d6f316ef1717a5900afedf17a3179e4f8c7",
+      "trim_frames": [
+        144207,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Василиса",
+      "case": "nominative",
+      "file": "1O_4vEgkBEw0YcMUbM4S6jH8XCgUFQybF.wav",
+      "sha256": "979f5b6d96b7ea55debb760a75faf7451bdb86fa9d374f3007b09a1b2dad0783",
+      "aliases": [],
+      "source_sha256": "c90bc4a35c735af050418f51ae7d4b12af92cf92ffd4a2b675cd319e040b0c12",
+      "trim_frames": [
+        142443,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Варвара",
+      "case": "nominative",
+      "file": "1uQ9l_RVE87EPrCYzYszGKHlB9L_5B6LE.wav",
+      "sha256": "cb23a7bce25a4afec741d2dde9a95f57ec7004461b94dc78037d6a52ada0cb49",
+      "aliases": [],
+      "source_sha256": "3326ca61716dd2ccf5fd530a447549d10ed08fda61087a4946472e3f595b907f",
+      "trim_frames": [
+        144207,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Валерия",
+      "case": "nominative",
+      "file": "1pZjS7Mn7dBtWk62c1Aax5QFeQw398nnJ.wav",
+      "sha256": "710a06dd6ed7fc719712152ecf18aeb34ca75709fa40d4c29f98b9ee23c884e6",
+      "aliases": [],
+      "source_sha256": "4dc9c5df91d9196f57bf94e1ee246e14ae6d8df723e804c7966456007a8ef100",
+      "trim_frames": [
+        145089,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Арина",
+      "case": "nominative",
+      "file": "16TTqJaJotOdRuXAyIcyr_-A8fkPms8BO.wav",
+      "sha256": "16aa9a0c400861c9b8666738948311a456d073dee4c92b69656326a8d76e0eed",
+      "aliases": [],
+      "source_sha256": "0987fea9c2eacfed3344305ec667a5390904f0f18b1642194cd6b3db65f1f598",
+      "trim_frames": [
+        144648,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ариана",
+      "case": "nominative",
+      "file": "1LJ0R-DMyRCHgbjWx75aFASySTQn2S2XQ.wav",
+      "sha256": "aeb383f44bc1dc3dc223704f1ad8a483b53bf213a6a04b8a717ad804e8279be6",
+      "aliases": [],
+      "source_sha256": "a606d604f2b0dc2e3d781c1e242cb9b527fa0b30d1e5ff21be3d2f3eda784b74",
+      "trim_frames": [
+        141120,
+        199332
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Анна",
+      "case": "nominative",
+      "file": "1MUgZ9a5DYLLBKLPqhN10Ees8bc1UCabo.wav",
+      "sha256": "cd6bc94d35f3d1b65bbfc2ec4f3ffa972f975d4731330a41490a5d4c2f730b74",
+      "aliases": [],
+      "source_sha256": "0d70c2eb5954c4471236d3d170924a7413f879d4e72241392e5139d1858ca512",
+      "trim_frames": [
+        145089,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ангелина",
+      "case": "nominative",
+      "file": "1erxVLHsDDXV7X1e7ppHdgpZj97lbrfjn.wav",
+      "sha256": "f770c31528f252b8167bc5a87f4d59856ceb62dab425bd39b35a08f7834bc06f",
+      "aliases": [],
+      "source_sha256": "a32cc0dd79d866975f0179990a05c24ce5d3c03c3ecd27948516c140a43d3b98",
+      "trim_frames": [
+        138915,
+        198009
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Анастасия",
+      "case": "nominative",
+      "file": "16LgJEVmDnHbcd7q8lIvrwUjIyxHKu8ip.wav",
+      "sha256": "3b914ee788a34e003629ff53b711cc6bfe095ad6dd394a1283448f3206e17b3d",
+      "aliases": [],
+      "source_sha256": "0a2919e6624103d135b20b3a3ec4cc23a3080b0f71ba4ae89cedd78e8fe9aba2",
+      "trim_frames": [
+        143325,
+        202860
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Амелия",
+      "case": "nominative",
+      "file": "1VqMsrj2Hkcg-x61l2oSKegIgmxgaucVo.wav",
+      "sha256": "cb0e73e9f1f4a7a0c4304a96e34b52899c32d69c67d31a94affb325211a8c096",
+      "aliases": [],
+      "source_sha256": "17dd725b0afdfb592c13947d12a0cdf1729ac7984b2f6aa829d515174dd5c97f",
+      "trim_frames": [
+        142002,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Алёна",
+      "case": "nominative",
+      "file": "1d_8uLecbTA1AnTb9lP7CH1ozgpcK8uMX.wav",
+      "sha256": "472b2fefb28afaa4fec6d7b97da71fbc6d5a3b98d0b18db467b4eaa0ff0dc30a",
+      "aliases": [],
+      "source_sha256": "fad7235048b6d1a72b9de696263bf0a4ce5000118b2ce42b02bb2476d74168c0",
+      "trim_frames": [
+        142002,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Алла",
+      "case": "nominative",
+      "file": "13rJyGI7VtOrxHpuhUxvLaXvF5qnH7iSf.wav",
+      "sha256": "b1bd0b6228064e48c118ce505c1ac85a12cbd46d021243a3dd22f7084792abb9",
+      "aliases": [],
+      "source_sha256": "9d84773e587ed3fe1bafa4b0bec736cc3907bdf6190e4ad35910a4f7db85b069",
+      "trim_frames": [
+        144648,
+        190512
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Алиса",
+      "case": "nominative",
+      "file": "1N-ZLCMt-iy_RZKAeqtph0VmeYsNGU48L.wav",
+      "sha256": "04a69c00367f581e7bd6d65d940ad884588bbbd3ffd0bffe711204808f9a0ed5",
+      "aliases": [],
+      "source_sha256": "73cf919c8334a14f3cb93066901cd7edee23059105730b8dffaf5d00f9acfdb1",
+      "trim_frames": [
+        142002,
+        192276
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Александра",
+      "case": "nominative",
+      "file": "1CYbQp4JQEUEdh-FEstqNjhQ3zaktz9tK.wav",
+      "sha256": "0c2100a07dded44778adde3211410dff0a6ff22d4d25a3729f23d9a4f3a7d7d7",
+      "aliases": [],
+      "source_sha256": "129bdca26e00f002aeb3ba3af9c7317bff9393a5a87da1917922b2522b8e38f4",
+      "trim_frames": [
+        140679,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Адель",
+      "case": "nominative",
+      "file": "1TE2Fl9dJsBMzKM2Nmvsk9B0PHbVaWW6U.wav",
+      "sha256": "6e15c1b3e962cea6ca0c9f94d82992bca654766755dabc5fd8d697629f348e93",
+      "aliases": [],
+      "source_sha256": "3dcc01cfd24652c096485edb0526012afc27933e2ec6e21938b9ae9234919704",
+      "trim_frames": [
+        144207,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Аделина",
+      "case": "nominative",
+      "file": "1HZ_ZNErpN0lP-DAgVjMYphSQ3_qEwfWI.wav",
+      "sha256": "8233ecc83eddd108c0ffb3f92ea770f9999b01daf720fe6733a62fa7ddd03ad4",
+      "aliases": [],
+      "source_sha256": "31fe4359602d736902dee036589a1236f426d738aa0f8bf94f8adbb639a4ea3a",
+      "trim_frames": [
+        144648,
+        199773
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Агата",
+      "case": "nominative",
+      "file": "14DpyO0K5mjTsTuNGoIuHe8ebp2PAlHKJ.wav",
+      "sha256": "f2677847da9f70a9379004a1bd10a3758df9618edcae9b55e63d0ffbcfc4b906",
+      "aliases": [],
+      "source_sha256": "e795297a926f5e9074bec036e37a78e0caf931eeb268a829e5572025b573a7fe",
+      "trim_frames": [
+        142884,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Аврора",
+      "case": "nominative",
+      "file": "1qaAVd4AICvrrK2O_SH1Yb8dj-QtUjvtX.wav",
+      "sha256": "9af68a7731c4cceb4bc7e45fda6dff4b10d91c1372569311aa8d3d9dbabef67c",
+      "aliases": [],
+      "source_sha256": "8a68cf7cac627135a5ab3f91c1278c1258001addf8546105a85f9b4503e7947f",
+      "trim_frames": [
+        142443,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Юсуф",
+      "case": "nominative",
+      "file": "1StXIQV_9rVSwrTqkeo4hVuTOXokmlb2o.wav",
+      "sha256": "fd95950d2b7a97ddc11634091825e5394917a3002e049fc741b76ed4db7a2d05",
+      "aliases": [],
+      "source_sha256": "ddb479660dda0cb838054099f8b27515d3b228040047c05e48234863a42cc427",
+      "trim_frames": [
+        143766,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Эмир",
+      "case": "nominative",
+      "file": "1YVEr2gQPPHbWSw2c46fpgYU0enkwRlvq.wav",
+      "sha256": "c14c6feab78a6f0b4e22666f940761316ce1cc61ed46662ad497c87d42b4f2e0",
+      "aliases": [],
+      "source_sha256": "be1443bcb6ec7856c50441fc2b5001f7a5311fa12119f485d4ec055ea15ee998",
+      "trim_frames": [
+        144207,
+        190071
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Эльдар",
+      "case": "nominative",
+      "file": "1t_UUZMrIzLO51BIyliwZUQDnGxpb8x45.wav",
+      "sha256": "f8b9a3a2042cfe6dd0dbfc2a2b8544f70059682abe2b621fcc81bfe5e09f09af",
+      "aliases": [],
+      "source_sha256": "cd1996163d8a3bfbe7154908bd4cb556146a21c82e5790e6a7f071f2850862de",
+      "trim_frames": [
+        142443,
+        192276
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Шахбан",
+      "case": "nominative",
+      "file": "199LbPR_9wLqsm-OSx3DENkbxbl7rcwL3.wav",
+      "sha256": "dab6e0ec028d9465062e04b093c086f4179b66619b693fe532b860109e14b5a8",
+      "aliases": [],
+      "source_sha256": "b593761b7496f42cbda4e15ccc6f3bb45b86fa5a427a338dc217d6f6d321bdce",
+      "trim_frames": [
+        142884,
+        198009
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Хасбулат",
+      "case": "nominative",
+      "file": "1c_wLShbaE854FvFqmJYCgi9RA8g1pO10.wav",
+      "sha256": "641a1b6cc7700690bcc503ba231c7c7bf023a01a95aa6a4759cab785a537116d",
+      "aliases": [],
+      "source_sha256": "6f99df71053668cced4de1f87bf462ffa1d9bd3586247abeb7ade0d5147d89e2",
+      "trim_frames": [
+        138474,
+        196245
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Шамиль",
+      "case": "nominative",
+      "file": "1uVI2hC80czR__p7nu1-yoRvLXQ3T0G62.wav",
+      "sha256": "1aaa5d5490b019d2c4d737680c21707425e67c7cc1a6320cd0d34617a3f44304",
+      "aliases": [],
+      "source_sha256": "048a37ae16faeedfa0272c2d6a2509388e42d5e17f0d0b39b568bbf019d5fce9",
+      "trim_frames": [
+        143766,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Хамза",
+      "case": "nominative",
+      "file": "1tarG8SHQvX56k5rgFmZcDvTDm5bQZApr.wav",
+      "sha256": "9b1243fde43e24c56e51d6a54e0b35339793cf08a8a6d789bc3a001f1c4e32c0",
+      "aliases": [],
+      "source_sha256": "c383c96e0926e209144c72aba6d98a720b8cbb89d73c7c7e0b07010a998956e9",
+      "trim_frames": [
+        144648,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Халид",
+      "case": "nominative",
+      "file": "1dnjfn9HSB_BgxTPLMxlUrJT3KrNGuwPw.wav",
+      "sha256": "ff4dd6f3b3f926c24acab1bea3a71a9d5b63735be7034bf292b931eba7067a85",
+      "aliases": [],
+      "source_sha256": "5422e3ef0e32126fcbc96088d35d8027b2a7d6877b05f4d64043ca8d9c55c842",
+      "trim_frames": [
+        143766,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Хабиб",
+      "case": "nominative",
+      "file": "1TixLmaYcE_K6Qsm4kwrr1l3Axsbo__Y3.wav",
+      "sha256": "f98d639d5312f98f4ab246fd4471e0271d63da33e0f7656a89dcca946360da58",
+      "aliases": [],
+      "source_sha256": "193ea593edd01f01200e4ed8803dc4c498230cbc2673afd2ec262e76a9faf340",
+      "trim_frames": [
+        146412,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Усман",
+      "case": "nominative",
+      "file": "1eYuCNys-ujZtqy9mHu3_-wm_aPEDNWTj.wav",
+      "sha256": "cf62d94b93d1ee93060ae295a59a30a27591389f4f1652a6c4d390ff99edea2d",
+      "aliases": [],
+      "source_sha256": "6e63c71c10812c6eaf000733983dea0f1f82deb6a1c9c16789c979d9eac41d6b",
+      "trim_frames": [
+        142884,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Умар",
+      "case": "nominative",
+      "file": "17CaiCTmXROQRFikKsavZf0YmnWr8iS31.wav",
+      "sha256": "f802778af156ebbf8831eda2ced0cff7f006818aeb3e4527fbf61e6e5f64485d",
+      "aliases": [],
+      "source_sha256": "15d69df6509ecb0b03baa31fe6392977075ae0c78626f96c42e39b1581cafe6e",
+      "trim_frames": [
+        144207,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Умалат",
+      "case": "nominative",
+      "file": "1bXI0nraAPlx4cz29ScFouSkP6-xwbsH3.wav",
+      "sha256": "2aa863b191ca43e6b7daf8d55e590acb24ab9e6fe74a1e35bbc7345e34bcc4ce",
+      "aliases": [],
+      "source_sha256": "0492a4cda4dbe47cb749805f958ad115f712db996fc4438df606d298521904a3",
+      "trim_frames": [
+        138474,
+        190512
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Тагир",
+      "case": "nominative",
+      "file": "1I5Y4SOhuxsFP9MZxijlF7eJe79T1Sj7_.wav",
+      "sha256": "9ccc30174349dd2676c2ee707d5315eb98af662d5798b99d37d2c90a8518c8c5",
+      "aliases": [],
+      "source_sha256": "b19d0b1e7d285735afb294a19557c7b2e03ad599371001097754bb45f5539459",
+      "trim_frames": [
+        142002,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Султан",
+      "case": "nominative",
+      "file": "1J7QQn7090whEA9oE7IjrUCFReM1Cyog2.wav",
+      "sha256": "aa179ebe53805111b66e328af2eb22294124b9cd7356ec460ce34f4556e01f9f",
+      "aliases": [],
+      "source_sha256": "5ee12d07cff3d95a7ee848f37684e0959240f7e1560efbe8af70847581a6e878",
+      "trim_frames": [
+        147294,
+        202860
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Самур",
+      "case": "nominative",
+      "file": "1UiosQIOsFNw-taAorVcHrbOOXjbP7xDb.wav",
+      "sha256": "f3cd3522a4021751a04bab5d473321fc56c82545ea0d598ff2c77f1502629dcd",
+      "aliases": [],
+      "source_sha256": "15da79bcc0466c4f73388851024ceef56285696f5ff52232328478e002e4d2bf",
+      "trim_frames": [
+        140238,
+        192276
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Саид",
+      "case": "nominative",
+      "file": "1XqHqKRsq5aXjW89xbnM4i978lfPq25va.wav",
+      "sha256": "e1a5d1f06f7272a7523e293c85e0e7120c4b4cf24eb4ac027ad186da567123a4",
+      "aliases": [],
+      "source_sha256": "a1abe0efc0c55994d6fe4ea2aec918afdc0c72fefb8697ce8aeeac7a74afd0d8",
+      "trim_frames": [
+        143766,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Салих",
+      "case": "nominative",
+      "file": "11bI_5uV_Gz0MnTrBrmVKCyQvfJwPYV0A.wav",
+      "sha256": "7c8d939e782ee547adc320c21d595ec9f9ada8b338979ccfc768228a1e4d12aa",
+      "aliases": [],
+      "source_sha256": "10ce25e55919e5b6a69b101b776666ce27f472e9ca08b004766c8ac9d9d568c3",
+      "trim_frames": [
+        144648,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Расул",
+      "case": "nominative",
+      "file": "1E40OHQPuONl3enn6TvAcA_eqqz38p7-l.wav",
+      "sha256": "f23ee4bad4ebd10837e8bbfada809546d79949bcd26cfc4d7f8d401471e6aa98",
+      "aliases": [],
+      "source_sha256": "ce834f24c4dc5877bdb63af18ba183810e97c96a583a6188379fa52c1800cc5f",
+      "trim_frames": [
+        144648,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ризван",
+      "case": "nominative",
+      "file": "1poA_TWfValXF5KQY9sAS11DWSDdFXapz.wav",
+      "sha256": "49945ac737a260b891eae90e2d10ee9967fc56cd9d346958499b4cbc00c2c193",
+      "aliases": [],
+      "source_sha256": "277d5acafa98659cab382f71914e6bd02fc9550a408e28b672dcd276235f9a9b",
+      "trim_frames": [
+        142884,
+        196245
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Рамазан",
+      "case": "nominative",
+      "file": "12nGeeaxrwiF_vzA37qxhfGEW-WGtYy7X.wav",
+      "sha256": "3de708b214308692d5a0e6e5faa1d15b2572fd0f11afa7dd4719dcd30facebcd",
+      "aliases": [],
+      "source_sha256": "fecd4575b5932763ea9cce0432ac1264d3972ab0ccd7202b2954c2b1c9325cac",
+      "trim_frames": [
+        144648,
+        200655
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Осман",
+      "case": "nominative",
+      "file": "18s_M0rnFrufBjW2w7lpkDODtpsSpPDr1.wav",
+      "sha256": "58e6b23e1772c60139be1544ace7400f99739d9636ebf0b98bedf614aaef53a1",
+      "aliases": [],
+      "source_sha256": "7df3dc0c8a6381dca22a154e17a4e9a85682639cd15efaeb46055a979b06a133",
+      "trim_frames": [
+        142002,
+        198009
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мухаммад",
+      "case": "nominative",
+      "file": "1AYUE0KzAs4aGbhkSxSYXrqvwWd3iNjpJ.wav",
+      "sha256": "ed962f94fd47749fd3528cda57b76fa3ce3139f30e74c7a2cabe63347dcae8f1",
+      "aliases": [],
+      "source_sha256": "6754dbbdac9cf830415fb133bdd544036e896469d842710a11947edd86eaffbb",
+      "trim_frames": [
+        141561,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Марат",
+      "case": "nominative",
+      "file": "18-RrmltjhjOB49ZMBikaDN-TdoTbpL4z.wav",
+      "sha256": "fd4f8827f8c3c9bc7744a16aa0c256d990dcbec7e520aa3678b0b52d7ee9a369",
+      "aliases": [],
+      "source_sha256": "fa48fbdc9bf4673f4709b6a97d39c08ffd4cdbbd11216153ad505d0b712724ab",
+      "trim_frames": [
+        142884,
+        190953
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мурад",
+      "case": "nominative",
+      "file": "1SpK42egHos1Urkg2bTQeQ4W0dqMtxxO_.wav",
+      "sha256": "6f2ce6ba6151a7c6972b636918044c62f6a2095bd28d8020ffaa35508cd21604",
+      "aliases": [],
+      "source_sha256": "39986889b08e260046177b9daf1fc6fcf4a49344c885745251018aca107ca6e9",
+      "trim_frames": [
+        144648,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Малик",
+      "case": "nominative",
+      "file": "1koKQCjC50JzXJ5QOE1kppJ_R-RQDL4iW.wav",
+      "sha256": "9441ea3761c324d86070cdf8506c092f1fb29ff56fe90542d98f9f2690f52299",
+      "aliases": [],
+      "source_sha256": "77abe006376e249e5ece1db6fdd38e528f07f51e2bf6af7193545c4c1f20ffca",
+      "trim_frames": [
+        144207,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Магомед",
+      "case": "nominative",
+      "file": "1_ZXCF_Am4k9NNf8qmHcYlzcpx__J4lX9.wav",
+      "sha256": "72e8a9c6ae2633801b9f2406b443963c6f26afe795013431418842d6f553ad02",
+      "aliases": [],
+      "source_sha256": "b5f2345b6f6aa213e9a6a617d151bcdef698448fd3ca57f85d3dc920a339487d",
+      "trim_frames": [
+        143325,
+        198009
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Карим",
+      "case": "nominative",
+      "file": "10jhMLAC1ckBht9Hv3mMjU4lAV6y4VoT2.wav",
+      "sha256": "069db03bc71e3cc9ede1f5683d36a5f3e89fd550797dec153c16cd510ae9ba31",
+      "aliases": [],
+      "source_sha256": "cd1675d7dc9dd75a4972d3aaea4496106d5e35989ae40e50d15084ed13cbc362",
+      "trim_frames": [
+        143325,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Каплан",
+      "case": "nominative",
+      "file": "1UrISw4ULSjhmLV3OMqrc4P2dKKxoI1l2.wav",
+      "sha256": "d8b91a1a2bbc2c1d027887343722f6846e2074c47bf5bc28d1254986d849c9f7",
+      "aliases": [],
+      "source_sha256": "2dfd13594e8ffbf7b8650255007cc46f110c77f1c086ff440c922698f24ea424",
+      "trim_frames": [
+        144648,
+        199332
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Камиль",
+      "case": "nominative",
+      "file": "18L9Cv6gQqWmtOITWJeo3XZg-OEQij_E-.wav",
+      "sha256": "8c10e5f3e60d612923f675d7eb2c58d1d7dea399d701770018603193e3f1df27",
+      "aliases": [],
+      "source_sha256": "369058532ba61a9dc691fcc815bf1284cf613677c64ddad63d5169d785034d87",
+      "trim_frames": [
+        143766,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ислам",
+      "case": "nominative",
+      "file": "1OMVD1OhUhzOVixCQFiGfoQ39oTSFgNsq.wav",
+      "sha256": "3d4864a2c7c597d7312ca62deffc0d2a1ab5917c17a2ee703abbce741c1bf394",
+      "aliases": [],
+      "source_sha256": "8b58614299bb30eacdc0408ac2357cbc67edc1bfd4eee596fc8a349698247150",
+      "trim_frames": [
+        145530,
+        196245
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Имран",
+      "case": "nominative",
+      "file": "1xLuZ8J0ylIz4LvC1HRfxK4q9xsa-j9QH.wav",
+      "sha256": "a8dd95d51f4ba6011ba0a332e4e8c8c37f5f41a14347d5dea901691eb0424c7d",
+      "aliases": [],
+      "source_sha256": "141b6c8d6818e612b07b2b842a9e94c6c51b74d37a248f2fea9bfc5404105e47",
+      "trim_frames": [
+        141120,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ильяс",
+      "case": "nominative",
+      "file": "1tW96_NE0B0Gqo0HVmZ95mlRCXSURYzOa.wav",
+      "sha256": "816dd18d708b05e0a04cb857f244eae08d5f017ac2bc28114cde9775c063576a",
+      "aliases": [],
+      "source_sha256": "40a72535b05ae6e89e1fdf61b31f6abe1ce64f719bef5a33d162cf09119f2d7a",
+      "trim_frames": [
+        142884,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ибрагим",
+      "case": "nominative",
+      "file": "1I73KfcQALonG5bmA7QKbjGmwjCMCkOaz.wav",
+      "sha256": "cdb8e55b27937c46a564fd2e2f5c321573818b8402671c3ce8a1895a444dae51",
+      "aliases": [],
+      "source_sha256": "f814b3a83e3e2a986023b4862825962971c4e8be9911cdaca3b44dc762313114",
+      "trim_frames": [
+        142443,
+        198891
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Заур",
+      "case": "nominative",
+      "file": "1I2OicqwcOmXdyMLTIEKXMeXxC4TPvScF.wav",
+      "sha256": "9ac868b00bd9550d8254ddbdaf35af01fb4a13cf95c59b4ada5e10b2d7c054d8",
+      "aliases": [],
+      "source_sha256": "bc84dcdd64b4317ab335eae90d974b0939c622c4ca2c52d48d62ce8d8a43fa8c",
+      "trim_frames": [
+        140238,
+        190953
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Замир",
+      "case": "nominative",
+      "file": "1p6bCq5wC15TkDPzlZmf0yW-B_gXZ_40V.wav",
+      "sha256": "1e9c8f1366533e5f914e4fd588eec88f295fa2f648f9cd0c98f58126d05f08d6",
+      "aliases": [],
+      "source_sha256": "dcb71cff675da5cf7ee5ee472d22acc36a7245920acf2446773e8430931047e4",
+      "trim_frames": [
+        143766,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Джамал",
+      "case": "nominative",
+      "file": "1msi24fRCuJs-3lhH8dEC1lNTcmnNyWeb.wav",
+      "sha256": "478b907159d3fbad97d621dcf2fb8936ebdab0b72d0371676172691d8d3feb7f",
+      "aliases": [],
+      "source_sha256": "ca3391101afa9243c9230aa5858ef3b99f832b0a3c01d7e7d5be65578e84d4ac",
+      "trim_frames": [
+        142443,
+        190071
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Дамир",
+      "case": "nominative",
+      "file": "1Y5xtOpNyBdLFL66kUNjm8WnkmxgtW7m4.wav",
+      "sha256": "7e8bd82b0d87f129615beca4e964def9378ff1dfa2a469e8c9bdd0f3f5ce6325",
+      "aliases": [],
+      "source_sha256": "f940462423fdc444757114ba4c3987fc9267d36cce4be9062978b26574051054",
+      "trim_frames": [
+        142002,
+        190953
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Гаджи",
+      "case": "nominative",
+      "file": "1BFn0EPrI82G86AFBvPv8m2nq7ZRlIj8L.wav",
+      "sha256": "75fdcdebb34557f1a02c0057b674f5f003da1562b8b6e5dad6a53b9f311e77ff",
+      "aliases": [],
+      "source_sha256": "c4387cc48f8415caa79301e6dcfaa89ccec6e009db9b97d33a7890e403911315",
+      "trim_frames": [
+        144648,
+        194040
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Батыр",
+      "case": "nominative",
+      "file": "1OKoLuunr3yJMZ7_jPJ7JhoAuoGIGO26J.wav",
+      "sha256": "674c2ced7a4c8316ad3a3cf0d3fc8c373083ae20e64d78d82b09162cffa6da41",
+      "aliases": [],
+      "source_sha256": "f13f79584259d8994729b9deb780cdf7985f66877160428aa05f4b51a5db10b8",
+      "trim_frames": [
+        141561,
+        189630
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ахмед",
+      "case": "nominative",
+      "file": "1-R3tma36pL_WP-o-8bwsvdP2EOpHGtIe.wav",
+      "sha256": "3484787e6082db13e085a639a1f32e455cb59ec1a61f5cfaeb57abc5a0bfc1fd",
+      "aliases": [],
+      "source_sha256": "b9efd2434a0224833e28b2cacdee253a03d0c2140c4130703456f937c0daf564",
+      "trim_frames": [
+        142884,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ахмад",
+      "case": "nominative",
+      "file": "1XOR3adz9H3hGikqop3u19aElBSXWUiUk.wav",
+      "sha256": "4cbd9cb85ea59a48b724a9e79c4724ae322fba4972efbe717de3a72ad206cf94",
+      "aliases": [],
+      "source_sha256": "f5356adb5059852b7ca2472b06ef0b029191f3ffac28dc65f194aa6517262dc5",
+      "trim_frames": [
+        144648,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Арслан",
+      "case": "nominative",
+      "file": "1Cu4--TB46iuYM3BJthkjnlrLwmtK5wEL.wav",
+      "sha256": "1aa9823dfbb12968d18231a20355fd7d4423f70e0f2c34043dfb6924d554680a",
+      "aliases": [],
+      "source_sha256": "1e254a56249f45192e0fc4d49aeffab7a188ddd41bd43daf929cb3f9793add98",
+      "trim_frames": [
+        144648,
+        199332
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Арсен",
+      "case": "nominative",
+      "file": "1Sqk_7VGvMfthapXBJBFHMbAAjN-D1YiM.wav",
+      "sha256": "9fdc2f11e7dbcd3f6d5576eaf5238d9a795d70b21ebca8d681bbeda31703759c",
+      "aliases": [],
+      "source_sha256": "7b5445b84694023084e1fae493b7d5cd3713906129573c7da7a7332059029f2a",
+      "trim_frames": [
+        143325,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Анзор",
+      "case": "nominative",
+      "file": "16FrTYW1TwRGQ0bjmdwXxhq4iNXj26dqP.wav",
+      "sha256": "52319a9d26a074b1ca93d390e8fc27c6818a0ef768023b6bdfe327e5c7300515",
+      "aliases": [],
+      "source_sha256": "c81287d1f83e03bb6b7ede0df6a7c74b4319e101848e1daceeb662286504f378",
+      "trim_frames": [
+        141120,
+        190512
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Амир",
+      "case": "nominative",
+      "file": "1H7rm-omSC9Q_T9tKroqc5_js3A1RzoVQ.wav",
+      "sha256": "3637b3254675c30ffbdb383ff15d69f09efbd02401022d255dd70faa538fd5ea",
+      "aliases": [],
+      "source_sha256": "94afb26be5e88d354ed3874bdf180d781711d79964ae08b0626bb5cbee7872d5",
+      "trim_frames": [
+        141120,
+        188307
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Алихан",
+      "case": "nominative",
+      "file": "1Rv5FZEbXLG8JsQrXJmHOJMSr75qq0BC2.wav",
+      "sha256": "24102553932fb36a48ac39d20fd5f485595f405dc3b855767b9ad9e819103cd1",
+      "aliases": [],
+      "source_sha256": "7605ed0327990641607dbf7c3f941e0508e6095313da7b3b186ebca4192c6359",
+      "trim_frames": [
+        143766,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Али",
+      "case": "nominative",
+      "file": "1OlnOlfia-0xPhoXDO7TLe2tqJVlCZOyC.wav",
+      "sha256": "90f2f0b23db070b4f7b09ae94c8b54dfb65442cf585301c4236178a99d456179",
+      "aliases": [],
+      "source_sha256": "05b7f3709f42d4fdede10431de84f05a5359c83a3a3452f6ca7751f36f02b57e",
+      "trim_frames": [
+        143766,
+        190953
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Адам",
+      "case": "nominative",
+      "file": "1RFjb2OuSJHwASFdAEAnwMVHikK8p-Y49.wav",
+      "sha256": "6c89070493a47fdaa5b072b23265233b90e4f63a57bf81fb72820e9379352142",
+      "aliases": [],
+      "source_sha256": "cc568b6f2d2eb53ef07bf208c0a30264f7d5358a254b66396f6e9a52f7c5c59f",
+      "trim_frames": [
+        146412,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Абубакр",
+      "case": "nominative",
+      "file": "1urbr3WYsL9ovFbzsY3SrdUvCd2utNCbc.wav",
+      "sha256": "6ff59defff345f00f2504de62a51221b1e6bc77f2e45e71cb4326946df64520d",
+      "aliases": [],
+      "source_sha256": "bd4e36400bc1321f9f5ec915f24d040b4ec934748896d60abb4dc2d4cb102e12",
+      "trim_frames": [
+        140238,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Абубакар",
+      "case": "nominative",
+      "file": "1CBY2ZuaMXrsdFc0R7utHj26iWcurDBMB.wav",
+      "sha256": "666b0c4d21fc2194a1a19d05f77a0a2a3c6ad6c2950034c63f45e46311c3a20c",
+      "aliases": [],
+      "source_sha256": "6478481ec702432b3207c2af28365199f2b1675cbbabb7eeffde341219fc96fa",
+      "trim_frames": [
+        144207,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Абдулла",
+      "case": "nominative",
+      "file": "1DBoaVJPxjXgMPm6n_bL9ru7LJ1hWiMSq.wav",
+      "sha256": "8f07f74be415458e134e57d322c9e1c791e8fc6facdf6cdfe8a074d71de5d7bd",
+      "aliases": [],
+      "source_sha256": "2d076966c8ec036f70e300e16a50917a3b0b113a37a8563e5b496774abfe1fe2",
+      "trim_frames": [
+        143766,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ясмина",
+      "case": "nominative",
+      "file": "128Bandd9NK5KtVEK19VMWqSZ0oAuUtAh.wav",
+      "sha256": "adc1bb235e540eb13197dbf7e8b32ff7e46aba6330633414d37d29267872d52f",
+      "aliases": [],
+      "source_sha256": "d3440f9b14df0bc407893628b85057f76865adc189fca13f34fa34013787d85c",
+      "trim_frames": [
+        138033,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Эльмира",
+      "case": "nominative",
+      "file": "1LuYRN0F0qzEn3kAJCILX2DIwy_FFyaQt.wav",
+      "sha256": "be08543d3f53a20879f66ba5ca137b68b01348d4129d597b66dffbf4095c7b7f",
+      "aliases": [],
+      "source_sha256": "8999a003321f486b44dd9df49368241ea123eac8c425c55eabb8d8da5ccdb628",
+      "trim_frames": [
+        142884,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Эльвира",
+      "case": "nominative",
+      "file": "1QK5evdJZjV1FEFqUMtzL_LOtGgt5Ue3C.wav",
+      "sha256": "bde535715f6faa5d3c9eef0a58c46e8ec35c7850516c826792cf375e9b5155db",
+      "aliases": [],
+      "source_sha256": "f95421db1680c50c8f1da092a8413633ed94837a3ae7f3d81126a40a073f3e40",
+      "trim_frames": [
+        142002,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Шахризат",
+      "case": "nominative",
+      "file": "1JDt-QFqP3aveMVKbntZi92tjWlqNX0iA.wav",
+      "sha256": "443de3383f33706f5c3ff149338a04016713fed0b4bb5ab70866ebfabd9439c4",
+      "aliases": [],
+      "source_sha256": "e24de7edb6b137cf6203581f0a8fb9f98837667f1ccebf9a19c285683f5438d7",
+      "trim_frames": [
+        143766,
+        199773
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Хадижат",
+      "case": "nominative",
+      "file": "1z6HRcaF953uQVuc_abPt8VsqIVG3-eLY.wav",
+      "sha256": "25728d59602ab3b97431a333549cbd155901d9d7ceb21f5bce440d6202f33a9b",
+      "aliases": [],
+      "source_sha256": "1a77bada952225fac7b8c0499b25e14c3c50f1ce973b9733ff6d3e7485934027",
+      "trim_frames": [
+        145530,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Хадижа",
+      "case": "nominative",
+      "file": "1Uvv-OBskr_8klzKyssXpvZF76Hhhz35z.wav",
+      "sha256": "0b55a7023787e038699324190b46f192f4356a37c0bf68ea3feaa52ac3c010e0",
+      "aliases": [],
+      "source_sha256": "f8df9cba1f3c69645bc240f6faad27f047ccc671c50b14bd4b4fb1198b19e00c",
+      "trim_frames": [
+        141120,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Хадиджа",
+      "case": "nominative",
+      "file": "1ds1G8JqeUCHgkU0UmD0IHbTcqaeoPLWO.wav",
+      "sha256": "dbf71790f23fd7315dc09ad23b8038a832fdbd4875ef74c00012c2927831528a",
+      "aliases": [],
+      "source_sha256": "3b73ab83e653f1660ffdb95201aa47a3c729a28e0953c639c5997b6b766d94c5",
+      "trim_frames": [
+        143325,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Хабибат",
+      "case": "nominative",
+      "file": "1aSICbRlf5H1LMo8-18kn6-_1-dfSW0EF.wav",
+      "sha256": "da2ec5fccd310524117d410cc6acec3dcab3d3ad90056714dfc6ca1c7520cb10",
+      "aliases": [],
+      "source_sha256": "1043c842b37be810e4a30df97ee766310797e23331b3afd550180e9c746b29ff",
+      "trim_frames": [
+        142002,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Фатима",
+      "case": "nominative",
+      "file": "13LGGg7o9Y6-chJfxKlaMeSXSKmPzBaS9.wav",
+      "sha256": "91e9181d5d320a610b835b13d38cd1325161dd014cd09fefe54db73958d7fd7e",
+      "aliases": [],
+      "source_sha256": "b8a78b6ef8dd75ac28992a11004411b6b9b25e353517762f283559cb9a3c2b5e",
+      "trim_frames": [
+        142884,
+        191835
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Фарида",
+      "case": "nominative",
+      "file": "1-Ue0RQHeOrHaxReQGHS8C87k1Z741jdC.wav",
+      "sha256": "c4310d8c24c88a378ccb97ea92f896f7ed7dbfaa95af4629b7e6f02c63b8889e",
+      "aliases": [],
+      "source_sha256": "e6547ac95e9bc53335c6fa5f0b70167b8087770e2061a13cff2fb5215097081c",
+      "trim_frames": [
+        142884,
+        193599
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Ума",
+      "case": "nominative",
+      "file": "14v3Cct-ECzhtTyzG74CcVd8wJcsE9uCq.wav",
+      "sha256": "b5d1737b053ef5e9603c7febc14256ef4a6277a73f1343fe856e96ab32f36bfb",
+      "aliases": [],
+      "source_sha256": "50b2f5f4c4a8ebb50a51284000f1065fb07c6dbf2a259ba94224fba4b15cf1fc",
+      "trim_frames": [
+        142443,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Сафия",
+      "case": "nominative",
+      "file": "1uyT4rt_YW_5hAu0wqMywcjmLmITdBdet.wav",
+      "sha256": "e7b1f58a8829ad3bdcfda49ccbb27f83a0b497436502acee4bdcb60af42693f8",
+      "aliases": [],
+      "source_sha256": "a9be874e28573730aafe2c7a1c050fed5a218ba160a1f2adc1d2db8e64d4e47e",
+      "trim_frames": [
+        136269,
+        196245
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Тамила",
+      "case": "nominative",
+      "file": "1OCPTIJb6H8o_lsPEmbtQWc5hrZuenzT1.wav",
+      "sha256": "6a7029482e70adf9b2d4cab558aec31caed17ef2e1125cb97d334e76522209b0",
+      "aliases": [],
+      "source_sha256": "286c98a9165dae5c1b76cb9306d0b6dfedd2c04282ba47ff1adbdabaeaa394ac",
+      "trim_frames": [
+        142002,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Самира",
+      "case": "nominative",
+      "file": "1DS5nnmHxEP88cQbHYIMsLT3dP3zizpks.wav",
+      "sha256": "656caa98e911a772928cc7a8970ffdb2bc67e23ac2a27d7f48d5a39332bff890",
+      "aliases": [],
+      "source_sha256": "fe7d8e885b6042431131cf20bd8203edd53b67eb5f1d4f2b4837a4aed39f7ec1",
+      "trim_frames": [
+        142443,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Салихат",
+      "case": "nominative",
+      "file": "1Zu7MjvOhsOPhFpcYtDxDrt6cjWuCJWan.wav",
+      "sha256": "90aae6fbf101f0b7022a0883467ddcbc7d5d71656c8c23a1c3b14ca6283c079f",
+      "aliases": [],
+      "source_sha256": "9d14c214bea2e829edd416bb9583adac485d4a37b8624871844c800d501ed00e",
+      "trim_frames": [
+        139797,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Салиха",
+      "case": "nominative",
+      "file": "1ftqbNwZc00PXLwaVs1_-YQjn98MrWHCn.wav",
+      "sha256": "328200115f20a064342727dad3d24d8c43c27926efc41d97c75050050c498074",
+      "aliases": [],
+      "source_sha256": "fce85c2fffccb2b803b69bac3b488d2f68bdaf7f98b65e9b842ecae45026977c",
+      "trim_frames": [
+        142002,
+        194040
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Саида",
+      "case": "nominative",
+      "file": "12M_apDhktwCHaXiPOpg5O8wv96a1pMM6.wav",
+      "sha256": "49defafad6bd780ed92be559c2989930fb680401e221ed10d297b7d35e23eeee",
+      "aliases": [],
+      "source_sha256": "f4402f9f4f12e4926fb95c312603baa5d4346121eb5af2918105d2b9dbbd1f28",
+      "trim_frames": [
+        144207,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Салимат",
+      "case": "nominative",
+      "file": "1c8eRb9gJ74tZggZn9P36a60Q3J6MQ9_v.wav",
+      "sha256": "b9e1a4ee2518b2f3bc050b397bf4bb31322eff0aff0d0fd1b75e1f079f157a91",
+      "aliases": [],
+      "source_sha256": "f5b62e411be39329d33918d272c353a93c7cbda99a2e3fcb4772afc6a5eec63b",
+      "trim_frames": [
+        143325,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Сабина",
+      "case": "nominative",
+      "file": "1s7GznRgu1bfS3WyIfZAsgWkUJlMc8Lqm.wav",
+      "sha256": "f8e87935b126136cfaf93533ee169c95aaad39b9723e0dc6c04629e8b28b1091",
+      "aliases": [],
+      "source_sha256": "ce40b2ca747cff26e8c273f164215a49c3d8a64b21db9295b395b13156923def",
+      "trim_frames": [
+        141561,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Рукият",
+      "case": "nominative",
+      "file": "13zLSXu7C-DAFIc3kWf49I--eYMWgCQDc.wav",
+      "sha256": "1fc98192cf2ce7d8274ba4eee1d67c2224ca99239596772f2eb3645bc1e7ae9a",
+      "aliases": [],
+      "source_sha256": "d2b7d4bff855bdb98aeba7e88e7d0c9e56e35efd51371be0d525b3326adf62d2",
+      "trim_frames": [
+        142884,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Райханат",
+      "case": "nominative",
+      "file": "1ArDKqxsVP4HTgzFk_RRr5uabJzC6ZoKl.wav",
+      "sha256": "4e48f29b20feea1cd434f721acacda3bbbdbc0bb1e587e5270ec93dfbacaaef3",
+      "aliases": [],
+      "source_sha256": "317b8915c94feefb5b73881ff2c65b75e1b7cd65e23067497614cba4578c2e93",
+      "trim_frames": [
+        142443,
+        199332
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Патимат",
+      "case": "nominative",
+      "file": "1EGuDJFTIv4IUExqQ7zlGr_TOiD1Ymupp.wav",
+      "sha256": "3fe8be59c98ed66b8fac80ffc1936e9045b02a5756b22aaa84ccf3b56a229f83",
+      "aliases": [],
+      "source_sha256": "e83b157811b9f9c81c2536474b77ce97ea74f40b8ece9f236676f094680ca471",
+      "trim_frames": [
+        143766,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Нурият",
+      "case": "nominative",
+      "file": "1tLZxxC6qjUwhCFIjAOLt1oFxF8z2PNb0.wav",
+      "sha256": "803040bbbb8dc3fa638668d4f640409cd92f90551067eb86934f3ded5e04beea",
+      "aliases": [],
+      "source_sha256": "fa55a6f699faf51c59237066350e6e63bf760a45b051fcd75e26f64f4d370637",
+      "trim_frames": [
+        140679,
+        198891
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Наира",
+      "case": "nominative",
+      "file": "1UpJxpDn26aI0uZWpRWWkp2z-FQql0PZM.wav",
+      "sha256": "0e53d3706590f1d9f0eba2c5e35d383f5a482a4951384a1475f8ba24a3a2953c",
+      "aliases": [],
+      "source_sha256": "45f79e4b0d18e93e7a89dcc12d03fb4be9221a2a5abc2606c6f35611ea12f712",
+      "trim_frames": [
+        144207,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Марьяна",
+      "case": "nominative",
+      "file": "1bkeH2UmhkiDxIIeZ4I1GODUyvfybv-NU.wav",
+      "sha256": "479cbe21c1919d84da7e28c23cc3f89a0a74247f96f369bea4e8750d3f8498c1",
+      "aliases": [],
+      "source_sha256": "0891fe65ba49174f5ddc0aeeafd5c211f8a7b0fb70d98c5031ed0c52441a9507",
+      "trim_frames": [
+        141561,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Марьям",
+      "case": "nominative",
+      "file": "1B7cFTX6Q_pFNGXQkhoq60j7eYK2HvmC-.wav",
+      "sha256": "f9aa8d9e4df2349105baa59d4de8d3d964740c93477a9ce616cd21b9c654e014",
+      "aliases": [],
+      "source_sha256": "a6f4703f516bcd0a32d668df71e33c07ba14d8558feceae5f36bbb21ea3853b2",
+      "trim_frames": [
+        143325,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Марият",
+      "case": "nominative",
+      "file": "1S5y9tcBSNW_h2wDlstzdFnXwPrMDtjrR.wav",
+      "sha256": "b20eadfc641aea1497fcb2195cf0828c32cbc21b6d3904078708d1db85137a2d",
+      "aliases": [],
+      "source_sha256": "594ef3fe99a9d08933fd0cab9a6210750602313fbdfcb93d33640e0da8c6c1ae",
+      "trim_frames": [
+        143766,
+        198009
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Мадина",
+      "case": "nominative",
+      "file": "1_ZQAq1RbAatqsL5cdRuTc7KVvZUg3Wmr.wav",
+      "sha256": "73d2529f2491fc85dd15ede64ca1b7eaf2e8944a11de6a9d00a553f3f296fcd6",
+      "aliases": [],
+      "source_sha256": "df25c6414f4ef3b26f6469b18192616f361a366b2934316e49e46c5e91d7d2ec",
+      "trim_frames": [
+        139797,
+        193158
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Лейли",
+      "case": "nominative",
+      "file": "1kLwsPLExKhWZZbk9duGRRNeA7_HxfEml.wav",
+      "sha256": "d120071d251f2511bfb1f17377910591ded2da06698e49c0c9d1414359d75f6d",
+      "aliases": [],
+      "source_sha256": "733fbb39a39337209bd9f80be114afe411533760f1d390ad5cdbe232097a546c",
+      "trim_frames": [
+        144648,
+        191835
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Лейла",
+      "case": "nominative",
+      "file": "1Cn6NeQom7KZvQed0L0P4qpMb8udUpc_l.wav",
+      "sha256": "81d2baca2e728cfe3a3951d6df0baca41023fa26551faca2ebb696a29298fd01",
+      "aliases": [],
+      "source_sha256": "e9be9fff961bb56424f9fafa5d1f015eef66611569fb9e0629eb977c6fdd4d75",
+      "trim_frames": [
+        141561,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Карина",
+      "case": "nominative",
+      "file": "1BnK-nZeblHVXOVXzprg_Wkp2nliNQqNE.wav",
+      "sha256": "208c923821a52e9a02b6a3cab293c2783c04c87aec74567fe2c688142018fa65",
+      "aliases": [],
+      "source_sha256": "cb3bc6b11da8f9d44be53ec31ea01ed55a817d4df223e1d7f7b3e338b9117804",
+      "trim_frames": [
+        142443,
+        192276
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Камила",
+      "case": "nominative",
+      "file": "1NWgZEYrc8tkEwa9dTKfp1lxa-V0sxjnP.wav",
+      "sha256": "f3509f21df5f1e87f2bf4eacc68fd25931ab24dccd325d26b40a56bc2d3e443f",
+      "aliases": [],
+      "source_sha256": "ebba2ee8bbc21443dcd344c55cd515e5909133a16a8fbf5a30b2428e67ab8976",
+      "trim_frames": [
+        140679,
+        194040
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Зульфия",
+      "case": "nominative",
+      "file": "1k66iI-HGUaqMxoQY1all41ntU66Fn4xt.wav",
+      "sha256": "1c5e82a26b82f51261bc0925b2259616ea5619d33e6e210d624b70f3942d1336",
+      "aliases": [],
+      "source_sha256": "405659a84983760cada7ce2a622526c4f5961ec052fd6673459c13c952fe26f5",
+      "trim_frames": [
+        140238,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Земфира",
+      "case": "nominative",
+      "file": "1KeEVkIQRHKZx_gCbn8gkWf6fVO6NfQ8B.wav",
+      "sha256": "78dcd3fd47487d4745b2e53b750173fb50ae96480fa1c1731bc89ebd7813c3e0",
+      "aliases": [],
+      "source_sha256": "314b7d44bd04201ef73630f4eaa672c0c93d77c44265ab8cd6dfc2722dd3fbdc",
+      "trim_frames": [
+        137592,
+        191835
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Зарема",
+      "case": "nominative",
+      "file": "1aNvdskjICNv2QtOJcamQzKrSHGVCZyjK.wav",
+      "sha256": "0ab845bc77dc3d00b1b5a2157d5db133ae0f7fe05f206701966ca593ef7ad72b",
+      "aliases": [],
+      "source_sha256": "2aafbc43ede61ca8e857aaae18140c63b0598b5e1cde8f072f1146e3f66fefdc",
+      "trim_frames": [
+        145530,
+        192717
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Залина",
+      "case": "nominative",
+      "file": "1jcg8g0BPXN807LrNKJ8T1QUTowFi03b4.wav",
+      "sha256": "388320d6ab11edd4a4e4b5fab272662dfe6e6b8f8ac77085983de3dacfe73843",
+      "aliases": [],
+      "source_sha256": "32b645b2fd435596ddd49eee9fe6ff867b6e75441386e9cd080ba8698e41ac91",
+      "trim_frames": [
+        144648,
+        198450
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Заира",
+      "case": "nominative",
+      "file": "1qWPVCIsUvZZ1b7yflb8XmmMqMYNH2LsE.wav",
+      "sha256": "114ba2feb37d3e9a633c330bede3c945ad922cff81557e7ec0bebc949dfb614e",
+      "aliases": [],
+      "source_sha256": "cf40664f8f746645437e542e5c01431f54b15daa82226ae2af2d68441d30e8a3",
+      "trim_frames": [
+        143766,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Джамиля",
+      "case": "nominative",
+      "file": "1it7QAcp2mAYhDK1JIWAYzTn1nN1l1X71.wav",
+      "sha256": "6ac02030a7b4d5afa70b88ee9fc3fe3334a8c545208bdac92311bbc1c3692c20",
+      "aliases": [],
+      "source_sha256": "0519ca3603e20e471b95032b404384cc8e64841a5fa5ecadd61865f71d9e3a97",
+      "trim_frames": [
+        143766,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Гюльнара",
+      "case": "nominative",
+      "file": "1eVag64zmEDpu7JBPulVTq_lghOh7xD1q.wav",
+      "sha256": "8dc6c3ab3cb7f376e0e5ffd444913b7b1c8c74ba21944c2cada0446e3d48cde2",
+      "aliases": [],
+      "source_sha256": "dace693650bb95ee7d96540eaa43512f1cee512a88e30ab21ef4ec9f3fb6c3e3",
+      "trim_frames": [
+        142002,
+        195363
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Барият",
+      "case": "nominative",
+      "file": "1lruauF1vBSNy0dtSNZ9m6NjTi5FiDNFc.wav",
+      "sha256": "0034b42b12d69a4e0d2f1c8106a281b5c8fa70ba1b0694010b47a0f9fb904a5c",
+      "aliases": [],
+      "source_sha256": "ec38b6d3ef5605e388b6530ed1f2fc9123d4e14c7025fe5d0aaf627f01d118d5",
+      "trim_frames": [
+        142002,
+        198009
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Асият",
+      "case": "nominative",
+      "file": "1C0dWJHwliY7tvYNDmnCJj5tlGsu0b6mz.wav",
+      "sha256": "9e28d254d50c0b36a6e412f6088969c191fdedc2f26c38ab49fd134edb905936",
+      "aliases": [],
+      "source_sha256": "c5a7d946f9edc207f78e5d6155e61356f6f62ee92b1ed5c43b70d9a2446e30fe",
+      "trim_frames": [
+        142002,
+        196686
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Асия",
+      "case": "nominative",
+      "file": "19_SnkCUJjDtdF5CmoLMSvoUPQ9H0HWKD.wav",
+      "sha256": "ebbb7effde5b8d7c90f794d921ec6883fdce280a0e57f71e595f25d8fbcaf80e",
+      "aliases": [],
+      "source_sha256": "3b76d018860fac4e7faa4cc2fd80c7b8d3a3f3108b9d727a71e10090e6af1615",
+      "trim_frames": [
+        144207,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Анисат",
+      "case": "nominative",
+      "file": "1K6PU5VSlrjBa6yM2NKwYMVwezTKTRJS9.wav",
+      "sha256": "004d87b059748a26b73c78fe7550d5b102c71f1e033577a18d19e74041996ccd",
+      "aliases": [],
+      "source_sha256": "de2fbbd54916aef919a08d5a761bd6e026bd9341e61c50c031d7e3025c5cd935",
+      "trim_frames": [
+        142443,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Амира",
+      "case": "nominative",
+      "file": "1sZrBKh-F6fHBJbSR16mhUtOD8Hahd7WH.wav",
+      "sha256": "78fcfa53c645dda2c1def0eb3405dd6cd20bd10605a39b127819fad0aec2d697",
+      "aliases": [],
+      "source_sha256": "aec7c519f56aa3978659e648902d86bb6e6d57e98076fe6444b36c67724a5192",
+      "trim_frames": [
+        143766,
+        194481
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Амина",
+      "case": "nominative",
+      "file": "1irTKy580dGsDP-18t3Bmj4olQukB8cgO.wav",
+      "sha256": "12ecc8d270645e7b4245b399b5888f2e5d5b91d70ebc9bdfefef7d48c2b21184",
+      "aliases": [],
+      "source_sha256": "7a5163dd947df25438612a020af7294ecd3da7a2247379005c5eceff7f81af24",
+      "trim_frames": [
+        138915,
+        190071
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Алия",
+      "case": "nominative",
+      "file": "1kPCava-2_QDnndlyfGzWDKLs4XOBWoUa.wav",
+      "sha256": "01fa3f030a0b20eb9fce009b031772e73829dc6faa12c31c30cc55c536718ccc",
+      "aliases": [],
+      "source_sha256": "bca30811d35be3f0f5be1ccf5bfa52f4a9de46a4698759ff7a349c1ee59eea65",
+      "trim_frames": [
+        144207,
+        195804
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Алина",
+      "case": "nominative",
+      "file": "1tsBqNPjbSu9ob5qtHtcikY976DxVWw75.wav",
+      "sha256": "657839676eba50d961f194b4f8229fd14c2dd2a6bcf9b2f9d9f3fd11ed45dc81",
+      "aliases": [],
+      "source_sha256": "02c63c1a846f27c1f6b1011f045c2f6f87f5566c80e867a48f3099f6fbeca409",
+      "trim_frames": [
+        145089,
+        194922
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Айшат",
+      "case": "nominative",
+      "file": "1t8tz5YhTKZWipmKe2aYjnbrvg_wmHKIQ.wav",
+      "sha256": "c88d53b20c529ebe4525c2693d304cee33c4b4f07a77fe2dc4e761ad0b928439",
+      "aliases": [],
+      "source_sha256": "869111e9e8e4c59cc27082751a621c3a668c6441d743d31c455677efc7aa70cb",
+      "trim_frames": [
+        142443,
+        191835
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Айша",
+      "case": "nominative",
+      "file": "1UjFjZ1F8n-ify4IyLe9Scsg1gcztVN62.wav",
+      "sha256": "50d2e4da7f3bb2f08c4920a1541b4b781e4196062567ec0ee07816e88aab2669",
+      "aliases": [],
+      "source_sha256": "3f63fb5c42fd17db1f11f1864777728d1b03ab661d60657266d53fb2a8de94f2",
+      "trim_frames": [
+        143325,
+        197127
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Айлин",
+      "case": "nominative",
+      "file": "1X_gT2jJN8nqoD8UWs005fPXeAfYVg1R4.wav",
+      "sha256": "76c6b764893d9f38ed0953e599a72a82622536a0326b90b0cab9ee7c7211f727",
+      "aliases": [],
+      "source_sha256": "2c88828508d7023c97e19f789bf0ebf2478d64704e17d6f5cbc7d04c29607d07",
+      "trim_frames": [
+        140679,
+        197568
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Айла",
+      "case": "nominative",
+      "file": "1YVlJPGAVPbVWJKe9KnYZxxfXe1FEiE6l.wav",
+      "sha256": "1fc76a4ae7211a00cfbd2fa07c32c8f1e0a7e7fc6e0e0db86606c0f08129f7dd",
+      "aliases": [],
+      "source_sha256": "6d33cfad7fa5af9c38b1e06fefdae336e422b6085ac817a118b0f7d942369487",
+      "trim_frames": [
+        142002,
+        194040
+      ],
+      "source_rate": 44100
+    },
+    {
+      "key": "Аиша",
+      "case": "nominative",
+      "file": "1hRAjOgQIwC1Ono9gDFcVQcV_Jt6uMgBB.wav",
+      "sha256": "e3144f484e29e5587484f78192c888fd2c131acdd65790c1211fad908fe97e80",
+      "aliases": [],
+      "source_sha256": "cbb086c4fd5a46197c89298e4b41d9d291c19bf1e6a37747c4c7ddef143d953f",
+      "trim_frames": [
+        144648,
+        192276
+      ],
+      "source_rate": 44100
+    }
+  ],
+  "not_prepared": [
+    {
+      "source_id": "1l9tV8zPcwVv1jbuHk9Adu6elv4a9UxlY",
+      "reason": "multiple_sustained_spans_needs_human_segmentation"
+    },
+    {
+      "source_id": "1NHJDYKBveFyNmBqtflvpp1M6laew1MFV",
+      "reason": "multiple_sustained_spans_needs_human_segmentation"
+    },
+    {
+      "source_id": "1CgyTAAEoBbEnd9SSieP3iC7DPWotaiET",
+      "reason": "multiple_sustained_spans_needs_human_segmentation"
+    },
+    {
+      "source_id": "1eymD90bNr4gLj4IbdHxFfqaaIbm8USEE",
+      "reason": "multiple_sustained_spans_needs_human_segmentation"
+    },
+    {
+      "source_id": "1NzaPIDc__lDjaKbOZJuPH-JEwCZUlUTM",
+      "reason": "multiple_sustained_spans_needs_human_segmentation"
+    }
+  ]
+}

@@ -10,10 +10,17 @@ CATALOGUE_CLARIFY_TEXT = 'Выбери один вариант из меню. С
 class SceneMenuMixin:
     def _menu_page(self, state):
         from .canonical_contract import IMMERSIVE_GAME_SPECS
+        story_items = None
+        if state.mode == 'personal_story_theme':
+            from .demo_story_catalog import select_stories
+            if not state.personal_story_selection:
+                state.personal_story_selection = select_stories(state.visit_profile(), seed=state.personal_story_seed)
+            story_items = tuple((item['id'], item['title']) for item in state.personal_story_selection)
         return build_menu_page(state.mode, state.age_band,
             state.scene_menu_pages.get(state.mode, 0), stories=self.stories,
             game_specs=IMMERSIVE_GAME_SPECS,
             personal_story_available=getattr(self,'personal_story_capable',False),
+            personal_story_items=story_items,
             day_items=getattr(self,'day_menu_items',lambda sid:(('date','Дата'),))(state.session_id))
 
     def _menu_selection(self, state, button):
@@ -223,7 +230,7 @@ class SceneMenuMixin:
         from .personal_story import story_theme
         request = ((state.mode == 'schedule_weather' and day_information_intent(text or '') is not None)
                    or (state.mode == 'personal_story_theme' and getattr(self,'personal_story_capable',False)
-                       and story_theme(text) is not None))
+                       and any(item['id'] == intent for item in state.personal_story_selection)))
         if request:
             state.scene_menu_answers[state.mode]='skipped'
             state.scene_menu_phase='ready'

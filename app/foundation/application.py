@@ -50,7 +50,7 @@ EXHIBITION_MENU_PHASE_TIMINGS_MS = (
     (1, "digit", 380), (1, "full", 1520),
     (2, "digit", 2800), (2, "full", 3690),
     (3, "digit", 5160), (3, "full", 5960),
-    (4, "digit", 8370), (4, "full", 9400),
+    (4, "digit", 7670), (4, "full", 8700),
     (5, "digit", 11110), (5, "full", 12200),
     (6, "digit", 13510), (6, "full", 14430),
     (7, "digit", 15910), (7, "full", 16830),
@@ -227,6 +227,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self.history_repository: Any = history
         # Canonical scenario documents and LangGraph are the single source of
         self.voice_manifest = RecordedPhraseResolver(f"{getattr(settings, 'content_root', 'content')}/audio/voice_manifest.json", allow_development_assets=self.allow_development_placeholders)
+        from .name_audio import NameAudioRegistry
+        self.name_audio_registry = NameAudioRegistry(getattr(settings, "name_audio_manifest", "assets/names/manifest.json"))
+        if self.bounded_s2s is not None:
+            self.bounded_s2s.name_audio_registry = self.name_audio_registry
         self.safety_classifier = InputSafetyGate(settings, story_backend_contract=
             getattr(self.bounded_s2s, "story_backend_contracts", {}).get("validator"))
         self._canonical_profiles: dict[str, dict[str, Any] | None] = {}
@@ -2000,7 +2004,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if (current is not None and current.mode == "personal_story_theme" and transient_text
                 and payload.get("safety_severity") == "none" and personal_welcome_answer_verified
                 and payload.get("intent") != "help_request"):
-            payload["intent"] = story_theme(transient_text) or "unsupported_story_theme"
+            from .menu_content import catalogue_choice
+            payload["intent"] = catalogue_choice(transient_text, 'personal_story_theme', current.age_band,
+                descriptor=current.scene_menu_descriptor) or "unsupported_story_theme"
         # Transport-supplied timestamps cannot make the real welcome clock due.
         if (event.event_type == "WelcomeTimerFired" and current is not None
                 and current.welcome_deadline_monotonic is not None
@@ -3520,6 +3526,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if state is not None:
             if state.display_name:
                 private_profile.setdefault("display_name", state.display_name)
+            if state.grammatical_gender in {"masculine", "feminine", "neutral"}:
+                private_profile.setdefault("grammatical_gender", state.grammatical_gender)
+            if state.interests:
+                private_profile.setdefault("interests", list(state.interests))
             private_profile["age_band"] = state.age_band
             state_snapshot["onboarding_name_collected"] = bool(state.onboarding_name_collected)
             state_snapshot["dialogue_memory"] = {
@@ -3563,7 +3573,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 return
             payload = await self._receive_canonical_event(
                 Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio",
-                      {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result)},
+                      {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result), "_name_confident": (not self._untrusted_stt(audio_result) and audio_result.stt.confidence >= 0.75)},
                       f"{correlation_id}:audio:{sequence}"),
                 audio_result.stt.text,
                 _speech_ingress_guard=_ingress_guard,
@@ -3675,7 +3685,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     float(getattr(audio_result.stt, "confidence", 0.0) or 0.0),
                     getattr(active, "mode", None),
                 )
-                result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard))
+                result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result), "_name_confident": (not self._untrusted_stt(audio_result) and audio_result.stt.confidence >= 0.75)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard))
                 result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
                 return result
             if _ingress_guard is not None and not _ingress_guard():

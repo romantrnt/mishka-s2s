@@ -106,42 +106,30 @@ class PrivateWelcomeMixin:
             return (not self._private_welcome_scope(session_id, owner)
                     or owner.chosen or self.monotonic_now() >= owner.deadline)
 
+        async def _synth_part(part_text):
+            from .name_audio import synthesize_private_text
+            return await synthesize_private_text(tts, part_text, owner.epoch, cancelled)
+
         async def prepare():
             audio = phrase = None
             try:
                 if cancelled():
                     return
-                phrase = f'Привет, {name}! Я Мишка.'
+                phrase = f'Привет, {name}. Я Мишка.'
                 decision = await engine.response_validator.validate_trusted(phrase)
                 if cancelled():
                     return
                 if not decision.allowed:
                     owner.status = 'personal_welcome_name_unavailable'
                     return
-                stream_fn = getattr(tts, 'synthesize_audio_stream', None)
-                if callable(stream_fn):
-                    from .s2s import AudioChunk
-                    from .voice_pipeline import peak_normalize, resample_mono
-                    collected = []
-                    stream_rate = None
-                    async for sub in stream_fn(phrase, owner.epoch, cancelled, first_chunk=True):
-                        if cancelled():
-                            return
-                        if not valid_pcm(sub):
-                            continue
-                        if stream_rate is None:
-                            stream_rate = sub.sample_rate
-                        collected.extend(sub.samples)
-                    if collected and stream_rate:
-                        samples = tuple(collected)
-                        if stream_rate != 24000:
-                            samples = tuple(await asyncio.to_thread(resample_mono, samples, stream_rate, 24000))
-                            stream_rate = 24000
-                        if samples and max(map(abs, samples)) > 1.0:
-                            samples = peak_normalize(samples, safe_peak=1.0)
-                        audio = AudioChunk(samples, stream_rate, owner.epoch)
-                else:
-                    audio = await tts.synthesize(phrase, owner.epoch, cancelled)
+                from .name_audio import render_phrase_with_name
+                audio, _ = await render_phrase_with_name(
+                    'Привет, {name}. Я Мишка.', name,
+                    synthesize_fn=_synth_part,
+                    registry=getattr(self, 'name_audio_registry', None),
+                )
+                if audio is None and not cancelled():
+                    audio = await _synth_part(phrase)
                 phrase = None
                 if cancelled():
                     return

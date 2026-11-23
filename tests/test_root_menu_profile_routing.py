@@ -37,8 +37,8 @@ async def menu(h, authorized, *, release_skip=True):
 
 
 @pytest.mark.parametrize("authorized", [False, True])
-@pytest.mark.parametrize("button,target", [(1,"game_menu"),(2,"fixed_story_menu"),(3,"support_intake"),
-    (4,"personal_story_theme"),(5,"wellbeing_check"),(6,"bear_dialogue"),(7,"schedule_weather")])
+@pytest.mark.parametrize("button,target", [(1,"game_menu"),(2,"fixed_story_menu"),(4,"support_intake"),
+    (3,"personal_story_theme"),(5,"wellbeing_check"),(6,"bear_dialogue"),(7,"schedule_weather")])
 def test_all_root_buttons_reach_existing_destinations(authorized, button, target):
     async def run():
         h = Harness(card() if authorized else None)

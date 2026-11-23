@@ -65,7 +65,10 @@ def catalogue_choice(text, scene, band, *, stories=None, game_specs=(), descript
         number = int(slot[1]) if slot[1].isdigit() else slots[slot[1]]
         return next((item['id'] for item in descriptor.get('items', ()) if item.get('slot') == number), None)
     matches = []
-    for item_id, title in catalogue_items(scene, band, stories=stories, game_specs=game_specs):
+    choices = catalogue_items(scene, band, stories=stories, game_specs=game_specs)
+    if scene == 'personal_story_theme' and descriptor:
+        choices = tuple((item['id'], item['title']) for item in descriptor.get('items', ()))
+    for item_id, title in choices:
         aliases = [title]
         if scene == 'game_menu':
             aliases.extend(GAME_ALIASES.get(item_id, ()))
@@ -162,7 +165,7 @@ def _story_items(stories: Any, band: str) -> tuple[tuple[str, str], ...]:
 
 def build_menu_page(scene: str, band: str, page: int = 0, *,
                     stories: Any = None,
-                    game_specs: Iterable[Any] = (), personal_story_available: bool = True, day_items: Iterable[tuple[str,str]] = ()) -> MenuPage:
+                    game_specs: Iterable[Any] = (), personal_story_available: bool = True, personal_story_items: Iterable[tuple[str,str]] | None = None, day_items: Iterable[tuple[str,str]] = ()) -> MenuPage:
     """Build a bounded page; the game chooser owns slots 1..5.
 
     ``stories`` is the current FixedStoryManifest, ``game_specs`` comes from the
@@ -187,7 +190,7 @@ def build_menu_page(scene: str, band: str, page: int = 0, *,
         choices = tuple((item_id, title) for item_id,title in day_items
                         if approved.get(item_id) == title)
     else:
-        choices = STORY_THEME_ITEMS if personal_story_available else ()
+        choices = (tuple(personal_story_items) if personal_story_items is not None else STORY_THEME_ITEMS) if personal_story_available else ()
     if len({item_id for item_id, _ in choices}) != len(choices):
         raise ValueError("menu_duplicate_item")
     size = 5 if scene in {"game_menu", "fixed_story_menu", "personal_story_theme"} else min(4, policy.max_choices)

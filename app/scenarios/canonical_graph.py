@@ -102,7 +102,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
         return False
     if current == target:
         return True
-    activity_modes = {"game_menu","game_active","fixed_story_menu","fixed_story_playing","story_speech_analysis",
+    activity_modes = {"personal_story_theme", "personal_story_generating", "personal_story_validating", "personal_story_playing", "game_menu","game_active","fixed_story_menu","fixed_story_playing","story_speech_analysis",
                       "story_pause_announcement","story_paused","story_resume_announcement","fixed_story_choice_wave"}
     if target == 'bear_dialogue' and current in activity_modes:
         return event_type in {'ButtonPressed','ButtonReleased','ButtonLongHeld','VoiceIntentReady','DialogueFallback','AudioCompleted','AudioFailed'}

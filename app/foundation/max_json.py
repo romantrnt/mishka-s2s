@@ -62,6 +62,49 @@ def _map_card(card, context_ref, now, monotonic_now):
         raise ValueError("invalid_adaptation")
     facts = {"acquaintance": kind, "wheelchair_access": adaptation["wheelchair_access"],
              "participation_mode": adaptation["participation_mode"]}
+    identity_block = card.get("identity") if isinstance(card.get("identity"), dict) else {}
+    raw_gender = identity_block.get("grammatical_gender") or identity_block.get("gender") or card.get("grammatical_gender") or card.get("gender")
+    if isinstance(raw_gender, str) and raw_gender.strip():
+        from .visit_profile import normalize_gender
+        mapped_gender = normalize_gender(raw_gender)
+        if mapped_gender in {"masculine", "feminine", "neutral"}:
+            profile["grammatical_gender"] = mapped_gender
+    raw_interests = card.get("interests") or identity_block.get("interests") or adaptation.get("interests")
+    if isinstance(raw_interests, (list, tuple)):
+        from .visit_profile import normalize_interests
+        validated_interests = []
+        for item in raw_interests[:12]:
+            try:
+                validated_interests.append(_bounded_text(item, "interests", 40))
+            except IdentityValidationError:
+                pass
+        norm_interests = list(normalize_interests(validated_interests))
+        if norm_interests:
+            profile["interests"] = norm_interests
+    for flag_key in ("motor_flags", "sensory_flags", "communication_flags"):
+        raw_flags = card.get(flag_key) or adaptation.get(flag_key)
+        if isinstance(raw_flags, (list, tuple)):
+            values = []
+            for item in raw_flags[:8]:
+                try:
+                    values.append(_bounded_text(item, flag_key, 40))
+                except IdentityValidationError:
+                    pass
+            if values:
+                profile[flag_key] = values
+    raw_triggers = card.get("trigger_topics") or adaptation.get("trigger_topics")
+    if isinstance(raw_triggers, (list, tuple)):
+        from .identity import _TRIGGER_TOPICS, _TRIGGER_HANDLING
+        safe_triggers = []
+        for item in raw_triggers[:8]:
+            if (isinstance(item, dict) and isinstance(item.get("topic_id"), str) and item.get("topic_id") in _TRIGGER_TOPICS
+                    and item.get("status") in ("active", "inactive")):
+                handling = item.get("handling", "adult_neutral")
+                if not isinstance(handling, str) or handling not in _TRIGGER_HANDLING:
+                    handling = "adult_neutral"
+                safe_triggers.append({"topic_id": item["topic_id"], "status": item["status"], "handling": handling})
+        if safe_triggers:
+            profile["trigger_topics"] = safe_triggers
     return normalize_profile(profile), monotonic_now + remaining, facts
 
 

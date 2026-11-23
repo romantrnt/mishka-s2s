@@ -21,11 +21,11 @@ def test_exhibition_menu_existing_use_cases_pass_application_and_graph():
         app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="exhibition"))
         for button, target, preset in (
             (1, "game_menu", "GAME_MENU"),
-            (3, "support_intake", "SUPPORT"),
+            (4, "support_intake", "SUPPORT"),
             (5, "wellbeing_check", "HELP"),
             (2, "fixed_story_menu", "STORY_MENU"),
             (6, "bear_dialogue", "BEAR_DIALOGUE"),
-            (4, "personal_story_theme", "PERSONAL_STORY"),
+            (3, "personal_story_theme", "PERSONAL_STORY"),
             (7, "schedule_weather", "SCHEDULE_WEATHER"),
         ):
             sid = f"menu-{button}"
@@ -58,7 +58,7 @@ def test_exhibition_menu_support_requires_handset_like_root_menu():
         # directly for this otherwise unreachable seeded state.
         from app.foundation.canonical_contract import CanonicalEvent
         result = app.canonical_runtime.handle(CanonicalEvent(
-            "ButtonPressed", sid, 1, 0, "test", {"button_id": 3},
+            "ButtonPressed", sid, 1, 0, "test", {"button_id": 4},
             "menu-support-down-1", 1.0, 1.0,
         ))
         assert result["state"]["mode"] == "awaiting_handset"

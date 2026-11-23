@@ -1,0 +1,35 @@
+{
+  "source_sha256": "44f31adada94d3d51133a72a69b8633917761eea7931ec1c0bfa0150802fa778",
+  "result_sha256": "9855772272e19978057ab656952d22154f0b68319e53b2f28191f47ba32717bd",
+  "source_slices_ms": [
+    [
+      0,
+      5160
+    ],
+    [
+      5160,
+      5960
+    ],
+    [
+      9400,
+      11110
+    ],
+    [
+      8370,
+      9400
+    ],
+    [
+      5960,
+      8370
+    ],
+    [
+      11110,
+      18406
+    ]
+  ],
+  "duration_ms": 18406,
+  "frame_count": 405858,
+  "human_listening_verified": false,
+  "button4_digit_ms": 7670,
+  "button4_action_ms": 8700
+}

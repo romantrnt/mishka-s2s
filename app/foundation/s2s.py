@@ -512,17 +512,44 @@ class ProfileContext:
     age_source: str = "anonymous_default"
     language: str = "ru-RU"
     accessibility: tuple[str, ...] = ()
+    grammatical_gender: str = "neutral"
+    interests: tuple[str, ...] = ()
 
     @classmethod
     def from_profile(cls, profile: dict[str, Any] | None) -> "ProfileContext":
         profile = profile or {}
         from .age_policy import age_details
+        from .visit_profile import infer_grammatical_gender, normalize_interests
         details = age_details(profile)
         flags = tuple(str(item)[:40] for key in ("motor_flags", "sensory_flags", "communication_flags") for item in (profile.get(key) or [])[:4])
-        return cls(display_name=str(profile["display_name"])[:64] if profile.get("display_name") else None, age=details.get("age_years"), age_band=str(details.get("age_band") or "3-5"), age_source=str(details.get("age_band_source") or "anonymous_default"), language=str(profile.get("language") or "ru-RU"), accessibility=flags)
+        display_name = str(profile["display_name"])[:64] if profile.get("display_name") else None
+        explicit_gender = profile.get("grammatical_gender")
+        gender = infer_grammatical_gender(display_name, explicit_gender=explicit_gender)
+        interests = normalize_interests(profile.get("interests"))
+        return cls(
+            display_name=display_name,
+            age=details.get("age_years"),
+            age_band=str(details.get("age_band") or "3-5"),
+            age_source=str(details.get("age_band_source") or "anonymous_default"),
+            language=str(profile.get("language") or "ru-RU"),
+            grammatical_gender=gender,
+            interests=interests,
+            accessibility=flags,
+        )
 
     def prompt_fields(self) -> dict[str, Any]:
-        return {key: value for key, value in (("display_name", self.display_name), ("age", self.age), ("age_band", self.age_band), ("age_source", self.age_source), ("language", self.language), ("accessibility", self.accessibility)) if value is not None}
+        return {
+            key: value for key, value in (
+                ("display_name", self.display_name),
+                ("age", self.age),
+                ("age_band", self.age_band),
+                ("age_source", self.age_source),
+                ("language", self.language),
+                ("grammatical_gender", self.grammatical_gender),
+                ("interests", self.interests or None),
+                ("accessibility", self.accessibility),
+            ) if value is not None
+        }
 
 @dataclass(frozen=True)
 class ScenarioContext:
@@ -2600,6 +2627,8 @@ class _AudioOwnership:
 
 def _native_audio_stream_method(tts):
     provider = tts.delegate if isinstance(tts, CachedTTSProvider) else tts
+    if getattr(provider, "supports_native_stream", True) is False:
+        return None
     method = getattr(provider, "synthesize_audio_stream", None)
     if callable(method) and getattr(provider, "provider_name", None) != "qwen765":
         return method
@@ -3708,7 +3737,12 @@ class BoundedConversationEngine:
             trace_generation_id = token
         trace_correlation_id = self.metrics.begin_voice_turn(context.session_id, generation_id=trace_generation_id).correlation_id
         self.metrics.mark_voice(context.session_id, "llm_request", generation_id=trace_generation_id)
-        queue=AudioSynthesisQueue(self.tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"), lifecycle_hook=self.lifecycle_hook,retire_hook=self._retire_queue)
+        turn_tts = self.tts
+        registry = getattr(self, "name_audio_registry", None)
+        if registry is not None and context.profile.display_name:
+            from .name_audio import VisitNameTTSProvider
+            turn_tts = VisitNameTTSProvider(self.tts, context.profile.display_name, registry)
+        queue=AudioSynthesisQueue(turn_tts,self.voice,self.playback,self.cancel,self.config,self.metrics,trace_generation_id=trace_generation_id,voice_mode=getattr(self.settings, "voice_conversion", "rvc_v2"), fallback_mode=getattr(self.settings, "rvc_fallback_mode", "passthrough"), lifecycle_hook=self.lifecycle_hook,retire_hook=self._retire_queue)
         queue_started=time.perf_counter(); await queue.start(context.session_id,token)
         task = current
         if task is not None:
@@ -3746,7 +3780,7 @@ class BoundedConversationEngine:
                 + f'Spoken text must use at most {age_words} words total. Express a shorter complete thought with normal separate words; never glue words or invent abbreviations to fit. '
                 + ('YOUNG_SPEECH: Сначала выбери одну простую законченную мысль на 3–6 слов. Вырази её сразу одним коротким русским предложением с обычными границами слов; не уплотняй длинную фразу склейкой или сокращениями. Strict maximum 8 words. Do not add a follow-up question unless the current scenario requires it. '
                    if response_contract.young else 'Use one or two short Russian sentences. '))
-        native_streaming = _native_audio_stream_method(self.tts) is not None
+        native_streaming = _native_audio_stream_method(turn_tts) is not None
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
         messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}\nNON_NEGOTIABLE_RUNTIME_OUTPUT: "+output_format},{"role":"user","content":text}]
@@ -3771,7 +3805,7 @@ class BoundedConversationEngine:
                 self.metrics.event("token_received", token_index=token_index, chars=len(value))
 
             async def _private_pre_stream(first_text: str, out_q: asyncio.Queue):
-                raw_tts = self.tts
+                raw_tts = turn_tts
                 while isinstance(raw_tts, CachedTTSProvider):
                     raw_tts = raw_tts.delegate
                 if getattr(raw_tts, "provider_name", None) == "vox555":

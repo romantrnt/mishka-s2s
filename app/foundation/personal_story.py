@@ -291,17 +291,24 @@ class PersonalStoryMixin:
     def personal_story_available(self):
         return bool(getattr(self.audio,'private_pcm_supported',False)
             and callable(getattr(self.audio,'play_pcm_owned',None))
-            and PersonalStoryService(self.bounded_s2s).capable())
+            and (PersonalStoryService(self.bounded_s2s).capable() or self._local_story_capable()))
+
+    def _local_story_capable(self):
+        from .demo_story_audio import capable
+        return capable(self.bounded_s2s)
 
     async def _prepare_personal_story(self,sid,brief,token):
         self._discard_personal_story(sid)
         state=self.canonical_runtime.sessions[sid]
         theme=story_theme(brief.get('theme')); band=state.age_band
+        entry = next((item for item in state.personal_story_selection
+                      if item['id'] == brief.get('catalogue_story_id')), None)
+        local = entry is not None
         service=PersonalStoryService(self.bounded_s2s)
         service._diagnostic('prepare','begin',band=band,jobs=len(self._personal_story_jobs))
         private_pcm_available=bool(getattr(self.audio,'private_pcm_supported',False))
-        available=bool(private_pcm_available and callable(getattr(self.audio,'play_pcm_owned',None)) and service.capable())
-        if not available or theme is None or band not in POLICIES:
+        available=bool(private_pcm_available and callable(getattr(self.audio,'play_pcm_owned',None)) and (self._local_story_capable() if local else service.capable()))
+        if not available or (theme is None and not local) or band not in POLICIES:
             return service._reject('prepare','admission_rejected',private_pcm_available=private_pcm_available,
                 theme_valid=theme is not None,band_valid=band in POLICIES,**service._capability_diagnostics())
         if len(self._personal_story_jobs)>=1:
@@ -315,7 +322,13 @@ class PersonalStoryMixin:
                          (state.profile_ref,state.identity_request_id),band,self.monotonic_now()+budget)
         self._personal_stories[sid]=owner
         current=lambda:self._personal_story_scope(sid,owner)
-        task=asyncio.create_task(service.render(theme,band,brief.get('content_constraints',()),token,current),name='mishka-personal-story')
+        if local:
+            from .demo_story_audio import render
+            coroutine = render(e, entry, state.visit_profile(self._canonical_profiles.get(sid)),
+                               token, current, getattr(self, 'name_audio_registry', None))
+        else:
+            coroutine = service.render(theme,band,brief.get('content_constraints',()),token,current)
+        task=asyncio.create_task(coroutine,name='mishka-personal-story')
         owner.task=task;self._personal_story_jobs.add(task)
         def observed(done):
             self._personal_story_jobs.discard(done)

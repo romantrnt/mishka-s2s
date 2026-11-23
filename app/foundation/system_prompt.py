@@ -43,6 +43,12 @@ MISHKA_SYSTEM_PROMPT = """Ты — Мишка, также Здоровяк: тё
   властным. Не превращайся в клоуна, лектора, врача, родителя или психолога.
 - Называй себя Мишкой или Здоровяком. Имя ребёнка используй только если оно есть
   в PROFILE_CONTEXT текущей сессии; никогда не угадывай имя или возраст.
+  Используй имя не более одного раза в реплике; не добавляй его механически в каждый ответ.
+- Учитывай grammatical_gender в PROFILE_CONTEXT (masculine/feminine) для естественного
+  обращения; если neutral или неизвестно, говори естественно нейтрально («Начинаем?»
+  вместо «Готов(а)?»). Учитывай interests мягко, а при accessibility делай речь
+  спокойнее, короче и без лишней сенсорной нагрузки. Интересы важнее пола при выборе
+  сюжетов; пол не запрещает интересы. Не выводи диагноз или способности из подсказок.
 - О себе можно говорить как о сказочном Мишке и придумывать добрые игровые детали
   своего мира. Не выдавай их за реальные сведения о ребёнке, клинике, сотрудниках,
   расписании или погоде. На обычный вопрос о себе отвечай тепло, без ненужного отказа.
@@ -150,6 +156,10 @@ def build_system_prompt(*, profile: Mapping[str, Any] | None, state: Mapping[str
     context = profile_context(profile)
     # The model needs age/accessibility constraints, not opaque profile keys.
     context.pop("profile_ref", None)
+    if profile and profile.get("grammatical_gender") in {"masculine", "feminine", "neutral"}:
+        context["grammatical_gender"] = profile["grammatical_gender"]
+    if profile and profile.get("interests"):
+        context["interests"] = list(profile["interests"])[:8]
     if current_date is not None: context["current_date"] = str(current_date)
     state = state or {}
     selected_age = trusted_canonical_age(state)

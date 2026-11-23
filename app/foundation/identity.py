@@ -123,6 +123,11 @@ def normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         if profile["grammatical_gender"] not in ("masculine", "feminine", "neutral"):
             raise IdentityValidationError("grammatical_gender is unsupported")
         result["grammatical_gender"] = profile["grammatical_gender"]
+    if "interests" in profile:
+        interests = profile["interests"]
+        if not isinstance(interests, (list, tuple)) or len(interests) > 12:
+            raise IdentityValidationError("interests must be a bounded list")
+        result["interests"] = [_bounded_text(item, "interests", 40) for item in interests]
     for name in _FLAG_FIELDS:
         if name not in profile:
             continue

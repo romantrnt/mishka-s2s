@@ -23,14 +23,15 @@ from zoneinfo import ZoneInfo
 from .game_engine import GameState, AVAILABLE_GAME_SPECS, start as start_game, advance as advance_game, desired_buttons, pause as pause_game, arm_wait, next_deadline, timer_step, begin_demonstration, IMMERSIVE_GAME_SPECS, current_challenge, game_answer_buttons, finish_prompt, hold_exit_policy, cancel_exit_gesture
 from .age_policy import age_details, policy_for, policy_for_band
 from .lighting import BUTTON_WAVE_ELEMENTS
+from .visit_profile import VisitProfile, infer_grammatical_gender, normalize_interests
 from .voice_catalog import load_phrase_catalog
 
 RAM_TTL_SECONDS = 300
 EXHIBITION_WELCOME_DELAY_SECONDS = 5.0
 AGE_BANDS = ("1-3", "3-5", "5-7")
 BUTTON_MODES = {
-    1: "game_menu", 2: "fixed_story_menu", 3: "support_intake",
-    4: "personal_story_theme", 5: "wellbeing_check", 6: "bear_dialogue",
+    1: "game_menu", 2: "fixed_story_menu", 3: "personal_story_theme",
+    4: "support_intake", 5: "wellbeing_check", 6: "bear_dialogue",
     7: "schedule_weather",
 }
 LIGHTING_ELEMENT_IDS = tuple(range(18))
@@ -291,6 +292,11 @@ class CanonicalState:
     root_menu_back_guard_until: float | None = field(default=None, repr=False)
     mood_result: str | None = None
     accessibility_policy: dict[str, Any] = field(default_factory=dict)
+    interests: list[str] = field(default_factory=list)
+    active_trigger_topics: tuple[str, ...] = field(default_factory=tuple, repr=False)
+    acquaintance_kind: str | None = None
+    personal_story_selection: list[dict[str, Any]] = field(default_factory=list)
+    personal_story_seed: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
     schedule_ref: str | None = None
     handset: str = "down"
     # None is an explicit ended visit, even if the physical hook remains up.
@@ -346,6 +352,9 @@ class CanonicalState:
     def audio_open(self) -> bool:
         return self.interaction_open and (not self.silent_mode or self.handset == "up")
 
+    def visit_profile(self, profile: Mapping[str, Any] | None = None, facts: Mapping[str, Any] | None = None) -> VisitProfile:
+        return VisitProfile.from_state_and_profile(self, profile=profile, facts=facts)
+
     def snapshot(self) -> dict[str, Any]:
         value = asdict(self)
         value["interaction_active"] = self.interaction_open
@@ -355,6 +364,8 @@ class CanonicalState:
             value.pop(private_key, None)
         # Profile display fields and schedule links stay inside the protected profile boundary.
         value.pop("display_name", None)
+        value.pop("interests", None)
+        value.pop("active_trigger_topics", None)
         value.pop("schedule_ref", None)
         value.pop("history_tail", None)
         value.pop("game_offer_id", None)
@@ -409,7 +420,7 @@ REQUIRED_EXHIBITION_CONTENT = (
     {"requirement": "onboarding_closing", "phrase_id": "PHRASE_107", "transcript": "Рад знакомству!"},
     {"requirement": "onboarding_thanks", "phrase_id": "PHRASE_016", "transcript": "Здорово. Спасибо"},
     {"requirement": "menu_prompt", "phrase_id": "PHRASE_007", "transcript": "Что хочешь сделать?"},
-    {"requirement": "menu_list", "phrase_id": "PHRASE_008", "transcript": "Один — игры. Два — сказки. Три — рассказать или спросить. Четыре — новая сказка. Пять — помощь. Шесть — поговорить. Семь — день и планы"},
+    {"requirement": "menu_list", "phrase_id": "PHRASE_008", "transcript": "Один — игры. Два — сказки. Три — новая сказка. Четыре — рассказать или спросить. Пять — помощь. Шесть — поговорить. Семь — день и планы"},
     {"requirement": "menu_repeat_prompt", "phrase_id": "PHRASE_009", "transcript": "Повторить меню?"},
     {"requirement": "listen", "phrase_id": "PHRASE_068", "transcript": "Я слушаю"},
     {"requirement": "retry", "phrase_id": "PHRASE_074", "transcript": "Я не расслышал. Скажи ещё раз"},
@@ -990,12 +1001,15 @@ class CanonicalRuntime(SceneMenuMixin):
         value = profile or {}
         profile_now = datetime.now(ZoneInfo(str(value.get("timezone") or "Europe/Moscow")))
         details = age_details(profile, now=profile_now)
-        gender = str(value.get("grammatical_gender") or "neutral")
-        if gender not in ALLOWED_GENDERS:
-            gender = "neutral"
         name = value.get("display_name")
         if not isinstance(name, str) or not name.strip():
             name = None
+        gender = infer_grammatical_gender(
+            name,
+            explicit_gender=str(value.get("grammatical_gender") or "") or None,
+        )
+        if gender not in ALLOWED_GENDERS:
+            gender = "neutral"
         progress = value.get("progress") if isinstance(value.get("progress"), Mapping) else {}
         mastery = progress.get("game_mastery") if isinstance(progress.get("game_mastery"), Mapping) else {}
         prior_level = max((int(item) for item in mastery.values() if isinstance(item, int) and not isinstance(item, bool)), default=0)
@@ -1013,6 +1027,8 @@ class CanonicalRuntime(SceneMenuMixin):
                               display_name=name[:80] if name else None,
                               grammatical_gender=gender,
                               accessibility_policy=accessibility_policy_from_profile(profile),
+                              interests=list(normalize_interests(value.get("interests"))),
+                              active_trigger_topics=tuple(t["topic_id"] for t in value.get("trigger_topics", ()) if isinstance(t, Mapping) and t.get("status") == "active" and isinstance(t.get("topic_id"), str)),
                               schedule_ref=str(value.get("schedule_ref")) if value.get("schedule_ref") else None,
                               game_level=max(0, min(9, prior_level)))
 
@@ -1020,7 +1036,8 @@ class CanonicalRuntime(SceneMenuMixin):
         fresh = self._new_state(state.session_id, None)
         for name in ("profile_ref", "profile_status", "display_name", "grammatical_gender", "language", "timezone",
                      "age_band", "age_band_source", "age_years", "age_policy", "profile_data_incomplete",
-                     "current_date", "accessibility_policy", "schedule_ref", "onboarding_name_collected"):
+                     "current_date", "accessibility_policy", "interests", "active_trigger_topics", "acquaintance_kind",
+                     "personal_story_selection", "personal_story_seed", "schedule_ref", "onboarding_name_collected"):
             setattr(state, name, getattr(fresh, name))
         state.history_tail.clear()
         state.dialogue_memory.clear()
@@ -1039,7 +1056,8 @@ class CanonicalRuntime(SceneMenuMixin):
             "profile_ref", "profile_status", "display_name", "grammatical_gender",
             "language", "timezone", "age_band", "age_band_source", "age_years",
             "age_policy", "profile_data_incomplete", "current_date",
-            "accessibility_policy", "schedule_ref", "onboarding_name_collected",
+            "accessibility_policy", "interests", "active_trigger_topics", "acquaintance_kind",
+            "personal_story_selection", "personal_story_seed", "schedule_ref", "onboarding_name_collected",
         ):
             setattr(state, name, getattr(fresh, name))
         state.story_menu_hint_seen = state.story_menu_hint_active = False
@@ -1507,7 +1525,7 @@ class CanonicalRuntime(SceneMenuMixin):
                   reset_session: bool = False, clear_audio: bool = False) -> dict[str, Any]:
         if (state.mode not in {"game_menu", "game_active", "fixed_story_menu", "fixed_story_playing",
                 "story_speech_analysis", "story_pause_announcement", "story_paused", "story_resume_announcement",
-                "fixed_story_choice_wave"} or not state.interaction_open or state.safety_severity != "none"):
+                "fixed_story_choice_wave", "personal_story_theme", "personal_story_generating", "personal_story_validating", "personal_story_playing"} or not state.interaction_open or state.safety_severity != "none"):
             state.activity_return_mode = None
         if state.mode != "bear_dialogue" or state.safety_severity != "none":
             state.dialogue_information_kind = None
@@ -1812,7 +1830,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if not profile or float(event.payload.get("expires_monotonic") or 0) <= monotonic_now:
                 return self._decision(state, [], "profile_expired")
             fresh = self._new_state(state.session_id, profile)
-            for name in ("profile_ref", "profile_status", "display_name", "grammatical_gender", "language", "timezone", "age_band", "age_band_source", "age_years", "age_policy", "profile_data_incomplete", "current_date", "accessibility_policy", "schedule_ref"):
+            for name in ("profile_ref", "profile_status", "display_name", "grammatical_gender", "language", "timezone", "age_band", "age_band_source", "age_years", "age_policy", "profile_data_incomplete", "current_date", "accessibility_policy", "interests", "active_trigger_topics", "personal_story_selection", "personal_story_seed", "schedule_ref"):
                 setattr(state, name, getattr(fresh, name))
             state.interaction_idle = False
             state.identity_request_id = event.payload["request_id"]
@@ -2819,7 +2837,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 if button in state.menu_pressed_buttons:
                     return self._decision(state, [], "exhibition_menu_button_duplicate")
                 action = {
-                    1: "games", 2: "stories", 3: "tell_or_ask", 4: "new_story",
+                    1: "games", 2: "stories", 3: "new_story", 4: "tell_or_ask",
                     5: "help", 6: "talk", 7: "day_and_plans",
                 }[button]
                 state.menu_pressed_buttons.append(button)
@@ -2835,7 +2853,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 if button in {1, 3, 4, 5, 7}:
                     mode = BUTTON_MODES[button]
                     state.menu_pressed_buttons = []
-                    if button in {3, 4, 5, 7} and not state.audio_open:
+                    if button in {4, 5, 7} and not state.audio_open:
                         state.pending_mode = mode
                         state.mode = "awaiting_handset"
                         selection["target_state"] = "awaiting_handset"
@@ -2853,7 +2871,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     )
                     selection["target_state"] = mode
                     selection["downstream_owner"] = mode
-                    preset = {1: "GAME_MENU", 3: "SUPPORT", 4: "PERSONAL_STORY",
+                    preset = {1: "GAME_MENU", 3: "PERSONAL_STORY", 4: "SUPPORT",
                               5: "HELP", 7: "SCHEDULE_WEATHER"}[button]
                     entry_effects = [selection, {"type": "lighting_preset", "preset": preset}]
                     if button == 7:
@@ -2937,6 +2955,8 @@ class CanonicalRuntime(SceneMenuMixin):
             if (button == 7 and (state.mode == "personal_story_playing" or
                     (state.active_story_id == "PERSONAL_STORY" and state.mode in {
                         "story_pause_announcement", "story_paused", "story_resume_announcement"}))):
+                if state.activity_return_mode == "bear_dialogue" and state.interaction_open:
+                    return self._activity_back(state, "personal_story_back")
                 state.mode = "root_menu"
                 state.active_story_id = None
                 state.state_version += 1
@@ -2955,7 +2975,7 @@ class CanonicalRuntime(SceneMenuMixin):
                         {"type": "speak", "phrase_id": "PHRASE_062"},
                     ], "story_pause_requested", clear_audio=True)
                 if button == 7:
-                    if state.active_story_id != 'PERSONAL_STORY' and state.activity_return_mode == 'bear_dialogue':
+                    if state.activity_return_mode == 'bear_dialogue':
                         return self._activity_back(state, 'story_stopped_by_button')
                     state.mode, state.substate = "fixed_story_choice_wave", "story_stop_requested"
                     state.state_version += 1
@@ -2997,6 +3017,8 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "game_menu_back")
             if state.mode in {"support_intake", "bear_dialogue", "personal_story_generating",
                               "personal_story_validating", "personal_story_playing"} and button == 7:
+                if state.mode != "bear_dialogue" and state.activity_return_mode == "bear_dialogue" and state.interaction_open:
+                    return self._activity_back(state, "activity_back")
                 state.root_menu_back_guard_until = monotonic_now + 0.65
                 state.mode, state.state_version = "root_menu", state.state_version + 1
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_preset", "preset": "ROOT_MENU"}], "activity_back")
@@ -3012,7 +3034,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 mode = BUTTON_MODES[button]
                 if mode in {"game_menu", "fixed_story_menu", "personal_story_theme", "schedule_weather"}:
                     state.scene_menu_held = [button]
-                if button in {3, 4, 5, 6, 7} and not state.audio_open:
+                if button in {4, 5, 6, 7} and not state.audio_open:
                     state.pending_mode = mode
                     state.mode, state.state_version = "awaiting_handset", state.state_version + 1
                     return self._decision(state, [{"type": "lighting", "elements": [14], "state": 1}, {"type": "visual", "view": "lift_handset"}], "handset_required")
@@ -3041,12 +3063,14 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode == "personal_story_theme":
                 theme = self._menu_selection(state, button)
                 if button == 7:
+                    if state.activity_return_mode == "bear_dialogue" and state.interaction_open:
+                        return self._activity_back(state, "personal_story_cancelled")
                     state.root_menu_back_guard_until = monotonic_now + 0.65
                     state.mode, state.state_version = "root_menu", state.state_version + 1
                     return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "personal_story_cancelled")
                 if theme is not None:
                     state.mode, state.state_version = "personal_story_generating", state.state_version + 1
-                    brief = {"age_band": state.age_band, "theme": theme, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
+                    brief = {"age_band": state.age_band, "theme": theme, "catalogue_story_id": theme if any(item["id"] == theme for item in state.personal_story_selection) else None, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
                     return self._decision(state, [{"type": "generate_personal_story", "brief": brief}], "personal_story_requested_by_button")
             if state.mode == "story_paused" and button == 6:
                 if state.public_story_checkpoint_pending:
@@ -3368,6 +3392,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.voice_retry_count = 0
                 if state.profile_status != "identified":
                     state.display_name = name
+                    state.grammatical_gender = infer_grammatical_gender(name, name_confident=event.payload.get("_name_confident", True) is True)
                 state.onboarding_name_collected = True
                 state.dialogue_memory.bounded_turns.append({"kind": "name", "value": name})
                 state.dialogue_memory.touch(now)
@@ -3388,8 +3413,11 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode == "personal_story_theme":
                 if state.scene_menu_phase != "ready" or not getattr(self, 'personal_story_capable', False):
                     return self._decision(state, [], "story_theme_not_accepting")
+                selected = next((item for item in state.personal_story_selection if item['id'] == intent), None)
+                if selected is None:
+                    return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_075"}], "story_choice_unrecognized")
                 state.mode, state.state_version = "personal_story_generating", state.state_version + 1
-                brief = {"age_band": state.age_band, "theme": intent, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
+                brief = {"age_band": state.age_band, "theme": intent, "catalogue_story_id": selected['id'], "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
                 return self._decision(state, [{"type": "generate_personal_story", "brief": brief}], "personal_story_requested")
             if state.mode == "bear_dialogue":
                 pending_information = state.dialogue_information_kind is not None
