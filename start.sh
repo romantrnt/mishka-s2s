@@ -35,4 +35,5 @@ if [[ -z "${PULSE_SERVER:-}" && -S /mnt/wslg/PulseServer ]]; then
 fi
 
 export PYTHONUNBUFFERED=1
+export MISHKA_MIC_GAIN="${MISHKA_MIC_GAIN:-6.0}"
 exec "$ROOT/.venv/bin/python" -u "$ROOT/scripts/run_stand.py"

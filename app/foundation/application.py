@@ -43,8 +43,7 @@ logger = logging.getLogger("mishka.application")
 STORY_PLAYBACK_WAVE_GROUPS = tuple((BUTTON_FILL_ELEMENTS[button],) for button in range(1, 8))
 STORY_CHOICE_WAVE_GROUPS = tuple((BUTTON_FILL_ELEMENTS[button],) for button in range(1, 6))
 STORY_MENU_BASE_ELEMENTS = tuple(
-    [BUTTON_DIGIT_ELEMENTS[button][1] for button in range(1, 8)]
-    + [BUTTON_FILL_ELEMENTS[6]]
+    BUTTON_DIGIT_ELEMENTS[button][1] for button in range(1, 8)
 )
 
 EXHIBITION_MENU_PHASE_TIMINGS_MS = (
@@ -3651,6 +3650,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 self.sessions.save(session)
                 return {**self._result(session, barge_outputs, "audio_processing"), "audio_status": "processing", "pending": True, "barge_in": audio_result.barge_in}
             if audio_result.stt is not None and audio_result.stt.text.strip():
+                logger.info(
+                    "speech_received chars=%d conf=%.2f mode=%s",
+                    len(audio_result.stt.text.strip()),
+                    float(getattr(audio_result.stt, "confidence", 0.0) or 0.0),
+                    getattr(active, "mode", None),
+                )
                 result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard))
                 result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
                 return result

@@ -40,14 +40,14 @@ LED_PRESETS = {
     "ALL_ON": tuple((element_id, 1) for element_id in LIGHTING_ELEMENT_IDS),
     "ROOT_MENU": _button_lights(1, 2, 3, 4, 5, 6, 7),
     "GAME_MENU": _button_lights(1, 2, 3, 4, 5, digits=True) + ((BUTTON_DIGIT_ELEMENTS[7][1], 1),),
-    # Story chooser: all digits remain visible; only fill 6 is on, 7 is digit-only exit.
-    "STORY_MENU": tuple((BUTTON_DIGIT_ELEMENTS[button][1], 1) for button in range(1, 8)) + ((BUTTON_FILL_ELEMENTS[6], 1),),
+    # Story chooser: digits 1..7 remain visible without lighting fill 6, 7 is digit-only exit.
+    "STORY_MENU": tuple((BUTTON_DIGIT_ELEMENTS[button][1], 1) for button in range(1, 8)),
     "STORY_PLAYBACK": ((14, 1),),
     "SUPPORT": ((2, 1), (14, 1), (BUTTON_DIGIT_ELEMENTS[7][1], 1)),
     "PERSONAL_STORY": ((3, 1), (14, 1), (BUTTON_DIGIT_ELEMENTS[7][1], 1)),
     "BEAR_DIALOGUE": ((14, 1),),
     "GAME_OFFER": _button_lights(1, digits=True) + ((BUTTON_DIGIT_ELEMENTS[7][1], 1),),
-    "SCHEDULE_WEATHER": ((6, 1), (15, 1), (BUTTON_DIGIT_ELEMENTS[7][1], 1)),
+    "SCHEDULE_WEATHER": ((BUTTON_DIGIT_ELEMENTS[7][1], 1),),
     "MOOD_CHOICES": _button_lights(1, 2, 3, 4, 5, 6, 7),
     "LISTENING": tuple((element, 1) for element in DIALOGUE_FILL_ELEMENTS + DIALOGUE_ANCHOR_ELEMENTS),
     "EXHIBITION_AGE_CHOICES": _button_lights(1, 2, 3),

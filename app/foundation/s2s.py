@@ -2440,6 +2440,7 @@ class SoundDeviceCaptureController:
         self.sample_rate = int(sample_rate)
         self.channels = max(1, int(channels))
         self.blocksize = max(64, int(blocksize))
+        self.gain = max(0.1, min(20.0, float(os.getenv("MISHKA_MIC_GAIN", "1.0"))))
         self._stream = None
         self._loop = None
         self._on_frame = None
@@ -2519,6 +2520,8 @@ class SoundDeviceCaptureController:
             values = values.mean(axis=1, dtype=np.float32) if values.ndim == 2 and values.shape[1] > 1 else values.reshape(-1)
             # PortAudio owns indata and may reuse it immediately on return.
             values = np.array(values, dtype=np.float32, copy=True)
+            if self.gain != 1.0:
+                values = np.clip(values * self.gain, -1.0, 1.0)
             if frame_context is None:
                 loop.call_soon_threadsafe(on_frame, values)
             else:
