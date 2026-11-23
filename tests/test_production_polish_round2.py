@@ -30,23 +30,24 @@ def test_quiz_single_button_gives_two_retries_then_advances_once():
     # 3 misses to narrow to 1 button
     for seq in range(1, 4):
         wrong = next(b for b in game_answer_buttons(state) if b != ch0.answer)
-        tr = advance_game(state, edge="ButtonPressed", button=wrong, sequence=seq, now=1.0 + seq)
-        state = finish_prompt(tr.state, 1.0 + seq).state
+        tr = advance_game(state, edge="ButtonPressed", button=wrong, sequence=seq * 2 - 1, now=1.0 + seq)
+        tr_rel = advance_game(tr.state, edge="ButtonReleased", button=wrong, sequence=seq * 2, now=1.1 + seq)
+        state = finish_prompt(tr_rel.state, 1.2 + seq).state
     assert state.narrowed_options == (ch0.answer,)
     wrong = next(b for b, _ in ch0.options if b != ch0.answer)
     # Miss 1 and 2 on single visible button -> "Попробуй ещё раз", hint stays visible
-    tr1 = advance_game(state, edge="ButtonPressed", button=wrong, sequence=4, now=5.0)
+    tr1 = advance_game(state, edge="ButtonPressed", button=wrong, sequence=10, now=5.0)
     assert tr1.status == "retry"
     assert tr1.speech_text == "Попробуй ещё раз"
     assert tr1.state.narrowed_options == (ch0.answer,)
-    s1 = finish_prompt(tr1.state, 5.0).state
-    tr2 = advance_game(s1, edge="ButtonPressed", button=wrong, sequence=5, now=6.0)
+    s1 = finish_prompt(advance_game(tr1.state, edge="ButtonReleased", button=wrong, sequence=11, now=5.1).state, 5.2).state
+    tr2 = advance_game(s1, edge="ButtonPressed", button=wrong, sequence=12, now=6.0)
     assert tr2.status == "retry"
     assert tr2.speech_text == "Попробуй ещё раз"
     assert tr2.state.narrowed_options == (ch0.answer,)
-    s2 = finish_prompt(tr2.state, 6.0).state
+    s2 = finish_prompt(advance_game(tr2.state, edge="ButtonReleased", button=wrong, sequence=13, now=6.1).state, 6.2).state
     # Miss 3 on single visible button -> "Давай попробуем следующий" and advance once
-    tr3 = advance_game(s2, edge="ButtonPressed", button=wrong, sequence=6, now=7.0)
+    tr3 = advance_game(s2, edge="ButtonPressed", button=wrong, sequence=14, now=7.0)
     assert tr3.status == "skipped_next"
     assert tr3.speech_text.startswith("Давай попробуем следующий.")
     assert tr3.state.challenge_index == 1
@@ -73,6 +74,10 @@ def test_correct_quiz_answer_button_and_voice_trigger_success_wave_without_overw
             Event("ButtonPressed", sid, 2, 2.0, "hid", {"button_id": ch.answer}, "c2", 2.0),
             None,
         )
+        await app.receive_async(
+            Event("ButtonReleased", sid, 3, 2.1, "hid", {"button_id": ch.answer}, "c2r", 2.1),
+            None,
+        )
         assert res["reason"] == "game_progress"
         assert led.exhibition_effects.effect == "wave"
         assert led.exhibition_effects.wave_phase == "game_success"
@@ -89,7 +94,7 @@ def test_correct_quiz_answer_button_and_voice_trigger_success_wave_without_overw
         st.game_engine_state = replace_phase(st.game_engine_state)
         ch2 = current_challenge(st.game_engine_state)
         res_v = await app.receive_async(
-            Event("SpeechReceived", sid, 3, 3.0, "audio", {}, "c3", 3.0),
+            Event("SpeechReceived", sid, 4, 3.0, "audio", {}, "c3", 3.0),
             str(ch2.answer),
         )
         assert res_v["reason"] == "game_progress"
