@@ -157,15 +157,13 @@ class S2SConfig:
     channels: int = 1
     audio_format: str = "float32"
     # Use start/continue hysteresis so quiet word beginnings are not lost.
-    vad_threshold: float = 0.35
-    vad_continue_threshold: float = 0.20
+    vad_threshold: float = 0.25
+    vad_continue_threshold: float = 0.15
     vad_preroll_ms: int = 320
-    # Production latency calibration: 200 ms is the minimum accepted
-    # hangover.  It keeps the real end-of-speech -> first audio budget under
-    # one second on the warmed local-GPU path; exhibition tuning may raise it
-    # if microphones are unusually noisy.
-    vad_silence_ms: int = 200
-    min_speech_ms: int = 300
+    # Production latency calibration: 250 ms keeps turn-taking snappy while
+    # avoiding word-mid truncation on quiet handset microphones.
+    vad_silence_ms: int = 250
+    min_speech_ms: int = 200
     max_speech_ms: int = 12_000
     max_buffer_seconds: int = 15
     stt_timeout_s: float = 8.0
@@ -184,7 +182,7 @@ class S2SConfig:
     first_audio_gate_s: float = 1.25
     queue_size: int = 4
     queue_put_timeout_s: float = 2.0
-    stt_confidence_threshold: float = 0.45
+    stt_confidence_threshold: float = 0.25
     stt_beam_size: int = 3
 
     def validate(self) -> "S2SConfig":
@@ -862,6 +860,9 @@ class FasterWhisperRecognizer:
             # Keep the original samples in RAM and pad only the local
             # inference buffer; this does not change the recorded input.
             samples=np.asarray(audio.samples, dtype=np.float32)
+            peak=float(np.max(np.abs(samples))) if samples.size else 0.0
+            if 0.002 < peak < 0.2:
+                samples = np.clip(samples * min(8.0, 0.35 / peak), -1.0, 1.0)
             minimum_samples=max(1600, int(audio.sample_rate * 0.75))
             if samples.size < minimum_samples:
                 samples=np.pad(samples, (0, minimum_samples - samples.size))

@@ -1969,6 +1969,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     and admitted_offer == (current.game_offer_id, True) and not explicit_help_request)
                 if game_confirmation_authorized:
                     intent = game_confirmation_intent(text)
+            mic_probe = getattr(self, "_mic_unavailable_probe", None)
+            if callable(mic_probe) and mic_probe():
+                payload["mic_unavailable"] = True
             payload.update({"intent": intent, "safety_severity": safety.severity,
                             "safety_reason": safety.reason})
         if event.event_type == "PersonalStoryReady":
@@ -2678,10 +2681,33 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         audio_failure = {"response_id": effect["content_id"],
                             "playback_lease": effect["playback_lease"], "error_code": "dialogue_prompt_dispatch_failed"}
             elif kind == "game_lighting":
-                ripple = getattr(self.led, "start_game_ripple", None)
-                if effect.get("animation") == "ripple" and callable(ripple):
-                    effect["lighting_effect"] = ripple(int(effect["origin_button"]), now=self.monotonic_now())
-                    effect["resolution"] = "game_ripple_started"
+                if effect.get("animation") == "ripple":
+                    ripple = getattr(self.led, "start_game_ripple", None)
+                    if callable(ripple):
+                        effect["lighting_effect"] = ripple(int(effect["origin_button"]), now=self.monotonic_now())
+                        effect["resolution"] = "game_ripple_started"
+                elif effect.get("animation") == "success":
+                    effects_engine = getattr(self.led, "exhibition_effects", None)
+                    start_success = getattr(effects_engine, "start_game_success_wave", None)
+                    if callable(start_success):
+                        next_preset = effect.get("next_preset")
+                        if next_preset:
+                            preset_cmds = LED_PRESETS.get(str(next_preset), ())
+                            desired = {element_id: 0 for element_id in LIGHTING_ELEMENT_IDS}
+                            for element_id, st_val in preset_cmds:
+                                desired[int(element_id)] = int(st_val)
+                            next_cmds = tuple(LightingCommand(eid, st_val, 140) for eid, st_val in desired.items())
+                        elif effect.get("next_buttons") is not None:
+                            active = dict(game_light_commands(effect.get("next_buttons", ()), effect.get("display", "digits")))
+                            next_cmds = tuple(LightingCommand(eid, int(eid in active), 140) for eid in LIGHTING_ELEMENT_IDS)
+                        else:
+                            next_cmds = ()
+                        effect["lighting_effect"] = start_success(
+                            effect.get("origin_button"),
+                            next_commands=next_cmds,
+                            now=self.monotonic_now(),
+                        )
+                        effect["resolution"] = "game_success_wave_started"
             elif kind == "game_exit":
                 self._cancel_game_cues(event.session_id)
                 effect["resolution"] = "game_presentation_released"
@@ -2705,6 +2731,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 # Replace the complete logical frame in one ordered batch.
                 # Sending clear_all() first caused a visible off-to-on pulse
                 # on the large weather pictogram (element 17).
+                effects_engine = getattr(self.led, "exhibition_effects", None)
+                if (preset == "ROOT_MENU"
+                        and getattr(effects_engine, "effect", None) == "wave"
+                        and getattr(effects_engine, "wave_phase", None) == "game_success"):
+                    continue
                 cancel_effects = getattr(self.led, "cancel_effects", None)
                 if callable(cancel_effects):
                     cancel_effects(clear=False)

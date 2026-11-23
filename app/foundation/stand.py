@@ -889,6 +889,10 @@ class HardwareIntegrationStand:
             led_controller=UARTLEDController(self.adapter, self.lighting_output, legacy_sink=self._record_legacy_led, stage_hook=self._publish_lighting_wave_stage, effect_hook=self._publish_lighting_effect_frame, monotonic_now=self.monotonic_now, background_scheduler=self.background_scheduler),display_controller=UARTDisplayController(self.adapter),playback_override=self.playback,monotonic_now=self.monotonic_now,background_scheduler=self.background_scheduler)
         self.application.audio_update_hook=self._publish_audio_completion
         self.application.state_update_hook=self._publish_canonical_state_update
+        self.application._mic_unavailable_probe = lambda: (
+            self.hardware_mode == "physical"
+            and getattr(self, "_headless_audio_status", {}).get("state") == "unavailable"
+        )
         reset_to_standby = getattr(self.application.led, "reset_to_standby", None)
         if callable(reset_to_standby):
             reset_to_standby(now=self.application.monotonic_now())

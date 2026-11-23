@@ -314,6 +314,7 @@ class ExhibitionLightingEngine:
         self._wave_stage_ms = EXHIBITION_WAVE_STAGE_MS
         self.wave_phase = "idle"
         self._wave_hold_on_complete = True
+        self._wave_final_commands: tuple[LightingCommand, ...] | None = None
         self._profile_ready = False
         self._profile_stage_at: float | None = None
 
@@ -516,6 +517,42 @@ class ExhibitionLightingEngine:
         self.wave_phase = "game_ripple"
         return self.snapshot()
 
+    def start_game_success_wave(
+        self,
+        origin_button: int | None = None,
+        *,
+        next_commands: tuple[LightingCommand, ...] = (),
+        now: float | None = None,
+    ) -> dict[str, object]:
+        """Run a fast celebratory burst on correct game answer, then land on next_commands."""
+        origin = int(origin_button) if origin_button in BUTTON_WAVE_ELEMENTS else 4
+        rings = tuple(
+            tuple(
+                element_id
+                for button_id in (origin - distance, origin + distance)
+                if 1 <= button_id <= 7
+                for element_id in BUTTON_WAVE_ELEMENTS[button_id]
+            )
+            for distance in range(max(origin - 1, 7 - origin) + 1)
+        )
+        peak = tuple(LIGHTING_ELEMENT_IDS)
+        groups = (
+            rings[0],
+            tuple(dict.fromkeys(rings[0] + (rings[1] if len(rings) > 1 else ()))),
+            peak,
+            rings[-1],
+        )
+        self.start_wave(
+            now=now,
+            groups=groups,
+            hold_on_complete=False,
+            stage_duration_ms=80,
+            preserve_current=False,
+        )
+        self.wave_phase = "game_success"
+        self._wave_final_commands = tuple(next_commands) if next_commands else None
+        return self.snapshot()
+
     def start_profile_ready(self, *, now: float | None = None) -> dict[str, object]:
         """Own the acknowledgement wave and continuous breathing as one effect.
 
@@ -552,6 +589,7 @@ class ExhibitionLightingEngine:
         self.breathing_phase = "breathing"
         self.wave_phase = "idle"
         self._wave_hold_on_complete = True
+        self._wave_final_commands: tuple[LightingCommand, ...] | None = None
         self._profile_ready = False
         self._profile_stage_at = None
         if clear:
@@ -667,8 +705,13 @@ class ExhibitionLightingEngine:
                         "held": True,
                         "brightness_percent": 100,
                     })
+                final_cmds = self._wave_final_commands
+                self._wave_final_commands = None
                 self.effect = "idle"
-                return self._emit(self._all_binary_commands(0), {"effect": "wave_complete", "at_monotonic": now, "wave_stage": self.wave_stage})
+                return self._emit(
+                    final_cmds if final_cmds is not None else self._all_binary_commands(0),
+                    {"effect": "wave_complete", "at_monotonic": now, "wave_stage": self.wave_stage},
+                )
             return None
         if not force and stage == self.wave_stage:
             return None

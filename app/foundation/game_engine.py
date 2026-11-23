@@ -80,6 +80,7 @@ class GameState:
     challenge_attempts: int = 0
     wrong_attempts: int = 0
     narrowed_options: tuple[int, ...] = ()
+    single_option_misses: int = 0
     seven_answer_generation: int | None = None
     seven_exit_down_at: float | None = None
     seven_exit_phase: str = 'idle'
@@ -202,6 +203,39 @@ def _narrow_challenge_options(state: GameState, challenge: GameChallenge, wrong_
 def _answer_challenge(state: GameState, button: int) -> GameTransition:
     challenge = current_challenge(state)
     if button != challenge.answer:
+        if len(state.narrowed_options) == 1:
+            if state.single_option_misses < 2:
+                state = replace(state, phase='awaiting_prompt',
+                                challenge_attempts=state.challenge_attempts + 1,
+                                wrong_attempts=state.wrong_attempts + 1,
+                                single_option_misses=state.single_option_misses + 1,
+                                response_deadline=None, hint_deadline=None,
+                                timer_generation=state.timer_generation + 1)
+                return GameTransition(state, desired_buttons(state), 'retry', speech_text='Попробуй ещё раз')
+            count = state.round + 1
+            complete = count >= state.rounds
+            if complete:
+                state = replace(state, round=count, level=state.level + 1,
+                                round_generation=state.round_generation + 1,
+                                challenge_attempts=0, hints_emitted=0,
+                                wrong_attempts=0, narrowed_options=(), single_option_misses=0,
+                                phase='completed', response_deadline=None, hint_deadline=None,
+                                timer_generation=state.timer_generation + 1)
+                return GameTransition(state, desired_buttons(state), 'completed',
+                                      feedback_id='PHRASE_028', completed=True)
+            index = state.challenge_index + 1
+            deck = state.deck
+            if index >= len(deck):
+                deck = build_deck(state.game_id, state.age_band, seed=state.seed + count)
+                index = 0
+            state = replace(state, round=count, level=state.level + 1,
+                            round_generation=state.round_generation + 1, deck=deck,
+                            challenge_index=index, challenge_attempts=0, hints_emitted=0,
+                            wrong_attempts=0, narrowed_options=(), single_option_misses=0,
+                            phase='awaiting_prompt', response_deadline=None, hint_deadline=None,
+                            timer_generation=state.timer_generation + 1)
+            return GameTransition(state, desired_buttons(state), 'skipped_next',
+                                  speech_text='Давай попробуем следующий. ' + current_challenge(state).prompt)
         narrowed = _narrow_challenge_options(state, challenge, button)
         if state.game_id == 'quiz' and state.wrong_attempts >= 2:
             hint = 'Посмотри на огонёк — попробуй нажать эту кнопку!'
@@ -212,6 +246,7 @@ def _answer_challenge(state: GameState, button: int) -> GameTransition:
                         challenge_attempts=state.challenge_attempts + 1,
                         wrong_attempts=state.wrong_attempts + 1,
                         narrowed_options=narrowed,
+                        single_option_misses=0,
                         response_deadline=None, hint_deadline=None,
                         timer_generation=state.timer_generation + 1)
         return GameTransition(state, desired_buttons(state), 'retry', speech_text=hint)
@@ -221,7 +256,7 @@ def _answer_challenge(state: GameState, button: int) -> GameTransition:
         state = replace(state, round=count, level=state.level + 1,
                         round_generation=state.round_generation + 1,
                         challenge_attempts=0, hints_emitted=0,
-                        wrong_attempts=0, narrowed_options=(),
+                        wrong_attempts=0, narrowed_options=(), single_option_misses=0,
                         phase='completed', response_deadline=None, hint_deadline=None,
                         timer_generation=state.timer_generation + 1)
         return GameTransition(state, desired_buttons(state), 'completed',
@@ -234,7 +269,7 @@ def _answer_challenge(state: GameState, button: int) -> GameTransition:
     state = replace(state, round=count, level=state.level + 1,
                     round_generation=state.round_generation + 1, deck=deck,
                     challenge_index=index, challenge_attempts=0, hints_emitted=0,
-                    wrong_attempts=0, narrowed_options=(),
+                    wrong_attempts=0, narrowed_options=(), single_option_misses=0,
                     phase='awaiting_prompt', response_deadline=None, hint_deadline=None,
                     timer_generation=state.timer_generation + 1)
     return GameTransition(state, desired_buttons(state), 'progress',

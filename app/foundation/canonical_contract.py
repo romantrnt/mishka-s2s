@@ -318,6 +318,7 @@ class CanonicalState:
     game_attempts: int = 0
     game_hint_stage: int = 0
     game_success_streak: int = 0
+    voice_retry_count: int = 0
     pending_game_offer: str | None = None
     game_offer_id: str | None = None
     game_offer_ready: bool = False
@@ -1328,6 +1329,38 @@ class CanonicalRuntime(SceneMenuMixin):
             "exit_hint": exit_hint,
             "display":getattr(challenge, "display", "digits") if challenge else "colors"}
 
+    @staticmethod
+    def _match_game_voice_button(engine: GameState, text: str) -> int | None:
+        normalized = " ".join(str(text or "").casefold().split()).strip(" .,!?…")
+        if not normalized:
+            return None
+        allowed = set(game_answer_buttons(engine))
+        if not allowed:
+            return None
+        num_words = {
+            "1": 1, "один": 1, "одна": 1, "первый": 1, "первая": 1, "раз": 1,
+            "2": 2, "два": 2, "две": 2, "второй": 2, "вторая": 2,
+            "3": 3, "три": 3, "третий": 3, "третья": 3,
+            "4": 4, "четыре": 4, "четвертый": 4, "четвёртый": 4, "четвертая": 4,
+            "5": 5, "пять": 5, "пятый": 5, "пятая": 5,
+            "6": 6, "шесть": 6, "шестой": 6, "шестая": 6,
+            "7": 7, "семь": 7, "седьмой": 7, "седьмая": 7,
+        }
+        tokens = normalized.split()
+        for tok in tokens:
+            btn = num_words.get(tok)
+            if btn in allowed:
+                return btn
+        challenge = current_challenge(engine)
+        if challenge is not None:
+            for btn, label in challenge.options:
+                if btn not in allowed:
+                    continue
+                opt = " ".join(str(label or "").casefold().split()).strip(" .,!?…")
+                if opt and (opt in normalized or normalized in opt):
+                    return btn
+        return None
+
     def _game_input(self, state: CanonicalState, event: CanonicalEvent, now: float) -> dict[str, Any]:
         engine = state.game_engine_state
         if engine is None:
@@ -1387,18 +1420,33 @@ class CanonicalRuntime(SceneMenuMixin):
                                                       getattr(outcome.state, 'level', 0))
             if outcome.completed:
                 decision = self._game_exit(state, "game_completed")
+                if engine.game_id != 'free_lights':
+                    decision["effects"].insert(0, {
+                        "type": "game_lighting", "animation": "success",
+                        "origin_button": button_id, "next_preset": "ROOT_MENU",
+                    })
                 if state.interaction_open:
                     decision["effects"].append({"type": "speak", "phrase_id": outcome.feedback_id or "PHRASE_028"})
                 return decision
             effects = []
             # A release must not replace an in-flight free-light ripple.
+            success_wave = (outcome.status == "progress" and engine.game_id != "free_lights")
             if outcome.wave_origin is not None:
                 effects.append({"type":"game_lighting", "animation":"ripple", "origin_button":outcome.wave_origin})
+            elif success_wave:
+                ch = current_challenge(outcome.state)
+                effects.append({
+                    "type": "game_lighting",
+                    "animation": "success",
+                    "origin_button": button_id,
+                    "next_buttons": list(game_answer_buttons(outcome.state)),
+                    "display": getattr(ch, "display", "digits") if ch else "colors",
+                })
             elif engine.game_id != 'free_lights':
                 effects.append(self._game_lighting(outcome.state))
             if outcome.speech_text and state.interaction_open:
                 effects = [{"type":"audio_stop"}, {"type":"capture_close"},
-                           *([self._game_lighting(outcome.state)] if engine.game_id != 'free_lights' else []),
+                           *(effects if (success_wave or engine.game_id == 'free_lights') else [self._game_lighting(outcome.state)]),
                            self._game_prompt(state, outcome.speech_text, outcome.feedback_id)]
             elif outcome.feedback_id and state.interaction_open:
                 effects.append({"type":"speak", "phrase_id":outcome.feedback_id})
@@ -1711,6 +1759,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 and int(event.payload['button_id']) in state.readiness_held_buttons):
             return self._decision(state, [], "readiness_button_held")
         if event.event_type == "ButtonPressed":
+            state.voice_retry_count = 0
             button = int(event.payload["button_id"])
             if (button == 6 and state.handset == "down" and not state.interaction_open
                     and (state.mode in {"idle", "profile_ready"}
@@ -2695,6 +2744,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.state_version += 1
             return self._decision(state, [], "exhibition_menu_button_released")
         if event.event_type == "ButtonPressed":
+            state.voice_retry_count = 0
             button = int(event.payload["button_id"])
             if state.mode == "bear_dialogue" and state.pending_game_offer:
                 if button == 7:
@@ -3064,18 +3114,48 @@ class CanonicalRuntime(SceneMenuMixin):
                 # A failed/uncertain classifier cannot authorize a command or
                 # identity capture, but it is not an adult-help request either.
                 # Preserve current safety classification and approved story playback.
-                retry_modes = {
-                    "exhibition_name_capture", "exhibition_age_selection",
-                    "exhibition_menu_repeat_listen", "bear_dialogue",
-                    "wellbeing_check", "personal_story_theme", "automatic_mood_check", "personal_welcome_listen",
-                }
-                retry_effects = ([{"type": "speak", "phrase_id": "PHRASE_074"}]
-                    if state.interaction_open and state.mode in retry_modes else [])
-                prior_substate = state.substate
-                result = self._decision(state, retry_effects, "input_safety_retry")
-                state.substate = prior_substate
-                result["state"]["substate"] = prior_substate
-                return result
+                mic_unavailable = bool(event.payload.get("mic_unavailable"))
+                if not mic_unavailable and state.voice_retry_count < 1:
+                    state.voice_retry_count += 1
+                    retry_modes = {
+                        "exhibition_name_capture", "exhibition_age_selection",
+                        "exhibition_menu_repeat_listen", "bear_dialogue",
+                        "wellbeing_check", "personal_story_theme", "automatic_mood_check", "personal_welcome_listen",
+                    }
+                    retry_effects = ([{"type": "speak", "phrase_id": "PHRASE_074"}]
+                        if state.interaction_open and state.mode in retry_modes else [])
+                    prior_substate = state.substate
+                    result = self._decision(state, retry_effects, "input_safety_retry")
+                    state.substate = prior_substate
+                    result["state"]["substate"] = prior_substate
+                    return result
+                state.voice_retry_count = 0
+                if self.exhibition_mode and state.mode == "exhibition_name_capture":
+                    state.mode, state.substate = "exhibition_age_prompt", "awaiting_age_question_audio"
+                    state.expected_inputs = ["audio_completed", "handset_down"]
+                    state.state_version += 1
+                    return self._decision(state, [
+                        {"type": "capture_close"},
+                        {"type": "speak", "phrase_id": "PHRASE_108"},
+                        {"type": "exhibition_onboarding_step", "step": "age_question"},
+                    ], "exhibition_name_skipped_to_age", clear_audio=True)
+                if self.exhibition_mode and state.mode == "exhibition_age_selection":
+                    state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
+                    state.state_version += 1
+                    return self._decision(state, ([{"type": "speak", "phrase_id": "PHRASE_075"}] if state.interaction_open else []), "exhibition_age_button_hint")
+                if self.exhibition_mode and state.mode == "exhibition_menu_repeat_listen":
+                    state.mode, state.substate = "menu_ready", "menu_repeat_defaulted"
+                    state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
+                    state.state_version += 1
+                    return self._decision(state, [
+                        {"type": "capture_close"},
+                        {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons), "repeat_defaulted": True},
+                        {"type": "lighting_preset", "preset": "ROOT_MENU"},
+                    ], "exhibition_menu_repeat_defaulted", clear_audio=True)
+                button_fallback_modes = {"wellbeing_check", "personal_story_theme", "fixed_story_menu", "game_menu", "schedule_weather"}
+                fallback_effects = ([{"type": "speak", "phrase_id": "PHRASE_075"}]
+                    if state.interaction_open and state.mode in button_fallback_modes else [])
+                return self._decision(state, fallback_effects, "input_retry_button_fallback")
             if intent == "help_request" or (state.mode == "wellbeing_check" and intent == "yes"):
                 return self._enter_local_safety(state, severity="concern", reason="help_requested")
             if severity == "concern":
@@ -3140,6 +3220,20 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.state_version += 1
                     return self._decision(state, [{'type':'bounded_dialogue_turn',
                         'intent':intent, 'game_id':'word_game', 'age_band':state.age_band}], 'word_game_turn')
+                if (state.mode == 'game_active' and state.active_game_id in {'quiz', 'odd_one_out'}
+                        and state.game_engine_state is not None):
+                    if state.game_audio_stage != 'playing' or state.active_audio_id:
+                        return self._decision(state, [], 'game_voice_waiting')
+                    matched_button = self._match_game_voice_button(state.game_engine_state, transient_text or "")
+                    if matched_button is not None:
+                        state.voice_retry_count = 0
+                        synth_event = CanonicalEvent(
+                            "ButtonPressed", event.session_id, event.sequence, event.timestamp,
+                            event.source, {"button_id": matched_button, "voice_answer": True},
+                            event.correlation_id, monotonic_now,
+                        )
+                        return self._game_input(state, synth_event, monotonic_now)
+                    return self._decision(state, [], 'game_voice_ignored')
                 if state.mode == 'game_active':
                     return self._decision(state, [], 'game_voice_ignored')
             if state.mode == "personal_welcome_listen":
@@ -3193,11 +3287,20 @@ class CanonicalRuntime(SceneMenuMixin):
             if self.exhibition_mode and state.mode == "exhibition_age_selection":
                 age_years = normalize_exhibition_age(transient_text or "")
                 if age_years is None:
+                    mic_unavailable = bool(event.payload.get("mic_unavailable"))
                     state.state_version += 1
+                    if not mic_unavailable and state.voice_retry_count < 1:
+                        state.voice_retry_count += 1
+                        return self._decision(state, [
+                            {"type": "speak", "phrase_id": "PHRASE_074"},
+                            {"type": "capture_open"},
+                        ], "exhibition_age_unrecognized", clear_audio=True)
+                    state.voice_retry_count = 0
+                    state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
                     return self._decision(state, [
-                        {"type": "speak", "phrase_id": "PHRASE_074"},
-                        {"type": "capture_open"},
-                    ], "exhibition_age_unrecognized", clear_audio=True)
+                        {"type": "speak", "phrase_id": "PHRASE_075"},
+                    ], "exhibition_age_button_hint", clear_audio=True)
+                state.voice_retry_count = 0
                 return self._select_exhibition_age(state, age_years, source="exhibition_voice", now=now)
             if state.mode in {"fixed_story_playing", "story_speech_analysis"} and intent in {"pause", "pause_story"}:
                 state.mode, state.substate = "story_pause_announcement", "story_pause_requested"
@@ -3225,12 +3328,25 @@ class CanonicalRuntime(SceneMenuMixin):
             if self.exhibition_mode and state.mode == "exhibition_name_capture":
                 name = normalize_exhibition_name(transient_text or "")
                 if name is None:
+                    mic_unavailable = bool(event.payload.get("mic_unavailable"))
+                    if not mic_unavailable and state.voice_retry_count < 1:
+                        state.voice_retry_count += 1
+                        state.state_version += 1
+                        return self._decision(state, [
+                            {"type": "speak", "phrase_id": "PHRASE_074"},
+                            {"type": "capture_open"},
+                            {"type": "exhibition_name_rejected"},
+                        ], "exhibition_name_unrecognized")
+                    state.voice_retry_count = 0
+                    state.mode, state.substate = "exhibition_age_prompt", "awaiting_age_question_audio"
+                    state.expected_inputs = ["audio_completed", "handset_down"]
                     state.state_version += 1
                     return self._decision(state, [
-                        {"type": "speak", "phrase_id": "PHRASE_074"},
-                        {"type": "capture_open"},
-                        {"type": "exhibition_name_rejected"},
-                    ], "exhibition_name_unrecognized")
+                        {"type": "capture_close"},
+                        {"type": "speak", "phrase_id": "PHRASE_108"},
+                        {"type": "exhibition_onboarding_step", "step": "age_question"},
+                    ], "exhibition_name_skipped_to_age", clear_audio=True)
+                state.voice_retry_count = 0
                 if state.profile_status != "identified":
                     state.display_name = name
                 state.onboarding_name_collected = True

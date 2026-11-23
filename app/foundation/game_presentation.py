@@ -423,12 +423,18 @@ class GamePresentationMixin:
                         await asyncio.sleep(max(.001, started + offset - self.monotonic_now()))
                     if not current():
                         return
-                    cancel = getattr(self.led, "cancel_effects", None)
-                    if callable(cancel):
-                        cancel(clear=False)
                     active = dict(game_light_commands(buttons, owner[4]))
-                    self.led.set_elements(tuple(LightingCommand(element, int(element in active), 140)
-                        for element in LIGHTING_ELEMENT_IDS))
+                    target_cmds = tuple(LightingCommand(element, int(element in active), 140)
+                        for element in LIGHTING_ELEMENT_IDS)
+                    effects_engine = getattr(self.led, "exhibition_effects", None)
+                    if (getattr(effects_engine, "effect", None) == "wave"
+                            and getattr(effects_engine, "wave_phase", None) == "game_success"):
+                        effects_engine._wave_final_commands = target_cmds
+                    else:
+                        cancel = getattr(self.led, "cancel_effects", None)
+                        if callable(cancel):
+                            cancel(clear=False)
+                        self.led.set_elements(target_cmds)
             except asyncio.CancelledError:
                 return
             except Exception:
@@ -771,12 +777,18 @@ class GamePresentationMixin:
                 return
             st.game_prompt_audible = True
             target = buttons if buttons else default_buttons
-            cancel = getattr(self.led, "cancel_effects", None)
-            if callable(cancel):
-                cancel(clear=False)
             active = dict(game_light_commands(target, display))
-            self.led.set_elements(tuple(LightingCommand(element, int(element in active), 140)
-                for element in LIGHTING_ELEMENT_IDS))
+            target_cmds = tuple(LightingCommand(element, int(element in active), 140)
+                for element in LIGHTING_ELEMENT_IDS)
+            effects_engine = getattr(self.led, "exhibition_effects", None)
+            if (getattr(effects_engine, "effect", None) == "wave"
+                    and getattr(effects_engine, "wave_phase", None) == "game_success"):
+                effects_engine._wave_final_commands = target_cmds
+            else:
+                cancel = getattr(self.led, "cancel_effects", None)
+                if callable(cancel):
+                    cancel(clear=False)
+                self.led.set_elements(target_cmds)
 
         async def segment_stream():
             cancelled = lambda: not current()
