@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.foundation.application import build_application
+from app.foundation.api import build_application
 from app.foundation.config import Settings
 from app.foundation.domain import Event
 from app.foundation.game_engine import advance as advance_game, current_challenge, start as start_game
