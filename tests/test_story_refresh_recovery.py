@@ -48,50 +48,93 @@ async def providers():
 
 
 @pytest.mark.asyncio
-async def test_repeated_cancel_recovers_actual_service_capability_chooser_and_render():
+async def test_repeated_cancel_recovers_actual_model_story_service_and_fresh_checks():
     app=await start_app()
     llm,mini,generator,validator,calls=await providers()
     app.bounded_s2s.llm=llm
     app.bounded_s2s.response_validator=AsyncResponseValidator(mini=mini)
-    pending=None
+    service=PersonalStoryService(app.bounded_s2s)
     try:
-        await enter(app)
+        # Retained model service seam only: root3 now uses the local catalogue.
         for c in (generator,validator):
             metadata=c._metadata;entered=asyncio.Event()
             async def blocked(path):
                 entered.set()
                 await asyncio.Future()
             c._metadata=blocked
-            pending=asyncio.create_task(send(app,'ButtonPressed',{'button_id':1}))
-            await asyncio.wait_for(entered.wait(),1)
-            await send(app,'ButtonReleased',{'button_id':1})
-            assert (await send(app,'ButtonPressed',{'button_id':7}))['reason']=='activity_back'
-            await send(app,'ButtonReleased',{'button_id':7})
-            assert (await asyncio.wait_for(pending,1))['reason']=='stale_session_generation'
-            c._metadata=metadata
-            assert not app._personal_stories
+            pending=asyncio.create_task(service.render('лес','3-5',(),1,lambda:True))
+            try:
+                await asyncio.wait_for(entered.wait(),1)
+                pending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(pending,1)
+            finally:
+                c._metadata=metadata
+                pending.cancel()
+                await asyncio.wait_for(asyncio.gather(pending,return_exceptions=True),1)
             assert llm.supports_full_story and mini.supports_full_story
             assert llm.supports_story_request(story_messages('лес','3-5',()))
-            assert PersonalStoryService(app.bounded_s2s).capable()
-            await send(app,'ButtonPressed',{'button_id':4})
-            await send(app,'ButtonReleased',{'button_id':4})
-            state=app.canonical_runtime.sessions['story-test']
-            assert state.scene_menu_descriptor['items'], 're-entry must offer actual story choices'
+            assert service.capable()
             counts=[len(c.calls) for c in (generator,validator)]
-            result=await send(app,'ButtonPressed',{'button_id':1})
-            assert result['reason']=='personal_story_ready' and state.mode=='personal_story_playing'
+            audio=await asyncio.wait_for(service.render('лес','3-5',(),2,lambda:True),5)
+            assert audio is not None and audio.token==2 and audio.samples
             assert calls[-2:]==['generate','validate']
             assert [len(c.calls)-n for c,n in zip((generator,validator),counts)]==[4,4]
             assert all(c.ready(URL,MODEL) for c in (generator,validator))
-            await send(app,'ButtonReleased',{'button_id':1})
-            await send(app,'ButtonPressed',{'button_id':7})
-            await send(app,'ButtonReleased',{'button_id':7})
-            await send(app,'ButtonPressed',{'button_id':4})
-            await send(app,'ButtonReleased',{'button_id':4})
     finally:
+        await app.shutdown_identity()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_authored_story_reenters_current_chooser_without_model_io():
+    from app.foundation.personal_story import STORY_ID
+    app=await start_app()
+    llm,mini,generator,validator,calls=await providers()
+    app.bounded_s2s.llm=llm
+    app.bounded_s2s.response_validator=AsyncResponseValidator(mini=mini)
+    synthesize=app.bounded_s2s.tts.synthesize
+    entered=asyncio.Event();pending=None
+    async def blocked(*args):
+        entered.set()
+        await asyncio.Future()
+    try:
+        for c in (generator,validator):
+            await cancel_refresh(c)
+        await enter(app)
+        app.bounded_s2s.tts.synthesize=blocked
+        pending=asyncio.create_task(send(app,'ButtonPressed',{'button_id':1}))
+        await asyncio.wait_for(entered.wait(),1)
+        owner=app._personal_stories['story-test']
+        await send(app,'ButtonReleased',{'button_id':1})
+        assert (await send(app,'ButtonPressed',{'button_id':7}))['reason']=='activity_back'
+        await send(app,'ButtonReleased',{'button_id':7})
+        assert (await asyncio.wait_for(pending,1))['reason']=='stale_session_generation'
+        assert owner.closed and owner.audio is None
+        assert not app._personal_stories and not app._personal_story_jobs
+        assert not any(c.get('response_id')==STORY_ID for c in app.audio.commands)
+        app.bounded_s2s.tts.synthesize=synthesize
+        assert PersonalStoryService(app.bounded_s2s).capable() and app.personal_story_available()
+        await send(app,'ButtonPressed',{'button_id':3})
+        await send(app,'ButtonReleased',{'button_id':3})
+        state=app.canonical_runtime.sessions['story-test']
+        assert state.mode=='personal_story_theme' and len(state.scene_menu_descriptor['items'])==5
+        counts=[len(c.calls) for c in (generator,validator)]
+        result=await asyncio.wait_for(send(app,'ButtonPressed',{'button_id':1}),5)
+        assert result['reason']=='personal_story_ready' and state.mode=='personal_story_playing'
+        assert app._personal_stories['story-test'] is not owner
+        assert sum(c.get('response_id')==STORY_ID for c in app.audio.commands)==1
+        assert not calls, 'authored recovery does not need model generation or semantic validation'
+        assert [len(c.calls)-n for c,n in zip((generator,validator),counts)]==[0,0]
+        assert all(c.ready(URL,MODEL) for c in (generator,validator))
+        await send(app,'ButtonReleased',{'button_id':1})
+        await send(app,'ButtonPressed',{'button_id':7})
+        await send(app,'ButtonReleased',{'button_id':7})
+        assert state.mode=='root_menu' and not app._personal_stories
+    finally:
+        app.bounded_s2s.tts.synthesize=synthesize
         if pending:
             pending.cancel()
-            await asyncio.gather(pending,return_exceptions=True)
+            await asyncio.wait_for(asyncio.gather(pending,return_exceptions=True),1)
         await app.shutdown_identity()
 
 

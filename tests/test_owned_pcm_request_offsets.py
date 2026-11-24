@@ -1,6 +1,7 @@
 """Per-request resume offsets are applied inside the native playback lock."""
 import asyncio
 import sys
+from importlib.machinery import ModuleSpec
 from types import SimpleNamespace
 import pytest
 from app.foundation.s2s import AudioChunk, SoundDevicePlaybackController
@@ -14,7 +15,9 @@ def native(monkeypatch):
         def write(self, values): writes.append(len(values))
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream,
+        __spec__=ModuleSpec("sounddevice", loader=None),
+        query_devices=lambda *_: {"max_output_channels": 1}))
     controller = SoundDevicePlaybackController()
     controller.active_token = 1
     return controller, writes
@@ -80,13 +83,24 @@ async def test_stop_mid_stream_retains_only_played_samples_after_request_offset(
     controller._run_io = barrier
     task = asyncio.create_task(controller.play_owned_pcm(
         AudioChunk((.1,) * 6000, 16000, 1), lambda: True, start_position_samples=3200))
-    await asyncio.wait_for(blocked.wait(), 2)
-    await controller.stop()
-    release.set()
-    await task
-    assert writes == [2048]
-    assert controller.position_samples == 5248
-    assert not controller.last_playback_completed
+    try:
+        await asyncio.wait_for(blocked.wait(), 2)
+        # Block sizing is not the contract: retain precisely the first native
+        # write, excluding the second dispatch that stop must revoke.
+        assert len(writes) == 1 and 0 < writes[0] < 6000
+        first_write = writes[0]
+        assert controller.position_samples == 3200 + first_write
+        await controller.stop()
+        release.set()
+        result = await asyncio.wait_for(task, 2)
+        assert writes == [first_write]
+        assert result.written_samples == first_write
+        assert result.position_samples == controller.position_samples == 3200 + first_write
+        assert not result.completed and not controller.last_playback_completed
+    finally:
+        release.set()
+        if not task.done(): task.cancel()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 2)
 
 
 @pytest.mark.asyncio
@@ -132,18 +146,24 @@ async def test_returned_result_is_immutable_after_new_owner_finishes(monkeypatch
 
 @pytest.mark.asyncio
 async def test_native_write_failure_never_returns_completed_result(monkeypatch):
+    writes = []
     class Stream:
         def __init__(self, **kwargs): pass
         def start(self): pass
-        def write(self, values): raise OSError('synthetic failure')
+        def write(self, values):
+            writes.append(len(values))
+            raise OSError('synthetic failure')
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream,
+        __spec__=ModuleSpec("sounddevice", loader=None),
+        query_devices=lambda *_: {"max_output_channels": 1}))
     controller = SoundDevicePlaybackController()
     controller.active_token = 1
     with pytest.raises(RuntimeError, match='local playback unavailable'):
         await controller.play_owned_pcm(AudioChunk((.1,), 16000, 1), lambda: True,
                                         start_position_samples=3200)
+    assert writes == [1]  # Reach native failure, not merely the device preflight.
     assert not controller.last_playback_completed
 
 

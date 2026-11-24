@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import replace
+from importlib.machinery import ModuleSpec
 import pytest
 from app.foundation.adapters import RecordingAudio
 from app.foundation.config import Settings
@@ -91,7 +92,7 @@ async def test_stale_pcm_never_starts_or_completes(mutation):
 async def test_cancelled_pcm_cannot_stop_or_complete_new_owner():
     stand=await setup('wait')
     try:
-        old=start(stand); await stand.playback.started.wait()
+        old=start(stand); await asyncio.wait_for(stand.playback.started.wait(),2)
         new=replace(HANDLE,playback_id='play-2',playback_lease='lease-2',token=13)
         install(stand,new)
         tasks=start(stand,new,replace(AUDIO,token=13))
@@ -105,7 +106,7 @@ async def test_cancelled_pcm_cannot_stop_or_complete_new_owner():
 async def test_hangup_during_pcm_suppresses_completion():
     stand=await setup('wait')
     try:
-        tasks=start(stand); await stand.playback.started.wait()
+        tasks=start(stand); await asyncio.wait_for(stand.playback.started.wait(),2)
         stand.application._active_audio.pop(HANDLE.session_id)
         stand.audio_output.cancel(13)
         await asyncio.gather(*tasks,return_exceptions=True)
@@ -151,7 +152,7 @@ async def test_private_listen_capture_waits_for_active_prompt_to_finish():
 async def test_stale_queued_pcm_does_not_cancel_current_audio():
     stand=await setup('wait')
     try:
-        old=start(stand); await stand.playback.started.wait()
+        old=start(stand); await asyncio.wait_for(stand.playback.started.wait(),2)
         stale=replace(HANDLE,playback_id='stale')
         pending=start(stand,stale)
         await asyncio.sleep(0)
@@ -166,7 +167,7 @@ async def test_stale_queued_pcm_does_not_cancel_current_audio():
 async def test_late_pcm_completion_cannot_close_new_owner(mutation):
     stand=await setup('wait')
     try:
-        tasks=start(stand); await stand.playback.started.wait()
+        tasks=start(stand); await asyncio.wait_for(stand.playback.started.wait(),2)
         if mutation=='lease': stand.application._active_audio[HANDLE.session_id]['playback_lease']='new'
         else: stand.active_session_id='next-child'
         stand.playback.release.set()
@@ -189,7 +190,7 @@ async def test_private_identity_rechecked_after_previous_audio_drain(change):
     stand._response_audio_tasks.add(previous)
     try:
         tasks=start(stand)
-        await draining.wait()
+        await asyncio.wait_for(draining.wait(),2)
         state=stand.application.canonical_runtime.sessions[HANDLE.session_id]
         if change=='expiry': stand.clock[0]=21.0
         if change=='profile': state.profile_ref='other-synthetic-profile'
@@ -275,7 +276,9 @@ async def test_physical_pcm_rechecks_identity_at_native_boundaries(monkeypatch,b
         def write(self,chunk): writes.append(len(chunk))
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream,
+        __spec__=ModuleSpec("sounddevice", loader=None),
+        query_devices=lambda *_: {"max_output_channels": 1}))
     stand.playback=SoundDevicePlaybackController()
     lock=stand.playback._play_lock
     if boundary=='play_lock': await lock.acquire()
@@ -319,7 +322,9 @@ async def test_physical_pcm_success_uses_guarded_native_path(monkeypatch):
         def write(self,chunk): writes.append(len(chunk))
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream,
+        __spec__=ModuleSpec("sounddevice", loader=None),
+        query_devices=lambda *_: {"max_output_channels": 1}))
     stand.playback=SoundDevicePlaybackController()
     try:
         await asyncio.gather(*start(stand))
@@ -333,7 +338,9 @@ async def test_physical_pcm_cancel_while_waiting_for_lock_never_opens_stream(mon
     from types import SimpleNamespace
     from app.foundation.s2s import SoundDevicePlaybackController
     stand=await setup(); created=[]
-    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=lambda **kw:created.append(kw)))
+    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=lambda **kw:created.append(kw),
+        __spec__=ModuleSpec("sounddevice", loader=None),
+        query_devices=lambda *_: {"max_output_channels": 1}))
     stand.playback=SoundDevicePlaybackController()
     await stand.playback._play_lock.acquire()
     try:
@@ -360,7 +367,9 @@ async def test_queued_stop_preserves_asset_semantics_but_revokes_private_pcm(mon
         def write(self,chunk): writes.append(len(chunk))
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream,
+        __spec__=ModuleSpec("sounddevice", loader=None),
+        query_devices=lambda *_: {"max_output_channels": 1}))
     playback=SoundDevicePlaybackController()
     playback.active_token=AUDIO.token
     await playback._play_lock.acquire()

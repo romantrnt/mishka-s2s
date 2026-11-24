@@ -3,6 +3,7 @@ import io
 import sys
 import wave
 from dataclasses import replace
+from importlib.machinery import ModuleSpec
 from types import SimpleNamespace
 import pytest
 from test_owned_private_pcm import setup, HANDLE, install
@@ -49,7 +50,9 @@ async def test_physical_asset_retains_owner_through_read_and_native_write(monkey
         def write(self, chunk): writes.append(len(chunk))
         def abort(self): pass
         def close(self): pass
-    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream,
+        __spec__=ModuleSpec("sounddevice", loader=None),
+        query_devices=lambda *_: {"max_output_channels": 1}))
     stand.playback = SoundDevicePlaybackController()
     try:
         await stand._play_asset_audio(HANDLE.session_id, response, 'synthetic.wav', 12, 10, handle)
