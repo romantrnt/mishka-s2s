@@ -126,6 +126,7 @@ class RemoteDeviceSimulator:
             "profile": self.stand.settings.profile, "identity_mode": self.stand.settings.identity_mode,
             "synthetic_profile": bool(app.max_json), "identity": dict(source.get("identity") or {}),
             "session": {"session_id": sid, "state": session.get("state"), "scenario": session.get("scenario"),
+                        "context_generation": app._profile_context_generations.get(sid, 0),
                         "node": session.get("node"), "state_version": getattr(state, "state_version", 0),
                         "profile_status": getattr(state, "profile_status", "anonymous"),
                         "interaction_route": getattr(state, "interaction_route", None) if state and state.interaction_open else None,
@@ -173,10 +174,11 @@ class RemoteDeviceSimulator:
 
     async def _session_action(self, payload):
         action = payload["action"]
-        fields = {"action", "instance_id", "epoch", "session_id"}
+        fields = {"action", "instance_id", "epoch", "session_id", "context_generation"}
         if action in {"skip_interview", "enable_audio"}:
             fields.add("state_version")
         if (set(payload) != fields or type(payload.get("epoch")) is not int or payload["epoch"] < 0
+                or type(payload.get("context_generation")) is not int or payload["context_generation"] < 0
                 or not isinstance(payload.get("session_id"), str)
                 or not isinstance(payload.get("instance_id"), str)
                 or (action in {"skip_interview", "enable_audio"} and (type(payload["state_version"]) is not int
@@ -184,6 +186,7 @@ class RemoteDeviceSimulator:
             return _error("validation_error", "session action requires its exact current owner scope")
         def current():
             return (not self.stand._closed and self.epoch == payload["epoch"]
+                    and self.stand.application._profile_context_generations.get(payload["session_id"], 0) == payload["context_generation"]
                     and self.stand.active_session_id == payload["session_id"]
                     and self.stand._panel_instance_id == payload["instance_id"])
         if not current():
@@ -207,6 +210,7 @@ class RemoteDeviceSimulator:
             self.invalidate("panel_session_end")
         epoch = self.epoch
         guard = lambda: (self.epoch == epoch and not self.stand._closed
+                         and self.stand.application._profile_context_generations.get(payload["session_id"], 0) == payload["context_generation"]
                          and self.stand.active_session_id == payload["session_id"]
                          and self.stand._panel_instance_id == payload["instance_id"])
         return await self.stand.session_action(action, ownership_guard=guard,

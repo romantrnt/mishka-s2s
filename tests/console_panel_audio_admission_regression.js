@@ -17,10 +17,10 @@ function setup(){
  vm.runInContext(source.slice(source.indexOf('window.MishkaConsole =')),context);
  vm.runInContext(phone.slice(phone.indexOf('function mountPhone')),context);
  let cursor=0;
- const state=({epoch=30,version=1,sid='stand',quiet=true,node='awaiting_handset',active=true}={})=>{
+ const state=({epoch=30,version=1,sid='stand',quiet=true,node='awaiting_handset',active=true,contextGeneration=0}={})=>{
   const value=snapshot(epoch,++cursor,false,version);value.session.state=active?'ACTIVE':'IDLE';value.session.node=node;
   Object.assign(value.simulator,{instance_id:'d'.repeat(16)});
-  Object.assign(value.simulator.session,{session_id:sid,node,interaction_active:active,interaction_route:active?'panel':null,session_actions:active?(quiet?['end','enable_audio']:['end']):['start']});
+  Object.assign(value.simulator.session,{session_id:sid,context_generation:contextGeneration,node,interaction_active:active,interaction_route:active?'panel':null,session_actions:active?(quiet?['end','enable_audio']:['end']):['start']});
   value.canonical_state={mode:node,interaction_active:active,silent_mode:quiet};value.simulator.microphone.eligible=!quiet;return value;
  };
  const show=options=>{const value=state(options);context.render(value);return value;};
@@ -33,7 +33,7 @@ async function explicitSound(){
  assert.match(h.fields['phone-instruction'].textContent,/Включить звук.*поднять трубку.*7/);
  const enabling=button.onclick({detail:0});assert.strictEqual(h.unlocks(),1);assert.strictEqual(h.requests.length,0);
  h.unlock({state:'running'});await tick();
- assert.deepStrictEqual(h.requests[0].body,{action:'enable_audio',instance_id:'d'.repeat(16),epoch:30,session_id:'stand',state_version:1});
+ assert.deepStrictEqual(h.requests[0].body,{action:'enable_audio',instance_id:'d'.repeat(16),epoch:30,session_id:'stand',context_generation:0,state_version:1});
  assert.strictEqual(h.requests[0].path,'/stand/simulator/action');
  h.requests[0].resolve({state:h.state({quiet:false,version:2,node:'game_active'})});await enabling;
  assert.strictEqual(h.context.current.session.handset_up,false,'sound never manufactures a handset edge');
@@ -42,11 +42,12 @@ async function explicitSound(){
  assert.strictEqual(locked.requests.length,0);assert.match(locked.fields['phone-error'].textContent,/Браузер не разрешил звук/);
 }
 async function staleUnlock(){
- for(const mutation of ['version','visit','epoch','socket','disconnect','end']){
+ for(const mutation of ['version','visit','epoch','context','socket','disconnect','end']){
   const h=setup();h.show();const enabling=h.fields['phone-sound'].onclick({detail:0});let ending;
   if(mutation==='version')h.show({version:2});
   if(mutation==='visit')h.show({sid:'next'});
   if(mutation==='epoch')h.show({epoch:31});
+  if(mutation==='context')h.show({contextGeneration:1});
   if(mutation==='socket')h.context.ws={readyState:1};
   if(mutation==='disconnect')h.context.ws.readyState=3;
   if(mutation==='end'){ending=h.fields['phone-end'].onclick({detail:0});assert.strictEqual(h.requests[0].body.action,'end');}
@@ -60,10 +61,17 @@ async function staleUnlock(){
  h.requests[0].resolve({state:h.state({quiet:false})});await enabling;
  assert.strictEqual(h.context.current.simulator.epoch,31,'late audio response cannot revive the ended visit');
 }
+async function staleContextEnd(){
+ const h=setup();h.show();const end=h.fields['phone-end'];end.onkeydown({code:'Enter',repeat:false});
+ h.show({contextGeneration:1});await end.onclick({detail:0});
+ assert.strictEqual(h.requests.length,0,'End captured before a fresh card cannot close the new child context');
+ const currentEnd=end.onclick({detail:0});assert.strictEqual(h.requests[0].body.context_generation,1);
+ h.requests[0].resolve({state:h.state({contextGeneration:1,active:false,epoch:31})});await currentEnd;
+}
 async function gestureAndQueue(){
- for(const mutation of ['version','visit','socket','cancel']){
+ for(const mutation of ['version','visit','context','socket','cancel']){
   const h=setup();h.show();const button=h.fields['phone-sound'];button.onpointerdown({button:0});
-  if(mutation==='version')h.show({version:2});if(mutation==='visit')h.show({sid:'next'});if(mutation==='socket')h.context.ws={readyState:1};if(mutation==='cancel')button.onpointercancel();
+  if(mutation==='context')h.show({contextGeneration:1});if(mutation==='version')h.show({version:2});if(mutation==='visit')h.show({sid:'next'});if(mutation==='socket')h.context.ws={readyState:1};if(mutation==='cancel')button.onpointercancel();
   await button.onclick({detail:1});assert.strictEqual(h.unlocks(),0,`${mutation} invalidates the captured media gesture`);assert.strictEqual(h.requests.length,0);
  }
  const h=setup();h.show();const held=h.context.post('/stand/text',{text:'synthetic queue blocker'});
@@ -102,4 +110,4 @@ async function physicalObserver(){
  vm.runInContext(source.slice(source.indexOf('async function refresh('),source.indexOf('function stopPolling(')),h.context);
  await h.context.refresh({includeStatus:false});assert.deepStrictEqual(paths,['/stand/state'],'phone polling uses the supported public snapshot in physical mode');
 }
-(async()=>{await explicitSound();physicalLighting();await staleUnlock();await gestureAndQueue();await physicalObserver();console.log('panel audio: explicit media gesture, exact owner/version, End, reconnect, stale FIFO and honest physical observer passed');})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{await staleContextEnd();await explicitSound();physicalLighting();await staleUnlock();await gestureAndQueue();await physicalObserver();console.log('panel audio: explicit media gesture, exact owner/version, End, reconnect, stale FIFO and honest physical observer passed');})().catch(error=>{console.error(error);process.exitCode=1;});

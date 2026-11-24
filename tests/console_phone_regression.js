@@ -285,7 +285,7 @@ function snapshotFences(){
  vm.runInContext(source.slice(source.indexOf('function interactionGuide('),source.indexOf('function enqueuePCM(')),context);
  const snapshot=(epoch,cursor,up,version=0)=>({
   session:{state:up?'ACTIVE':'ENDED',handset_up:up,node:up?'root_menu':'session_closed'},
-  simulator:{epoch,journal_cursor:cursor,session:{session_id:'stand',state_version:version},microphone:{eligible:up},admission:{input_ready:true,connected:true},devices:{handset:{state:up?'up':'down'},buttons:[],lighting:{},rfid:{},audio:{}},fault:{}},
+  simulator:{epoch,journal_cursor:cursor,session:{session_id:'stand',context_generation:0,state_version:version},microphone:{eligible:up},admission:{input_ready:true,connected:true},devices:{handset:{state:up?'up':'down'},buttons:[],lighting:{},rfid:{},audio:{}},fault:{}},
   commands:[],latencies:[],results:[],errors:[],events:[],raw_frames:[],lighting:{},
  });
  const ended=snapshot(8,20,false,10);context.render(ended);
@@ -450,7 +450,7 @@ async function panelSessionControls(){
  assert.strictEqual(requests.length,0,'no request before unlock');assert.strictEqual(end.hidden,false,'pending start remains cancellable');
  await end.onclick({detail:0});unlock();await warming;assert.strictEqual(requests.length,0,'cancelled pre-submit unlock has no start or end POST');
  const starting=start.onclick({detail:0});unlock();await tick();
- assert.deepStrictEqual(requests[0].body,{action:'start',instance_id:'c'.repeat(16),epoch:20,session_id:'stand'});
+ assert.deepStrictEqual(requests[0].body,{action:'start',instance_id:'c'.repeat(16),epoch:20,session_id:'stand',context_generation:0});
  await start.onclick({detail:0});assert.strictEqual(requests.length,1,'pending start is idempotent in UI');
  const beforeStop=stops,ending=end.onclick({detail:0});assert(stops>beforeStop,'end immediately stops local mic/audio before the network');
  assert.strictEqual(requests[0].signal.aborted,true);assert.strictEqual(requests[1].body.action,'end');

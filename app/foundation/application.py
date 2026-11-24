@@ -176,6 +176,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self.audio_cleanup_timeout_seconds = max(0.01, float(getattr(settings, "audio_cleanup_timeout_s", 1.0)))
         self._init_engagement_idle()
         self._session_epochs: dict[str, int] = {}
+        self._profile_context_generations: dict[str, int] = {}
         self._session_revisions: dict[str, int] = {}
         self._runtime_ingress: dict[asyncio.Task[Any], object] = {}
         self._runtime_maintenance: object | None = None
@@ -313,6 +314,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             runtime.clear_identity(old)
         fresh.substate = 'profile_replacing'
         runtime.sessions[sid] = fresh
+        # A fresh card retires old screen actions before cleanup can yield.
+        self._profile_context_generations[sid] = self._profile_context_generations.get(sid, 0) + 1
         self._session_epochs[sid] = self._session_epochs.get(sid, 0) + 1
         self._session_revisions[sid] = self._session_revisions.get(sid, 0) + 1
         epoch, revision = self._session_epochs[sid], self._session_revisions[sid]

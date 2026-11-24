@@ -41,7 +41,7 @@ function mountPhone() {
   let microphoneError='',drawerReturn=null;
   let sessionPending=null;
   const sessionButtons={start:$('phone-start'),end:$('phone-end'),skip_interview:$('phone-skip-interview')};
-  const sessionScope=action=>({action,instance_id:simulator?.instance_id,epoch:simulator?.epoch,session_id:simulator?.session?.session_id,
+  const sessionScope=action=>({action,instance_id:simulator?.instance_id,epoch:simulator?.epoch,session_id:simulator?.session?.session_id,context_generation:simulator?.session?.context_generation,
     ...(['skip_interview','enable_audio'].includes(action)?{state_version:simulator?.session?.state_version}:{})});
   const sameSessionScope=body=>body&&JSON.stringify(body)===JSON.stringify(sessionScope(body.action));
   const connected=()=>Boolean(bridge.media().connected&&!bridge.media().authBlocked);

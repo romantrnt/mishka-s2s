@@ -30,6 +30,7 @@ class PanelStand(MenuStand):
     def scope(self):
         sim = self.stand.panel_snapshot()["simulator"]
         return {"instance_id": sim["instance_id"], "epoch": sim["epoch"],
+                "context_generation": sim["session"]["context_generation"],
                 "session_id": sim["session"]["session_id"]}
 
     async def control(self, action, scope=None):

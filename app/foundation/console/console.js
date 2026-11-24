@@ -159,6 +159,7 @@ function sessionActionIsCurrent(payload) {
   if (!simulator || authBlocked || !['start', 'end', 'skip_interview', 'enable_audio'].includes(payload.action)
     || !/^[a-f0-9]{16}$/.test(payload.instance_id || '') || payload.instance_id !== simulator.instance_id
     || !Number.isSafeInteger(payload.epoch) || payload.epoch !== simulator.epoch
+    || !Number.isSafeInteger(payload.context_generation) || payload.context_generation !== simulator.session?.context_generation
     || typeof payload.session_id !== 'string' || payload.session_id !== simulator.session?.session_id) return false;
   // End can cancel an already submitted Start before its first state arrives.
   if (payload.action === 'end') return true;
