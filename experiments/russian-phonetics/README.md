@@ -34,6 +34,53 @@ sentence boundaries. Plain/full-utterance/native-streaming audio comparison,
 stress-format support, subjective voice quality and acoustic timings remain open.
 Do not enable this front end in the running application from the text score.
 
+## Actual digital audio comparison (24 November)
+
+`prepare_audio_inputs.py` runs the application's actual `prepare_vox_text` in its
+unchanged environment, then prepares plain, ё-only and Unicode acute variants.
+`gpu_corpus_probe.py` uses the pinned Vox555 model, adapter and approved reference
+to generate ten public phrases in four modes (40 WAVs). Run the GPU experiment
+only in an explicitly coordinated window with the application stopped; do not
+start a second GPU voice worker during a live demonstration.
+
+```sh
+HF_HUB_OFFLINE=1 /tmp/mishka-phonetics-env/bin/python experiments/russian-phonetics/prepare_audio_inputs.py \
+  --models /tmp/mishka-phonetics-data/ruaccent \
+  --normalizer-python /path/to/application/venv/bin/python --output /tmp/audio-inputs.json
+# On the isolated GPU host, using the existing validated experimental-worker config:
+/path/to/vox555/venv/bin/python experiments/russian-phonetics/gpu_corpus_probe.py \
+  --source /path/to/source --validated-config /private/validated-config.json \
+  --inputs /tmp/audio-inputs.json --output /outside/git/vox-wavs
+```
+
+All 40 generated files were copied back and SHA256 checked. The existing
+whole-utterance path's median first generated PCM was 1437.686 ms; the existing
+native streaming path's was 74.408 ms (ten samples each). This is an engine-mode
+comparison, **not a newly implemented application speed improvement**, and not
+time to audible sound. The accent front-end time is not included in those numbers.
+
+`audio_decode_probe.py` checks each WAV hash and transcribes only this authored
+corpus with the existing Whisper large-v3-turbo snapshot, explicitly CPU/int8,
+two threads, no downloads, microphone or playback:
+
+```sh
+/path/to/application/venv/bin/python experiments/russian-phonetics/audio_decode_probe.py \
+  --corpus /outside/git/vox-wavs --inputs /tmp/audio-inputs.json \
+  --model /existing/whisper/snapshot --output /outside/git/audio-decode.json
+```
+
+Actual ten-clip results: plain full, plain streaming and ё-only streaming each
+had 1 word edit in 64 reference words; acute streaming had 2/64. Acute made
+`демо` recognizable instead of `дема`, but introduced `на горы` for `на горе`
+and `чётко` for `щётка` in the decoder output. ASR is a diagnostic proxy, not
+proof of the perceived consonant, stress or voice quality. The clips' samples
+and durations change with acute marks, but no human auditory improvement has
+been established. **Do not deploy the experimental accent front end.**
+
+The corpus/readback/decode receipts and public WAVs are retained in the existing
+Obsidian checkpoint `Antigravity/demo-checkpoint-20261124/`. Listening to these
+clips and acoustic/real-microphone evaluation remain separate open checks.
+
 Morphology is probed separately: `обезьяну` normalizes to `обезьяна`; `мышью` has
 multiple analyses. This does not implement or validate the word game's rules.
 
@@ -44,7 +91,9 @@ multiple analyses. This does not implement or validate the word game's rules.
   code MIT. [Public model card](https://huggingface.co/ruaccent/accentuator)
   declares MIT; pinned model revision is in `download_models.py`.
 - [pymorphy3](https://github.com/no-plagiarism/pymorphy3): MIT morphology engine.
-  Dictionary provenance/licensing must also be checked before production packaging.
+  Installed dictionary METADATA declares code MIT and data CC BY-SA 3.0;
+  preserve attribution and license metadata when packaging (see
+  `docs/word-game-rules.md`).
 - [VoxCPM upstream](https://github.com/OpenBMB/VoxCPM) and
   [usage guide](https://voxcpm.readthedocs.io/en/latest/usage_guide.html).
   Current docs describe phoneme conventions for Chinese/English; they do not
