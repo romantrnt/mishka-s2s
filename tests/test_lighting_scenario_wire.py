@@ -134,28 +134,34 @@ def test_all_root_selections_send_only_the_current_scene_channels(button, band):
     asyncio.run(scenario())
 
 
-def test_game_retry_hold_abort_exit_and_hangup_replace_entire_serial_frame():
+@pytest.mark.parametrize("seed, display", [(0, "digits"), (12, "colors")])
+def test_game_retry_hold_abort_exit_and_hangup_replace_entire_serial_frame(seed, display):
     async def scenario():
         h = Harness()
         digit_channels = {1:{14,15}, 2:{12,13}, 3:{10,11}, 4:{8,9},
                           5:{6,7}, 6:{2,3}, 7:{0,1}}
         def digits(buttons):
             return set().union(*(digit_channels[b] for b in buttons))
+        def answers(buttons):
+            fills = {1:14, 2:13, 3:10, 4:9, 5:6, 6:3, 7:1}
+            return digits(buttons) if display == "digits" else {fills[b] for b in buttons}
         try:
             await h.press(1); await h.release(1)
+            # Cover both real deck displays without depending on a random visit seed.
+            h.state.game_entry_seed = seed
             assert (await h.press(2))["reason"] == "game_started"
             await h.release(2)
             assert h.state.active_game_id == "quiz"
             await h.complete(); await h.complete()
             challenge = h.state.game_engine_state.deck[0]
-            assert challenge.display == "digits" and len(challenge.options) > 3
-            h.assert_lit(digits(button for button, _ in challenge.options))
+            assert challenge.display == display and len(challenge.options) > 3
+            h.assert_lit(answers(button for button, _ in challenge.options))
             wrong = next(button for button, _ in challenge.options if button != challenge.answer)
             assert (await h.press(wrong))["reason"] == "game_retry"
             await h.release(wrong); await h.complete()
             narrowed = h.state.game_engine_state.narrowed_options
             assert len(narrowed) == 3 and challenge.answer in narrowed
-            h.assert_lit(digits(narrowed))
+            h.assert_lit(answers(narrowed))
             assert (await h.press(7))["reason"] == "game_exit_pending"
             h.clock += .6
             assert (await h.app.flush_game_timers())[0]["reason"] == "game_exit_progress"
@@ -164,9 +170,9 @@ def test_game_retry_hold_abort_exit_and_hangup_replace_entire_serial_frame():
             assert (await h.release(7))["reason"] == "game_exit_aborted"
             await h.complete()
             assert h.state.mode == "game_active" and h.state.game_engine_state.seven_exit_phase == "idle"
-            h.assert_lit(digits(narrowed))
+            h.assert_lit(answers(narrowed))
             assert await h.app._fire_game_timer(h.sid, stale_timer) is None
-            h.assert_lit(digits(narrowed))
+            h.assert_lit(answers(narrowed))
             await h.press(7); h.clock += 5.
             assert (await h.app.flush_game_timers())[0]["reason"] == "game_exit_ready"
             h.output.flush(); h.assert_lit(FILLS)
