@@ -3643,6 +3643,8 @@ class HardwareIntegrationStand:
             "silent_hold_active", "silent_hold_step", "silent_mode",
             "pending_mode", "pending_game_id",
         ) if key in canonical}
+        if canonical.get("mode") == "schedule_weather" and canonical.get("pending_tool") in {"date", "weather", "card_doctors", "what_next", "where_now"}:
+            canonical_safe["pending_information_kind"] = canonical["pending_tool"]
         if canonical.get("mode") == "wellbeing_check" and canonical.get("support_question_kind") in {"pain_or_discomfort", "fear"}:
             canonical_safe["support_question"] = canonical["support_question_kind"]
         alert_kind = canonical.get("support_alert_kind")

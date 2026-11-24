@@ -61,6 +61,10 @@ async function staleUnlock(){
  h.requests[0].resolve({state:h.state({quiet:false})});await enabling;
  assert.strictEqual(h.context.current.simulator.epoch,31,'late audio response cannot revive the ended visit');
 }
+function quietDayHint(){
+ const h=setup(),value=h.state({node:'schedule_weather'});value.canonical_state.pending_information_kind='date';h.context.render(value);
+ assert.match(h.fields['phone-instruction'].textContent,/Включить звук.*подними трубку.*выбранный вопрос.*7/);
+}
 async function staleContextEnd(){
  const h=setup();h.show();const end=h.fields['phone-end'];end.onkeydown({code:'Enter',repeat:false});
  h.show({contextGeneration:1});await end.onclick({detail:0});
@@ -110,4 +114,4 @@ async function physicalObserver(){
  vm.runInContext(source.slice(source.indexOf('async function refresh('),source.indexOf('function stopPolling(')),h.context);
  await h.context.refresh({includeStatus:false});assert.deepStrictEqual(paths,['/stand/state'],'phone polling uses the supported public snapshot in physical mode');
 }
-(async()=>{await staleContextEnd();await explicitSound();physicalLighting();await staleUnlock();await gestureAndQueue();await physicalObserver();console.log('panel audio: explicit media gesture, exact owner/version, End, reconnect, stale FIFO and honest physical observer passed');})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{quietDayHint();await staleContextEnd();await explicitSound();physicalLighting();await staleUnlock();await gestureAndQueue();await physicalObserver();console.log('panel audio: explicit media gesture, exact owner/version, End, reconnect, stale FIFO and honest physical observer passed');})().catch(error=>{console.error(error);process.exitCode=1;});

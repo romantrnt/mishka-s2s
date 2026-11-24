@@ -3274,11 +3274,14 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         profile = None
                     schedule_ref = self._canonical_schedule_refs.get(event.session_id) if self._identity_scope_live(event.session_id, "schedule") else None
                     request_scope = weather_scope
-                    if (tool_kind == 'weather' and event.event_type == 'ButtonPressed'
+                    if (tool_kind == 'weather'
                             and previous_state is not None and previous_state.mode == 'schedule_weather'
                             and previous_state.scene_menu_descriptor.get('scene') == 'schedule_weather'
-                            and any(item.get('id') == 'weather' and item.get('slot') == payload.get('button_id')
-                                    for item in previous_state.scene_menu_descriptor.get('items', ()) if isinstance(item, dict))):
+                            and any(item.get('id') == 'weather' and (
+                                (event.event_type == 'ButtonPressed' and item.get('slot') == payload.get('button_id'))
+                                or (event.event_type in {'SessionAudioEnabled', 'HandsetLifted'}
+                                    and previous_state.pending_tool == 'weather'))
+                                for item in previous_state.scene_menu_descriptor.get('items', ()) if isinstance(item, dict))):
                         request_scope = 'configured_point'
                     info = await TypedInfoRenderer(self.schedule_weather, profile, schedule_ref).render(
                         tool_kind, allow_demo=getattr(self.settings, "profile", "") == "mock",

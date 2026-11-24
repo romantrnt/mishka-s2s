@@ -1256,7 +1256,12 @@ class CanonicalRuntime(SceneMenuMixin):
             effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору."))
         return self._decision(state, effects, reason, clear_audio=True)
 
-    def _information_effect(self, state, kind):
+    def _information_effect(self, state, kind, *, button_choice=False):
+        # Only a menu button can retain authority for the configured weather point.
+        if state.mode == 'schedule_weather' and not state.audio_open and (kind != 'weather' or button_choice):
+            state.pending_tool = kind
+            return {'type': 'visual', 'view': 'information_audio_required'}
+        state.pending_tool = None
         if state.mode == 'bear_dialogue':
             state.dialogue_information_kind = kind
         return {'type':'typed_info_request', 'kind':kind}
@@ -1578,6 +1583,8 @@ class CanonicalRuntime(SceneMenuMixin):
             state.game_parameters = {}
         if state.mode != "awaiting_handset":
             state.pending_story_theme = None
+        if state.mode != "schedule_weather":
+            state.pending_tool = None
         effects = self._prepare_scene_menu(state, effects, reason)
         # Acknowledgements, audio completion and handset changes cannot answer
         # an exit question. Its explicit 6/7 choices change substate/mode first.
@@ -1967,6 +1974,9 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._session_action_noop(state, "panel_audio_already_enabled")
             state.silent_mode = False
             state.state_version += 1
+            if state.mode == "schedule_weather" and state.pending_tool:
+                return self._decision(state, [self._information_effect(state, state.pending_tool)],
+                                      "typed_info_after_audio_enabled")
             pending = state.pending_mode
             state.pending_mode = None
             if pending == "personal_story_generating" and state.pending_story_theme:
@@ -2720,6 +2730,10 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.substate = None
             if state.interaction_route == "panel" and state.mode != "awaiting_handset" and not state.pending_mode:
                 state.handset = "up"
+                if state.mode == "schedule_weather" and state.pending_tool:
+                    state.state_version += 1
+                    return self._decision(state, [self._information_effect(state, state.pending_tool)],
+                                          "typed_info_after_handset")
                 return self._session_action_noop(state, "panel_handset_lifted")
             state.interaction_route = "handset"
             state.handset = "up"; state.state_version += 1
@@ -2736,8 +2750,10 @@ class CanonicalRuntime(SceneMenuMixin):
                     reason="exhibition_handset_lifted", preserve_lighting=preserve_lighting)
             if state.mode == "schedule_weather":
                 state.expected_inputs = ["button", "speech", "handset_down"]
+                pending = state.pending_tool
                 return self._decision(state, [{"type": "capture_open"},
-                    {"type": "typed_info_request", "kind": "menu"}], "typed_menu_after_handset")
+                    self._information_effect(state, pending or "menu")],
+                    "typed_info_after_handset" if pending else "typed_menu_after_handset")
             if state.mode == "wellbeing_check":
                 state.expected_inputs = ["button_1", "button_5", "button_7", "speech", "handset_down"]
                 return self._decision(state, [
@@ -3204,7 +3220,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     return self._decision(state, [{"type": "privacy_blocked"}, {"type": "speak", "phrase_id": "PHRASE_101"}], "schedule_requires_profile")
                 if action:
                     state.state_version += 1
-                    return self._decision(state, [self._information_effect(state, action)], "typed_info_requested")
+                    return self._decision(state, [self._information_effect(state, action, button_choice=True)], "typed_info_requested")
         if event.event_type == "VoiceIntentReady":
             severity = str(event.payload.get("safety_severity", "none"))
             if severity not in {"none", "concern", "urgent"}:

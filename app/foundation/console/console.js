@@ -483,7 +483,7 @@ function pipelineEntries(metrics) {
   const events = Array.isArray(metrics?.events) ? metrics.events : [];
   return events.slice(-35).map(item => {
     const event = String(item.event || '');
-    const labels = { speech_end: ['INPUT', 'End of speech detected', 'VAD'], audio_ack_requested: ['AUDIO ACK', 'Immediate acknowledgement requested', 'LATENCY'], token_received: ['TOKEN', 'LLM token received', 'STREAM'], chunk_closed: ['CHUNK', 'Text chunk closed', 'PARSER'], tts_started: ['TTS', 'Silero synthesis started', 'PIPELINE'], audio_ready: ['AUDIO', 'PCM chunk ready', 'PIPELINE'], playback_started: ['PLAYBACK', 'Playback started', 'AUDIO OUT'], audio_cancelled: ['BARGE-IN', 'Playback/queue cancelled', 'CANCELLED'], rvc_v2_fallback: ['RVC', 'RVC v2 unavailable · direct fallback', 'FALLBACK'] }[event];
+    const labels = { speech_end: ['INPUT', 'End of speech detected', 'VAD'], audio_ack_requested: ['AUDIO ACK', 'Immediate acknowledgement requested', 'LATENCY'], token_received: ['TOKEN', 'LLM token received', 'STREAM'], chunk_closed: ['CHUNK', 'Text chunk closed', 'PARSER'], tts_started: ['TTS', 'Speech synthesis started', 'PIPELINE'], audio_ready: ['AUDIO', 'PCM chunk ready', 'PIPELINE'], playback_started: ['PLAYBACK', 'Playback started', 'AUDIO OUT'], audio_cancelled: ['BARGE-IN', 'Playback/queue cancelled', 'CANCELLED'], rvc_v2_fallback: ['RVC', 'RVC v2 unavailable · direct fallback', 'FALLBACK'] }[event];
     if (!labels) return null;
     const suffix = item.chunk_index !== undefined ? ` · chunk ${item.chunk_index}` : item.token_index !== undefined ? ` · token ${item.token_index}` : '';
     return { kind: event.includes('fallback') ? 'fallback' : event === 'audio_cancelled' ? 'audio' : 'metric', title: labels[0], text: labels[1] + suffix, meta: labels[2], at: item.at || item.timestamp };
@@ -1620,7 +1620,7 @@ function speakCommands(state) {
       playStoryAsset(command, generation).catch(error => {
         if (generation !== storySpeechGeneration || current?.session.node !== 'fixed_story_playing') return;
         post('/stand/audio/failed', {...audioIdentity(command), error_code: 'browser_story_playback_failed' }).catch(() => {});
-        showError(new Error('Silero story unavailable; audio path stopped: ' + error.message));
+        showError(new Error('Сказка недоступна; воспроизведение остановлено: ' + error.message));
       });
       continue;
     }
@@ -1636,6 +1636,9 @@ function interactionGuide(state, media) {
   }
   if (state?.session?.node === 'awaiting_handset' && state?.simulator?.session?.interaction_route === 'panel') {
     return ['Нужен звук', 'Нажми «Включить звук», чтобы продолжить без поднятия трубки. Можно также поднять трубку или нажать 7 для возврата.'];
+  }
+  if (state?.session?.node === 'schedule_weather' && state?.canonical_state?.pending_information_kind) {
+    return ['Выбор принят', 'Нажми «Включить звук» или подними трубку — Мишка ответит на выбранный вопрос. 7 — вернуться в меню.'];
   }
   if (['accepted', 'preparing'].includes(state?.canonical_state?.story_audio_phase)) {
     return ['Выбор принят', 'Готовлю сказку. Можно подождать или нажать 7, чтобы вернуться.'];
