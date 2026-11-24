@@ -41,6 +41,7 @@ async def test_operator_poll_is_available_while_degraded_without_taking_audio_le
             result = response.json()
             assert result['storage'] == 'bounded_process_memory'
             assert result['transcripts_enabled'] is False
+            assert type(result['sampled_at']) is float and result['sampled_at'] > 0
             assert response.headers['cache-control'] == 'no-store'
             assert result['alert'] is None
             assert (await client.get('/stand/operator?after=-1')).status_code == 422

@@ -110,7 +110,7 @@ class OperatorMonitor:
             oldest = self._items[0]["cursor"]
             gap = restart or (after > 0 and after < oldest - 1)
             since = 0 if gap else after
-            return {"stream": self._stream, "cursor": self._cursor, "gap": gap,
+            return {"stream": self._stream, "cursor": self._cursor, "gap": gap, "sampled_at": time.time(),
                     "oldest_cursor": oldest, "capacity": self._items.maxlen,
                     "items": deepcopy([item for item in self._items if item["cursor"] > since]),
                     "alert": deepcopy(self._alert), "health": dict(safe_health), "mode": self._mode,

@@ -8,7 +8,7 @@ class Element {
 }
 const elements=new Map(),documentListeners={},windowListeners={},requests=[];
 const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
-const payload=(cursor=3,alert=null)=>({stream:'process-a',cursor,gap:false,items:[{cursor:1,at:1700000000,kind:'started',data:{}},{cursor:2,at:1700000001,kind:'event',data:{event:'ButtonPressed',button:7}},{cursor:3,at:1700000002,kind:'alert_opened',data:{kind:'help_requested'}}],health:{runtime:'READY',handset:'up',audio:'available',hid:'active',lighting:'available',lit_channels:2},mode:'safety_stop',alert});
+const payload=(cursor=3,alert=null)=>({sampled_at:1700000005,stream:'process-a',cursor,gap:false,items:[{cursor:1,at:1700000000,kind:'started',data:{}},{cursor:2,at:1700000001,kind:'event',data:{event:'ButtonPressed',button:7}},{cursor:3,at:1700000002,kind:'alert_opened',data:{kind:'help_requested'}}],health:{runtime:'READY',handset:'up',audio:'available',hid:'active',lighting:'available',lit_channels:2},mode:'safety_stop',alert});
 let response=payload(3,{kind:'help_requested'}),status=200;
 const context=vm.createContext({document:{hidden:false,getElementById:get,createElement:()=>new Element(),addEventListener:(k,v)=>documentListeners[k]=v},window:{addEventListener:(k,v)=>windowListeners[k]=v},Date,URLSearchParams,AbortController,setTimeout:()=>1,clearTimeout(){},fetch:async(url,options)=>{requests.push({url,options});return {ok:status===200,status,json:async()=>response};},WebSocket:class{constructor(){throw Error('operator must never own a websocket');}}});
 vm.runInContext(fs.readFileSync('app/foundation/console/operator.js','utf8'),context);
@@ -20,6 +20,7 @@ const text=node=>node.textContent+' '+node.children.map(text).join(' ');
  assert(text(get('operator-timeline')).includes('Нажата кнопка 7'));
  assert(text(get('operator-timeline')).includes('Доставка и помощь не подтверждены'));
  assert.strictEqual(get('operator-connection').textContent,'На связи');
+ assert.strictEqual(get('operator-updated').textContent,'Обновлено '+new Date(1700000005*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),'sample time must use the same server clock as event times');
  assert(requests.every(r=>r.url.startsWith('/stand/operator?')&&!r.options.method));
  assert(requests.every(r=>r.options.credentials==='same-origin'&&r.options.cache==='no-store'));
  get('operator-filter').value='alerts';get('operator-filter').listeners.change();

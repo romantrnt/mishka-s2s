@@ -95,7 +95,8 @@
     const h=data.health||{},fields=[['Контур',label(statuses,h.runtime)],['Трубка',label(statuses,h.handset)],['Звук',label(statuses,h.audio)],['Кнопки',label(statuses,h.hid)],['Подсветка',label(statuses,h.lighting)],['Каналы света',Number.isInteger(h.lit_channels)&&h.lit_channels>=0&&h.lit_channels<=18?`${h.lit_channels} из 18`:'Неизвестно']];
     $('operator-health').replaceChildren(...fields.map(([a,b])=>{const div=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=a;dd.textContent=b;div.append(dt,dd);return div;}));
     $('operator-mode').textContent=`Режим: ${label(modes,data.mode,'другой режим')}`;
-    $('operator-updated').textContent=`Обновлено ${clock(Date.now()/1000)}`;
+    $('operator-updated').textContent=Number.isFinite(data.sampled_at)&&data.sampled_at>0&&data.sampled_at<1e12
+      ?`Обновлено ${clock(data.sampled_at)}`:'Время снимка неизвестно';
     $('operator-connection').textContent='На связи';$('operator-connection').classList.remove('offline');$('operator-error').hidden=true;
     renderItems();
   }
