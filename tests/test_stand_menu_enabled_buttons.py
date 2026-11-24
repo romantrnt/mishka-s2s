@@ -130,7 +130,7 @@ async def test_page_edges_keep_hold_and_old_audio_guards_then_back_reset_and_new
         old = dict(h.app._active_audio["stand"])
         assert (await h.edge(6))["reason"] == "scene_menu_page"
         page, current = copy.deepcopy(h.state.scene_menu_descriptor), dict(h.app._active_audio["stand"])
-        assert (await h.edge(6))["reason"] == "scene_menu_release_required"
+        assert (await h.edge(6))["reason"] == "button_held"
         assert h.state.scene_menu_descriptor == page and h.app._active_audio["stand"] == current
         await h.done(old)
         assert h.state.scene_menu_descriptor == page and h.app._active_audio["stand"] == current

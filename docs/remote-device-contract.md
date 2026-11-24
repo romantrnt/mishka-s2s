@@ -71,6 +71,14 @@ duplicate suppression is preserved and reported as `duplicate_suppressed_by_max`
 No capture callback means 409 `scan_unavailable`; arbitrary profile payloads
 are rejected with 422.
 
+Button commands describe edges, not atomic clicks. Send a separate release
+after a press; another press with a new sequence while the button is still
+down must not select another scene or answer another question. Hold ticks and
+release keep their existing meaning, including the short-answer/held-exit
+gesture on button 7. Use the release event type: `button` with a payload field
+`state: released` is not a release alias. A client that exposes clicks must
+translate each click into an ordered press/release pair.
+
 ## Physical input → application → output
 
 | Physical or protocol action | Existing backend event | Existing runtime output |

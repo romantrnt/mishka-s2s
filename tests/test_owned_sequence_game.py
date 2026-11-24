@@ -13,6 +13,16 @@ async def sequence_game():
     clock=[100.]
     app,*_=build_application(settings=Settings(profile='mock',runtime_mode='clinical'),
                             monotonic_now=lambda:clock[0],background_scheduler=False)
+    import asyncio
+    from app.foundation.s2s import AudioChunk, MockTTSProvider
+    class CheapMockTTS(MockTTSProvider):
+        async def synthesize(self,text,token,cancelled):
+            await asyncio.sleep(0)
+            if cancelled():
+                raise asyncio.CancelledError
+            return AudioChunk((.05,-.05)*1200,24000,token)
+    # Control tests exercise the real owned renderer, not waveform generation cost.
+    app.bounded_s2s.tts.delegate=CheapMockTTS()
     seq=0
     async def send(kind,button=None,text=None,**payload):
         nonlocal seq
@@ -77,7 +87,7 @@ async def test_wrong_answer_replays_and_demo_held_key_cannot_score(sequence_game
     await send('ButtonReleased',held);await send('ButtonPressed',held)
     for _ in range(2*len(state.game_engine_state.pattern)):await tick()
     assert state.game_engine_state.phase=='playing'
-    assert (await send('ButtonPressed',held))['reason']=='game_held'
+    assert (await send('ButtonPressed',held))['reason']=='button_held'
     assert state.game_engine_state.answer_index==0
     await send('ButtonReleased',held)
     await send('ButtonReleased',first);await send('ButtonPressed',first)

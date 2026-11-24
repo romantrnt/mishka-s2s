@@ -61,7 +61,7 @@ async def test_interrupt_hold_needs_release_and_help_preempts():
         await h.button(2)
         assert (await h.button(6))['reason']=='scene_menu_skipped'  # Unadvertised key only skips.
         assert h.state.scene_menu_phase=='ready'
-        assert (await h.button(6))['reason']=='scene_menu_release_required'
+        assert (await h.button(6))['reason']=='button_held'
         assert h.state.mode=='fixed_story_menu'
         await h.release(6);await h.button(1)
         assert h.state.mode=='fixed_story_playing'
