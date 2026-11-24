@@ -51,9 +51,8 @@ async def test_prepare_rejection_is_specific_and_cannot_log_private_fixture(capl
             async def failed(*args):
                 if failure=='backend':raise StoryContextError('story_backend_changed',PRIVATE)
                 raise type(PRIVATE,(RuntimeError,),{})(PRIVATE)
-                yield ''
-            app.bounded_s2s.llm.stream_story=failed
-            await send(app,'ButtonPressed',{'button_id':1})
+            app.bounded_s2s.tts.synthesize=failed
+            assert (await send(app,'ButtonPressed',{'button_id':1}))['reason']=='personal_story_unavailable'
         else:
             assert await app._prepare_personal_story('story-test',{'theme':'лес','private':PRIVATE},999) is None
         values=diagnostics(caplog)

@@ -13,8 +13,8 @@ async def test_impossible_generator_not_advertised_but_mini_independent():
     assert mini.supports_full_story
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('ceiling,available',[(4096,False),(8192,False),(16384,True)])
-async def test_actual_theme_chooser_budget_with_capable_validator_and_positive_control(ceiling,available):
+@pytest.mark.parametrize('ceiling',[4096,8192,16384])
+async def test_local_authored_chooser_does_not_require_dynamic_generator_budget(ceiling):
     from test_scene_menu_runtime import Harness
     from test_personal_story_service import Mini
     from app.foundation.validation import AsyncResponseValidator
@@ -24,11 +24,11 @@ async def test_actual_theme_chooser_budget_with_capable_validator_and_positive_c
         h.app.bounded_s2s.llm=OllamaLLMProvider(URL,MODEL,1,num_ctx=4096,story_backend_contract=c)
         h.app.bounded_s2s.response_validator=AsyncResponseValidator(mini=Mini())
         assert h.app.bounded_s2s.response_validator.supports_full_story
-        await h.button(4)
-        assert h.app.personal_story_available() is available
+        await h.button(3)
+        assert h.app.personal_story_available()
         page=h.app.canonical_runtime._menu_page(h.state)
-        assert len(page.items)==(2 if available else 0)
-        assert h.app.canonical_runtime.personal_story_capable is available
+        assert len(page.items)==5
+        assert h.app.canonical_runtime.personal_story_capable
         assert h.render.texts==[page.spoken_text]
     finally:await h.close()
 

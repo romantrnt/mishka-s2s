@@ -31,7 +31,7 @@ async def test_actual_personal_wave_frames_pause_resume_exit_and_new_owner_clean
         lease=dict(app._active_audio[sid])
         return await send('AudioCompleted',{**lease,'response_id':response_id})
     async def story():
-        await button(4);await button(6)
+        await button(3)
         result=await send('ButtonPressed',{'button_id':1})
         effects=list(app.last_canonical_effects)
         await send('ButtonReleased',{'button_id':1})

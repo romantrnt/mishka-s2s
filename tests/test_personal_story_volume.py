@@ -284,30 +284,30 @@ async def test_repair_still_uses_actual_provider_context_budget_before_second_mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stop',['cancel','deadline'])
-@pytest.mark.parametrize('issue',['volume','sentence'])
-async def test_actual_application_cancel_or_original_deadline_revokes_repair(stop,issue):
+@pytest.mark.parametrize('stage',['trusted_validation','tts'])
+async def test_actual_authored_application_cancel_or_original_deadline_revokes_render(stop,stage):
     from test_personal_story_app import start_app,enter,send
-    app=await start_app();entered=asyncio.Event();pending=None;calls=[];deadline=[]
+    app=await start_app();entered=asyncio.Event();pending=None;deadlines=[]
     clock=[app.monotonic_now()];app.monotonic_now=lambda:clock[0]
-    async def generate(*args):
-        calls.append(True)
-        if len(calls)==1:yield wire(SHORT_PLOT if issue=='volume' else long_sentence_parts(words=19),'3-5')
-        else:
-            owner=app._personal_stories['story-test'];deadline.append(owner.deadline)
-            entered.set()
-            if stop=='cancel':await asyncio.Future()
-            else:
-                clock[0]=owner.deadline
-                async for value in LLM().stream_story(*args):yield value
-    app.bounded_s2s.llm.stream_story=generate
+    provider=(app.bounded_s2s.response_validator if stage=='trusted_validation' else app.bounded_s2s.tts)
+    method='validate_trusted' if stage=='trusted_validation' else 'synthesize'
+    original=getattr(provider,method)
+    async def blocked(*args,**kwargs):
+        owner=app._personal_stories['story-test'];deadlines.append(owner.deadline)
+        entered.set()
+        if stop=='cancel':await asyncio.Future()
+        else:clock[0]=owner.deadline
+        return await original(*args,**kwargs)
+    setattr(provider,method,blocked)
     try:
         await enter(app)
         pending=asyncio.create_task(send(app,'ButtonPressed',{'button_id':1}))
         await asyncio.wait_for(entered.wait(),2)
         if stop=='cancel':assert (await send(app,'ButtonPressed',{'button_id':7}))['reason']=='activity_back'
         await asyncio.wait_for(pending,2)
-        assert len(calls)==2 and deadline
-        assert not app.bounded_s2s.tts.calls and not app._personal_story_jobs
+        assert len(deadlines)==1
+        assert not app.bounded_s2s.llm.calls and not app._personal_story_jobs
+        if stage=='trusted_validation':assert not app.bounded_s2s.tts.calls
         assert not any(item.get('response_id')=='PERSONAL_STORY' for item in app.audio.commands)
     finally:
         if pending:pending.cancel();await asyncio.gather(pending,return_exceptions=True)

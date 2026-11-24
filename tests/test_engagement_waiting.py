@@ -220,7 +220,7 @@ async def test_system_game_hint_does_not_restart_full_wait():
 async def test_cancellation_resistant_old_story_job_cannot_keep_new_game_awake(monkeypatch):
     import asyncio
     from test_personal_story_native import setup
-    from app.foundation.personal_story import PersonalStoryService
+    from app.foundation import demo_story_audio
     stand,send,complete,_,_=await setup(monkeypatch)
     app,sid=stand.application,stand.active_session_id
     clock=[app.monotonic_now()];app.monotonic_now=lambda:clock[0];app.now=lambda:clock[0]
@@ -231,17 +231,17 @@ async def test_cancellation_resistant_old_story_job_cannot_keep_new_game_awake(m
             try:await release.wait()
             except asyncio.CancelledError:pass
         return None
-    monkeypatch.setattr(PersonalStoryService,'render',resistant)
+    monkeypatch.setattr(demo_story_audio,'render',resistant)
     pending=asyncio.create_task(send('ButtonPressed',{'button_id':1}))
     try:
-        await entered.wait();await send('HandsetPlaced')
+        await asyncio.wait_for(entered.wait(),2);await send('HandsetPlaced')
         assert app._personal_story_jobs and sid not in app._personal_stories
         await send('ButtonReleased',{'button_id':1});await send('ButtonPressed',{'button_id':1})
         assert app.canonical_runtime.sessions[sid].mode=='game_menu'
         clock[0]+=120
         assert (await app.expire_engagement_sessions())[0]['reason']=='interaction_idle'
     finally:
-        release.set();await pending;await stand.aclose()
+        release.set();await asyncio.wait_for(pending,2);await stand.aclose()
 
 @pytest.mark.asyncio
 async def test_cancel_resistant_menu_tts_same_sid_old_epoch_is_not_busy():

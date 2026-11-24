@@ -1,4 +1,4 @@
-"""Absent story provider is an honest owned failure, never fake success."""
+"""Absent authored audio capability is honest; stale failures never play."""
 import asyncio
 
 import pytest
@@ -16,17 +16,17 @@ async def speech(h, text):
 
 @pytest.mark.parametrize("authorized", [False, True])
 @pytest.mark.parametrize("input_kind", ["speech", 1, 2, 3, 4, 6])
-def test_absent_provider_offers_no_fake_choice_and_fixed_chooser_remains_reachable(authorized, input_kind):
+def test_absent_tts_offers_no_fake_choice_and_fixed_chooser_remains_reachable(authorized, input_kind):
     async def run():
         h = Harness(card() if authorized else None)
         try:
             await menu(h, authorized)
-            await h.send("ButtonPressed", {"button_id": 4})
-            await h.send("ButtonReleased", {"button_id": 4})
+            h.app._owned_menu_voice_capable = lambda: False
+            h.app.bounded_s2s.tts.synthesize = None
+            await h.send("ButtonPressed", {"button_id": 3})
+            await h.send("ButtonReleased", {"button_id": 3})
             assert h.state.scene_menu_descriptor["items"] == []
-            assert h.state.scene_menu_descriptor["buttons"] == [5, 7]
-            await h.send("ButtonPressed", {"button_id": 1})  # interrupt narration only
-            await h.send("ButtonReleased", {"button_id": 1})
+            assert h.state.scene_menu_descriptor["buttons"] == [7]
             h.played.clear()
             result = (await speech(h, "Про динозавров") if input_kind == "speech"
                       else await h.send("ButtonPressed", {"button_id": input_kind}))
@@ -42,8 +42,6 @@ def test_absent_provider_offers_no_fake_choice_and_fixed_chooser_remains_reachab
             await h.send("ButtonReleased", {"button_id": 7})
             await h.send("ButtonPressed", {"button_id": 2})
             await h.send("ButtonReleased", {"button_id": 2})
-            await h.send("ButtonPressed", {"button_id": 1})  # first fixed menu narration
-            await h.send("ButtonReleased", {"button_id": 1})
             chosen = await h.send("ButtonPressed", {"button_id": 1})
             assert h.state.mode == "fixed_story_playing"
             assert chosen["reason"] == "fixed_story_started"
@@ -60,14 +58,13 @@ async def failing_story_menu(h):
     engine.tts = TTS(DURATION_BOUNDS[h.state.age_band][0])
     engine.voice = Voice()
     engine.response_validator = AsyncResponseValidator(mini=Mini())
-    await h.send("ButtonPressed", {"button_id": 4})
-    await h.send("ButtonReleased", {"button_id": 4})
-    await h.send("ButtonPressed", {"button_id": 1})
-    await h.send("ButtonReleased", {"button_id": 1})
+    h.app._owned_menu_voice_capable = lambda: False
+    await h.send("ButtonPressed", {"button_id": 3})
+    await h.send("ButtonReleased", {"button_id": 3})
     assert h.state.scene_menu_phase == "ready"
-    async def invalid(*args):
-        yield '{"incomplete":true}'
-    engine.llm.stream_story = invalid
+    async def unavailable(*args):
+        return None
+    engine.tts.synthesize = unavailable
     h.played.clear()
 
 
@@ -77,7 +74,7 @@ def test_urgent_theme_goes_to_safety_not_unavailable_story(authorized):
         h = Harness(card() if authorized else None)
         try:
             await menu(h, authorized)
-            await h.send("ButtonPressed", {"button_id": 4})
+            await h.send("ButtonPressed", {"button_id": 3})
             h.played.clear()
             await speech(h, "Я не хочу жить")
             assert h.state.mode == "safety_stop" and h.state.safety_severity == "urgent"
@@ -87,7 +84,7 @@ def test_urgent_theme_goes_to_safety_not_unavailable_story(authorized):
 
 
 @pytest.mark.parametrize("interrupt", ["HandsetPlaced", "urgent"])
-@pytest.mark.parametrize("failure_stage", ["generation", "output"])
+@pytest.mark.parametrize("failure_stage", ["tts", "output"])
 def test_interruption_during_fallback_cleanup_cannot_play_stale_failure(interrupt, failure_stage):
     async def run():
         h = Harness(card())
@@ -103,16 +100,16 @@ def test_interruption_during_fallback_cleanup_cannot_play_stale_failure(interrup
         try:
             await failing_story_menu(h)
             if failure_stage == "output":
-                from test_personal_story_service import LLM
-                h.app.bounded_s2s.llm = LLM(h.state.age_band)
+                from test_personal_story_service import TTS, DURATION_BOUNDS
+                h.app.bounded_s2s.tts = TTS(DURATION_BOUNDS[h.state.age_band][0])
                 def unavailable(*args): raise OSError("synthetic output failure")
                 h.app.audio.play_pcm_owned = unavailable
             h.app._cancel_audio_owner = cancel
-            task = asyncio.create_task(speech(h, "Про динозавров"))
+            task = asyncio.create_task(h.send("ButtonPressed", {"button_id": 1}))
             await asyncio.wait_for(entered.wait(), 3)
             if interrupt == "urgent": await speech(h, "Я не хочу жить")
             else: await h.send("HandsetPlaced")
-            release.set(); await task
+            release.set(); await asyncio.wait_for(task, 3)
             assert "PHRASE_080" not in h.played
             if interrupt == "urgent": assert h.state.mode == "safety_stop"
             else: assert not h.app._canonical_profiles
@@ -125,7 +122,7 @@ def test_interruption_during_fallback_cleanup_cannot_play_stale_failure(interrup
 
 
 @pytest.mark.parametrize("exit_button,target", [(5,"wellbeing_check"),(7,"root_menu")])
-def test_failed_space_story_has_working_help_and_back(exit_button, target):
+def test_failed_authored_story_has_working_back_and_root_help(exit_button, target):
     async def run():
         h = Harness(card())
         try:
@@ -134,11 +131,12 @@ def test_failed_space_story_has_working_help_and_back(exit_button, target):
             assert result["reason"] == "personal_story_unavailable"
             assert h.state.mode == "fixed_story_menu"
             assert h.played == ["PHRASE_080"]
-            await h.complete()  # failed generation now offers the real fixed menu
-            if exit_button == 7:
-                await h.send("ButtonPressed", {"button_id": 7})  # interrupt submenu narration
-                await h.send("ButtonReleased", {"button_id": 7})
-            await h.send("ButtonPressed", {"button_id": exit_button})
+            await h.complete()  # Failed authored audio offers the real fixed menu.
+            await h.send("ButtonPressed", {"button_id": 7})
+            await h.send("ButtonReleased", {"button_id": 7})
+            assert h.state.mode == "root_menu"
+            if exit_button == 5:
+                await h.send("ButtonPressed", {"button_id": 5})
             assert h.state.mode == target
         finally: await h.close()
     asyncio.run(run())
@@ -177,7 +175,8 @@ def test_old_or_interrupted_story_states_always_keep_help_and_exit(mode, button,
             await menu(h, False)
             h.state.mode = mode
             result = await h.send("ButtonPressed", {"button_id": button})
-            assert result["reason"] in {"help_priority", "activity_back", "personal_story_back"}
+            expected = "help_priority" if button == 5 else "personal_story_back" if mode == "personal_story_playing" else "activity_back"
+            assert result["reason"] == expected
             assert h.state.mode == target
             assert any(x.get("type") == "audio_stop" for x in result["outputs"])
         finally: await h.close()

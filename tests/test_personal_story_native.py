@@ -15,6 +15,7 @@ async def setup(monkeypatch):
     stand = HardwareIntegrationStand(Settings(profile='mock',runtime_mode='clinical'),background_scheduler=False)
     app, sid = stand.application, stand.active_session_id
     app.bounded_s2s = engine()
+    app._owned_menu_voice_capable = lambda: False
     stand.hardware_mode = 'physical'
     stand.playback = playback = SoundDevicePlaybackController()
     writes, streams, handles = [], [], []
@@ -42,7 +43,7 @@ async def setup(monkeypatch):
     async def complete(phrase):
         lease=dict(app._active_audio[sid]);lease['response_id']=phrase
         return await send('AudioCompleted',lease)
-    await send('HandsetLifted');await send('ButtonPressed',{'button_id':4})
+    await send('HandsetLifted');await send('ButtonPressed',{'button_id':3});await send('ButtonReleased',{'button_id':3})
     assert app.canonical_runtime.sessions[sid].mode=='personal_story_theme'
     return stand,send,complete,writes,handles
 
@@ -64,24 +65,28 @@ async def test_actual_generated_pause_resume_uses_owned_native_position(monkeypa
         assert (await send('ButtonPressed',{'button_id':1}))['reason']=='personal_story_ready'
         await asyncio.wait_for(blocked.wait(),2)
         owner=app._personal_stories[sid]; original_audio=owner.audio
+        generation=playback._generation
         pause=asyncio.create_task(send('ButtonPressed',{'button_id':6}))
         for _ in range(100):
-            if playback._generation:break
+            if playback._generation>generation:break
             await asyncio.sleep(.001)
-        assert playback._generation
+        assert playback._generation>generation
         release.set();await asyncio.wait_for(pause,2)
         state=app.canonical_runtime.sessions[sid]
-        expected=int(2048*1000/original_audio.sample_rate)
+        assert len(writes)==1 and writes[0][0]==0
+        written=writes[0][1]
+        assert 0<written<len(original_audio.samples)
+        expected=int(written*1000/original_audio.sample_rate)
         assert state.dialogue_memory.story_checkpoint=={'story_id':'PERSONAL_STORY','offset_ms':expected}
-        assert writes==[(0,2048)]
         assert owner.audio is original_audio
         await complete('PHRASE_062');await send('ButtonReleased',{'button_id':6})
         await send('ButtonPressed',{'button_id':6});await complete('PHRASE_064')
         await asyncio.wait_for(asyncio.gather(*tuple(stand._response_audio_tasks)),2)
         assert len(handles)==2 and handles[0][0].playback_id!=handles[1][0].playback_id
-        assert handles[1][1]==len(original_audio.samples)-2048
+        assert handles[1][1]==len(original_audio.samples)-written
         assert sum(n for _,n in writes)==len(original_audio.samples)
-        assert len(app.bounded_s2s.llm.calls)==1
+        assert not app.bounded_s2s.llm.calls
+        assert app.bounded_s2s.tts.calls
         assert sid not in app._personal_stories
         assert state.mode=='root_menu'
     finally:
@@ -97,11 +102,12 @@ async def test_pause_before_native_start_cannot_read_previous_owner_position(mon
     try:
         await send('ButtonPressed',{'button_id':1})
         await asyncio.sleep(0)
+        generation=playback._generation
         pause=asyncio.create_task(send('ButtonPressed',{'button_id':6}))
         for _ in range(100):
-            if playback._generation:break
+            if playback._generation>generation:break
             await asyncio.sleep(.001)
-        assert playback._generation
+        assert playback._generation>generation
         playback._play_lock.release()
         await asyncio.wait_for(pause,2)
         assert writes==[]
@@ -144,11 +150,11 @@ async def test_pause_during_native_close_keeps_full_checkpoint_and_does_not_repl
     app,sid,playback=stand.application,stand.active_session_id,stand.playback
     closing,release=asyncio.Event(),asyncio.Event()
     original=playback._close_stream; first=True
-    async def barrier(stream):
+    async def barrier(stream, *, drain=False):
         nonlocal first
         if first:
             first=False; closing.set(); await release.wait()
-        return await original(stream)
+        return await original(stream,drain=drain)
     playback._close_stream=barrier
     try:
         await send('ButtonPressed',{'button_id':1})
@@ -156,11 +162,12 @@ async def test_pause_during_native_close_keeps_full_checkpoint_and_does_not_repl
         owner=app._personal_stories[sid]
         total=len(owner.audio.samples); duration=int(total*1000/owner.audio.sample_rate)
         assert sum(n for _,n in writes)==total
+        generation=playback._generation
         pause=asyncio.create_task(send('ButtonPressed',{'button_id':6}))
         for _ in range(100):
-            if playback._generation:break
+            if playback._generation>generation:break
             await asyncio.sleep(.001)
-        assert playback._generation
+        assert playback._generation>generation
         release.set();await asyncio.wait_for(pause,2)
         state=app.canonical_runtime.sessions[sid]
         assert state.dialogue_memory.story_checkpoint=={'story_id':'PERSONAL_STORY','offset_ms':duration}
