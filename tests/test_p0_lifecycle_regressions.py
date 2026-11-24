@@ -108,8 +108,11 @@ def test_repeated_phrase_has_distinct_playback_lease_without_version_change():
     a = runtime.handle(CanonicalEvent(
         "ButtonPressed", sid, 2, version, "test", {"button_id": 5}, "press-a", 1.0,
     ))
+    runtime.handle(CanonicalEvent(
+        "ButtonReleased", sid, 3, a["state"]["state_version"], "test", {"button_id": 5}, "release-a", 1.0,
+    ))
     b = runtime.handle(CanonicalEvent(
-        "ButtonPressed", sid, 3, a["state"]["state_version"], "test", {"button_id": 5}, "press-b", 1.0,
+        "ButtonPressed", sid, 4, a["state"]["state_version"], "test", {"button_id": 5}, "press-b", 1.0,
     ))
     a_audio = next(e for e in a["effects"] if e["type"] == "support_question")
     b_audio = next(e for e in b["effects"] if e["type"] == "support_question")

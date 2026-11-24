@@ -7,6 +7,7 @@ import pytest
 from app.foundation.experimental_voice import ExperimentalTTSProvider
 from app.foundation.public_menu_audio import enable_public_menu_audio_cache
 from app.foundation.s2s import AudioChunk
+from story_catalogue_fixtures import tiny_stories
 from test_scene_menu_runtime import Harness
 
 
@@ -44,8 +45,10 @@ class DrainingNative(ExperimentalTTSProvider):
         yield AudioChunk((.3,), 16000, token)
 
 
-async def native_menu():
+async def native_menu(tmp_path):
     h = Harness()
+    # Keep real WAV/hash admission without rereading full recordings in a drain test.
+    h.app.canonical_runtime.stories = tiny_stories(tmp_path)
     native = DrainingNative()
     h.app.bounded_s2s.tts = native
     cache = enable_public_menu_audio_cache(h.app)
@@ -75,8 +78,8 @@ async def close(h, native, pending):
 
 
 @pytest.mark.asyncio
-async def test_actual_menu_entry_waits_for_cancelled_native_drain_before_request():
-    h, native, cache = await native_menu()
+async def test_actual_menu_entry_waits_for_cancelled_native_drain_before_request(tmp_path):
+    h, native, cache = await native_menu(tmp_path)
     pending = asyncio.create_task(h.button(2))
     try:
         await at_idle_wait(pending, native)
@@ -96,8 +99,8 @@ async def test_actual_menu_entry_waits_for_cancelled_native_drain_before_request
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('boundary', ['hangup', 'cancel', 'timeout'])
-async def test_waiting_menu_owner_cannot_request_audio_or_fill_cache_after_revocation(boundary):
-    h, native, cache = await native_menu()
+async def test_waiting_menu_owner_cannot_request_audio_or_fill_cache_after_revocation(boundary, tmp_path):
+    h, native, cache = await native_menu(tmp_path)
     if boundary == 'timeout':
         h.app.audio.owned_render_timeout_s = .05
     pending = asyncio.create_task(h.button(2))
@@ -120,8 +123,9 @@ async def test_waiting_menu_owner_cannot_request_audio_or_fill_cache_after_revoc
 
 
 @pytest.mark.asyncio
-async def test_non_native_menu_keeps_validated_private_voice_and_public_cache():
+async def test_non_native_menu_keeps_validated_private_voice_and_public_cache(tmp_path):
     h = Harness()
+    h.app.canonical_runtime.stories = tiny_stories(tmp_path)
     cache = enable_public_menu_audio_cache(h.app)
     calls = []
     original = h.render.convert_private

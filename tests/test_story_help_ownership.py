@@ -73,6 +73,7 @@ async def test_personal_story_help_no_then_yes_uses_current_fear_question():
         await story(app, True)
         await send(app, 'ButtonPressed', {'button_id': 5})
         await complete(app)
+        await send(app, 'ButtonReleased', {'button_id': 1})
         await send(app, 'ButtonPressed', {'button_id': 1})
         state = app.canonical_runtime.sessions['story-test']
         assert state.mode == 'wellbeing_check' and state.support_question_kind == 'fear'

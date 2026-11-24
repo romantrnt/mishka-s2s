@@ -158,7 +158,8 @@ async def test_actual_pause_resume_reuses_ram_pcm_and_new_lease():
             lease=app._active_audio['story-test']
             return await send(app,'AudioCompleted',{'response_id':phrase,'token':lease['token'],'generation':lease['generation'],
                             'playback_id':lease['playback_id'],'playback_lease':lease['playback_lease']})
-        await complete('PHRASE_062');await send(app,'ButtonPressed',{'button_id':6});await complete('PHRASE_064')
+        await complete('PHRASE_062');await send(app,'ButtonReleased',{'button_id':6})
+        await send(app,'ButtonPressed',{'button_id':6});await complete('PHRASE_064')
         assert app.canonical_runtime.sessions['story-test'].mode=='personal_story_playing'
         assert owner.audio is audio and owner.offset_ms==1000
         assert not app.bounded_s2s.llm.calls
@@ -214,7 +215,8 @@ async def test_resume_at_full_native_checkpoint_finishes_not_empty_pcm(beyond_en
             lease=app._active_audio['story-test']
             return await send(app,'AudioCompleted',{'response_id':phrase,'token':lease['token'],'generation':lease['generation'],
                             'playback_id':lease['playback_id'],'playback_lease':lease['playback_lease']})
-        await complete('PHRASE_062');await send(app,'ButtonPressed',{'button_id':6})
+        await complete('PHRASE_062');await send(app,'ButtonReleased',{'button_id':6})
+        await send(app,'ButtonPressed',{'button_id':6})
         app.audio.play_pcm_owned=lambda *args:plays.append(args)
         result=await complete('PHRASE_064')
         assert app.canonical_runtime.sessions['story-test'].mode==expected,result
