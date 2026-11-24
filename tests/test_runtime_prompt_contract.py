@@ -104,7 +104,7 @@ async def test_effective_mode_format_matches_unchanged_parser_authority(mode, re
     context = ConversationContext('prompt-mode','canonical_product',mode,('__all__',),('diagnosis',),4,120,2,
         profile=ProfileContext(age=2,age_band='1-3'))
     try:
-        result = await engine.run_text_turn('Хочу викторину',context)
+        result = await engine.run_text_turn('Хочу поиграть, что предложишь?',context)
         prompt = model.calls[0][0]['content']
         final = prompt.split('NON_NEGOTIABLE_RUNTIME_OUTPUT:',1)[1]
         assert ('Choose exactly ONE output form' in final) == (mode == 'bear_dialogue')

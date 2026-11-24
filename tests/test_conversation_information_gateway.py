@@ -40,7 +40,7 @@ async def test_explicit_facts_cannot_be_answered_by_model_say(text, content):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('text', ['Где ты живёшь?', 'Где мой игрушечный телефон?', 'Почему меняется погода?',
-    'Расскажи сказку про погоду', 'Мишка, какая погода в твоём волшебном лесу?', 'Я хочу викторину про погоду',
+    'Расскажи сказку про погоду', 'Мишка, какая погода в твоём волшебном лесу?',
     'Ты врач?', 'Что делает врач?', 'Не говори моё расписание'])
 async def test_persona_and_general_questions_keep_normal_dialogue(text):
     h = Harness('<say>Давай представим маленький домик в лесу.</say>')
@@ -49,6 +49,26 @@ async def test_persona_and_general_questions_keep_normal_dialogue(text):
         assert len(h.model.calls) == 1 and h.state.dialogue_information_kind is None
         assert not any(e.get('type') == 'typed_info_request' for e in result['outputs'])
         assert h.state.mode == 'bear_dialogue'
+    finally:
+        await h.close()
+
+
+@pytest.mark.asyncio
+async def test_named_quiz_about_weather_needs_heard_offer_and_fresh_consent_not_typed_facts():
+    h = Harness('<say>Модель не должна обещать игру.</say>')
+    try:
+        result = await h.send('SpeechReceived', text='Я хочу викторину про погоду')
+        assert not h.model.calls and h.state.dialogue_information_kind is None
+        assert not any(e.get('type') == 'typed_info_request' for e in result['outputs'])
+        assert h.state.mode == 'bear_dialogue' and h.state.pending_game_offer == 'quiz'
+        assert h.state.active_audio_id == 'DIALOGUE_OFFER' and h.state.active_game_id is None
+        await h.key(1)
+        assert h.state.mode == 'bear_dialogue' and h.state.active_game_id is None
+        await h.done()
+        assert h.state.game_offer_ready
+        await h.key(1)
+        assert h.state.mode == 'game_active' and h.state.active_game_id == 'quiz'
+        assert not h.model.calls and h.state.dialogue_information_kind is None
     finally:
         await h.close()
 

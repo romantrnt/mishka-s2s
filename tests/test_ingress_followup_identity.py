@@ -43,12 +43,12 @@ async def test_actual_stand_text_parser_has_no_correlation_and_finishes_four_wor
             if index < 4:
                 assert state.game_engine_state.round == index
         assert state.mode == 'root_menu' and state.game_engine_state is None
-        assert len(model.calls) == 4
+        assert not model.calls  # All four actual UART turns use the word rules.
         assert len(admitted) == 4
         assert all(event.source == 'uart_pty' and not event.correlation_id for event in admitted)
         assert len({event.sequence for event in admitted}) == 4
         replay = await original(admitted[-1], 'Белка')
-        assert replay['reason'] == 'stale_sequence' and len(model.calls) == 4
+        assert replay['reason'] == 'stale_sequence' and not model.calls
     finally:
         await h.stand.aclose()
 

@@ -204,8 +204,8 @@ async def test_actual_mapped_card_day_label_is_public_without_private_card_data(
         await h.harness.advance(5)
         await h.done()
         await h.done()
-        await h.key(6)  # Actual authorized-profile tutorial skip.
         await h.key(7)
+        assert h.state.mode == 'schedule_weather'
         assert h.state.identity_capabilities == ["personalize"]
         assert h.app._canonical_profiles["stand"]["card_doctor_names"] == [NAME]
         assert any(item["id"] == "card_doctors" for item in h.state.scene_menu_descriptor["items"])

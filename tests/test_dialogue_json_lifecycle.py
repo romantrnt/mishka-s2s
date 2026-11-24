@@ -15,7 +15,7 @@ from app.foundation.menu_content import STORY_TITLES
 from app.foundation.s2s import MockTTSProvider, OllamaLLMProvider, RetryingLLMProvider, S2SConfig
 from app.foundation.s2s import EnergyVADAdapter, LocalS2SPipeline, MockSpeechRecognizer
 from app.foundation.e2e_probe import ProductionE2EWarmupProbe
-from test_contextual_game_flow import Harness
+from test_contextual_game_flow import Harness, WORD_GAME_WORDS
 from test_conversation_catalogue_gateway import quick_public_audio
 from test_dialogue_json_contract import context, engine, semantic, wire, _HTTP_CLIENT
 from test_runtime_prompt_contract import young_guest
@@ -167,32 +167,47 @@ async def test_verified_ids_refresh_once_from_same_catalogue_snapshot_and_clear_
 
 @pytest.mark.asyncio
 async def test_json_word_game_continues_and_final_turn_restores_caller_once(monkeypatch,tmp_path):
-    answers = [{"type":"offer_game","game_id":"word_game"}] + [
-        {"type":"say","text":"Лиса, теперь ты."}]*3 + [
-        {"type":"say","text":"Вернулись к разговору, я слушаю."}]
-    requests = wire(monkeypatch, lambda _request:json.dumps(answers.pop(0),ensure_ascii=False))
+    requests = wire(monkeypatch, json.dumps({"type":"offer_game","game_id":"word_game"}))
     h = Harness(band="1-3")
     try:
         install(h)
+        render = h.app.bounded_s2s.tts
         h.app.canonical_runtime.stories = catalogue(tmp_path)
         semantic_requests = semantic(h.app.bounded_s2s)
-        await h.send("SpeechReceived",text="Хочу играть в слова")
+        await h.send("SpeechReceived",text="Хочу поиграть")  # Actual JSON offer, not named bypass.
+        assert len(requests) == 1 and 'offer_game' in json.dumps(requests[0]['format'])
+        assert h.state.mode == 'bear_dialogue' and h.state.pending_game_offer == 'word_game'
+        assert h.state.active_audio_id == 'DIALOGUE_OFFER'
+        await h.key(1)  # Unheard offer is not launch consent.
+        assert h.state.mode == 'bear_dialogue' and h.state.active_game_id is None
         await h.done()
         await h.key(1)
+        assert h.state.mode == 'game_active' and h.state.active_game_id == 'word_game'
         await h.done()
+        old_prompt = dict(h.app._active_audio[h.state.session_id])
         await h.done()
-        for turn in range(4):
-            await h.send("SpeechReceived",text="Кот")
+        render.texts.clear()
+        for turn, word in enumerate(WORD_GAME_WORDS['1-3']):
+            result = await h.send("SpeechReceived",text=word)
             if turn < 3:
                 assert h.state.mode == "game_active" and h.state.game_engine_state.round == turn+1
         assert h.state.mode == "bear_dialogue" and not h.app._game_callers
+        assert result['reason'] == 'word_game_finished' and h.state.game_engine_state is None
+        assert h.state.active_game_id is None and h.state.active_audio_id is None
+        assert len(render.texts) == 4
+        assert all(len(text.split()) <= 8 and text.count('.') == 1 for text in render.texts)
+        assert 'разговору' in render.texts[-1] and '?' not in render.texts[-1]
         quality_requests = [request for request in semantic_requests
             if "spoken-response quality requirement" in request["messages"][0]["content"]]
-        assert len(requests) == 5 and len(quality_requests) == 4
-        assert "ПОСЛЕДНИЙ ХОД" in requests[-1]["messages"][0]["content"]
-        policy = quality_requests[-1]["messages"][0]["content"]
-        assert "final word-game turn" in policy and "no new word request or question" in policy
-        assert "final word-game turn" not in quality_requests[0]["messages"][0]["content"]
+        assert len(requests) == 1  # Only the offer is freely generated.
+        assert len(quality_requests) == 4  # Authored replies retain mandatory semantics.
+        policy = quality_requests[-1]['messages'][0]['content']
+        assert 'final word-game turn' in policy and 'no new word request or question' in policy
+        assert 'final word-game turn' not in quality_requests[0]['messages'][0]['content']
+        version = h.state.state_version
+        await h.send('AudioCompleted', {**old_prompt, 'response_id': old_prompt['content_id']})
+        assert h.state.mode == 'bear_dialogue' and h.state.state_version == version
+        assert not h.app._game_callers and len(requests) == 1
     finally:
         await h.close()
 

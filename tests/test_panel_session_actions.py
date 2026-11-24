@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 import pytest
 
 from app.foundation.canonical_contract import CanonicalState
+from app.foundation.application import EXHIBITION_MENU_PHASE_TIMINGS_MS
+from app.foundation.domain import Event
+from app.foundation.lighting import EXHIBITION_MENU_WAVE_GROUPS, EXHIBITION_WAVE_STAGE_MS
 from app.foundation.max_json import MaxJsonBoundary
 from test_card_doctors_profile import doctor_card
 from test_profile_onboarding import Client
@@ -53,7 +56,30 @@ class PanelStand(MenuStand):
             assert self.state.mode == "exhibition_introduction"
             await self.control("skip_interview")
         await self.done()
-        await self.key(6)  # Existing tutorial skip, not an invented navigation key.
+        assert self.state.mode == 'exhibition_menu_tutorial_buttons'
+        token = self.app.sessions.get('stand').cancellation_token
+        started = self.harness.clock.now()
+        async def tutorial_event(kind, payload):
+            self.stand._audio_event_sequence += 1
+            sequence = self.stand._audio_event_sequence
+            return await self.app.receive_async(Event(kind, 'stand', sequence,
+                self.harness.clock.now(), 'simulator_tutorial', {**payload, 'token': token},
+                f'simulator-tutorial:{sequence}', self.harness.clock.now()))
+        # The simulator has no background scheduler: deliver the same timed
+        # callbacks as the actual tutorial, without selecting a root action.
+        for button, phase, offset_ms in EXHIBITION_MENU_PHASE_TIMINGS_MS:
+            await self.harness.advance(started + offset_ms / 1000 - self.harness.clock.now())
+            result = await tutorial_event('MenuTutorialStep', {'button': button, 'phase': phase})
+            assert result['reason'] == ('menu_tutorial_digit_lit' if phase == 'digit' else 'menu_tutorial_button_lit')
+        assert self.state.menu_lit_buttons == list(range(1, 8))
+        await self.done()
+        assert self.state.mode == 'exhibition_menu_wave'
+        await self.harness.advance(len(EXHIBITION_MENU_WAVE_GROUPS) * EXHIBITION_WAVE_STAGE_MS / 1000)
+        await tutorial_event('ExhibitionMenuWaveComplete', {})
+        assert self.state.mode == 'exhibition_menu_repeat_prompt'
+        await self.done()
+        assert self.state.mode == 'exhibition_menu_repeat_listen'
+        await self.stand.inject('text', {'text': 'Нет'}, 'stand')
         assert self.state.mode == "menu_ready"
 
     async def close(self):

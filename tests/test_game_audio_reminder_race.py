@@ -238,7 +238,7 @@ async def test_late_recognition_after_explicit_change_cannot_advance_old_game(ch
         recognizer.release.set()
         result = (await asyncio.gather(task, return_exceptions=True))[0]
         assert isinstance(result, asyncio.CancelledError) or result['reason'] == 'stale_session_generation'
-        assert len(h.model.calls) == calls + (change == 'typed')
+        assert len(h.model.calls) == calls  # Word rules own the fresh typed turn too.
         assert not h.app._game_audio_waits
         if change == 'typed':
             assert h.state.game_engine_state.round == 1

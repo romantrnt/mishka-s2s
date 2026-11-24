@@ -187,8 +187,8 @@ async def test_exhibition_full_path_hangup_cancels_demo():
     h=Harness(card(age=4))
     try:
         await h.ready();await h.lift();await h.complete();await h.complete()
-        # Skip the root tutorial once, open games, then select its third slot.
-        for b in (1,1,3):
+        # The first root tap opens games; the next chooses its third slot.
+        for b in (1,3):
             await h.send('ButtonPressed',{'button_id':b});await h.send('ButtonReleased',{'button_id':b})
         assert h.state.active_game_id=='repeat_pattern'
         assert h.state.game_engine_state.phase=='instruction'

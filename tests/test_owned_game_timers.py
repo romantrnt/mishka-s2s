@@ -178,10 +178,9 @@ async def test_profile_to_game_timer_and_exhibition_reset_without_state_seeding(
         await h.lift()
         await h.complete()  # verified profile bypasses name/age interview
         await h.complete()  # approved root menu recording
-        await h.send('ButtonPressed',{'button_id':1})  # interrupt only
-        await h.send('ButtonReleased',{'button_id':1})
         await h.send('ButtonPressed',{'button_id':1})
         await h.send('ButtonReleased',{'button_id':1})
+        assert h.state.mode == 'game_menu'
         # A fresh valid chooser edge selects immediately; free lights have no timer.
         assert (await h.send('ButtonPressed',{'button_id':4}))['reason']=='game_started'
         await h.send('ButtonReleased',{'button_id':4})
