@@ -126,7 +126,8 @@ class OwnedSpeechMixin:
                 cached = cache.get(key, token, session_id)
                 if cached is not None:
                     return cached
-            audio = await render_tts.synthesize(text, token, cancelled)
+            from .name_audio import synthesize_private_text
+            audio = await synthesize_private_text(render_tts, text, token, cancelled)
             if cancelled() or not valid_pcm(audio):return None
             audio = await render_convert(audio, cancelled)
             if cancelled() or not valid_pcm(audio):return None
