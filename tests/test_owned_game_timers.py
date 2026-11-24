@@ -7,6 +7,20 @@ from app.foundation.domain import Event
 from app.foundation.age_policy import POLICIES
 from app.foundation.game_engine import start, timer_step, next_deadline, current_challenge
 
+
+async def admit_spoken_game(app, session_id, send):
+    state=app.canonical_runtime.sessions[session_id]
+    assert state.mode=='awaiting_handset' and state.pending_game_id=='odd_one_out'
+    assert state.game_engine_state is None and session_id not in app._game_timer_scopes
+    assert (await send('HandsetLifted'))['reason']=='game_started'
+    for content_id in ('PHRASE_020','GAME_PROMPT'):
+        owner=dict(app._active_audio[session_id])
+        assert owner['content_id']==content_id
+        await send('AudioCompleted',**owner,response_id=content_id)
+    assert state.active_game_id=='odd_one_out' and state.game_audio_stage=='playing'
+    assert state.game_engine_state.phase=='playing'
+
+
 @pytest.mark.parametrize('band',tuple(POLICIES))
 def test_existing_policy_wait_windows_and_bounded_repeats(band):
     p=POLICIES[band]
@@ -34,12 +48,15 @@ async def game():
         sequence+=1
         if button is not None: payload['button_id']=button
         return await app.receive_async(Event(kind,'timer-game',sequence,clock[0],'test',payload,f't:{sequence}',clock[0]),text)
-    await send('ButtonPressed',1)
-    await send('ButtonReleased',1)
-    assert (await send('ButtonPressed',4))['reason']=='game_started'
-    await send('ButtonReleased',4)
-    assert app.canonical_runtime.sessions['timer-game'].active_game_id=='odd_one_out'
     try:
+        await send('ButtonPressed',1)
+        await send('ButtonReleased',1)
+        assert (await send('ButtonPressed',4))['reason']=='game_handset_required'
+        await send('ButtonReleased',4)
+        await admit_spoken_game(app,'timer-game',send)
+        await send('HandsetPlaced')
+        assert app.canonical_runtime.sessions['timer-game'].handset=='down'
+        assert 'timer-game' not in app._active_audio
         yield app,clock,send
     finally:
         await app._cleanup_session_resources('timer-game')
@@ -49,6 +66,7 @@ async def test_actual_boundary_silent_onhook_and_no_penalty(game):
     app,clock,send=game
     state=app.canonical_runtime.sessions['timer-game']
     before=dict(app.led.output.snapshot())
+    idle_deadline=app._engagement_owners['timer-game']['deadline']
     original=state.game_engine_state
     scope=app._game_timer_scopes['timer-game']
     assert scope[-1]==118.
@@ -73,6 +91,7 @@ async def test_actual_boundary_silent_onhook_and_no_penalty(game):
     assert state.game_engine_state.hints_emitted==2
     assert state.game_engine_state.round==original.round and state.game_level==0
     assert app.led.output.snapshot()==before and 'timer-game' not in app._active_audio
+    assert app._engagement_owners['timer-game']['deadline']==idle_deadline
     assert 'timer-game' not in app._game_timer_scopes
     answer=current_challenge(state.game_engine_state).answer
     assert (await send('ButtonPressed',answer))['reason']=='game_progress'
@@ -97,7 +116,10 @@ async def test_late_timer_revoked_by_actual_navigation(game,action):
     app,clock,send=game
     scope=app._game_timer_scopes['timer-game']
     if action=='help': await send('SpeechReceived',text='Позови взрослого')
-    elif action=='exit': await send('ButtonPressed',7)
+    elif action=='exit':
+        assert (await send('ButtonPressed',7))['reason']=='game_exit_pending'
+        clock[0]+=6.
+        assert (await send('ButtonReleased',7))['reason']=='game_exited_by_long_button'
     elif action=='reset': await send('SessionReset')
     else: await send('HardwareDisconnected')
     frame=dict(app.led.output.snapshot())
@@ -115,21 +137,21 @@ async def test_scope_rechecked_after_awaited_ingress_race(game):
     async def delayed(event,*args,**kwargs):
         if event.event_type=='GameTimer':
             entered.set()
-            await release.wait()
+            await asyncio.wait_for(release.wait(),2)
         return await original(event,*args,**kwargs)
     app._receive_canonical_event=delayed
     clock[0]=118.
     task=asyncio.create_task(app._fire_game_timer('timer-game',scope))
     try:
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(),2)
         await send('SpeechReceived',text='Позови взрослого')
         frame=dict(app.led.output.snapshot())
         release.set()
-        assert (await task)['reason']=='game_timer_stale'
+        assert (await asyncio.wait_for(task,2))['reason']=='game_timer_stale'
         assert app.led.output.snapshot()==frame
     finally:
         release.set()
-        await task
+        await asyncio.wait_for(task,2)
         app._receive_canonical_event=original
 
 @pytest.mark.asyncio
@@ -189,14 +211,17 @@ async def test_background_task_is_cancelled_on_help_and_cleanup():
     app,*_=build_application(settings=Settings(profile='mock',runtime_mode='clinical'),
                             monotonic_now=lambda:clock[0],background_scheduler=True)
     sequence=0
-    async def send(kind,button=None,text=None):
+    async def send(kind,button=None,text=None,**payload):
         nonlocal sequence
         sequence+=1
+        if button is not None:payload['button_id']=button
         return await app.receive_async(Event(kind,'background-game',sequence,clock[0],'test',
-            {} if button is None else {'button_id':button},f'b:{sequence}',clock[0]),text)
+            payload,f'b:{sequence}',clock[0]),text)
     try:
         for kind,button in [('ButtonPressed',1),('ButtonReleased',1),('ButtonPressed',4),('ButtonReleased',4)]:
             await send(kind,button)
+        await admit_spoken_game(app,'background-game',send)
+        await send('HandsetPlaced')
         task=app._game_timer_tasks['background-game']
         assert not task.done()
         await send('SpeechReceived',text='Позови взрослого')
