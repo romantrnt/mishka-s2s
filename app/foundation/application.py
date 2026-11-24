@@ -2785,6 +2785,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         self.led.set_element(element_id, target_state)
             elif kind == "scene_menu_page":
                 descriptor=effect["descriptor"]
+                if (snapshot.get("mode") == "game_menu"
+                        and any(item.get("type") == "game_lighting" and item.get("animation") == "success"
+                                and item.get("next_preset") == "GAME_MENU" for item in effects)
+                        and getattr(getattr(self.led, "exhibition_effects", None), "wave_phase", None) == "game_success"):
+                    # This same completion's wave already owns the final menu frame.
+                    continue
                 cancel_effects=getattr(self.led,"cancel_effects",None)
                 if callable(cancel_effects): cancel_effects(clear=False)
                 buttons=descriptor["buttons"]
@@ -2974,6 +2980,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 # on the large weather pictogram (element 17).
                 effects_engine = getattr(self.led, "exhibition_effects", None)
                 if (preset == "ROOT_MENU"
+                        and any(item.get("type") == "game_lighting" and item.get("animation") == "success"
+                                and item.get("next_preset") == preset for item in effects)
                         and getattr(effects_engine, "effect", None) == "wave"
                         and getattr(effects_engine, "wave_phase", None) == "game_success"):
                     continue
@@ -3179,6 +3187,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     audio_failure = {"response_id": phrase, "token": record.cancellation_token,
                                      "error_code": str(diagnosis.get("code") or "content_unavailable")[:80]}
             elif kind == "bounded_dialogue_turn":
+                game_run_id = (getattr(state_owner.game_engine_state, "run_id", None)
+                               if effect.get("game_id") == "word_game" else None)
                 effect["response_policy"] = "bounded_validated_dialogue"
                 fallback_reason = None
                 if not voice_open or not (transient_text or "").strip():
@@ -3301,7 +3311,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         if fallback_reason is None and effect.get("game_id") == "word_game":
                             followup = await self._receive_canonical_event(self._internal_followup(
                                 event, "DialogueFallback",
-                                "bounded_word_turn", {"reason": "word_retry_complete" if turn.word_accepted is False else "word_turn_complete"},
+                                "bounded_word_turn", {"reason": "word_turn_complete" if turn.word_accepted is True else "word_retry_complete",
+                                    "game_run_id": game_run_id},
                                 "word-complete"),
                                 dialogue_fallback_authorized=True)
                             return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
@@ -3847,6 +3858,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 "status": state.dialogue_memory.status,
                 "turns": list(state.dialogue_memory.bounded_turns),
             }
+            if (is_information_dialogue(state.mode, state.safety_severity)
+                    and state.dialogue_memory.status != "expired"
+                    and (state.dialogue_memory.expires_at is None or self.now() < state.dialogue_memory.expires_at)):
+                state_snapshot["dialogue_memory"]["last_game"] = state.dialogue_memory.last_game
         prompt = build_system_prompt(profile=private_profile or None, state=state_snapshot)
         profile_context = ProfileContext.from_profile(private_profile or None)
         selected_age = trusted_canonical_age(state_snapshot)

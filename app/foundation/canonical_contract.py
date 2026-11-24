@@ -29,6 +29,10 @@ from .visit_profile import VisitProfile, infer_grammatical_gender, normalize_int
 from .voice_catalog import load_phrase_catalog
 
 RAM_TTL_SECONDS = 300
+GAME_MEMORY_EXIT_REASONS = frozenset({"game_completed", "word_game_finished",
+    "game_exited_by_long_button", "game_exited_by_button", "game_exited_by_voice"})
+GAME_MEMORY_MAX_ROUNDS = 1_000_000
+GAME_MEMORY_RUN_ID = re.compile(r"[0-9a-f]{32}")
 EXHIBITION_WELCOME_DELAY_SECONDS = 5.0
 AGE_BANDS = ("1-3", "3-5", "5-7")
 BUTTON_MODES = {
@@ -221,6 +225,7 @@ class DialogueMemory:
     ttl_seconds: int = RAM_TTL_SECONDS
     bounded_turns: list[str] = field(default_factory=list)
     story_checkpoint: dict[str, Any] | None = None
+    last_game: dict[str, Any] | None = field(default=None, repr=False)
 
     def suspend(self, now: float) -> None:
         self.status, self.last_valid_interaction_at = "suspended", now
@@ -235,6 +240,7 @@ class DialogueMemory:
 
     def clear(self) -> None:
         self.status, self.bounded_turns, self.story_checkpoint = "expired", [], None
+        self.last_game = None
         self.last_valid_interaction_at = self.expires_at = None
 
 
@@ -1193,7 +1199,7 @@ class CanonicalRuntime(SceneMenuMixin):
     def has_private_context(state: CanonicalState) -> bool:
         return bool(state.profile_ref or state.display_name or state.onboarding_name_collected
                     or state.history_tail or state.dialogue_memory.bounded_turns
-                    or state.dialogue_memory.story_checkpoint or state.active_story_id
+                    or state.dialogue_memory.story_checkpoint or state.dialogue_memory.last_game or state.active_story_id
                     or state.active_game_id or state.pending_game_offer or state.game_progress)
 
     def _start_exhibition_welcome(self, state, monotonic_now, *, reason, preserve_lighting=False):
@@ -1312,6 +1318,18 @@ class CanonicalRuntime(SceneMenuMixin):
         returning = (state.game_return_mode == "bear_dialogue" or state.activity_return_mode == "bear_dialogue") and state.interaction_open
         return_to_game_menu = state.game_return_mode == "game_menu" and not returning
         target_mode = "bear_dialogue" if returning else "game_menu" if return_to_game_menu else "root_menu"
+        ask_about_game = False
+        if (engine is not None and reason in GAME_MEMORY_EXIT_REASONS and state.safety_severity == "none"
+                and isinstance(engine.run_id, str) and GAME_MEMORY_RUN_ID.fullmatch(engine.run_id)):
+            result = {"game_id": engine.game_id, "run_id": engine.run_id, "terminal_reason": reason,
+                "caller": target_mode, "feedback_question_issued": False}
+            if (engine.game_id not in {"free_lights", "visual_free_play"}
+                    and type(engine.round) is int and 0 <= engine.round <= GAME_MEMORY_MAX_ROUNDS):
+                result["completed_rounds"] = engine.round
+                ask_about_game = returning and not preserve_output and engine.round > 0
+            result["feedback_question_issued"] = ask_about_game
+            state.dialogue_memory.touch(self.now())
+            state.dialogue_memory.last_game = result
         state.mode, state.active_game_id = target_mode, None
         state.game_return_mode = None
         state.activity_return_mode = None
@@ -1330,7 +1348,9 @@ class CanonicalRuntime(SceneMenuMixin):
         effects = ([] if preserve_output else [{"type":"audio_stop"}, {"type":"capture_close"}]) + [{"type":"game_exit"},
                    {"type":"lighting_preset","preset":preset}]
         if returning and not preserve_output:
-            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору. Чтобы вернуться в меню, нажми семь."))
+            effects.append(self._dialogue_prompt("DIALOGUE_RETURN",
+                "Как тебе игра? Семь — в меню." if ask_about_game
+                else "Вернулись к разговору. Чтобы вернуться в меню, нажми семь."))
         elif returning and preserve_output:
             effects.append({"type": "capture_open"})
         elif reason == "word_game_finished" and not preserve_output:
@@ -1616,7 +1636,8 @@ class CanonicalRuntime(SceneMenuMixin):
                 if engine.game_id != 'free_lights':
                     decision["effects"].insert(0, {
                         "type": "game_lighting", "animation": "success",
-                        "origin_button": button_id, "next_preset": "ROOT_MENU",
+                        "origin_button": button_id,
+                        "next_preset": {"bear_dialogue": "BEAR_DIALOGUE", "game_menu": "GAME_MENU"}.get(state.mode, "ROOT_MENU"),
                     })
                 return decision
             effects = []
@@ -2365,6 +2386,11 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"},
                     {"type": "lighting_preset", "preset": "GAME_OFFER"},
                     self._dialogue_prompt("DIALOGUE_OFFER", prompt)], "game_offered", clear_audio=True)
+            if event.payload.get("reason") in {"word_retry_complete", "word_turn_complete"}:
+                if (state.mode != "game_active" or state.active_game_id != "word_game"
+                        or state.game_engine_state is None
+                        or event.payload.get("game_run_id") != state.game_engine_state.run_id):
+                    return self._session_action_noop(state, "word_game_result_stale")
             if (event.payload.get("reason") == "word_retry_complete" and state.mode == "game_active"
                     and state.active_game_id == "word_game" and state.game_engine_state is not None):
                 state.game_engine_state = arm_wait(state.game_engine_state, monotonic_now)
@@ -2376,6 +2402,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 from .age_policy import POLICIES
                 limit = POLICIES.get(state.age_band, POLICIES["3-5"]).dialogue_turn_limit
                 if engine.round + 1 >= limit:
+                    state.game_engine_state = replace(engine, round=engine.round + 1)
                     return self._game_exit(state, "word_game_finished", preserve_output=True)
                 state.game_engine_state = arm_wait(replace(engine, round=engine.round + 1,
                     round_generation=engine.round_generation + 1), monotonic_now)
@@ -3179,6 +3206,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     if button == 7:
                         entry_effects.append({"type": "typed_info_request", "kind": "menu"})
                     if button == 5:
+                        state.dialogue_memory.last_game = None
                         state.support_question_kind = "pain_or_discomfort"
                         state.expected_inputs = ["button_1", "button_5", "button_7", "speech", "handset_down"]
                         entry_effects.append({"type": "support_question", "question": state.support_question_kind})
@@ -3236,6 +3264,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 and getattr(state.game_engine_state, 'immersive', False)
                 and button in game_answer_buttons(state.game_engine_state, include_narrowed=False)
             ) and not (self.exhibition_mode and state.mode == "exhibition_age_selection"):
+                state.dialogue_memory.last_game = None
                 question = state.support_question_kind if state.mode == "wellbeing_check" else None
                 state.support_question_kind = question or "pain_or_discomfort"
                 state.mode, state.expected_inputs, state.state_version = "wellbeing_check", ["button_1", "button_5", "button_7", "speech", "handset_down"], state.state_version + 1
@@ -3500,6 +3529,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if severity == "concern":
                 # A disclosure is never consumed as a name, age, story theme
                 # or ordinary scene command, even during onboarding.
+                state.dialogue_memory.last_game = None
                 state.mode, state.safety_severity = "support_intake", "concern"
                 state.pending_tool = state.pending_mode = None
                 state.support_question_kind = None
@@ -3543,10 +3573,10 @@ class CanonicalRuntime(SceneMenuMixin):
                         {"type": "lighting_preset", "preset": "LISTENING"}], "game_offer_declined", clear_audio=True)
             if state.mode in {"game_active", "game_menu"} and severity == "none":
                 text = " ".join(str(transient_text or "").casefold().split()).strip(" .!?…")
-                leaving = (intent in {'stop', 'stop_game', 'exit_game', 'return_to_menu'}
-                    or bool(re.search(r"\b(?:(?:не хочу|не буду)(?: больше)? (?:играть|игру)|стоп(?: игра| играть)?|хватит(?: играть)?|"
+                leaving = ((not text and intent in {'stop', 'stop_game', 'exit_game', 'return_to_menu'})
+                    or bool(re.fullmatch(r"(?:мишка[,!:]?\s+)?(?:(?:не хочу|не буду)(?: больше)? (?:играть|игру)|стоп(?: игра| играть)?|хватит(?: играть)?|"
                                       r"закончим(?: игру| играть)?|закончить игру|останови игру|выйди из игры|выйти(?: из игры)?|"
-                                      r"давай (?:закончим|в меню)|вернись в меню|надоело играть)\b", text)))
+                                      r"давай (?:закончим|в меню)|вернись в меню|надоело играть)(?:,? пожалуйста)?", text)))
                 if leaving:
                     return self._game_exit(state, 'game_exited_by_voice')
                 if (state.mode == 'game_active' and state.active_game_id == 'word_game'
@@ -3558,7 +3588,8 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.dialogue_memory.touch(now)
                     state.state_version += 1
                     return self._decision(state, [{'type':'bounded_dialogue_turn',
-                        'intent':intent, 'game_id':'word_game', 'age_band':state.age_band}], 'word_game_turn')
+                        'intent':intent, 'game_id':'word_game',
+                        'age_band':state.age_band}], 'word_game_turn')
                 if (state.mode == 'game_active' and state.active_game_id in {'quiz', 'odd_one_out'}
                         and state.game_engine_state is not None):
                     if state.game_audio_stage != 'playing' or state.active_audio_id:
