@@ -29,6 +29,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+# Internal provenance for an admitted audio-owner cancellation, never provider data.
+_AUDIO_OWNER_CANCELLED = object()
+
 
 logger = logging.getLogger("uvicorn.error")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -4133,7 +4136,7 @@ class BoundedConversationEngine:
             # Keep the same scope fence on that captured queue's final stop.
             queue._cleanup_ownership_guard = current
         if task is not None and task is not asyncio.current_task() and not task.done():
-            task.cancel()
+            task.cancel(_AUDIO_OWNER_CANCELLED if authorized else None)
             with contextlib.suppress(asyncio.CancelledError): await task
         if self.active_tasks.get(session_id) is task and (task is None or task.done()):
             self.task_started_at.pop(session_id, None)

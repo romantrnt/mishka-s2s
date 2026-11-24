@@ -33,7 +33,8 @@ from .hardware import (HardwareFrame, PTYUARTSimulator, PosixSerialTransport,
                        SerialHardwareAdapter, decode_frame, encode_frame)
 from .canonical_contract import FixedStoryManifest, canonical_state_nodes
 from .s2s import (AudioChunk, SoundDeviceCaptureController, SoundDevicePlaybackController,
-                  AUDIO_FAILURE_STAGES, AUDIO_FAILURE_EXCEPTION_CLASSES, AUDIO_FAILURE_CODES)
+                  AUDIO_FAILURE_STAGES, AUDIO_FAILURE_EXCEPTION_CLASSES, AUDIO_FAILURE_CODES,
+                  _AUDIO_OWNER_CANCELLED)
 from .input_adapters import KeyboardHIDInputAdapter, NormalizedInputEvent
 from .led_contract import BUTTON_LED_COLORS, button_contract, canonical_led_state, canonical_led_state_from_lighting, fixed_button_colors
 from .lighting import (
@@ -2894,7 +2895,21 @@ class HardwareIntegrationStand:
         if frame.type=="audio_pcm": return await self._dispatch_pcm(frame, sid, wait_for_turn=wait_for_audio, _ingress_guard=_ingress_guard)
         event_payload={"type":frame.type,**frame.payload}
         event=parse_event(event_payload,sid,frame.sequence,"uart_pty")
-        return await self.application.receive_async(event,frame.payload.get("text") if frame.type=="text" else None)
+        if frame.type != "text":
+            return await self.application.receive_async(event)
+        # Audio barge-in may cancel this domain task without cancelling its transport.
+        dispatch = asyncio.create_task(self.application.receive_async(event, frame.payload.get("text")),
+                                       name="mishka-text-dispatch")
+        try:
+            return await dispatch
+        except asyncio.CancelledError as exc:
+            parent = asyncio.current_task()
+            if (not dispatch.cancelled() or parent is None or parent.cancelling()
+                    or not exc.args or exc.args[0] is not _AUDIO_OWNER_CANCELLED
+                    or self._closed or self.application._identity_shutdown):
+                raise
+            return {"session_id": sid, "reason": "text_turn_cancelled", "outputs": [],
+                    "audio_status": "cancelled", "pending": False}
 
     async def _dispatch_pcm(self, frame: HardwareFrame, session_id: str | None = None, *, wait_for_turn: bool = True, _ingress_guard=None):
         sid = session_id or self.active_session_id
