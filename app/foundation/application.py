@@ -3291,7 +3291,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         if fallback_reason is None and effect.get("game_id") == "word_game":
                             followup = await self._receive_canonical_event(self._internal_followup(
                                 event, "DialogueFallback",
-                                "bounded_word_turn", {"reason": "word_retry_complete" if turn.word_accepted is False else "word_turn_complete"},
+                                "bounded_word_turn", {"reason": "word_retry_complete" if turn.word_accepted is False else "word_turn_complete",
+                                    "game_run_id": effect.get("game_run_id")},
                                 "word-complete"),
                                 dialogue_fallback_authorized=True)
                             return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
@@ -3837,6 +3838,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 "status": state.dialogue_memory.status,
                 "turns": list(state.dialogue_memory.bounded_turns),
             }
+            if (is_information_dialogue(state.mode, state.safety_severity)
+                    and state.dialogue_memory.status != "expired"
+                    and (state.dialogue_memory.expires_at is None or self.now() < state.dialogue_memory.expires_at)):
+                state_snapshot["dialogue_memory"]["last_game"] = state.dialogue_memory.last_game
         prompt = build_system_prompt(profile=private_profile or None, state=state_snapshot)
         profile_context = ProfileContext.from_profile(private_profile or None)
         selected_age = trusted_canonical_age(state_snapshot)
