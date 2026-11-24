@@ -6,6 +6,7 @@ import asyncio
 import sys
 import threading
 from dataclasses import replace
+from importlib.machinery import ModuleSpec
 from types import SimpleNamespace
 
 import pytest
@@ -52,7 +53,9 @@ async def test_menu_native_owner_at_physical_boundary(monkeypatch, response, mod
         def abort(self): pass
         def close(self): pass
 
-    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(
+        __spec__=ModuleSpec("sounddevice", loader=None), OutputStream=Stream,
+        query_devices=lambda *_: {"max_output_channels": 1}))
     lock = stand.playback._play_lock
     if boundary == "play_lock": await lock.acquire()
     original_io = stand.playback._run_io

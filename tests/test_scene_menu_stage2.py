@@ -1,51 +1,66 @@
 import pytest
 from test_scene_menu_runtime import Harness
-from test_personal_story_service import LLM,TTS,Voice,Mini,DURATION_BOUNDS
-from app.foundation.validation import AsyncResponseValidator
+from test_demo_story_offline_contract import UnavailableModels, TrustedValidation
+from app.foundation.demo_story_catalog import load_catalog
 
 
 def capable(h):
-    e=h.app.bounded_s2s;e.llm=LLM();e.tts=TTS(DURATION_BOUNDS['3-5'][0]);e.voice=Voice()
-    e.response_validator=AsyncResponseValidator(mini=Mini())
+    unavailable = UnavailableModels()
+    h.app.bounded_s2s.llm = unavailable
+    h.app.bounded_s2s.response_validator = TrustedValidation(unavailable)
+    return unavailable
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('index',range(5))
-async def test_actual_all_five_personal_themes_use_age_page_and_service(index):
-    h=Harness();capable(h)
+@pytest.mark.parametrize('band',['1-3','3-5','5-7'])
+async def test_actual_all_five_authored_stories_use_current_age_text_without_models(index, band):
+    h=Harness(band);unavailable=capable(h)
     try:
-        await h.button(4);await h.release(4)
+        await h.button(3);await h.release(3)
         assert h.state.scene_menu_phase=='narrating'
-        for _ in range(index//2):
-            await h.button(6);await h.release(6)
-        theme=h.state.scene_menu_descriptor['items'][index%2]['id']
-        result=await h.button(index%2+1)
+        page=h.state.scene_menu_descriptor
+        assert page['buttons']==[1,2,3,4,5,7] and len(page['items'])==5
+        selected=page['items'][index]
+        assert selected['slot']==index+1
+        public=next(entry for entry in load_catalog() if entry['id']==selected['id'])
+        entry=h.state.personal_story_selection[index]
+        assert entry['id']==selected['id'] and entry['title']==public['title']
+        assert entry['text']==public['young_text' if band=='1-3' else 'text']
+        result=await h.button(index+1)
         assert result['reason']=='personal_story_ready'
         assert h.state.mode=='personal_story_playing'
-        assert h.app.bounded_s2s.llm.calls
-        assert theme in str(h.app.bounded_s2s.llm.calls)
+        assert h.played[-1].response_id=='PERSONAL_STORY'
+        validator=h.app.bounded_s2s.response_validator
+        assert validator.trusted_decisions and all(d.allowed for d in validator.trusted_decisions)
+        assert not unavailable.calls
     finally:await h.close()
 
 @pytest.mark.asyncio
 async def test_unavailable_story_shows_no_theme_choices_and_never_calls_generation():
-    h=Harness();h.app.bounded_s2s.llm=object()
+    h=Harness();unavailable=capable(h)
+    # Local authored playback still needs the real private PCM output contract.
+    h.app.audio.private_pcm_supported=False
     try:
-        await h.button(4);await h.release(4)
+        await h.button(3);await h.release(3)
         assert h.state.scene_menu_descriptor['items']==[]
         assert h.state.scene_menu_descriptor['buttons']==[7]
         await h.button(1);await h.release(1);await h.button(1)
         assert h.state.mode=='personal_story_theme'
         assert not h.app._personal_stories
+        assert not h.app._personal_story_jobs and not unavailable.calls
     finally:await h.close()
 
 @pytest.mark.asyncio
 async def test_theme_repeat_no_is_not_interpreted_as_story_theme():
-    h=Harness();capable(h)
+    h=Harness();unavailable=capable(h)
     try:
-        await h.button(4);await h.complete();await h.complete()
+        await h.button(3);await h.release(3);await h.complete();await h.complete()
+        assert h.state.scene_menu_phase=='repeat_listen'
         await h.send('SpeechReceived',text='Нет')
         assert h.state.scene_menu_answers['personal_story_theme']=='no'
         assert h.state.mode=='personal_story_theme'
-        assert not h.app.bounded_s2s.llm.calls
+        assert h.state.scene_menu_phase=='ready'
+        assert not h.app._personal_stories and not unavailable.calls
     finally:await h.close()
 
 @pytest.mark.asyncio

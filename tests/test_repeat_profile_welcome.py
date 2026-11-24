@@ -30,6 +30,8 @@ async def end_profile(h, cause):
 @pytest.mark.parametrize("private_pcm", [True, False])
 async def test_repeated_profiles_start_welcome_once_at_each_real_timer_deadline(cause, private_pcm):
     h, render = setup()
+    # This test owns deadlines/re-entry, independently of installed name WAVs.
+    h.app.name_audio_registry = None
     h.app.audio.private_pcm_supported = private_pcm
     old_deadline = old_callback = old_sequence = None
     try:
@@ -53,14 +55,27 @@ async def test_repeated_profiles_start_welcome_once_at_each_real_timer_deadline(
             assert len(fired) == 1
             assert fired[0]["reason"] == ("personal_welcome_started" if private_pcm else "welcome_started")
             if old_sequence is not None and cause != "hangup":
+                generation = h.app._session_epochs[h.boundary.session_id]
+                owner = h.state
+                version = h.state.state_version
+                stale_generation = await h.app.receive_async(Event(
+                    "WelcomeTimerFired", h.boundary.session_id, old_sequence, 1.,
+                    "canonical_welcome_timer", {"deadline_monotonic": old_deadline,
+                        "generation": generation - 1},
+                    f"late-generation:{old_sequence}", h.clock[0],
+                ))
+                assert stale_generation["reason"] == "stale_session_generation" and not stale_generation["outputs"]
                 # Retained canonical admission still rejects an old source
-                # sequence, even with a different correlation ID.
+                # sequence with a current generation and different correlation ID.
                 stale = await h.app.receive_async(Event(
                     "WelcomeTimerFired", h.boundary.session_id, old_sequence, 1.,
-                    "canonical_welcome_timer", {"deadline_monotonic": old_deadline},
+                    "canonical_welcome_timer", {"deadline_monotonic": old_deadline,
+                        "generation": generation},
                     f"late-welcome:{old_sequence}", h.clock[0],
                 ))
                 assert stale["reason"] == "stale_sequence" and not stale["outputs"]
+                assert h.state is owner and h.state.state_version == version
+                assert h.state.welcome_deadline_monotonic == deadline
             old_sequence = h.state.last_sequence_by_source["canonical_welcome_timer"]
             assert await h.app.flush_welcome_timers() == []
             old_deadline, old_callback = deadline, h.callback()
