@@ -2473,6 +2473,21 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [], "event_ignored")
             if event.payload.get("playback_lease") and event.payload.get("playback_lease") != state.playback_lease:
                 return self._decision(state, [], "event_ignored")
+            if (not self.exhibition_mode and state.mode == "voice_welcome"
+                    and state.welcome_status == "started" and response_id == "PHRASE_001"
+                    and state.active_audio_id == response_id and state.playback_lease
+                    and event.payload.get("playback_lease") == state.playback_lease):
+                failed = event.event_type == "AudioFailed"
+                state.mode, state.welcome_status = "root_menu", "completed"
+                state.audio_status = "failed" if failed else "finished"
+                state.audio_failure_code = (str(event.payload.get("error_code") or "audio_failed")[:80]
+                                            if failed else None)
+                state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
+                state.state_version += 1
+                effects = ([{"type": "audio_stop"},
+                            {"type": "content_blocked", "error_code": state.audio_failure_code}] if failed else [])
+                return self._decision(state, effects + [{"type": "lighting_preset", "preset": "ROOT_MENU"}],
+                    "clinical_welcome_failed" if failed else "clinical_welcome_finished", clear_audio=True)
             if (self.exhibition_mode and event.event_type == "AudioFailed"
                     and state.mode == "exhibition_name_question" and response_id == "PHRASE_099"
                     and state.active_audio_id == response_id and state.playback_lease
