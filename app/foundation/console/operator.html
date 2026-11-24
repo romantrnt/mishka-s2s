@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#f2f4f3"><title>Мишка — оператор</title>
+<link rel="icon" href="data:,"><link rel="stylesheet" href="/console/console.css?v=20261124-operator"><link rel="stylesheet" href="/console/operator.css?v=20261124-operator">
+<script src="/console/operator.js?v=20261124-operator" defer></script>
+</head>
+<body class="operator-console">
+<header class="toolbar"><div class="brand"><strong>Мягкий телефон Мишки</strong><span>Оператор</span></div><nav class="toolbar-actions" aria-label="Панели"><a href="/console">Телефон</a><span id="operator-connection" class="status-chip offline" role="status">Подключение…</span><button id="operator-refresh" type="button">Обновить</button></nav></header>
+<main class="operator-workbench">
+<div class="operator-intro"><h1>Что происходит с телефоном</h1><p>Техническое состояние, события и локальные сигналы помощи.</p></div>
+<p id="operator-error" class="operator-error" role="status" hidden></p>
+<section id="operator-alert" class="panel operator-alert" aria-labelledby="operator-alert-title" aria-live="polite"><h2 id="operator-alert-title">Проверяем сигналы помощи…</h2><p id="operator-alert-text">Данные ещё не получены.</p><p class="operator-boundary">Доставка уведомления взрослому и оказание помощи системой не подтверждаются.</p></section>
+<section class="panel operator-health" aria-labelledby="operator-health-title"><div class="panel-heading"><h2 id="operator-health-title">Текущее состояние</h2><span id="operator-updated">Ожидание данных</span></div><dl id="operator-health"></dl><p id="operator-mode">Режим неизвестен</p></section>
+<section class="panel operator-timeline-panel" aria-labelledby="operator-timeline-title"><div class="panel-heading"><div><h2 id="operator-timeline-title">Таймлайн событий</h2><p>Новые события сверху</p></div><label>Показать<select id="operator-filter"><option value="all">Все события</option><option value="controls">Управление</option><option value="audio">Звук</option><option value="alerts">Тревоги</option></select></label></div><p id="operator-gap" class="operator-note" hidden>Часть ранних событий недоступна: процесс перезапущен или буфер заполнен.</p><ol id="operator-timeline" class="operator-feed"></ol><p id="operator-timeline-empty" class="operator-empty">События появятся при использовании телефона.</p></section>
+<section class="panel operator-logs-panel" aria-labelledby="operator-logs-title"><div class="panel-heading"><div><h2 id="operator-logs-title">Технические логи</h2><p>Состояние компонентов и ошибки</p></div></div><ol id="operator-logs" class="operator-feed"></ol><p id="operator-logs-empty" class="operator-empty">Ошибок и изменений компонентов пока нет.</p></section>
+<footer class="operator-footer">Эта страница не записывает разговоры. Последние 240 технических событий хранятся только в памяти этого процесса и исчезают после перезапуска. Страница не управляет телефоном.</footer>
+</main>
+</body>
+</html>

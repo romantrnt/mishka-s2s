@@ -220,6 +220,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self.canonical_diagnostics: deque[dict[str, Any]] = deque(maxlen=100)
         self.audio_runtime_diagnostics: deque[dict[str, Any]] = deque(maxlen=100)
         self.state_update_hook: Any = None
+        self.technical_state_observer: Any = None
         self.runtime_manager: Any = None
         self.metrics: Any = None
         self.watchdog_interval_seconds = float(getattr(settings, "watchdog_interval_s", 5.0))
@@ -2265,6 +2266,13 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._sync_game_timer(event.session_id)
         self._sync_silent_hold_timer(event.session_id)
         self._engagement_event(event, decision, accepted=takes_ownership, voice_activity=verified_voice_activity)
+
+        # A local safety signal must be visible before old audio cleanup awaits.
+        if callable(self.technical_state_observer):
+            try:
+                self.technical_state_observer(snapshot, event)
+            except Exception:
+                self.canonical_diagnostics.append({"kind": "operator_observation_failed"})
 
         reset_sync_results: dict[str, dict[str, Any]] = {}
         local_safety_batch = snapshot.get("mode") == "safety_stop" and any(

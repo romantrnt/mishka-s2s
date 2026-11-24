@@ -4,6 +4,7 @@ body[data-phone] { --phone-ink:var(--ink); }
 .phone-top-actions,.phone-main-actions,.phone-rfid-options,.phone-fault-actions,.phone-journal-actions {display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .phone-top-actions {padding-left:8px;border-left:1px solid var(--line);}
 .phone-top-actions button {min-height:36px;border-color:var(--line);}
+.phone-top-actions a {display:inline-flex;align-items:center;min-height:44px;color:var(--ink);text-underline-offset:4px;}
 .phone-top-actions #phone-open-tools span {margin-left:7px;}
 .phone-mic-indicator {font-size:11px;color:var(--muted);display:flex;align-items:center;gap:7px;}
 .phone-mic-indicator::before {content:"";width:7px;height:7px;border:1px solid currentColor;border-radius:50%;}

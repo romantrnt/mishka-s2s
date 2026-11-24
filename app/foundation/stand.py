@@ -36,6 +36,7 @@ from .s2s import (AudioChunk, SoundDeviceCaptureController, SoundDevicePlaybackC
                   AUDIO_FAILURE_STAGES, AUDIO_FAILURE_EXCEPTION_CLASSES, AUDIO_FAILURE_CODES,
                   _AUDIO_OWNER_CANCELLED)
 from .input_adapters import KeyboardHIDInputAdapter, NormalizedInputEvent
+from .operator_monitor import OperatorMonitor, OperatorErrorBuffer
 from .led_contract import BUTTON_LED_COLORS, button_contract, canonical_led_state, canonical_led_state_from_lighting, fixed_button_colors
 from .lighting import (
     LightingFaultLatchedError,
@@ -843,7 +844,9 @@ class HardwareIntegrationStand:
         # expensive recognition and response work is detached afterwards.
         self._audio_ingress_locks: dict[str, asyncio.Lock] = {}
         self.raw_frames: deque[dict[str,Any]]=deque(maxlen=500); self.commands: deque[dict[str,Any]]=deque(maxlen=300)
-        self.results: deque[dict[str,Any]]=deque(maxlen=200); self.errors: deque[dict[str,Any]]=deque(maxlen=100)
+        self.operator = OperatorMonitor()
+        self.results: deque[dict[str,Any]]=deque(maxlen=200)
+        self.errors: deque[dict[str,Any]]=OperatorErrorBuffer(self.operator, maxlen=100)
         self.latencies: deque[dict[str,Any]]=deque(maxlen=300); self.device_sequence=0; self.active_session_id="stand"
         self.transport=PosixSerialTransport(self.pty.slave_path)
         self.adapter=SerialHardwareAdapter(self.transport,raw_observer=self._observe_raw); self.adapter.connect()
@@ -898,6 +901,7 @@ class HardwareIntegrationStand:
             led_controller=UARTLEDController(self.adapter, self.lighting_output, legacy_sink=self._record_legacy_led, stage_hook=self._publish_lighting_wave_stage, effect_hook=self._publish_lighting_effect_frame, monotonic_now=self.monotonic_now, background_scheduler=self.background_scheduler),display_controller=UARTDisplayController(self.adapter),playback_override=self.playback,monotonic_now=self.monotonic_now,background_scheduler=self.background_scheduler)
         self.application.audio_update_hook=self._publish_audio_completion
         self.application.state_update_hook=self._publish_canonical_state_update
+        self.application.technical_state_observer=self.operator.observe
         self.application._mic_unavailable_probe = lambda: (
             self.hardware_mode == "physical"
             and getattr(self, "_headless_audio_status", {}).get("state") == "unavailable"
@@ -3037,6 +3041,7 @@ class HardwareIntegrationStand:
             self.lighting_output.clear_all()
         self.application.publisher.clear()
         self._event_cursor = 0
+        self.operator.reset()
         metrics=getattr(getattr(self.application, "runtime_manager", None), "engine", None)
         if metrics is not None and hasattr(metrics, "metrics"):
             metrics.metrics.clear()
@@ -4015,6 +4020,12 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
 
     @api.middleware("http")
     async def stand_auth(request:Request,call_next):
+        operator_request = (request.url.path.startswith("/console/operator")
+                            or request.url.path == "/stand/operator")
+        if operator_request and not access_token:
+            return JSONResponse({"error": {"code": "operator_auth_unconfigured",
+                                "message": "operator authentication is unavailable"}}, status_code=503,
+                                headers={"Cache-Control": "no-store"})
         mutation_request = request.method in {"POST", "PUT", "PATCH", "DELETE"}
         protected=(mutation_request
                    or request.url.path.startswith("/stand")
@@ -4043,7 +4054,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
         if (request.url.path.startswith("/stand/")
                 and request.url.path not in {
                     "/stand/reset", "/stand/state", "/stand/graph",
-                    "/stand/health", "/stand/diagnostics", "/stand/trace",
+                    "/stand/health", "/stand/diagnostics", "/stand/trace", "/stand/operator",
                     "/stand/simulator/state", "/stand/simulator/journal",
                     "/stand/simulator/action", "/stand/simulator/fault",
                 }
@@ -4056,6 +4067,18 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
         return response
 
     if stand.settings.webpanel_enabled:
+        operator_headers = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                            "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
+                            "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"}
+        @api.get("/console/operator", include_in_schema=False)
+        def operator_console():
+            return FileResponse(console_root/"operator.html", headers=operator_headers)
+        @api.get("/console/operator.js", include_in_schema=False)
+        def operator_js():
+            return FileResponse(console_root/"operator.js", media_type="application/javascript", headers=operator_headers)
+        @api.get("/console/operator.css", include_in_schema=False)
+        def operator_css():
+            return FileResponse(console_root/"operator.css", media_type="text/css", headers=operator_headers)
         @api.get("/console",include_in_schema=False)
         def console(): return FileResponse(console_root/"index.html", headers={"Cache-Control": "no-store"})
         @api.get("/console/console.js",include_in_schema=False)
@@ -4079,6 +4102,15 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
             api.add_api_route("/console/" + asset_name, phone_asset_endpoint(asset_name, media_type), methods=["GET"], include_in_schema=False)
     @api.get("/stand/state")
     def state(): return stand.panel_snapshot()
+    @api.get("/stand/operator")
+    def operator_state(after: int = 0, stream: str = ""):
+        if after < 0 or after > 2**63 - 1 or len(stream) > 64:
+            raise HTTPException(status_code=422, detail="invalid operator cursor")
+        value = stand.operator.snapshot(
+            after=after, stream=stream, health=stand.health_snapshot(),
+            runtime=api.state.lifecycle.snapshot().get("state"),
+            lighting=stand.lighting_output.snapshot())
+        return JSONResponse(value, headers={"Cache-Control": "no-store"})
     @api.get("/stand/health")
     def operational_health(): return stand.health_snapshot()
     @api.get("/stand/diagnostics")

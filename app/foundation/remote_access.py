@@ -209,7 +209,7 @@ class PrivateStandGateway:
             accepts_html = any(key.lower() == b"accept" and b"text/html" in value.lower() for key, value in headers)
             if (scope["type"] == "http" and not query_auth and not has_auth_header
                     and scope.get("method", "GET") in {"GET", "HEAD"}
-                    and scope.get("path") in {"/", "/console", "/simulator"}
+                    and scope.get("path") in {"/", "/console", "/console/operator", "/simulator"}
                     and accepts_html):
                 return await self._send_login_page(scope, send, status=200)
             return await self._deny(scope, send)
