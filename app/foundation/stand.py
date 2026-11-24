@@ -1351,6 +1351,8 @@ class HardwareIntegrationStand:
         if handle.response_id == "PERSONAL_STORY":
             owner = self.application._personal_stories.get(handle.session_id)
             return self.application._personal_story_scope(handle.session_id, owner, playback=True)
+        if handle.response_id == "NAME_BUTTON_HINT":
+            return state.mode == "exhibition_name_capture" and state.safety_severity == "none"
         if handle.response_id == "PERSONAL_WELCOME" or handle.response_id in PRIVATE_TYPED_AUDIO_IDS:
             if (handle.response_id in PRIVATE_TYPED_AUDIO_IDS and state.mode != "schedule_weather"
                     and not (is_information_dialogue(state.mode, state.safety_severity)
