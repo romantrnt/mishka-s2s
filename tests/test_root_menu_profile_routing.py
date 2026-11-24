@@ -26,13 +26,22 @@ async def menu(h, authorized, *, release_skip=True):
         await h.send("ButtonReleased", {"button_id": 4})
         await h.complete()
         await h.send("ExhibitionOnboardingComplete")
-    await h.send("ButtonPressed", {"button_id": 1})
-    assert h.state.mode == "menu_ready"
-    # A completed physical press includes release. Without it, another down
-    # of button 1 is still the consumed tutorial-skip edge, not a selection.
-    if release_skip:
-        released = await h.send("ButtonReleased", {"button_id": 1})
-        assert released["reason"] == "exhibition_menu_button_released"
+    if not release_skip:
+        await h.send("ButtonPressed", {"button_id": 1})
+        assert h.state.mode == 'game_menu'
+    else:
+        # Reach the unselected root through actual owned tutorial terminals.
+        if h.state.mode == 'exhibition_menu_tutorial_prompt':
+            await h.complete()
+        await h.complete()
+        if h.state.mode == 'exhibition_menu_wave':
+            token = h.app.sessions.get(h.boundary.session_id).cancellation_token
+            await h.send('ExhibitionMenuWaveComplete', {'token': token})
+        await h.complete()
+        h.sequence += 1
+        await h.app.receive_async(Event('SpeechReceived', h.boundary.session_id, h.sequence,
+            1., 'test', {}, f'menu-answer:{h.sequence}', h.clock[0]), 'Нет')
+        assert h.state.mode == "menu_ready"
     h.played.clear()
 
 
@@ -100,24 +109,22 @@ def test_schedule_selection_never_bypasses_missing_schedule_grant(authorized, se
 
 
 @pytest.mark.parametrize("authorized", [False, True])
-def test_held_tutorial_skip_one_requires_release_before_game_menu(authorized):
+def test_early_root_choice_requires_release_before_submenu_action(authorized):
     async def run():
         h = Harness(card() if authorized else None)
         try:
             await menu(h, authorized, release_skip=False)
             held = await h.send("ButtonPressed", {"button_id": 1})
-            assert held["reason"] == "exhibition_menu_button_duplicate"
-            assert h.state.mode == "menu_ready"
-            assert h.state.menu_pressed_buttons == [1]
+            assert held["reason"] == "exhibition_menu_choice_held"
+            assert h.state.mode == "game_menu"
+            assert h.state.menu_early_choice_button == 1
             assert not any(x.get("type") == "exhibition_menu_selected" for x in held["outputs"])
             released = await h.send("ButtonReleased", {"button_id": 1})
-            assert released["reason"] == "exhibition_menu_button_released"
-            assert h.state.menu_pressed_buttons == []
+            assert h.state.menu_early_choice_button is None
             selected = await h.send("ButtonPressed", {"button_id": 1})
-            assert h.state.mode == "game_menu"
-            assert selected["reason"] == "button_mode"
-            assert [x["target_state"] for x in selected["outputs"]
-                    if x.get("type") == "exhibition_menu_selected"] == ["game_menu"]
+            assert h.state.mode == "game_active"
+            assert selected["reason"] == "game_started"
+            assert not any(x.get("type") == "exhibition_menu_selected" for x in selected["outputs"])
         finally:
             await h.close()
     asyncio.run(run())

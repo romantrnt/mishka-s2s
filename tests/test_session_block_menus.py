@@ -63,10 +63,11 @@ def test_session_and_identity_reset_restore_one_time_menu():
 
 @pytest.mark.parametrize('button',range(1,8))
 @pytest.mark.parametrize('phase',['exhibition_menu_tutorial_buttons','exhibition_menu_repeat_prompt','exhibition_menu_repeat_listen'])
-def test_existing_root_menu_any_button_still_skips(button,phase):
+def test_existing_root_menu_any_fresh_button_selects_during_tutorial(button,phase):
     r=setup(phase);result=send(r,'ButtonPressed',{'button_id':button})
-    assert result['reason']=='exhibition_menu_tutorial_skipped'
-    assert result['state']['mode']=='menu_ready'
+    from app.foundation.canonical_contract import BUTTON_MODES
+    assert result['state']['mode']==BUTTON_MODES[button]
+    assert len([e for e in result['effects'] if e['type']=='exhibition_menu_selected'])==1
     assert any(x['type']=='audio_stop' for x in result['effects'])
 
 

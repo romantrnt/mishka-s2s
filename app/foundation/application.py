@@ -723,7 +723,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 stage_duration_ms=520,
             )
         else:
-            phase = "output" if phase == "output" else "listening"
+            phase = phase if phase in {"output", "preparing"} else "listening"
             start_breathing = getattr(self.led, "start_breathing", None)
             if not callable(start_breathing):
                 return None
@@ -2807,6 +2807,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              resolution="dialogue_prompt_unavailable")
                 else:
                     try:
+                        if effect["content_id"] in {"DIALOGUE_INTRO", "DIALOGUE_RETURN"}:
+                            await self._set_dialogue_lighting_phase(event.session_id, "output")
+                            if not prompt_current():
+                                return stale_result()
                         self._play_typed_audio(event.session_id, rendered, effect, record.cancellation_token)
                         _set_audio_effect_status(effect, asset_status="approved", queued=True,
                                                  resolution="dialogue_prompt_pcm_queued")
@@ -2853,6 +2857,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 # An explicit, current canonical listening effect owns this
                 # frame. Backend dialogue callbacks remain bear-mode scoped.
                 start_breathing = getattr(self.led, "start_breathing", None)
+                if preset == "BEAR_DIALOGUE" and snapshot.get("mode") == "bear_dialogue" and callable(start_breathing):
+                    phase = ("preparing" if state_owner.active_audio_id in {"DIALOGUE_INTRO", "DIALOGUE_RETURN"}
+                             else "listening")
+                    lighting = await self._set_dialogue_lighting_phase(event.session_id, phase)
+                    if not still_current():
+                        return stale_result()
+                    if lighting is not None:
+                        effect["lighting_effect"] = dict(lighting)
+                        effect["resolution"] = "dialogue_entry_" + phase
+                        continue
                 if preset == "LISTENING" and callable(start_breathing):
                     effect["lighting_effect"] = dict(start_breathing(
                         now=self.monotonic_now(), elements=DIALOGUE_FILL_ELEMENTS,
@@ -3778,7 +3792,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             else:
                 utterance_guard = _ingress_guard
                 pipeline._canonical_private_owner = (_ingress_guard
-                    if state is not None and state.mode in {"personal_welcome_listen", "game_active", 'game_menu', 'fixed_story_menu'} else None)
+                    if state is not None and state.mode in {"personal_welcome_listen", "game_active", 'game_menu', 'fixed_story_menu',
+                                                           'exhibition_menu_repeat_listen'} else None)
         async def no_llm_turn(_text: str, _generation: int):
             return TurnResult((), (), False, None)
         with self._game_audio_wait(session_id, pipeline, utterance_guard) as audio_wait:
@@ -3862,6 +3877,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         state = self.canonical_runtime.sessions.get(session_id)
         version = state.state_version if state is not None else None
         private_phase = bool(state and state.mode == "personal_welcome_listen")
+        menu_repeat_phase = bool(state and state.mode == 'exhibition_menu_repeat_listen')
         game_phase = bool(state and state.mode == "game_active")
         game_scope = self._game_voice_scope(session_id)
         game_owner = self._game_speech_check_owner(session_id)
@@ -3874,6 +3890,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 getattr(self.canonical_runtime.sessions.get(session_id), 'mode', None)) == conversation_scene))
             and (catalogue_scope is None or self._catalogue_voice_scope(session_id) == catalogue_scope)
             and (not private_phase or (self.canonical_runtime.sessions.get(session_id) is state
+                and state.state_version == version))
+            # A finished menu answer cannot become a new dialogue turn or
+            # answer a replacement question while its completion awaits expiry.
+            and (not menu_repeat_phase or (self.canonical_runtime.sessions.get(session_id) is state
                 and state.state_version == version))
             and (not game_phase or (game_scope is not None
                 and self._game_speech_check_owner(session_id) == game_owner

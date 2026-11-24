@@ -67,19 +67,22 @@ async def test_hangup_dark_before_slow_audio_cleanup_and_after_cancellation(iden
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('button', range(1, 8))
-async def test_tutorial_skip_held_edge_cannot_activate_action(button):
+async def test_tutorial_choice_held_edge_cannot_repeat_action(button):
     app, engine, output, send = fixture_app()
     try:
         await send('HandsetLifted')
         app.canonical_runtime.sessions['sequence'].mode = 'exhibition_menu_repeat_listen'
         first = await send('ButtonPressed', {'button_id': button})
-        assert first['reason'] == 'exhibition_menu_tutorial_skipped'
+        from app.foundation.canonical_contract import BUTTON_MODES
+        target = BUTTON_MODES[button]
+        assert first['canonical_state']['mode'] == target
+        assert len([e for e in first['outputs'] if e.get('type') == 'exhibition_menu_selected']) == 1
         held = await send('ButtonPressed', {'button_id': button})
-        assert held['reason'] == 'exhibition_menu_button_duplicate'
-        assert app.canonical_runtime.sessions['sequence'].mode == 'menu_ready'
+        assert held['reason'] == 'exhibition_menu_choice_held'
+        assert app.canonical_runtime.sessions['sequence'].mode == target
         await send('ButtonReleased', {'button_id': button})
         fresh = await send('ButtonPressed', {'button_id': button})
-        assert fresh['reason'] != 'exhibition_menu_button_duplicate'
+        assert fresh['reason'] != 'exhibition_menu_choice_held'
         await send('HandsetPlaced')
         engine.advance(100)
         assert set(output.snapshot().values()) == {0}

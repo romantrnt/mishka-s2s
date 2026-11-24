@@ -266,6 +266,7 @@ class CanonicalState:
     menu_prompt_after_wave: bool = True
     menu_lit_buttons: list[int] = field(default_factory=list)
     menu_pressed_buttons: list[int] = field(default_factory=list)
+    menu_early_choice_button: int | None = None
     menu_repeat_attempts: int = 0
     story_menu_hint_seen: bool = False
     story_menu_hint_active: bool = False
@@ -1813,6 +1814,8 @@ class CanonicalRuntime(SceneMenuMixin):
                                          {"type": "lighting_dark"}], "interaction_idle", clear_audio=True)
         if event.event_type == "ButtonReleased":
             button = int(event.payload["button_id"])
+            if state.menu_early_choice_button == button:
+                state.menu_early_choice_button = None
             if button == 6 and state.silent_entry_completed:
                 state.silent_entry_completed = False
                 return self._decision(state, [], "silent_hold_release_consumed")
@@ -1848,9 +1851,14 @@ class CanonicalRuntime(SceneMenuMixin):
         if (event.event_type in {"ButtonHeld", "ButtonLongHeld"}
                 and int(event.payload['button_id']) in state.readiness_held_buttons):
             return self._decision(state, [], "readiness_button_held")
+        if (event.event_type in {"ButtonPressed", "ButtonHeld", "ButtonLongHeld"}
+                and int(event.payload['button_id']) == state.menu_early_choice_button):
+            return self._decision(state, [], "exhibition_menu_choice_held")
         if event.event_type == "ButtonPressed":
             state.voice_retry_count = 0
             button = int(event.payload["button_id"])
+            menu_entry_effects = []
+            menu_cancel_effects = []
             if (button == 6 and state.handset == "down" and not state.interaction_open
                     and (state.mode in {"idle", "profile_ready"}
                          or (state.mode == "session_closed" and state.substate == "soft_end"))):
@@ -2936,26 +2944,24 @@ class CanonicalRuntime(SceneMenuMixin):
                 "exhibition_menu_repeat_prompt", "exhibition_menu_repeat_listen",
                 "exhibition_menu_replay_buttons",
             }:
-                # A physical button press is an explicit child-friendly skip
-                # gesture.  Do not also activate the selected menu action on
-                # this same edge; the next press starts a clean menu action.
-                state.mode, state.substate = "menu_ready", "menu_tutorial_skipped"
+                if not fresh_button_press:
+                    return self._decision(state, [], "exhibition_menu_choice_held")
+                # The same fresh edge stops the tour and selects its advertised
+                # root action below, even if that button has not lit up yet.
+                state.mode, state.substate = "menu_ready", "menu_tutorial_selected"
                 state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
                 state.menu_lit_buttons = list(range(1, 8))
-                # The skip edge stays consumed until physical release. A
-                # repeated key-down must not also activate the menu action.
-                state.menu_pressed_buttons = [button]
-                state.menu_tutorial_phase = "skipped"
+                state.menu_pressed_buttons = []
+                state.menu_early_choice_button = button
+                state.menu_tutorial_phase = "selected"
                 state.menu_repeat_attempts = 0
                 state.state_version += 1
-                return self._decision(state, [
-                    {"type": "audio_stop"},
-                    {"type": "capture_close"},
+                menu_entry_effects = [
                     {"type": "exhibition_menu_tutorial_skip", "button": button},
                     {"type": "exhibition_effects_cancelled"},
-                    {"type": "lighting_preset", "preset": "ROOT_MENU"},
                     {"type": "menu_tutorial_complete", "buttons": list(state.menu_lit_buttons), "skipped": True},
-                ], "exhibition_menu_tutorial_skipped", clear_audio=True)
+                ]
+                menu_cancel_effects = [{"type": "audio_stop"}, {"type": "capture_close"}]
             if self.exhibition_mode and state.mode == "menu_ready":
                 if button == 7 and state.root_menu_back_guard_until is not None and monotonic_now < state.root_menu_back_guard_until:
                     return self._decision(state, [], "submenu_back_bounce_ignored")
@@ -2984,7 +2990,7 @@ class CanonicalRuntime(SceneMenuMixin):
                         selection["target_state"] = "awaiting_handset"
                         selection["downstream_owner"] = mode
                         state.expected_inputs = ["handset_up", "handset_down"]
-                        return self._decision(state, [
+                        return self._decision(state, menu_entry_effects + menu_cancel_effects + [
                             selection,
                             {"type": "lighting", "elements": [14], "state": 1},
                             {"type": "visual", "view": "lift_handset"},
@@ -2998,7 +3004,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     selection["downstream_owner"] = mode
                     preset = {1: "GAME_MENU", 3: "PERSONAL_STORY", 4: "SUPPORT",
                               5: "HELP", 7: "SCHEDULE_WEATHER"}[button]
-                    entry_effects = [selection, {"type": "lighting_preset", "preset": preset}]
+                    entry_effects = menu_entry_effects + menu_cancel_effects + [selection, {"type": "lighting_preset", "preset": preset}]
                     if button == 7:
                         entry_effects.append({"type": "typed_info_request", "kind": "menu"})
                     if button == 5:
@@ -3012,7 +3018,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.expected_inputs = [f"button_{item}" for item in range(1, 6)] + ["button_7", "handset_down"]
                     selection["target_state"] = "fixed_story_menu"
                     selection["downstream_owner"] = "fixed_story_menu"
-                    return self._decision(state, [
+                    return self._decision(state, menu_entry_effects + menu_cancel_effects + [
                         selection,
                         {"type": "lighting_preset", "preset": "STORY_MENU"},
                         {"type": "speak", "phrase_id": "PHRASE_054"},
@@ -3024,7 +3030,7 @@ class CanonicalRuntime(SceneMenuMixin):
                         selection["target_state"] = "awaiting_handset"
                         selection["downstream_owner"] = "bear_dialogue"
                         state.expected_inputs = ["handset_up", "handset_down"]
-                        return self._decision(state, [
+                        return self._decision(state, menu_entry_effects + menu_cancel_effects + [
                             selection,
                             {"type": "lighting", "elements": [14], "state": 1},
                             {"type": "visual", "view": "lift_handset"},
@@ -3034,9 +3040,10 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.dialogue_memory.touch(now)
                     selection["target_state"] = "bear_dialogue"
                     selection["downstream_owner"] = "bear_dialogue"
-                    return self._decision(state, [
+                    return self._decision(state, menu_entry_effects + [
                         selection,
                         {"type": "lighting_preset", "preset": "BEAR_DIALOGUE"},
+                    ] + menu_cancel_effects + [
                         {"type": "capture_open"},
                         self._dialogue_prompt("DIALOGUE_INTRO", "Давай поговорим. Чтобы вернуться в меню, нажми семь."),
                     ], "bear_dialogue_started", clear_audio=True)

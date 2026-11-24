@@ -1779,7 +1779,7 @@ function updateGuide(state, contract = validateButtonContract(state.button_contr
     helpAlert.textContent = visible
       ? 'Нужна помощь взрослого рядом. Подтверждение взрослого не получено.' : '';
   }
-  const skipHint = 'Нажмите любую кнопку, чтобы пропустить подсказку. Затем нажмите нужную кнопку для выбора.';
+  const skipHint = 'Выбери нужную кнопку 1–7. Ждать конца подсказки не нужно.';
     const labels = {
     profile_ready: ['Карта принята', 'Поднимите трубку, чтобы начать.'],
     game_menu: ['Игры', 'Варианты загружаются из текущего меню.'],

@@ -94,7 +94,7 @@ async def test_cleanup_public_projection_accepts_only_fixed_enums(stand, malform
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('button', range(1, 8))
-async def test_reconstructed_root_skip_requires_release_before_action(stand, button):
+async def test_reconstructed_root_choice_held_does_not_repeat(stand, button):
     from app.foundation.domain import Event
     await stand.inject_physical({'type': 'SpaceReleased'})
     app = stand.application
@@ -103,10 +103,11 @@ async def test_reconstructed_root_skip_requires_release_before_action(stand, but
     async def send(kind, sequence):
         return await app.receive_async(Event(kind, session_id, sequence, 0., 'skip-test',
                                             {'button_id': button}, f'skip:{sequence}', 0.))
-    assert (await send('ButtonPressed', 1))['reason'] == 'exhibition_menu_tutorial_skipped'
-    assert (await send('ButtonPressed', 2))['reason'] == 'exhibition_menu_button_duplicate'
-    assert app.canonical_runtime.sessions[session_id].mode == 'menu_ready'
+    from app.foundation.canonical_contract import BUTTON_MODES
+    await send('ButtonPressed', 1)
+    assert app.canonical_runtime.sessions[session_id].mode == BUTTON_MODES[button]
+    assert (await send('ButtonPressed', 2))['reason'] == 'exhibition_menu_choice_held'
     await send('ButtonReleased', 3)
-    assert (await send('ButtonPressed', 4))['reason'] != 'exhibition_menu_button_duplicate'
+    assert (await send('ButtonPressed', 4))['reason'] != 'exhibition_menu_choice_held'
     await stand.inject_physical({'type': 'SpacePressed'})
     assert set(app.led.output.snapshot().values()) == {0}

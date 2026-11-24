@@ -56,8 +56,9 @@ def test_tutorial_skip_and_handset_down_survive_stuck_audio_cleanup() -> None:
         skipped = await asyncio.wait_for(app.receive_async(Event(
             "ButtonPressed", session_id, 1, 0.0, "hid", {"button_id": 4}, "skip", 0.0,
         )), 0.5)
-        assert skipped["reason"] == "exhibition_menu_tutorial_skipped"
-        assert skipped["state"] == "menu_ready"
+        assert skipped["reason"] == "button_mode"
+        assert skipped["state"] == "support_intake"
+        assert any(e.get('type') == 'exhibition_menu_selected' for e in skipped['outputs'])
         down = await asyncio.wait_for(app.receive_async(Event(
             "HandsetPlaced", session_id, 2, 0.1, "hid", {}, "down", 0.1,
         )), 0.5)

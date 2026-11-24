@@ -239,7 +239,8 @@ def test_menu_skip_buttons_no_mood_inference(button):
         try:
             await start(h);await deadline(h);await h.complete()
             result=await h.send('ButtonPressed',{'button_id':button})
-            expected='menu_ready'
+            from app.foundation.canonical_contract import BUTTON_MODES
+            expected=BUTTON_MODES[button]
             assert h.state.mode==expected,result
             assert h.state.mood_result is None
         finally:await h.close()

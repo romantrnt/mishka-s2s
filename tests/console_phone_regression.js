@@ -600,7 +600,7 @@ function menuCopy(){
  context.authBlocked=false;context.wsReloadRequired=false;context.wsSnapshotReady=true;context.current=null;
  context.document.querySelector=()=>null;context.buttonLegendSummary=()=>'';
  vm.runInContext(source.slice(source.indexOf('function updateGuide('),source.indexOf('function enqueuePCM(')),context);
- const hint='Нажмите любую кнопку, чтобы пропустить подсказку. Затем нажмите нужную кнопку для выбора.';
+ const hint='Выбери нужную кнопку 1–7. Ждать конца подсказки не нужно.';
  const nodes=['exhibition_menu_tutorial_intro','exhibition_menu_tutorial_prompt','exhibition_menu_tutorial_buttons','exhibition_menu_wave','exhibition_menu_repeat_prompt','exhibition_menu_repeat_listen','exhibition_menu_replay_buttons'];
  nodes.forEach((node,index)=>{
   const state=snapshot(13,index,true);state.session.node=node;state.simulator.session.node=node;context.render(state);
@@ -608,7 +608,8 @@ function menuCopy(){
   assert.strictEqual(fields['phone-instruction'].textContent,expected,'tutorial fallback follows '+node);
   assert.strictEqual(fields['guide-text'].textContent,expected,'console guide follows '+node);
   state.simulator.prompt={text:'Текущая записанная реплика'};context.render(state);
-  assert.strictEqual(fields['phone-instruction'].textContent,'Текущая записанная реплика','active transcript takes priority over skip hint');
+  assert.strictEqual(fields['phone-instruction'].textContent,expected,'single-tap guidance stays visible with the active transcript');
+  assert.strictEqual(fields['phone-prompt'].textContent,'Текущая записанная реплика','the existing transcript panel retains the recorded speech');
  });
  const ready=snapshot(13,20,true);ready.session.node='menu_ready';ready.simulator.session.node='menu_ready';context.render(ready);
  assert.strictEqual(fields['phone-instruction'].textContent,'Выберите кнопку на лапе');

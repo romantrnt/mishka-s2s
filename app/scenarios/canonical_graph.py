@@ -234,7 +234,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
                 "exhibition_menu_tutorial_buttons", "exhibition_menu_wave",
                 "exhibition_menu_repeat_prompt", "exhibition_menu_repeat_listen",
                 "exhibition_menu_replay_buttons",
-            } and target == "menu_ready")
+            } and target in BUTTON_TARGETS | {"menu_ready", "awaiting_handset"})
             or (current in ROOT_ENTRY_MODES and target in BUTTON_TARGETS | {"awaiting_handset"})
             or (current == "awaiting_handset" and target == "root_menu")
             or (current == "personal_story_theme" and target in {"personal_story_generating", "awaiting_handset", "root_menu"})

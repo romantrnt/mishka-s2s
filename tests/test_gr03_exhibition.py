@@ -250,16 +250,19 @@ def test_menu_tutorial_can_be_skipped_and_unclear_repeat_is_bounded():
     runtime.handle(ce("ExhibitionOnboardingComplete", 11, state.state_version, "wave"))
     state = runtime.sessions["gr03"]
     skipped = runtime.handle(ce("ButtonPressed", 12, state.state_version, "hid", {"button_id": 6}))
-    assert skipped["reason"] == "exhibition_menu_tutorial_skipped"
-    assert skipped["state"]["mode"] == "menu_ready"
+    assert skipped["reason"] == "bear_dialogue_started"
+    assert skipped["state"]["mode"] == "bear_dialogue"
+    runtime.handle(ce('AudioCompleted', 13, state.state_version, 'audio', {
+        'response_id': state.active_audio_id, 'playback_lease': state.playback_lease}))
+    runtime.handle(ce('ButtonReleased', 14, state.state_version, 'hid', {'button_id': 6}))
 
     state.mode = "exhibition_menu_repeat_listen"
     state.handset = "up"
     state.menu_repeat_attempts = 0
-    first = runtime.handle(ce("VoiceIntentReady", 13, state.state_version, "speech", {"intent": "free_speech", "safety_severity": "none"}), transient_text="не понял")
+    first = runtime.handle(ce("VoiceIntentReady", 15, state.state_version, "speech", {"intent": "free_speech", "safety_severity": "none"}), transient_text="не понял")
     assert first["reason"] == "exhibition_menu_repeat_unclear"
     state = runtime.sessions["gr03"]
-    second = runtime.handle(ce("VoiceIntentReady", 14, state.state_version, "speech", {"intent": "free_speech", "safety_severity": "none"}), transient_text="опять не понял")
+    second = runtime.handle(ce("VoiceIntentReady", 16, state.state_version, "speech", {"intent": "free_speech", "safety_severity": "none"}), transient_text="опять не понял")
     assert second["reason"] == "exhibition_menu_repeat_defaulted"
     assert second["state"]["mode"] == "menu_ready"
 

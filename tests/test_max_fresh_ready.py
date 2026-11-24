@@ -272,7 +272,10 @@ async def test_held_key_cannot_skip_new_onboarding_or_become_a_new_action(h):
     assert (await h.send('ButtonReleased', {'button_id':7}))['reason'] == 'readiness_button_released'
     h.clock.value = h.state.welcome_deadline_monotonic
     await h.send('WelcomeTimerFired'); await h.complete()
-    assert (await h.send('ButtonPressed', {'button_id':7}))['reason'] == 'exhibition_menu_tutorial_skipped'
+    chosen = await h.send('ButtonPressed', {'button_id':7})
+    assert h.state.mode == 'schedule_weather'
+    assert len([e for e in chosen['outputs'] if e.get('type') == 'exhibition_menu_selected']) == 1
+    assert (await h.send('ButtonPressed', {'button_id':7}))['reason'] == 'exhibition_menu_choice_held'
 
 
 @pytest.mark.asyncio

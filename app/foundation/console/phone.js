@@ -155,9 +155,11 @@ function mountPhone() {
     const live=connected(),up=bridge.interactionActive(state);
     const hint=bridge.interactionGuide(state,media);
     const tutorial=['exhibition_menu_tutorial_intro','exhibition_menu_tutorial_prompt','exhibition_menu_tutorial_buttons','exhibition_menu_wave','exhibition_menu_repeat_prompt','exhibition_menu_repeat_listen','exhibition_menu_replay_buttons'].includes(simulator?.session?.node);
-    const skipHint='Нажмите любую кнопку, чтобы пропустить подсказку. Затем нажмите нужную кнопку для выбора.';
+    const skipHint='Выбери нужную кнопку 1–7. Ждать конца подсказки не нужно.';
+    const tutorialHint=(simulator?.session?.node==='exhibition_menu_repeat_listen'?'Скажите «да» или «нет». ':'')+skipHint;
+    const prompt=tutorial?tutorialHint:simulator?.prompt?.text;
     const dialogueMicOff=state?.session.node==='bear_dialogue'&&!media.microphone;
-    $('phone-instruction').textContent=media.reloadRequired?'Сервис перезапущен. Обновите страницу, чтобы продолжить.':!simulator?'Подключение к телефону…':!live?'Соединение с телефоном потеряно':!media.inputReady?'Дождитесь актуального состояния телефона.':!simulator.admission?.input_ready?'Телефон пока недоступен':!simulator.admission.connected?'Устройство ввода отключено':state?.session.node==='session_closed'&&hint?hint[1]:(state?.session.node==='awaiting_handset'||dialogueMicOff?hint?.[1]:simulator.prompt?.text) || hint?.[1] || (tutorial?(simulator.session.node==='exhibition_menu_repeat_listen'?'Скажите «да» или «нет». ':'')+skipHint:up?'Выберите кнопку на лапе':'Поднимите трубку');
+    $('phone-instruction').textContent=media.reloadRequired?'Сервис перезапущен. Обновите страницу, чтобы продолжить.':!simulator?'Подключение к телефону…':!live?'Соединение с телефоном потеряно':!media.inputReady?'Дождитесь актуального состояния телефона.':!simulator.admission?.input_ready?'Телефон пока недоступен':!simulator.admission.connected?'Устройство ввода отключено':state?.session.node==='session_closed'&&hint?hint[1]:(state?.session.node==='awaiting_handset'||dialogueMicOff?hint?.[1]:prompt) || hint?.[1] || (tutorial?tutorialHint:up?'Выберите кнопку на лапе':'Поднимите трубку');
   }
   function renderMedia() {
     const media=bridge.media();
