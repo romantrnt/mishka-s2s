@@ -247,6 +247,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self._canonical_profiles: dict[str, dict[str, Any] | None] = {}
         self._canonical_schedule_refs: dict[str, str | None] = {}
         self.transition_authorizer = CanonicalLangGraphAuthorizer() if self.canonical_runtime is not None else None
+        self._support_lighting_owners: dict[str, tuple[Any, Callable[[], bool]]] = {}
 
     def identity_status(self) -> dict[str, Any]:
         """Safe readiness only; starting a client never implies a connected real reader."""
@@ -691,24 +692,60 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                      f"{origin}:{suffix}", self.monotonic_now())
 
 
-    async def _set_dialogue_lighting_phase(self, session_id: str, phase: str) -> dict[str, Any] | None:
+    async def _set_dialogue_lighting_phase(self, session_id: str, phase: str, *, current=None) -> dict[str, Any] | None:
         """Drive the dialogue LED frame from the actual bounded-runtime phase.
 
-        The bear pictogram and button 7 digit are fixed anchors. Only button
-        fills animate, so the serial protocol remains the existing binary
+        Safe support keeps help/back digits visible beside its activity fill.
+        The other conversation retains its bear/back anchors. The protocol is binary
         element/state/transition contract and the same frame is visible in
         the physical stand and the WebPanel.
         """
         runtime = self.canonical_runtime
         state = runtime.sessions.get(session_id) if runtime is not None else None
+        support = bool(state and state.mode == "support_intake"
+                       and is_information_dialogue(state.mode, state.safety_severity))
         word_game = bool(state and state.mode == "game_active" and state.active_game_id == "word_game"
                          and state.game_audio_stage == "playing")
-        if state is None or (state.mode != "bear_dialogue" and not word_game) or not state.interaction_open:
+        if state is None or (state.mode != "bear_dialogue" and not word_game and not support) or not state.interaction_open:
+            return None
+        revision, epoch, version = (self._session_revisions.get(session_id, 0),
+            self._session_epochs.get(session_id, 0), state.state_version)
+        def support_current():
+            return (runtime.sessions.get(session_id) is state and state.interaction_open
+                and state.mode == "support_intake" and is_information_dialogue(state.mode, state.safety_severity)
+                and state.state_version == version and self._session_revisions.get(session_id, 0) == revision
+                and self._session_epochs.get(session_id, 0) == epoch and (current is None or current()))
+        if support and not support_current():
             return None
         if self.optional_identity and state.identity_request_id and not self._identity_scope_live(session_id):
             await self.expire_identity_leases()
             return None
         phase = str(phase or "listening")
+        if support:
+            if not support_current():
+                return None
+            phase = phase if phase in {"preparing", "processing", "output"} else "listening"
+            anchors = (BUTTON_DIGIT_ELEMENTS[5][1], BUTTON_DIGIT_ELEMENTS[7][1])
+            fills = tuple(BUTTON_FILL_ELEMENTS[button] for button in (4, 5, 7))
+            wave, breathing = getattr(self.led, "start_wave", None), getattr(self.led, "start_breathing", None)
+            if phase in {"preparing", "processing"} and callable(wave):
+                lighting = wave(now=self.monotonic_now(), groups=tuple((element,) for element in fills),
+                    base_elements=anchors, loop=True, stage_duration_ms=520)
+            elif phase == "listening" and callable(breathing):
+                lighting = breathing(now=self.monotonic_now(), elements=(BUTTON_FILL_ELEMENTS[4],),
+                    base_elements=anchors, phase=phase)
+            else:
+                cancel = getattr(self.led, "cancel_effects", None)
+                if callable(cancel):
+                    cancel(clear=False)
+                active = {BUTTON_FILL_ELEMENTS[4], *anchors}
+                self.led.set_elements(tuple(LightingCommand(element, int(element in active), 0)
+                    for element in LIGHTING_ELEMENT_IDS))
+                lighting = {"effect": "steady", "phase": phase, "active_elements": sorted(active),
+                    "protocol": "binary_transition"}
+            self.runtime_status["dialogue_lighting_phase"] = phase
+            self.runtime_status["dialogue_lighting"] = dict(lighting)
+            return dict(lighting)
         fills = DIALOGUE_FILL_ELEMENTS
         anchors = DIALOGUE_ANCHOR_ELEMENTS
         if phase == "processing":
@@ -736,6 +773,38 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
 
     async def dialogue_lifecycle(self, session_id: str, phase: str, **details: Any) -> None:
         """Callback used by bounded S2S when its backend phase changes."""
+        state = self.canonical_runtime.sessions.get(session_id) if self.canonical_runtime else None
+        owner = self._support_lighting_owners.get(session_id)
+        if owner is not None and state and state.mode == "bear_dialogue":
+            # A cancelled support provider may drain after the child starts a
+            # fresh conversation. Its receipt must not suppress the new task.
+            if phase == "output":
+                queue = self.bounded_s2s.active_queues.get(session_id)
+                active_task = self.bounded_s2s.active_tasks.get(session_id)
+                token = details.get("token")
+                if (active_task is None or active_task is owner[0] or queue is None
+                        or token != queue.token or self.bounded_s2s.cancel.cancelled(session_id, token)):
+                    return
+            elif asyncio.current_task() is owner[0]:
+                return
+            await self._set_dialogue_lighting_phase(session_id, phase)
+            return
+        if owner is not None or (state and state.mode == "support_intake"):
+            if (owner is None or not owner[1]() or state is None
+                    or not is_information_dialogue(state.mode, state.safety_severity)
+                    or state.dialogue_information_kind is not None):
+                return
+            task, current = owner
+            if phase == "output":
+                queue = self.bounded_s2s.active_queues.get(session_id)
+                token = details.get("token")
+                if (self.bounded_s2s.active_tasks.get(session_id) is not task or queue is None
+                        or token != queue.token or self.bounded_s2s.cancel.cancelled(session_id, token)):
+                    return
+            elif asyncio.current_task() is not task:
+                return
+            await self._set_dialogue_lighting_phase(session_id, phase, current=current)
+            return
         await self._set_dialogue_lighting_phase(session_id, phase)
 
     def record_audio_diagnostic(self, kind: str, **fields: Any) -> dict[str, Any]:
@@ -2819,7 +2888,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 else:
                     try:
                         if effect["content_id"] in {"DIALOGUE_INTRO", "DIALOGUE_RETURN"}:
-                            await self._set_dialogue_lighting_phase(event.session_id, "output")
+                            await self._set_dialogue_lighting_phase(event.session_id, "output", current=prompt_current)
                             if not prompt_current():
                                 return stale_result()
                         if streamed is None:
@@ -2869,6 +2938,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 # An explicit, current canonical listening effect owns this
                 # frame. Backend dialogue callbacks remain bear-mode scoped.
                 start_breathing = getattr(self.led, "start_breathing", None)
+                if (preset == "SUPPORT" and snapshot.get("mode") == "support_intake"
+                        and is_information_dialogue(state_owner.mode, state_owner.safety_severity)):
+                    phase = "preparing" if state_owner.active_audio_id == "DIALOGUE_INTRO" else "listening"
+                    lighting = await self._set_dialogue_lighting_phase(event.session_id, phase, current=still_current)
+                    if not still_current():
+                        return stale_result()
+                    if lighting is not None:
+                        effect["lighting_effect"] = dict(lighting)
+                        effect["resolution"] = "support_entry_" + phase
+                        continue
                 if preset == "BEAR_DIALOGUE" and snapshot.get("mode") == "bear_dialogue" and callable(start_breathing):
                     phase = ("preparing" if state_owner.active_audio_id in {"DIALOGUE_INTRO", "DIALOGUE_RETURN"}
                              else "listening")
@@ -3032,8 +3111,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              queued=False, resolution="audio_deferred_handset_down")
                 elif asset:
                     try:
-                        if snapshot.get("mode") == "bear_dialogue":
-                            await self._set_dialogue_lighting_phase(event.session_id, "output")
+                        if snapshot.get("mode") == "bear_dialogue" or (state_owner.mode == "support_intake"
+                                and is_information_dialogue(state_owner.mode, state_owner.safety_severity)):
+                            await self._set_dialogue_lighting_phase(event.session_id, "output", current=still_current)
                             if not still_current():
                                 return stale_result()
                         self._play_owned_audio(event.session_id, phrase_id, str(asset["asset_path"]),
@@ -3131,8 +3211,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             await self._append_journal_turn(event.session_id, journal_visit, "user", str(transient_text), still_current)
                             if not still_current() or self._identity_shutdown:
                                 return stale_result()
-                        turn = (TurnResult((), (), True) if exit_requested else
-                            await self.bounded_s2s.run_text_turn(str(transient_text), turn_context))
+                        lighting_owner = None
+                        if state_owner.mode == "support_intake" and is_information_dialogue(state_owner.mode, state_owner.safety_severity):
+                            lighting_owner = (asyncio.current_task(), still_current)
+                            self._support_lighting_owners[event.session_id] = lighting_owner
+                        try:
+                            turn = (TurnResult((), (), True) if exit_requested else
+                                await self.bounded_s2s.run_text_turn(str(transient_text), turn_context))
+                        finally:
+                            if lighting_owner is not None and self._support_lighting_owners.get(event.session_id) is lighting_owner:
+                                self._support_lighting_owners.pop(event.session_id, None)
                         await self.expire_identity_leases()
                         if not still_current():
                             return stale_result()
@@ -3357,6 +3445,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                     and previous_state.pending_tool == 'weather'))
                                 for item in previous_state.scene_menu_descriptor.get('items', ()) if isinstance(item, dict))):
                         request_scope = 'configured_point'
+                    if state_owner.mode == "support_intake" and is_information_dialogue(state_owner.mode, state_owner.safety_severity):
+                        await self._set_dialogue_lighting_phase(event.session_id, "processing", current=still_current)
+                        if not still_current():
+                            return stale_result()
                     info = await TypedInfoRenderer(self.schedule_weather, profile, schedule_ref).render(
                         tool_kind, allow_demo=getattr(self.settings, "profile", "") == "mock",
                         weather_scope=request_scope)
@@ -3376,6 +3468,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         return stale_result()
                     if audio is None:
                         raise ScheduleWeatherProviderError("typed_information_audio_unavailable")
+                    if state_owner.mode == "support_intake" and is_information_dialogue(state_owner.mode, state_owner.safety_severity):
+                        await self._set_dialogue_lighting_phase(event.session_id, "output", current=audio_current)
+                        if not audio_current():
+                            return stale_result()
                     self._play_typed_audio(event.session_id, audio, effect, record.cancellation_token)
                     audio = None
                     _set_audio_effect_status(effect, asset_status="approved", queued=True,
@@ -3416,7 +3512,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     and self._session_epochs.get(event.session_id, 0) == epoch
                     and self.canonical_runtime.sessions.get(event.session_id) is state_owner
                     and state_owner.state_version == failure.get("canonical_state", {}).get("state_version")
-                    and state_owner.mode == "bear_dialogue" and state_owner.active_audio_id is None):
+                    and (state_owner.mode == "bear_dialogue" or is_information_dialogue(state_owner.mode, state_owner.safety_severity))
+                    and state_owner.active_audio_id is None):
                 # Internal dispatch failure is already terminal; it bypasses
                 # receive_async's ordinary AudioFailed lighting callback.
                 await self._set_dialogue_lighting_phase(event.session_id, "listening")
@@ -3601,6 +3698,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         if event.event_type in {"AudioCompleted", "AudioFailed"}:
             state_after_audio = self.canonical_runtime.sessions.get(event.session_id)
             if state_after_audio is not None and (state_after_audio.mode == "bear_dialogue"
+                    or (state_after_audio.mode == "support_intake"
+                        and is_information_dialogue(state_after_audio.mode, state_after_audio.safety_severity)
+                        and result.get("reason") in {"dialogue_prompt_finished", "typed_information_finished"})
                     or (state_after_audio.mode == "game_active" and state_after_audio.active_game_id == "word_game"
                         and state_after_audio.game_audio_stage == "playing")):
                 await self._set_dialogue_lighting_phase(event.session_id, "listening")

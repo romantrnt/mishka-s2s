@@ -1365,7 +1365,10 @@ class HardwareIntegrationStand:
         if handle.response_id == "DIALOGUE_OFFER":
             return (state.mode == "bear_dialogue" and state.pending_game_offer is not None
                     and not state.game_offer_ready)
-        if handle.response_id in {"DIALOGUE_INTRO", "DIALOGUE_RETURN"}:
+        if handle.response_id == "DIALOGUE_INTRO":
+            return state.mode == "bear_dialogue" or (state.mode == "support_intake"
+                and is_information_dialogue(state.mode, state.safety_severity))
+        if handle.response_id == "DIALOGUE_RETURN":
             return state.mode == "bear_dialogue"
         if handle.response_id == "DIALOGUE_FINISH":
             return state.mode == "root_menu"

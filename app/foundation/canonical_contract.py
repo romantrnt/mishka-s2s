@@ -1273,6 +1273,13 @@ class CanonicalRuntime(SceneMenuMixin):
     def _dialogue_prompt(content_id: str, text: str) -> dict[str, Any]:
         return {"type": "dialogue_prompt", "content_id": content_id, "text": text}
 
+    def _support_entry_effects(self, state: CanonicalState) -> list[dict[str, Any]]:
+        if state.mode != "support_intake" or not is_information_dialogue(state.mode, state.safety_severity) or not state.audio_open:
+            return []
+        state.expected_inputs = ["speech", "button_5", "button_7", "handset_down"]
+        return [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "capture_open"},
+            self._dialogue_prompt("DIALOGUE_INTRO", "Давай поговорим. Чтобы вернуться в меню, нажми семь.")]
+
     def _activity_back(self, state, reason):
         returning = state.activity_return_mode == "bear_dialogue" and state.interaction_open
         state.mode = "bear_dialogue" if returning else "root_menu"
@@ -2071,6 +2078,8 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.substate = "dialogue_started"
                     state.dialogue_memory.touch(now)
                     effects.append(self._dialogue_prompt("DIALOGUE_INTRO", "Давай поговорим. Чтобы вернуться в меню, нажми семь."))
+                elif pending == "support_intake":
+                    effects = [{"type": "lighting_preset", "preset": "SUPPORT"}] + self._support_entry_effects(state)
                 return self._decision(state, effects, "panel_audio_pending_started", clear_audio=True)
             effects = ([{"type": "support_question", "question": state.support_question_kind or "pain_or_discomfort"}]
                        if state.mode == "wellbeing_check" else [])
@@ -2418,7 +2427,8 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.game_offer_ready = True
                     state.expected_inputs = ["speech", "button_1", "button_7", "handset_down"]
                     return self._decision(state, [{"type": "capture_open"}], "game_offer_ready", clear_audio=True)
-                return self._decision(state, [{"type": "capture_open"}] if state.mode == "bear_dialogue" else [],
+                return self._decision(state, [{"type": "capture_open"}] if (state.mode == "bear_dialogue"
+                    or (response_id == "DIALOGUE_INTRO" and is_information_dialogue(state.mode, state.safety_severity))) else [],
                                       "dialogue_prompt_finished", clear_audio=True)
             menu_result = self._scene_menu_audio(state, event, response_id)
             if menu_result is not None: return menu_result
@@ -2960,6 +2970,9 @@ class CanonicalRuntime(SceneMenuMixin):
                         {"type": "typed_info_request", "kind": "menu"},
                     ], "typed_menu_after_handset")
                 preset = {"support_intake": "SUPPORT", "personal_story_theme": "PERSONAL_STORY"}.get(pending, "LISTENING")
+                if pending == "support_intake" and is_information_dialogue(state.mode, state.safety_severity):
+                    return self._decision(state, [{"type": "lighting_preset", "preset": preset}]
+                        + self._support_entry_effects(state), "voice_open_pending_activity", clear_audio=True)
                 state.expected_inputs = ["button", "speech", "handset_down"]
                 return self._decision(state, [{"type": "capture_open"}, {"type": "lighting_preset", "preset": preset}], "voice_open_pending_activity")
             if state.profile_status == "identified":
@@ -3101,6 +3114,8 @@ class CanonicalRuntime(SceneMenuMixin):
                         state.support_question_kind = "pain_or_discomfort"
                         state.expected_inputs = ["button_1", "button_5", "button_7", "speech", "handset_down"]
                         entry_effects.append({"type": "support_question", "question": state.support_question_kind})
+                    if button == 4:
+                        entry_effects.extend(self._support_entry_effects(state))
                     return self._decision(state, entry_effects, "button_mode")
                 if button == 2:
                     state.mode, state.substate = "fixed_story_menu", "story_menu_opened"
@@ -3272,6 +3287,8 @@ class CanonicalRuntime(SceneMenuMixin):
                     "schedule_weather": "SCHEDULE_WEATHER",
                 }.get(mode, "ROOT_MENU")
                 effects = [{"type": "lighting_preset", "preset": preset}]
+                if mode == "support_intake":
+                    effects.extend(self._support_entry_effects(state))
                 if mode == "schedule_weather":
                     effects.append({"type": "typed_info_request", "kind": "menu"})
                 if mode == "bear_dialogue" and state.interaction_open:
@@ -3614,6 +3631,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._request_personal_story(state, intent)
             if is_information_dialogue(state.mode, state.safety_severity):
                 pending_information = state.dialogue_information_kind is not None
+                support_intro = state.mode == "support_intake" and state.active_audio_id == "DIALOGUE_INTRO"
                 state.dialogue_information_kind = None
                 if state.mode == "bear_dialogue":
                     state.dialogue_memory.bounded_turns.append({"intent": intent})
@@ -3626,10 +3644,10 @@ class CanonicalRuntime(SceneMenuMixin):
                 if information:
                     return self._decision(state, [{'type':'audio_stop'}, {'type':'capture_close'},
                         self._information_effect(state, information)], 'typed_info_requested', clear_audio=True)
-                return self._decision(state, ([{'type':'audio_stop'}, {'type':'capture_close'}] if pending_information else [])
+                return self._decision(state, ([{'type':'audio_stop'}, {'type':'capture_close'}] if pending_information or support_intro else [])
                     + [{"type": "bounded_dialogue_turn", "intent": intent}],
                     "support_dialogue_turn" if state.mode == "support_intake" else "dialogue_turn",
-                    clear_audio=pending_information)
+                    clear_audio=pending_information or support_intro)
             if state.mode == "schedule_weather":
                 from .canonical_services import day_information_intent
                 information = day_information_intent(transient_text or "")
