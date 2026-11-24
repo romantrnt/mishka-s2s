@@ -126,12 +126,39 @@ async def test_absent_or_open_scope_fails_closed_before_provider(current_weather
 @pytest.mark.parametrize('band', ['1-3', '4-5', '6-7'])
 def test_missing_day_weather_is_explained_without_fake_choice(band):
     page = build_menu_page('schedule_weather', band, day_items=(('date', 'Дата'),))
-    assert page.buttons == (1, 5, 7)
+    assert page.buttons == (1, 7)
     assert [(item.id, item.title) for item in page.items] == [('date', 'Дата')]
     assert 'Погоду сейчас не могу проверить.' in page.spoken_text
     assert page.spoken_text.index('Погоду сейчас') < page.spoken_text.index('Один —')
-    assert page.action_for(5) == ('help', None) and page.action_for(7) == ('back', None)
+    assert page.action_for(5) is None and page.action_for(7) == ('back', None)
     assert len(page.spoken_text) <= 320
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('handset', ['up', 'down'])
+async def test_unconfigured_day_keeps_button_path_back_to_root_help(tmp_path, handset):
+    from test_panel_session_actions import PanelStand
+    from test_demo_story_offline_contract import UnavailableModels
+    h = PanelStand(tmp_path)
+    h.app.schedule_weather = None
+    try:
+        await h.control('start')
+        await h.menu()
+        if handset == 'up':
+            await h.simulator.action({'action': 'handset', 'state': 'up'})
+        models = UnavailableModels()
+        h.app.bounded_s2s.llm = models
+        await h.key(7)
+        assert h.state.mode == 'schedule_weather'
+        assert [item['id'] for item in h.state.scene_menu_descriptor['items']] == ['date']
+        assert 'Погоду сейчас не могу проверить.' in h.state.scene_menu_descriptor['spoken_text']
+        await h.key(7)
+        assert h.state.mode == 'root_menu'
+        await h.key(5)
+        assert h.state.mode == 'wellbeing_check'
+        assert h.state.handset == handset and not models.calls
+    finally:
+        await h.close()
 
 
 def test_weather_on_another_page_is_not_announced_as_unavailable():

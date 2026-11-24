@@ -36,7 +36,22 @@ class GameHarness:
 async def test_game_exit_requires_hold_and_returns_to_game_menu(handset_up,slot):
     h=GameHarness()
     try:
-        await h.start(slot,voice=handset_up)
+        entry=await h.start(slot,voice=handset_up)
+        if not handset_up and slot in {4,5}:
+            # Spoken games cannot invent an on-hook question. Admit the
+            # pending choice, hear its actual prompt, then continue on-hook.
+            assert entry['reason']=='game_handset_required'
+            assert h.state.mode=='awaiting_handset' and h.state.game_engine_state is None
+            assert h.state.pending_game_id==('odd_one_out' if slot==4 else 'word_game')
+            assert (await h.send('HandsetLifted'))['reason']=='game_started'
+            assert h.app._active_audio[h.sid]['content_id']=='PHRASE_020'
+            await h.terminal()
+            assert h.app._active_audio[h.sid]['content_id']=='GAME_PROMPT'
+            await h.terminal()
+            assert h.state.game_audio_stage=='playing'
+            await h.send('HandsetPlaced')
+            assert h.state.handset=='down' and h.state.mode=='game_active'
+            assert h.state.game_return_mode is None  # Pending entry has root as caller.
         short=await h.press(7)
         assert short['reason']=='game_exit_pending'
         assert h.state.mode=='game_active'

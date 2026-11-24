@@ -10,8 +10,18 @@ FILL_ORDER = (14, 13, 10, 9, 6, 3, 1)
 
 def quiz(*, seven=True):
     state = start('quiz', sequence=0, now=100., selection_button=0, run_id='exit-test', age_band='5-7')
-    index = next(i for i, question in enumerate(state.deck) if (7 in dict(question.options)) is seven)
-    return finish_prompt(replace(state, challenge_index=index), 100.).state
+    if seven:
+        index = next(i for i, question in enumerate(state.deck) if 7 in dict(question.options))
+        state = replace(state, challenge_index=index)
+    else:
+        # Current authored quizzes all have seven choices. This valid limited
+        # synthetic challenge isolates hold policy when seven cannot score.
+        question = next(question for question in state.deck if question.answer != 7)
+        question = replace(question, id='synthetic-six-option-quiz',
+            options=tuple(option for option in question.options if option[0] != 7))
+        assert question.answer in dict(question.options) and len(question.options) == 6
+        state = replace(state, deck=(question,), challenge_index=0)
+    return finish_prompt(state, 100.).state
 
 
 def edge(state, kind, at, button=7, **kwargs):
@@ -73,7 +83,11 @@ def test_cancelled_release_never_answers_or_exits(duration):
 
 def test_whole_quiz_has_the_same_hold_policy_even_when_seven_is_not_an_answer():
     state = quiz(seven=False)
-    result = edge(state, 'ButtonPressed', 100.)
+    assert 7 not in game_answer_buttons(state)
+    short = edge(edge(state, 'ButtonPressed', 100.).state, 'ButtonReleased', 100.3)
+    assert short.status == 'exit_aborted'
+    assert short.state.round == 0 and short.state.challenge_attempts == 0
+    result = edge(short.state, 'ButtonPressed', 101.)
     assert result.status == 'exit_pending'
     assert edge(result.state, 'ButtonReleased', 106.).status == 'exit_requested'
 
@@ -89,9 +103,22 @@ def test_repeated_press_and_other_key_noise_cannot_score_or_exit():
 
 
 @pytest.mark.parametrize('band', ['1-3', '3-5', '5-7'])
-def test_current_repeat_pool_does_not_advertise_seven(band):
+def test_current_repeat_pool_keeps_age_choices_and_short_seven_separate_from_exit(band):
     state = start('repeat_pattern', sequence=0, now=100., selection_button=0, age_band=band, immersive=True)
-    assert 7 not in game_answer_buttons(state)
+    assert game_answer_buttons(state) == ((1,2,3,4) if band == '1-3' else tuple(range(1,8)))
+    # A deterministic playable pattern makes the answer meaning explicit;
+    # demonstration timing has independent engine/application coverage.
+    state = replace(state, phase='playing', pattern=(1,2) if band == '1-3' else (7,1))
+    short = edge(edge(state, 'ButtonPressed', 100.).state, 'ButtonReleased', 100.3)
+    assert short.status == ('exit_aborted' if band == '1-3' else 'sequence_partial')
+    expected_index = 0 if band == '1-3' else 1
+    assert short.state.answer_index == expected_index and short.state.round == 0
+    duplicate = edge(short.state, 'ButtonReleased', 100.4)
+    assert duplicate.status == 'released' and duplicate.state.answer_index == expected_index
+    held = edge(state, 'ButtonPressed', 101.).state
+    ready = timer_step(held, 106.).state
+    assert ready.seven_exit_phase == 'ready' and ready.answer_index == 0
+    assert edge(ready, 'ButtonReleased', 107.).status == 'exit_requested'
 
 
 def test_release_without_down_or_after_cancellation_cannot_exit():
@@ -168,17 +195,31 @@ async def test_clinical_onhook_hold_and_hangup_disarm_use_current_question_proje
     clock = [100.]
     app,*_ = build_application(settings=Settings(profile='mock',runtime_mode='clinical'),monotonic_now=lambda:clock[0],background_scheduler=False)
     sequence = 0
-    async def send(kind,button=None):
+    async def send(kind,button=None,payload=None):
         nonlocal sequence
         sequence += 1
-        return await app.receive_async(Event(kind,'clinical-hold',sequence,1.,'test',{} if button is None else {'button_id':button},str(sequence),clock[0]))
+        return await app.receive_async(Event(kind,'clinical-hold',sequence,1.,'test',
+            payload if payload is not None else {} if button is None else {'button_id':button},str(sequence),clock[0]))
+    async def complete():
+        owner=dict(app._active_audio['clinical-hold'])
+        return await send('AudioCompleted',payload={**owner,'response_id':owner['content_id']})
     try:
         for kind,button in [('ButtonPressed',1),('ButtonReleased',1),('ButtonPressed',2),('ButtonReleased',2)]:
             await send(kind,button)
         state = app.canonical_runtime.sessions['clinical-hold']
+        assert state.mode == 'awaiting_handset' and state.pending_game_id == 'quiz'
+        assert state.game_engine_state is None
+        assert (await send('HandsetLifted'))['reason'] == 'game_started'
+        assert app._active_audio['clinical-hold']['content_id'] == 'PHRASE_020'
+        await complete()
+        assert app._active_audio['clinical-hold']['content_id'] == 'GAME_PROMPT'
+        await complete()
         assert state.active_game_id == 'quiz' and state.game_audio_stage == 'playing'
-        if hangup:
-            await send('HandsetLifted')
+        assert current_challenge(state.game_engine_state) is not None
+        assert state.game_engine_state.phase == 'playing' and state.game_return_mode is None
+        if not hangup:
+            await send('HandsetPlaced')
+            assert state.mode == 'game_active' and state.handset == 'down'
         current = dict(app.led.output.snapshot())
         await send('ButtonPressed',7)
         scope = app._game_timer_scopes['clinical-hold']
