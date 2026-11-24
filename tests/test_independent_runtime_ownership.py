@@ -247,6 +247,10 @@ async def test_headless_story_pcm_reaches_real_vad_stt_and_canonical_transition(
     state = app.canonical_runtime.sessions["review"]
     state.mode, state.active_story_id = mode, "fixed_aibolit_v1"
     state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": 700}
+    if mode == "story_paused":
+        checkpoint = await app.receive_async(ev("StoryPositionUpdated", 2,
+            {"story_id": state.active_story_id, "offset_ms": 700}, source="audio_pause"))
+        assert checkpoint["reason"] == "story_checkpoint_updated" and state.story_checkpoint_confirmed
     app.sessions.get("review").current_node = state.mode
     transcripts = []
     class STT:

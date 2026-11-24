@@ -369,6 +369,10 @@ def test_owned_audio_dispatch_failure_is_terminal_even_during_completion(kind):
             state.active_audio_id = "PHRASE_064" if kind == "resume" else "PHRASE_001"
             state.playback_lease = "initial"
             state.welcome_status = "started"
+            if kind == "resume":
+                # Synthetic admitted continuation; this test faults its output adapter.
+                state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": 700}
+                state.story_checkpoint_confirmed = True
         calls = []
         def fail(handle, *args, **kwargs):
             calls.append(handle)

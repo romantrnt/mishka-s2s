@@ -217,6 +217,8 @@ def test_story_resume_uses_new_owned_playback_and_remaining_duration():
         state.dialogue_memory.story_checkpoint = {
             "story_id": "fixed_aibolit_v1", "offset_ms": 30000,
         }
+        # Synthetic admitted continuation; exercise the new lease and remaining watchdog.
+        state.story_checkpoint_confirmed = True
         result = await app._receive_canonical_event(Event(
             "AudioCompleted", sid, 2, 1.0, "test",
             {"response_id": "PHRASE_064", "playback_lease": "announcement"},

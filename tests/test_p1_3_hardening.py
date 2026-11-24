@@ -27,12 +27,17 @@ def test_story_analysis_preserves_confirmed_controls_and_completion():
     paused_ready = runtime.handle(_event("AudioCompleted", 7, paused["state"]["state_version"], {"response_id": "PHRASE_062", "playback_lease": paused["state"]["playback_lease"]}))
     assert paused_ready["state"]["mode"] == "story_paused"
 
-    resumed = runtime.handle(_event("VoiceIntentReady", 8, paused_ready["state"]["state_version"], {"intent": "resume_story", "safety_severity": "none"}))
+    checkpoint = runtime.handle(_event("StoryPositionUpdated", 8, paused_ready["state"]["state_version"],
+        {"story_id": "fixed_aibolit_v1", "offset_ms": 700}))
+    assert checkpoint["reason"] == "story_checkpoint_updated"
+    assert runtime.sessions["p1-3"].story_checkpoint_confirmed
+    resumed = runtime.handle(_event("VoiceIntentReady", 9, checkpoint["state"]["state_version"], {"intent": "resume_story", "safety_severity": "none"}))
     assert resumed["state"]["mode"] == "story_resume_announcement"
-    resumed_ready = runtime.handle(_event("AudioCompleted", 9, resumed["state"]["state_version"], {"response_id": "PHRASE_064", "playback_lease": resumed["state"]["playback_lease"]}))
+    resumed_ready = runtime.handle(_event("AudioCompleted", 10, resumed["state"]["state_version"], {"response_id": "PHRASE_064", "playback_lease": resumed["state"]["playback_lease"]}))
     assert resumed_ready["state"]["mode"] == "fixed_story_playing"
-    analysis = runtime.handle(_event("VoiceIntentReady", 10, resumed_ready["state"]["state_version"], {"intent": "free_speech", "safety_severity": "none"}))
-    completed = runtime.handle(_event("AudioCompleted", 11, analysis["state"]["state_version"], {"response_id": "fixed_aibolit_v1", "playback_lease": analysis["state"]["playback_lease"]}))
+    assert runtime.sessions["p1-3"].dialogue_memory.story_checkpoint == {"story_id": "fixed_aibolit_v1", "offset_ms": 700}
+    analysis = runtime.handle(_event("VoiceIntentReady", 11, resumed_ready["state"]["state_version"], {"intent": "free_speech", "safety_severity": "none"}))
+    completed = runtime.handle(_event("AudioCompleted", 12, analysis["state"]["state_version"], {"response_id": "fixed_aibolit_v1", "playback_lease": analysis["state"]["playback_lease"]}))
     assert completed["state"]["mode"] == "fixed_story_choice_wave"
 
 

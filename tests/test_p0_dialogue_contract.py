@@ -223,13 +223,19 @@ def test_voice_story_actions_pass_application_graph_and_keep_unrelated_blocked()
             state.handset = "up"
             state.active_story_id = "fixed_aibolit_v1"
             state.expected_inputs = ["speech", "handset_down"]
+            sequence = 2
+            if mode == "story_paused":
+                checkpoint = await app.receive_async(event("StoryPositionUpdated", sid, sequence,
+                    {"story_id": state.active_story_id, "offset_ms": 700}, source="audio_pause"))
+                assert checkpoint["reason"] == "story_checkpoint_updated" and state.story_checkpoint_confirmed
+                sequence += 1
             result = await app.receive_async(
-                event("VoiceIntentReady", sid, 2, {"intent": intent}),
+                event("VoiceIntentReady", sid, sequence, {"intent": intent}),
                 transient_text=intent,
             )
             assert result["reason"] == expected
             assert result["reason"] != "transition_rejected"
-            await app.receive_async(event("HandsetPlaced", sid, 3))
+            await app.receive_async(event("HandsetPlaced", sid, sequence + 1))
 
     asyncio.run(run())
 
