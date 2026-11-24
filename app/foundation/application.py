@@ -2001,8 +2001,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 self._game_speech_checks[asyncio.current_task()] = game_check_owner
                 self._sync_game_timer(event.session_id)
             safety_started = self.monotonic_now()
-            wellbeing_question = (current.support_question_kind if current is not None
-                and current.mode == "wellbeing_check" and current.safety_severity == "none" else None)
+            # A delayed reassurance still answers its captured question for
+            # safety classification; it cannot authorize a new question's intent.
+            wellbeing_question = (getattr(_speech_ingress_guard, 'wellbeing_question', None)
+                or (current.support_question_kind if current is not None
+                    and current.mode == "wellbeing_check" and current.safety_severity == "none" else None))
             reassurance = wellbeing_reassurance(text, wellbeing_question)
             safety = (await self.safety_classifier.classify(text, wellbeing_question=wellbeing_question)
                       if reassurance else await self.safety_classifier.classify(text))
@@ -3811,7 +3814,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 utterance_guard = _ingress_guard
                 pipeline._canonical_private_owner = (_ingress_guard
                     if state is not None and state.mode in {"personal_welcome_listen", "game_active", 'game_menu', 'fixed_story_menu',
-                                                           'exhibition_menu_repeat_listen'} else None)
+                                                           'exhibition_menu_repeat_listen', 'wellbeing_check'} else None)
         async def no_llm_turn(_text: str, _generation: int):
             return TurnResult((), (), False, None)
         with self._game_audio_wait(session_id, pipeline, utterance_guard) as audio_wait:
@@ -3896,6 +3899,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         version = state.state_version if state is not None else None
         private_phase = bool(state and state.mode == "personal_welcome_listen")
         menu_repeat_phase = bool(state and state.mode == 'exhibition_menu_repeat_listen')
+        wellbeing_phase = bool(state and state.mode == 'wellbeing_check')
+        wellbeing_question = state.support_question_kind if wellbeing_phase else None
         game_phase = bool(state and state.mode == "game_active")
         game_scope = self._game_voice_scope(session_id)
         game_owner = self._game_speech_check_owner(session_id)
@@ -3913,10 +3918,17 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             # answer a replacement question while its completion awaits expiry.
             and (not menu_repeat_phase or (self.canonical_runtime.sessions.get(session_id) is state
                 and state.state_version == version))
+            # A yes/no answer belongs to the particular wellbeing question,
+            # including a repeated question with a fresh playback owner.
+            and (not wellbeing_phase or (self.canonical_runtime.sessions.get(session_id) is state
+                and state.mode == 'wellbeing_check' and state.state_version == version
+                and state.support_question_kind == wellbeing_question))
             and (not game_phase or (game_scope is not None
                 and self._game_speech_check_owner(session_id) == game_owner
                 and self._game_voice_scope(session_id) == game_scope)))
         phase_guard.lifecycle_current = getattr(transport_guard, "lifecycle_current", transport_guard)
+        if wellbeing_phase and state.safety_severity == 'none':
+            phase_guard.wellbeing_question = wellbeing_question
         if catalogue_scope is not None:
             phase_guard.catalogue_descriptor = copy.deepcopy(getattr(transport_guard, 'catalogue_descriptor', state.scene_menu_descriptor))
         return await self._receive_canonical_audio(session_id, samples, sequence, wait_for_turn=wait_for_turn, _ingress_guard=phase_guard)
