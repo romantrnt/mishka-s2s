@@ -1867,6 +1867,9 @@ class CanonicalRuntime(SceneMenuMixin):
                 raise ValueError("invalid voice admission")
             _voice_admission.consumed = True
         if state.mode == "safety_stop":
+            if event.event_type == "ButtonReleased":
+                _, rejected = self._track_button_gesture(state, event)
+                return self._session_action_noop(state, rejected or "safety_stop_active")
             if event.event_type in {"HandsetPlaced", "SessionCancel", "SessionReset"}:
                 return self._finish_local_safety(state, event,
                     panel_end=session_action_authorized and event.event_type == "SessionCancel")
@@ -2123,7 +2126,9 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.substate = "soft_end"
             state.expected_inputs = ["handset_down"] if state.handset == "up" else ["handset_up"]
             state.state_version += 1
-            lighting = {"type": "lighting_dark"} if self.optional_identity else {"type": "lighting_preset", "preset": "READY"}
+            lighting = ({"type": "lighting_dark"} if self.optional_identity
+                        or (session_action_authorized and event.event_type == "SessionCancel")
+                        else {"type": "lighting_preset", "preset": "READY"})
             return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "identity_cleared"}, lighting], "soft_end" if event.event_type == "SessionCancel" else "session_closed")
         if event.event_type == "SessionStarted":
             if state.substate == "profile_cleanup_failed":
