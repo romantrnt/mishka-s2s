@@ -71,6 +71,9 @@ const pendingPCM = [];
 const pendingTextInputs = [];
 const buttonInputs = Object.fromEntries(BUTTON_IDS.map(id => [id, 'released']));
 const buttonInputOwners = new Map();
+const buttonGestures = new Map(), buttonTerminals = new Map();
+const buttonGestureInstance = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let buttonGestureCounter = 0;
 const buttonRefs = new Map();
 let liveClientEntries = [];
 let liveSessionId = null;
@@ -144,6 +147,13 @@ let activePost = null;
 let postGeneration = 0;
 var wsWriteOwner = false;
 const wsButtonSockets = new Map();
+const wsButtonAcks = new Map();
+let wsButtonRequest = 0;
+function rejectButtonAcks(socket, error) {
+  for (const [id, item] of wsButtonAcks) if (item.socket === socket) {
+    clearTimeout(item.timer);wsButtonAcks.delete(id);item.reject(error);
+  }
+}
 
 function postAdmissionAvailable() {
   return !current?.simulator || (wsSnapshotReady && !wsReloadRequired && !authBlocked);
@@ -252,19 +262,35 @@ function post(path, body = {}) {
       && wsWriteOwner && postAdmissionAvailable()) {
     const useWs = isButtonPress
       ? (!activePost && !postQueue.length)
-      : wsButtonSockets.get(owner) === ws;
+      : wsButtonSockets.get(owner)?.gesture === payload.gesture_id
+        && (wsButtonSockets.get(owner)?.socket === ws
+          || (payload.cancelled === true && wsButtonSockets.has(owner)));
     if (useWs) {
+      if (wsButtonAcks.size >= 128) return Promise.reject(new Error('Очередь подтверждений кнопок заполнена.'));
+      const socket = ws;
+      const requestId = `button-${++wsButtonRequest}`;
+      let pending;
+      const receipt = new Promise((resolve, reject) => {
+        pending = {socket, resolve, reject, button: payload.button_id, gesture: payload.gesture_id, owner, release: isButtonRelease};
+        pending.timer = setTimeout(() => {
+          if (wsButtonAcks.get(requestId) !== pending) return;
+          wsButtonAcks.delete(requestId);reject(new Error('Нет подтверждения кнопки. Отпускание будет отменено безопасно.'));
+        }, FETCH_TIMEOUT_MS);
+        wsButtonAcks.set(requestId, pending);
+      });
+      receipt.catch(() => {});
       try {
         const wsMsg = legacyButtonType
-          ? { type: legacyButtonType, ...payload }
-          : { type: 'simulator_action', ...payload };
+          ? { type: legacyButtonType, ...payload, request_id: requestId }
+          : { type: 'simulator_action', ...payload, request_id: requestId };
         ws.send(JSON.stringify(wsMsg));
-        if (isButtonPress) wsButtonSockets.set(owner, ws);
-        else if (isButtonRelease) wsButtonSockets.delete(owner);
+        if (isButtonPress) wsButtonSockets.set(owner, {socket, gesture: payload.gesture_id});
         recordLiveInput(path, payload);
-        return Promise.resolve(null);
-      } catch (_) {
+        return receipt;
+      } catch (error) {
+        clearTimeout(pending.timer);wsButtonAcks.delete(requestId);pending.reject(error);
         wsButtonSockets.delete(owner);
+        return receipt;
       }
     }
   }
@@ -650,6 +676,7 @@ function connect() {
     refresh({ includeStatus: true, includeState: false }).finally(schedulePolling);
   };
   socket.onclose = () => {
+    rejectButtonAcks(socket, new Error('Соединение прервано. Неподтверждённые кнопки будут отменены.'));
     if (ws !== socket) return;
     stopWebsocketHeartbeat();
     ws = null;
@@ -682,6 +709,18 @@ function connect() {
     try {
       const message = parseMessage(event.data);
       if (!message) { showError("WebSocket sent invalid JSON"); return; }
+      if (message.type === 'button_ack') {
+        const item = wsButtonAcks.get(message.request_id);
+        if (!item || item.socket !== socket || item.button !== message.button_id
+            || item.gesture !== message.gesture_id || message.stage === 'queued') return;
+        if (!['completed', 'rejected'].includes(message.stage)) return;
+        clearTimeout(item.timer);wsButtonAcks.delete(message.request_id);
+        if (item.release && wsButtonSockets.get(item.owner)?.gesture === item.gesture)
+          wsButtonSockets.delete(item.owner);
+        if (message.stage === 'rejected' || message.error) item.reject(new Error(message.error?.code || 'Кнопка не принята'));
+        else item.resolve({button_ack: message});
+        return;
+      }
       if (message.type === "admission_error") {
         wsSnapshotReady = false;
         cancelOrdinaryPosts();
@@ -2007,12 +2046,64 @@ function initDiagnostics() {
   }
 }
 
+function buttonGestureScope() {
+  return JSON.stringify([current?.simulator?.instance_id,current?.simulator?.epoch,
+    current?.simulator?.session?.context_generation,session(),current?.session?.node]);
+}
+function forgetButtonTerminal(id, record) {
+  const records=buttonTerminals.get(id);records?.delete(record);
+  if(!records?.size)buttonTerminals.delete(id);
+}
+function recoverButtonTerminal(id, record) {
+  if(record.recovering)return record.recovering;
+  record.cancelled=true;
+  record.recovering=post('/stand/button-released',{session_id:record.sessionId,button_id:Number(id),
+    state:'released',gesture_id:record.gesture,cancelled:true})
+    .then(()=>forgetButtonTerminal(id,record)).finally(()=>{record.recovering=null;});
+  return record.recovering;
+}
+function beginButtonGesture(id) {
+  const prior=[...(buttonTerminals.get(id)||[])];
+  if(prior.length>=2){showError('Отпускание кнопки ещё не подтверждено.');return false;}
+  const record={gesture:`${buttonGestureInstance}:${++buttonGestureCounter}`,at:performance.now(),
+    sessionId:session(),scope:buttonGestureScope()};
+  record.dispatched=new Promise(resolve=>{record.didDispatch=resolve;});buttonGestures.set(id,record);
+  (async()=>{
+    try {
+      for(const old of prior)await recoverButtonTerminal(id,old);
+      if(record.cancelled||record.scope!==buttonGestureScope()){record.didDispatch(false);return;}
+      const receipt=post('/stand/button',{session_id:record.sessionId,button_id:Number(id),state:'pressed',gesture_id:record.gesture});
+      record.didDispatch(true);await receipt;
+    } catch(error){record.didDispatch(false);showError(error);
+      if(buttonGestures.get(id)===record)releaseButton(id,record.sessionId,true).catch(showError);
+      else if(buttonTerminals.get(id)?.has(record))recoverButtonTerminal(id,record).catch(showError);
+    }
+  })();
+  return true;
+}
 function releaseButton(id, sessionId = session(), cancelled = false, owner = null) {
   if (buttonInputs[id] !== 'pressed' || (owner !== null && buttonInputOwners.get(id) !== owner)) return Promise.resolve(null);
   buttonInputs[id] = 'released';
   buttonInputOwners.delete(id);
   const button = buttonRefs.get(id);
   if (button) button.classList.remove('pressed');
+  const record=buttonGestures.get(id);
+  if(record){
+    buttonGestures.delete(id);record.cancelled=cancelled;
+    if(!buttonTerminals.has(id))buttonTerminals.set(id,new Set());buttonTerminals.get(id).add(record);
+    return (async()=>{
+      if(!await record.dispatched){forgetButtonTerminal(id,record);return;}
+      const duration=Math.min(120000,Math.max(0,Math.round(performance.now()-record.at)));
+      try {if(!record.cancelled&&Number(id)!==7&&duration>=600)
+        await post(duration>=5000?'/stand/button-long-hold':'/stand/button-hold',
+          {session_id:record.sessionId,button_id:Number(id),duration_ms:duration,gesture_id:record.gesture});
+      } catch(error){record.cancelled=true;}
+      try {const result=await post('/stand/button-released',{session_id:record.sessionId,button_id:Number(id),
+        state:'released',gesture_id:record.gesture,...(record.cancelled?{cancelled:true}:{})});
+        forgetButtonTerminal(id,record);return result;
+      } catch(error){record.cancelled=true;throw error;}
+    })();
+  }
   return post('/stand/button-released', { session_id: sessionId, button_id: Number(id), state: 'released', ...(cancelled ? {cancelled:true} : {}) });
 }
 
@@ -2032,12 +2123,12 @@ function createButtons() {
     button.onpointerdown = async event => {
       event.preventDefault();
       if (buttonInputs[id] === 'pressed') return;
+      if (!beginButtonGesture(id)) return;
       down = performance.now();
       buttonInputs[id] = 'pressed';
       buttonInputOwners.set(id,event.pointerId);
       button.classList.add('pressed');
       button.setPointerCapture(event.pointerId);
-      try { await post('/stand/button', { button_id: Number(id), state: 'pressed' }); } catch (_) { /* shown in the error panel */ }
     };
     button.onpointerup = async event => {
       event.preventDefault();
@@ -2047,10 +2138,7 @@ function createButtons() {
         return;
       }
       button.classList.remove('pressed');
-      const duration = Math.round(performance.now() - down);
       const sessionId = session();
-      if (duration >= 5000) post('/stand/button-long-hold', { session_id: sessionId, button_id: Number(id), duration_ms: duration }).catch(() => {});
-      else if (duration >= 600) post('/stand/button-hold', { session_id: sessionId, button_id: Number(id), duration_ms: duration }).catch(() => {});
       await releaseButton(id, sessionId,false,event.pointerId).catch(() => {});
     };
     button.onpointercancel = event => releaseButton(id,session(),true,event.pointerId).catch(() => {});

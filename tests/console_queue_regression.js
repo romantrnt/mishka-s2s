@@ -69,6 +69,7 @@ function installBrowserHandlers(h) {
   };
   Object.assign(h.context, {
     BUTTON_IDS: [1], buttonInputs: {}, buttonRefs: new Map(), buttonInputOwners: new Map(),
+    buttonGestures: new Map(), buttonTerminals: new Map(), buttonGestureInstance: 'queue-test', buttonGestureCounter: 0,
     performance: {now: () => 700},
     document: {createElement: () => ({
       setAttribute: () => {}, setPointerCapture: () => {},
@@ -80,7 +81,7 @@ function installBrowserHandlers(h) {
     storySpeechGeneration: 1, audioReady: true,
     current: {session: {node: 'fixed_story_playing'}},
   });
-  vm.runInContext(source.slice(source.indexOf('function releaseButton('), source.indexOf("$('enable-audio').onclick")), h.context);
+  vm.runInContext(source.slice(source.indexOf('function buttonGestureScope('), source.indexOf("$('enable-audio').onclick")), h.context);
   vm.runInContext(source.slice(source.indexOf('function handleAudioStop('), source.indexOf('function speakCommands(')), h.context);
   h.context.createButtons();
   return {sources, button: buttons[0]};
@@ -93,6 +94,7 @@ async function lifecycleUnderNormalBacklog() {
   const browser = installBrowserHandlers(h);
   h.context.buttonInputs[1] = 'pressed'; // The admitted press above owns this release.
   h.context.buttonInputOwners.set(1,1);
+  h.context.buttonGestures.set(1,{gesture:'queue-test:1',at:0,sessionId:'first-session',dispatched:Promise.resolve(true)});
   const released = browser.button.onpointerup({preventDefault: () => {},pointerId:1});
   await tick(); // The rejected hold must still enqueue its finally release.
   const identity = id => ({
@@ -472,10 +474,11 @@ async function scopedPersonalStoryCancellation() {
 async function wsButtonDeliveryAndHttpFallback() {
   const h = harness();
   const sentWs = [];
-  const socket = { readyState: 1, send: raw => sentWs.push(JSON.parse(raw)) };
   Object.assign(h.context, {
-    ws: socket,
-    WebSocket: { OPEN: 1 },
+    ws: null, pageLifecycleStopped: false, document: {hidden:false},
+    location: {protocol:'http:',host:'queue.test'}, parseMessage: JSON.parse,
+    setTimeout: h.context.window.setTimeout, clearTimeout: h.context.window.clearTimeout,
+    WebSocket: class {static OPEN=1;static CONNECTING=0;constructor(){this.readyState=1;}send(raw){sentWs.push(JSON.parse(raw));}},
     wsWriteOwner: true,
     wsSnapshotReady: true,
     wsReloadRequired: false,
@@ -486,8 +489,16 @@ async function wsButtonDeliveryAndHttpFallback() {
         admission: { input_ready: true, connected: true }, devices: { handset: { state: 'up' } } },
     },
   });
-  await h.context.post('/stand/simulator/action', { action: 'button', button_id: 7, press: 'press', epoch: 3 });
-  await h.context.post('/stand/simulator/action', { action: 'button', button_id: 7, press: 'release', epoch: 3 });
+  vm.runInContext(source.slice(source.indexOf('function connect()'),source.indexOf('async function fetchWithTimeout(')),h.context);
+  h.context.connect();h.context.wsWriteOwner=true;h.context.wsSnapshotReady=true;
+  const ack=stage=>{const message=sentWs.at(-1);h.context.ws.onmessage({data:JSON.stringify({type:'button_ack',
+    request_id:message.request_id,button_id:message.button_id,stage})});};
+  let complete=false;
+  const press=h.context.post('/stand/simulator/action', { action: 'button', button_id: 7, press: 'press', epoch: 3 }).then(()=>{complete=true;});
+  ack('queued');await tick();assert(!complete,'queued receipt cannot acknowledge admission');
+  ack('completed');await press;
+  const released=h.context.post('/stand/simulator/action', { action: 'button', button_id: 7, press: 'release', epoch: 3 });
+  ack('completed');await released;
   assert.strictEqual(h.requests.length, 0, 'owner WS delivers button press/release without HTTP FIFO delay');
   assert.deepStrictEqual(sentWs.map(m => [m.type, m.button_id, m.press]), [
     ['simulator_action', 7, 'press'],

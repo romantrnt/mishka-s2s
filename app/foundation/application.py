@@ -312,6 +312,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             fresh.last_sequence_by_source = dict(old.last_sequence_by_source)
             fresh.seen_correlations = set(old.seen_correlations)
             fresh.accepted_buttons_down = list(old.accepted_buttons_down)
+            fresh._button_gesture_owners = copy.deepcopy(getattr(old, '_button_gesture_owners', {}))
+            fresh._button_gesture_terminals = copy.deepcopy(getattr(old, '_button_gesture_terminals', {}))
             fresh.readiness_held_buttons = list(dict.fromkeys(old.readiness_held_buttons + old.accepted_buttons_down))
             runtime.clear_identity(old)
         fresh.substate = 'profile_replacing'
@@ -1956,9 +1958,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 self.publisher.publish(event)
             if not rejected and event.event_type == 'ButtonPressed':
                 button = event.payload['button_id']
-                if button not in current.accepted_buttons_down:
-                    current.accepted_buttons_down.append(button)
-                if button not in current.readiness_held_buttons:
+                fresh, rejected = self.canonical_runtime._track_button_gesture(current, candidate)
+                if fresh and button not in current.readiness_held_buttons:
                     current.readiness_held_buttons.append(button)
             return self._identity_result(event.session_id, rejected or 'profile_replacing')
         if (self._profile_replacing(event.session_id) and event.event_type == 'VoiceIntentReady'
@@ -2402,9 +2403,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 reset_sync_step("lighting", lambda: cancel_effects(clear=True)
                                 if callable(cancel_effects) else self.led.clear_all())
 
+        button_current = (self.canonical_runtime.button_input_guard()
+            if event.event_type in {'ButtonPressed', 'ButtonReleased', 'ButtonHeld', 'ButtonLongHeld'} else lambda: True)
         def still_current() -> bool:
             return (
-                self._session_revisions.get(event.session_id) == revision
+                button_current() and self._session_revisions.get(event.session_id) == revision
                 and self._session_epochs.get(event.session_id, 0) == epoch
                 and self.canonical_runtime.sessions.get(event.session_id) is state_owner
                 and (not fresh_profile_prepared or identity_current is None or identity_current(False))

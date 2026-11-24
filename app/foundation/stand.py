@@ -13,6 +13,7 @@ import math
 import os
 import numpy as np
 import secrets
+import re
 import struct
 import threading
 import time
@@ -833,6 +834,7 @@ class HardwareIntegrationStand:
         self._browser_pcm_binding = None
         self._browser_pcm_playback = None
         self._browser_capture_owners = {}
+        self._revoked_button_owners = set()
         self._audio_event_sequence = 0
         self._lighting_wave = {'active': False, 'stage': 0, 'total_stages': len(READINESS_WAVE_GROUPS), 'elements': []}
         # PTY writes/reads are a transport transaction.  Audio inference is
@@ -2393,7 +2395,12 @@ class HardwareIntegrationStand:
             if admits is None or not admits():
                 return {"state": "idle", "reason": "runtime_unavailable", "outputs": []}
         try:
-            result = await self.application.receive_async(event, None)
+            if event.event_type in {'ButtonPressed', 'ButtonReleased', 'ButtonHeld', 'ButtonLongHeld'}:
+                with self.application.canonical_runtime.button_input_scope(
+                        f'physical:{getattr(self, "_hid_generation", 0)}:{source}'):
+                    result = await self.application.receive_async(event, None)
+            else:
+                result = await self.application.receive_async(event, None)
         except LightingFaultLatchedError:
             # The native writer may latch after admission, including for an
             # ordinary button. Report that known lighting failure, not HID loss.
@@ -2763,7 +2770,24 @@ class HardwareIntegrationStand:
         await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
         return result
 
-    async def inject(self, message_type: str, payload: dict[str,Any], session_id: str | None = None, *, wait_for_audio: bool = True, _ingress_guard=None):
+    async def inject(self, message_type: str, payload: dict[str,Any], session_id: str | None = None, *, wait_for_audio: bool = True, _ingress_guard=None, _button_input=None):
+        if message_type in {'button', 'button_released', 'button_hold', 'button_long_hold'}:
+            owner, gesture = _button_input or ('operator_http', None)
+            if message_type == 'button_released' and payload.get('cancelled') is True and gesture:
+                state = self.application.canonical_runtime.sessions.get(session_id or self.active_session_id)
+                record = getattr(state, '_button_gesture_owners', {}).get(payload.get('button_id'))
+                if record and record[0] in self._revoked_button_owners and record[1] == gesture:
+                    owner = record[0]
+            try:
+                with self.application.canonical_runtime.button_input_scope(owner, gesture, current=_ingress_guard):
+                    return await self._inject_transport(message_type, payload, session_id,
+                        wait_for_audio=wait_for_audio, _ingress_guard=_ingress_guard)
+            except ValueError:
+                return {'error': {'code': 'validation_error', 'message': 'invalid button gesture'}}
+        return await self._inject_transport(message_type, payload, session_id,
+            wait_for_audio=wait_for_audio, _ingress_guard=_ingress_guard)
+
+    async def _inject_transport(self, message_type: str, payload: dict[str,Any], session_id: str | None = None, *, wait_for_audio: bool = True, _ingress_guard=None):
         sid = session_id or self.active_session_id
         if message_type == "audio_pcm":
             _ingress_guard = _ingress_guard or self._audio_owner_guard(sid)
@@ -4364,13 +4388,13 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                 return {"session_id": str(sid), "state": getattr(existing.state, "value", existing.state), "node": existing.current_node, "reason": "idempotent_duplicate", "outputs": []}
         return transport_response(await stand.inject("handset",{"state":payload.get("state")},sid))
     @api.post("/stand/button")
-    async def button(payload:dict): return transport_response(await stand.inject("button",{"button_id":payload.get("button_id"),"state":"pressed"},payload.get("session_id")))
+    async def button(payload:dict): return transport_response(await stand.inject("button",{"button_id":payload.get("button_id"),"state":"pressed"},payload.get("session_id"),_button_input=('operator_http',payload.get('gesture_id'))))
     @api.post("/stand/button-released")
-    async def button_released(payload:dict): return transport_response(await stand.inject("button_released",{"button_id":payload.get("button_id"),"state":"released",**({'cancelled':payload['cancelled']} if 'cancelled' in payload else {})},payload.get("session_id")))
+    async def button_released(payload:dict): return transport_response(await stand.inject("button_released",{"button_id":payload.get("button_id"),"state":"released",**({'cancelled':payload['cancelled']} if 'cancelled' in payload else {})},payload.get("session_id"),_button_input=('operator_http',payload.get('gesture_id'))))
     @api.post("/stand/button-hold")
-    async def button_hold(payload:dict): return transport_response(await stand.inject("button_hold",{"button_id":payload.get("button_id"),"duration_ms":payload.get("duration_ms")},payload.get("session_id")))
+    async def button_hold(payload:dict): return transport_response(await stand.inject("button_hold",{"button_id":payload.get("button_id"),"duration_ms":payload.get("duration_ms")},payload.get("session_id"),_button_input=('operator_http',payload.get('gesture_id'))))
     @api.post("/stand/button-long-hold")
-    async def button_long_hold(payload:dict): return transport_response(await stand.inject("button_long_hold",{"button_id":payload.get("button_id"),"duration_ms":payload.get("duration_ms")},payload.get("session_id")))
+    async def button_long_hold(payload:dict): return transport_response(await stand.inject("button_long_hold",{"button_id":payload.get("button_id"),"duration_ms":payload.get("duration_ms")},payload.get("session_id"),_button_input=('operator_http',payload.get('gesture_id'))))
     @api.post("/stand/text")
     async def text(payload:dict): return transport_response(await stand.inject("text",{"text":str(payload.get("text",""))},payload.get("session_id")))
     @api.post("/stand/raw")
@@ -4422,17 +4446,36 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
         # processed only after the old response finished.
         audio_tasks: set[asyncio.Task[Any]] = set()
         max_pending_audio = 16  # includes both PCM frames and flush requests
-        control_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=32)
+        control_queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+        button_owner = 'browser_ws:' + secrets.token_hex(12)
+
+        async def button_ack(payload, stage, result=None):
+            request_id = payload.get('request_id')
+            if isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,80}', request_id):
+                await websocket.send_json({'type': 'button_ack', 'request_id': request_id,
+                    'button_id': payload.get('button_id'), 'gesture_id': payload.get('gesture_id'),
+                    'stage': stage, 'error': (result or {}).get('error'),
+                    'reason': (result or {}).get('reason')})
 
         async def run_control_queue() -> None:
-            while True:
-                item_kind, item_payload = await control_queue.get()
+            while not asyncio.current_task().cancelling():
+                item_kind, queued, binding = await control_queue.get()
+                item_payload = dict(queued)
+                item_payload.pop('request_id', None)
                 try:
+                    if not stand.hub.owner_binding_current(binding):
+                        await button_ack(queued, 'rejected', {'error': {'code': 'stale_input_owner'}})
+                        continue
                     if item_kind == "simulator_action":
-                        result = await stand.remote_devices.action(item_payload)
+                        result = await stand.remote_devices.action(item_payload, input_owner=button_owner,
+                            input_guard=lambda: stand.hub.owner_binding_current(binding))
                     else:
                         sid_arg = item_payload.pop("_session_id", None)
-                        result = await stand.inject(item_kind, item_payload, sid_arg)
+                        gesture = item_payload.pop('gesture_id', None)
+                        result = await stand.inject(item_kind, item_payload, sid_arg,
+                            _button_input=(button_owner, gesture),
+                            _ingress_guard=lambda: stand.hub.owner_binding_current(binding))
+                    await button_ack(queued, 'rejected' if isinstance(result, dict) and result.get('error') else 'completed', result)
                     if isinstance(result, dict) and result.get("error"):
                         error = result["error"]
                         await websocket.send_json({"type": "error", "error": {
@@ -4563,7 +4606,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                         elif control_queue.full():
                             await websocket.send_json({"type": "error", "error": {"code": "simulator_backpressure", "message": "simulator input queue is full"}})
                         else:
-                            control_queue.put_nowait(("simulator_action", {k: v for k, v in message.items() if k != "type"}))
+                            control_queue.put_nowait(("simulator_action", {k: v for k, v in message.items() if k != "type"}, stand.hub.owner_binding()))
+                            await button_ack(message, 'queued')
                     elif kind in {"button", "button_released", "button_hold", "button_long_hold"}:
                         if control_queue.full():
                             await websocket.send_json({"type": "error", "error": {"code": "simulator_backpressure", "message": "simulator input queue is full"}})
@@ -4571,7 +4615,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                             control_queue.put_nowait((kind, {
                                 **{k: v for k, v in message.items() if k not in {"type", "session_id"}},
                                 "_session_id": message.get("session_id"),
-                            }))
+                            }, stand.hub.owner_binding()))
+                            await button_ack(message, 'queued')
                     elif kind in {"handset", "text"}:
                         result = await stand.inject(kind,{k:v for k,v in message.items() if k not in {"type","session_id"}},message.get("session_id"))
                         if isinstance(result, dict) and result.get("error"):
@@ -4591,11 +4636,25 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                     await websocket.send_json({"type":"error","error":{"code":"invalid_audio_frame","message":"audio PCM frame is invalid"}})
         except WebSocketDisconnect: pass
         finally:
+            runtime = stand.application.canonical_runtime
+            if any(runtime.owned_button_gestures(sid, button_owner) for sid in runtime.sessions):
+                stand._revoked_button_owners.add(button_owner)
             stand.hub.disconnect(websocket)
             # Starlette may already have cancelled the enclosing AnyIO scope.
             with anyio.CancelScope(shield=True):
                 control_task.cancel()
                 await asyncio.gather(control_task, return_exceptions=True)
+                # A cancelled connection can abandon only its own admitted keys.
+                # Always cancel; a normal seven release could complete an exit.
+                for sid in tuple(runtime.sessions):
+                    for button_id, gesture in runtime.owned_button_gestures(sid, button_owner):
+                        stand._physical_sequence += 1
+                        with runtime.button_input_scope(button_owner, gesture):
+                            await stand.application.receive_async(Event('ButtonReleased', sid,
+                                stand._physical_sequence, time.time(), 'browser_button_cleanup',
+                                {'button_id': button_id, 'cancelled': True}))
+                if not any(runtime.owned_button_gestures(sid, button_owner) for sid in runtime.sessions):
+                    stand._revoked_button_owners.discard(button_owner)
                 # Finished collecting tasks no longer exist in audio_tasks, but
                 # their RAM capture still belongs to this write lease.
                 for sid, owned in capture_owners.items():
