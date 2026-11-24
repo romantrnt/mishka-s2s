@@ -4489,11 +4489,17 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
 
         control_task = asyncio.create_task(run_control_queue(), name="mishka-ws-simulator-actions")
         capture_owners = {}
+        audio_upload_lock = asyncio.Lock()
 
         def capture_current(sid, owned):
             return stand._browser_capture_owners.get(sid) is owned and owned[1]()
 
         async def browser_audio(samples, sample_rate, sid, flush_silence, binding, session_guard):
+            # One upload may contain several UART frames; preserve their wire order.
+            async with audio_upload_lock:
+                return await receive_browser_audio(samples, sample_rate, sid, flush_silence, binding, session_guard)
+
+        async def receive_browser_audio(samples, sample_rate, sid, flush_silence, binding, session_guard):
             # Serialize replacement cleanup with PCM admission, not the control loop.
             lock = stand._audio_ingress_locks.setdefault(sid, asyncio.Lock())
             async with lock:
