@@ -1129,7 +1129,7 @@ class CanonicalRuntime(SceneMenuMixin):
     def has_private_context(state: CanonicalState) -> bool:
         return bool(state.profile_ref or state.display_name or state.onboarding_name_collected
                     or state.history_tail or state.dialogue_memory.bounded_turns
-                    or state.dialogue_memory.story_checkpoint or state.active_story_id
+                    or state.dialogue_memory.story_checkpoint or state.dialogue_memory.last_game or state.active_story_id
                     or state.active_game_id or state.pending_game_offer or state.game_progress)
 
     def _start_exhibition_welcome(self, state, monotonic_now, *, reason, preserve_lighting=False):
@@ -1566,7 +1566,8 @@ class CanonicalRuntime(SceneMenuMixin):
                 if engine.game_id != 'free_lights':
                     decision["effects"].insert(0, {
                         "type": "game_lighting", "animation": "success",
-                        "origin_button": button_id, "next_preset": "ROOT_MENU",
+                        "origin_button": button_id,
+                        "next_preset": {"bear_dialogue": "BEAR_DIALOGUE", "game_menu": "GAME_MENU"}.get(state.mode, "ROOT_MENU"),
                     })
                 return decision
             effects = []
@@ -3137,6 +3138,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     if button == 7:
                         entry_effects.append({"type": "typed_info_request", "kind": "menu"})
                     if button == 5:
+                        state.dialogue_memory.last_game = None
                         state.support_question_kind = "pain_or_discomfort"
                         state.expected_inputs = ["button_1", "button_5", "button_7", "speech", "handset_down"]
                         entry_effects.append({"type": "support_question", "question": state.support_question_kind})
@@ -3194,6 +3196,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 and getattr(state.game_engine_state, 'immersive', False)
                 and button in game_answer_buttons(state.game_engine_state, include_narrowed=False)
             ) and not (self.exhibition_mode and state.mode == "exhibition_age_selection"):
+                state.dialogue_memory.last_game = None
                 question = state.support_question_kind if state.mode == "wellbeing_check" else None
                 state.support_question_kind = question or "pain_or_discomfort"
                 state.mode, state.expected_inputs, state.state_version = "wellbeing_check", ["button_1", "button_5", "button_7", "speech", "handset_down"], state.state_version + 1
@@ -3517,7 +3520,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.dialogue_memory.touch(now)
                     state.state_version += 1
                     return self._decision(state, [{'type':'bounded_dialogue_turn',
-                        'intent':intent, 'game_id':'word_game', 'game_run_id':state.game_engine_state.run_id,
+                        'intent':intent, 'game_id':'word_game',
                         'age_band':state.age_band}], 'word_game_turn')
                 if (state.mode == 'game_active' and state.active_game_id in {'quiz', 'odd_one_out'}
                         and state.game_engine_state is not None):
