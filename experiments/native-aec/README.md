@@ -3,7 +3,10 @@
 This experiment never opens devices, starts an application, changes turn-taking
 or touches the deployed environment. It uses the previously generated public
 Vox555 corpus, validates input SHA256, and processes 10 ms mono 16 kHz frames
-on CPU with `pywebrtc-audio==0.2.0`. NS, AGC and high-pass filtering are off.
+on CPU with `pywebrtc-audio==0.2.0`. NS, AGC and high-pass flags are requested off.
+The inspected upstream binding enables a high-pass filter when AEC is enabled,
+even with that flag off. Its exact source-to-wheel identity still needs checking;
+do not attribute all measured attenuation to the echo suppressor alone.
 
 ```sh
 python3 -m venv /tmp/mishka-aec-env
