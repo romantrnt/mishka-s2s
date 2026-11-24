@@ -1821,10 +1821,15 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.accepted_buttons_down.remove(button)
             if event.event_type == "ButtonPressed" and not fresh_button_press:
                 # A held edge cannot answer or navigate in a successor scene.
-                reason = ("exhibition_menu_choice_held"
-                    if button == state.menu_early_choice_button
-                    or (self.exhibition_mode and state.mode.startswith("exhibition_menu_"))
-                    else "button_held")
+                if self.exhibition_mode and state.mode in {"exhibition_name_question", "exhibition_name_capture"}:
+                    reason = "exhibition_name_button_release_required"
+                elif self.exhibition_mode and state.mode in {"exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"}:
+                    reason = "exhibition_age_button_release_required"
+                else:
+                    reason = ("exhibition_menu_choice_held"
+                        if button == state.menu_early_choice_button
+                        or (self.exhibition_mode and state.mode.startswith("exhibition_menu_"))
+                        else "button_held")
                 return self._session_action_noop(state, reason)
         if event.event_type == "HandsetPlaced" and state.handset == "down":
             return self._decision(state, [], "handset_already_placed")
