@@ -558,33 +558,36 @@ def test_dev_topic_policy_accepts_unlisted_topics_but_keeps_forbidden_terms():
     assert not policy.check("Мне нужен диагноз", ("__all__",), ("диагноз", "medicine"))
 
 
-def test_completed_say_tag_reaches_playback_before_stream_finishes():
-    release=asyncio.Event()
+def test_ordinary_completed_say_waits_for_full_action_set_before_playback():
+    release=asyncio.Event(); paused=asyncio.Event()
     class GatedLLM:
         async def stream(self,messages,request_id,cancelled):
             yield "<say>Первая тестовая фраза.</say>"
+            paused.set()
             await release.wait()
             yield '<action type="led" pattern="calm"/>'
     playback=MockPlaybackController(); engine=BoundedConversationEngine(GatedLLM(),MockTTSProvider(),RVCProvider(),playback)
     async def flow():
         task=asyncio.create_task(engine.run_text_turn("fixture",context()))
-        for _ in range(10):
-            await asyncio.sleep(0)
-            if playback.played: break
-        assert playback.played and not task.done()
+        await asyncio.wait_for(paused.wait(), .5)
+        await asyncio.sleep(.01)  # Give a wrongly admitted audio worker a chance to play.
+        assert not playback.played and not task.done()
         release.set(); result=await task
         assert result.actions[0].value=="led"
+        assert result.chunks==("Первая тестовая фраза.",) and playback.played
     asyncio.run(flow())
 
 
-def test_real_streaming_chunk_reaches_playback_before_llm_finishes_and_logs_pipeline():
-    release=asyncio.Event()
+@pytest.mark.parametrize("node_id,early_pcm", [("bear_dialogue", False), ("warmup_speech", True)])
+def test_legacy_streaming_obeys_context_terminal_gate_and_logs_pipeline(node_id,early_pcm):
+    release=asyncio.Event(); paused=asyncio.Event()
 
     class StreamingLLM:
         async def stream(self,messages,request_id,cancelled):
             yield "<say>Первый "
             await asyncio.sleep(0)
             yield "фрагмент.</say>"
+            paused.set()
             await release.wait()
             yield "<say>Второй фрагмент.</say>"
 
@@ -597,14 +600,20 @@ def test_real_streaming_chunk_reaches_playback_before_llm_finishes_and_logs_pipe
 
     playback=TimedPlayback(); engine=BoundedConversationEngine(StreamingLLM(),MockTTSProvider(),RVCProvider(),playback)
     async def flow():
-        started=time.perf_counter(); task=asyncio.create_task(engine.run_text_turn("fixture",context()))
-        for _ in range(100):
-            await asyncio.sleep(0.001)
-            if playback.played: break
-        assert playback.played and not task.done()
-        first_audio_latency=(playback.first_playback_at-started)*1000
+        ctx=context(); ctx.node_id=node_id
+        started=time.perf_counter(); task=asyncio.create_task(engine.run_text_turn("fixture",ctx))
+        await asyncio.wait_for(paused.wait(), .5)
+        await asyncio.sleep(.01)
+        if early_pcm:
+            for _ in range(100):
+                await asyncio.sleep(0.001)
+                if playback.played: break
+        assert bool(playback.played) is early_pcm and not task.done()
+        released_at=time.perf_counter()
         release.set(); result=await task
         assert result.chunks==("Первый фрагмент.","Второй фрагмент.")
+        assert (playback.first_playback_at < released_at) is early_pcm
+        first_audio_latency=(playback.first_playback_at-started)*1000
         assert first_audio_latency < (time.perf_counter()-started)*1000
         events=[item["event"] for item in engine.metrics.snapshot()["events"]]
         for name in ("token_received","chunk_closed","tts_started","audio_ready","playback_started"):
@@ -955,25 +964,29 @@ def test_first_audio_gate_failure_wins_simultaneous_ready_and_hangup_cleans_wait
     asyncio.run(flow())
 
 
-def test_closed_say_plays_before_later_unfinished_tag_fails_and_stops_audio():
-    release = asyncio.Event()
+def test_ordinary_closed_say_then_unfinished_tag_fails_without_any_pcm():
+    release = asyncio.Event(); paused = asyncio.Event(); pcm_calls = []
     class LLM:
         async def stream(self, messages, request_id, cancelled):
             yield "<say>Первая законченная фраза.</say>"
+            paused.set()
             await release.wait()
             yield "<say>Незаконченный ответ"
-    playback = MockPlaybackController()
+    class Playback(MockPlaybackController):
+        async def play(self, audio):
+            pcm_calls.append(audio)
+            await super().play(audio)
+    playback = Playback()
     engine = BoundedConversationEngine(LLM(), MockTTSProvider(), RVCProvider(), playback)
     async def flow():
         task = asyncio.create_task(engine.run_text_turn("fixture", context()))
-        for _ in range(100):
-            await asyncio.sleep(0.001)
-            if playback.played:
-                break
-        assert playback.played and not task.done()
+        await asyncio.wait_for(paused.wait(), .5)
+        await asyncio.sleep(.01)
+        assert not pcm_calls and not task.done()
         release.set()
         result = await task
         assert result.fallback_reason == "provider_or_validation_failure"
+        assert not pcm_calls and not playback.played
         assert playback.stops >= 1
         assert not engine.active_queues
     asyncio.run(flow())

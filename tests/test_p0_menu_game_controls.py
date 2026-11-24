@@ -164,13 +164,14 @@ def test_game_target_is_ignored_while_exit_confirmation_waits_for_7_or_6():
             sid, mode="game_active", handset="up", game_target=1, game_level=0, game_engine_state=GameState("catch_light"),
         )
         await app.receive_async(_event("ButtonPressed", sid, 1, {"button_id": 7}))
-        blocked = await app.receive_async(_event("ButtonPressed", sid, 2, {"button_id": 1}))
+        await app.receive_async(_event("ButtonReleased", sid, 2, {"button_id": 7}))
+        blocked = await app.receive_async(_event("ButtonPressed", sid, 3, {"button_id": 1}))
         assert blocked["canonical_state"]["mode"] == "game_active"
         assert blocked["canonical_state"]["substate"] == "game_exit_confirmation"
         assert blocked["canonical_state"]["game_success_streak"] == 0
         assert blocked["canonical_state"]["game_attempts"] == 0
         assert not any(effect.get("type") in {"game_level", "game_retry"} for effect in blocked["outputs"])
-        confirmed = await app.receive_async(_event("ButtonPressed", sid, 3, {"button_id": 7}))
+        confirmed = await app.receive_async(_event("ButtonPressed", sid, 4, {"button_id": 7}))
         assert confirmed["reason"] == "game_exit_confirmed"
 
         normal = "game-normal-target"

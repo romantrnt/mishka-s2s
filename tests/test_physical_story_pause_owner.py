@@ -78,9 +78,10 @@ async def test_real_button6_preserves_physical_story_checkpoint_and_resume(revoc
                 'playback_id':lease['playback_id'],'playback_lease':lease['playback_lease']},f'complete-{seq}',float(seq)))
         await complete(3,'PHRASE_062')
         assert app.canonical_runtime.sessions[sid].mode == 'story_paused'
-        await app.receive_async(Event('ButtonPressed',sid,4,4.,'button',{'button_id':6},'resume-button',4.))
+        await app.receive_async(Event('ButtonReleased',sid,4,4.,'button',{'button_id':6},'release-pause-button',4.))
+        await app.receive_async(Event('ButtonPressed',sid,5,5.,'button',{'button_id':6},'resume-button',5.))
         assert app.canonical_runtime.sessions[sid].mode == 'story_resume_announcement'
-        result = await complete(5,'PHRASE_064')
+        result = await complete(6,'PHRASE_064')
         stories=[args for args in resumed if args[0]==story]
         assert stories and stories[0][3]==250
     finally:
