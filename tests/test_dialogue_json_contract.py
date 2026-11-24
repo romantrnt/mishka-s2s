@@ -67,6 +67,10 @@ async def test_actual_ollama_json_is_closed_before_speech(monkeypatch):
     '{"type":"play_story","story_id":"fixed_aibolit_v1"}',  # No trusted snapshot.
     '{"type":"request_information","kind":"raw_sql"}',
     '{"type":"say_return","text":"Привет.","target":"unsafe"}',
+    '{"type":"say_return","text":"Привет."}',
+    '{"type":"say_return","text":"Привет.","target":"root_menu","extra":true}',
+    '{"type":"say_return","text":true,"target":"root_menu"}',
+    '{"type":"say_return","text":"Раз два три четыре пять шесть семь восемь девять.","target":"root_menu"}',
     '{"type":"say_led","text":"Привет.","pattern":"blink"}',
     '{"type":"say","text":true}',
     '{"type":"say","text":NaN}',
@@ -220,7 +224,7 @@ async def test_quality_scope_is_not_added_to_trusted_application_or_unscoped_sem
 async def test_speech_with_existing_led_or_return_is_still_supported(monkeypatch, action):
     wire(monkeypatch, json.dumps(action, ensure_ascii=False))
     e = engine()
-    result = await e.run_text_turn("Привет", context())
+    result = await e.run_text_turn("Вернись в меню." if action["type"] == "say_return" else "Привет", context())
     assert result.chunks == (action["text"],) and e.playback.played
     assert len(result.actions) == 1
     assert result.actions[0].value == ("led" if action["type"] == "say_led" else "return_to_scenario")
@@ -253,8 +257,11 @@ async def test_parallel_requests_keep_separate_wire_mode_age_and_catalogue(monke
     assert all(result.chunks == ("Я слушаю тебя.",) for result in results)
     schemas = [request["format"] for request in requests]
     assert len(schemas) == 2
-    bear = next(schema for schema in schemas if len(schema["oneOf"]) > 3)
-    other = next(schema for schema in schemas if len(schema["oneOf"]) == 3)
+    def types(schema):
+        return {branch['properties']['type']['enum'][0] for branch in schema['oneOf']}
+    bear = next(schema for schema in schemas if 'play_story' in types(schema))
+    other = next(schema for schema in schemas if types(schema) == {'say', 'say_led'})
+    assert 'say_return' not in types(bear) and 'offer_game' in types(bear)
     assert '{0,7}' in bear["oneOf"][0]["properties"]["text"]["pattern"]
     assert '{0,29}' in other["oneOf"][0]["properties"]["text"]["pattern"]
     assert 'fixed_aibolit_v1' in json.dumps(bear) and 'fixed_aibolit_v1' not in json.dumps(other)

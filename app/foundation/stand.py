@@ -1052,7 +1052,8 @@ class HardwareIntegrationStand:
         version = getattr(state, "state_version", None)
         lease = self.application._active_audio.get(sid)
         catalogue_scope = self.application._catalogue_voice_scope(sid)
-        private_phase = (node in {"personal_welcome_listen","fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
+        private_phase = (node in {"personal_welcome_listen","fixed_story_menu","game_menu","personal_story_theme","schedule_weather",
+                                  "exhibition_name_capture", "exhibition_age_selection"}
                          or bool(lease and lease.get("content_id") == "PERSONAL_WELCOME"))
         game_phase = node == "game_active"
         game_scope = self.application._game_voice_scope(sid) if game_phase else None
@@ -3054,6 +3055,13 @@ class HardwareIntegrationStand:
         if session is None:
             return list(range(1, 8))
         mode = str(session.current_node or "idle")
+        if mode in {"exhibition_name_question", "exhibition_name_capture", "exhibition_age_prompt",
+                    "exhibition_age_hint", "exhibition_age_selection", "exhibition_age_complete",
+                    "exhibition_onboarding_complete"}:
+            state = self.application.canonical_runtime.sessions.get(session.session_id)
+            if state is None or state.mode != mode or state.safety_severity != "none":
+                return []
+            return [button for button in range(1, 8) if f"button_{button}" in state.expected_inputs]
         if mode in {"fixed_story_menu", "personal_story_theme", "schedule_weather"}:
             state = self.application.canonical_runtime.sessions.get(session.session_id)
             if (state is None or state.mode != mode or state.scene_menu_active != mode

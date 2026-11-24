@@ -11,14 +11,13 @@ import html
 import math
 import re
 from collections.abc import Iterable
+from .spoken_numbers import normalize_spoken_numbers
 
 SILERO_SAMPLE_RATE = 48_000
 RVC_SAMPLE_RATE = 40_000
 DEFAULT_PRE_ROLL_MS = 150
 SAFE_PEAK = 0.92
 
-_TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
-_NUMBER_RE = re.compile(r"(?P<minus>-)?(?P<num>[0-9]+(?:[.,][0-9]+)?)")
 _DASH_PAUSE_RE = re.compile(r"\s+[—–-]\s+")
 _ELLIPSIS_RE = re.compile(r"(?:\.\.\.|…)\s*")
 _OPENER_PAUSE_RE = re.compile(
@@ -39,9 +38,6 @@ _PRONUNCIATION_REPLACEMENTS = (
     (re.compile(r"\bAPI\b", re.IGNORECASE), "эй-пи-ай"),
     (re.compile(r"\bLangGraph\b", re.IGNORECASE), "лэнг-граф"),
     (re.compile(r"\bQwen\b", re.IGNORECASE), "куэн"),
-    (re.compile(r"°\s*[CС]\b"), " градусов"),
-    (re.compile(r"°"), " градусов"),
-    (re.compile(r"%"), " процентов"),
 )
 
 # Silero's automatic accentor is good, but these high-frequency product
@@ -73,35 +69,13 @@ def normalize_text(text: str) -> str:
     high-frequency 'ё' forms are restored, and emphatic runs are collapsed
     without flattening natural exclamation or question intonation.
     """
-    from num2words import num2words
-
     value = re.sub(r"\s+", " ", str(text)).strip()
     if not value:
         raise ValueError("Silero cannot synthesize empty text")
     value = re.sub(r"!+", "!", value)
     value = re.sub(r"\?+", "?", value)
 
-    def number_to_words(match: re.Match[str]) -> str:
-        prefix = "минус " if match.group("minus") else ""
-        raw = match.group("num").replace(",", ".")
-        if "." not in raw:
-            return prefix + num2words(int(raw), lang="ru")
-        integer, fraction = raw.split(".", 1)
-        digits = " ".join(num2words(int(digit), lang="ru") for digit in fraction)
-        return f"{prefix}{num2words(int(integer), lang='ru')} целых {digits}"
-
-    def time_to_words(match: re.Match[str]) -> str:
-        hours = num2words(int(match.group(1)), lang="ru")
-        mins_raw = match.group(2)
-        mins_int = int(mins_raw)
-        if mins_int == 0:
-            return f"{hours} ноль ноль"
-        if mins_int < 10:
-            return f"{hours} ноль {num2words(mins_int, lang='ru')}"
-        return f"{hours} {num2words(mins_int, lang='ru')}"
-
-    value = _TIME_RE.sub(time_to_words, value)
-    value = _NUMBER_RE.sub(number_to_words, value)
+    value = normalize_spoken_numbers(value)
     for pattern, replacement in _PRONUNCIATION_REPLACEMENTS:
         value = pattern.sub(replacement, value)
 

@@ -677,9 +677,9 @@ async function onboardingGuidance(){
  for(const [node,hint] of Object.entries({
   voice_welcome:'Сейчас Мишка поздоровается. Подожди немного.',
   exhibition_introduction:'Дослушай Мишку.',
-  exhibition_name_question:'Дослушай вопрос Мишки.',
-  exhibition_age_prompt:'Дослушай Мишку. Потом можно будет ответить.',
-  exhibition_age_hint:'Дослушай Мишку. Потом можно будет ответить.',
+  exhibition_name_question:'Имя можно пропустить: нажми 7.',
+  exhibition_age_prompt:'Нажми свой возраст: 1–7.',
+  exhibition_age_hint:'Нажми свой возраст: 1–7.',
   exhibition_age_selection:'Нажми цифру своего возраста (1–7). Можно включить микрофон или написать возраст в «Инструментах».',
   exhibition_age_complete:'Мишка завершает знакомство. Подожди немного.',
   exhibition_onboarding_complete:'Сейчас появится меню. Подожди немного.',
@@ -692,10 +692,10 @@ async function onboardingGuidance(){
   state.simulator.prompt={text:'Текущая записанная реплика'};context.render(state);
   assert.strictEqual(fields['phone-instruction'].textContent,'Текущая записанная реплика','valid-state transcript keeps priority');
  }
- const off='Включи микрофон и назови своё имя. Можно написать его в «Инструментах».';
- const pending='Разреши микрофон в окне браузера. Или напиши своё имя в «Инструментах».';
- const accepting='Назови своё имя. Можно написать его в «Инструментах».';
- const paused='Дослушай Мишку. Потом назови своё имя или напиши его в «Инструментах».';
+ const off='Имя необязательно. Нажми 7, чтобы пропустить.';
+ const pending=off;
+ const accepting='Назови имя или нажми 7, чтобы пропустить.';
+ const paused=off;
  const name=show('exhibition_name_capture');assertHint(off);
  const enable=fields['phone-microphone'].onclick();assertHint(pending);await tick();
  permissions.shift().resolve({getTracks:()=>[{stop:()=>{}}]});await enable;assertHint(accepting);

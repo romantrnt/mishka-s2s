@@ -538,10 +538,15 @@ async def test_control_only_offer_preserves_last_spoken_caller_turn_without_rese
         assert h.state.mode == 'bear_dialogue'
         assert any(effect.get('resolution') == 'bounded_dialogue_completed' for effect in result['outputs'])
         assert h.app.conversation_contexts[sid].turns == limit
+        previous = h.app.conversation_contexts[sid]
+        history, owner = list(previous.history), previous._owner
         before = len(h.model.calls)
         result = await h.send('SpeechReceived', text='Ещё один вопрос')
-        assert len(h.model.calls) == before
-        assert any(effect.get('fallback_reason') == 'bounded_limit' for effect in result['outputs'])
+        current = h.app.conversation_contexts[sid]
+        assert len(h.model.calls) == before + 1 and h.state.mode == 'bear_dialogue'
+        assert current.turns == 1 and current.max_turns == limit and current.max_duration_seconds == 120
+        assert current._owner == owner and current.history[:-1] == history
+        assert not h.app._game_callers and not any(effect.get('fallback_reason') for effect in result['outputs'])
     finally:
         await h.close()
 

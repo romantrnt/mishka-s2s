@@ -24,10 +24,11 @@ import uuid
 import wave
 from .activity_requests import (ActivityRequestGate, ActivityRequestReceipt,
                                 OllamaActivityRequestClassifier, activity_target, named_game_candidate)
+from .spoken_numbers import sentence_matches
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -583,6 +584,24 @@ class ConversationContext:
     verified_story_ids: tuple[str, ...] = ()
 
 
+def dialogue_exit_requested(text):
+    """Only a complete current command grants ordinary dialogue navigation."""
+    value = " ".join(str(text or "").casefold().replace("ё", "е").split())
+    if any(mark in value for mark in ('"', "'", '«', '»', '“', '”', '‘', '’', '`')):
+        return False
+    value = re.sub(r"^(?:мишка|здоровяк)[,!:]?\s+", "", value)
+    value = re.sub(r"(?:,?\s+пожалуйста)?[.!?…]*$", "", value).strip(" ,.!?…")
+    return bool(re.fullmatch(
+        r"(?:пока|до свидания|стоп|хватит(?: разговаривать| беседовать)?|"
+        r"(?:давай )?(?:закончим|закончи)(?: разговор| беседу)?|"
+        r"(?:вернись|верни меня|вернемся|давай вернемся|хочу вернуться|я хочу вернуться) в (?:главное )?меню|"
+        r"(?:хочу |я хочу )?в (?:главное )?меню)", value))
+
+
+class UnrequestedDialogueReturn(ValueError):
+    """A syntactically valid model exit has no current user authority."""
+
+
 @dataclass(frozen=True)
 class DialogueResponseContract:
     """Immutable request scope; the JSON schema constrains syntax, not authority."""
@@ -591,6 +610,7 @@ class DialogueResponseContract:
     catalogue: bool
     story_ids: tuple[str, ...] = ()
     speech_only: bool = False
+    allow_return: bool = True
 
     @classmethod
     def from_context(cls, context):
@@ -624,8 +644,9 @@ class DialogueResponseContract:
                     "required":list(properties), "additionalProperties":False}
         text = {"type":"string", "pattern":self.text_pattern}
         branches = [branch("say", text=text),
-                    branch("say_led", text=dict(text), pattern=enum(("calm","attention","off"))),
-                    branch("say_return", text=dict(text), target=enum(("root_menu","fixed_story_menu","menu_ready")))]
+                    branch("say_led", text=dict(text), pattern=enum(("calm","attention","off")))]
+        if self.allow_return:
+            branches.append(branch("say_return", text=dict(text), target=enum(("root_menu","fixed_story_menu","menu_ready"))))
         if self.speech_only:
             return {"oneOf": branches[:1]}
         if self.catalogue:
@@ -653,7 +674,10 @@ class DialogueResponseContract:
             raise ValueError("dialogue_json_invalid") from exc
         if not isinstance(value, dict):
             raise ValueError("dialogue_json_object_required")
-        branch = next((item for item in self.schema()["oneOf"]
+        unrequested_return = value.get("type") == "say_return" and not self.allow_return
+        # Only a well-formed return is repairable; malformed JSON stays closed.
+        validation_contract = replace(self, allow_return=True, speech_only=False) if unrequested_return else self
+        branch = next((item for item in validation_contract.schema()["oneOf"]
                        if value.get("type") == item["properties"]["type"]["enum"][0]), None)
         if branch is None or set(value) != set(branch["required"]):
             raise ValueError("dialogue_json_fields")
@@ -668,6 +692,8 @@ class DialogueResponseContract:
             text = value["text"]
             if len(text.split()) > self.max_words or len(re.findall(r"[.!?]", text)) > (1 if self.young else 2):
                 raise ValueError("age_word_budget_exceeded")
+            if unrequested_return:
+                raise UnrequestedDialogueReturn("dialogue_return_unrequested")
             xml = "<say>" + text + "</say>"
             if kind == "say_led":
                 xml += '<action type="led" pattern="' + value["pattern"] + '"/>'
@@ -1095,8 +1121,8 @@ class _DialogueJSONBridge:
             chars.append(ch)
             i += 1
         decoded = "".join(chars)
-        match = re.match(r'^(.+?[.!?…]+)(?=\s|$)', decoded, re.S)
-        if match and re.search(r'\b[а-яА-ЯёЁa-zA-Z]\.$', match.group(1)):
+        match = next(iter(sentence_matches(decoded)), None)
+        if match and re.search(r'\b[а-яА-ЯёЁa-zA-Z]\.$', match.group(0)):
             match = None
         if not match and len(decoded) >= 32:
             clause = re.match(r'^(.{28,}?[,;:])(?=\s)', decoded, re.S)
@@ -1104,7 +1130,7 @@ class _DialogueJSONBridge:
                 match = clause
         if not match:
             return None
-        phrase = match.group(1).strip()
+        phrase = match.group(0).strip()
         return phrase if any(c.isalnum() for c in phrase) else None
 
     async def stream(self, messages, request_id, cancelled):
@@ -1319,7 +1345,7 @@ class SentenceChunker:
         self.buffer += token
         result=[]
         while True:
-            boundaries=list(re.finditer(r".+?[.!?…]+(?=\s|$)", self.buffer, re.S))
+            boundaries=sentence_matches(self.buffer)
             if len(boundaries) >= self.min_sentences:
                 selected=boundaries[min(self.max_sentences, len(boundaries))-1]
                 result.append(self.buffer[:selected.end()].strip())
@@ -3809,9 +3835,15 @@ class BoundedConversationEngine:
         age_words = POLICIES.get(context.profile.age_band, POLICIES["3-5"]).max_words
         structured = getattr(self.llm, "supports_dialogue_json", False) is True
         response_contract = DialogueResponseContract.from_context(context)
+        ordinary_dialogue = context.node_id in {"bear_dialogue", "support_intake"} and not getattr(context, "_game_id", None)
+        return_allowed = not ordinary_dialogue or dialogue_exit_requested(text)
+        response_contract = replace(response_contract, allow_return=return_allowed)
+        # Legacy XML puts actions after a closed say; vet that action set
+        # before any speech can cross PCM. JSON say keeps its existing path.
+        defer_legacy_speech = ordinary_dialogue and not structured and not return_allowed
         if not activities_allowed:
             response_contract = DialogueResponseContract(response_contract.max_words, response_contract.young,
-                                                         False, response_contract.story_ids, speech_only=True)
+                                                         False, response_contract.story_ids, speech_only=True, allow_return=False)
         topic_instruction = ("Open developer dialogue: accept any topic unless it violates the safety rules. "
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
@@ -3820,6 +3852,8 @@ class BoundedConversationEngine:
             from .system_prompt import JSON_WIRE_INSTRUCTION, LEGACY_XML_WIRE_INSTRUCTION
             policy = policy.replace(JSON_WIRE_INSTRUCTION, LEGACY_XML_WIRE_INSTRUCTION)
         speech_form = 'SPEECH_FORM: complete <say>...</say> blocks, optionally followed by one <action type="led" pattern="calm|attention|off"/> or <action type="return_to_scenario" target="root_menu|fixed_story_menu|menu_ready"/> when required by the current scenario. '
+        if not return_allowed:
+            speech_form = 'SPEECH_FORM: complete <say>...</say> blocks, optionally followed by one <action type="led" pattern="calm|attention|off"/>. The application owns navigation; never end the conversation, announce a menu or emit return_to_scenario without a current explicit exit request. '
         if context.node_id == "bear_dialogue":
             output_format = ('Choose exactly ONE output form. ' + speech_form
                 + 'CATALOGUE_FORM: exactly one allowlisted offer_game, open_catalog, play_story or request_information action with current catalogue IDs, without say, led, return_to_scenario or other actions. Use this form only for a meaningful request to use an available activity or sourced information. An unspecified game/story uses open_catalog; a named game uses offer_game; a known named recording uses play_story; explicit factual date/weather/child appointment questions use request_information. Ordinary conversation, including fictional Mishka home, uses SPEECH_FORM. Never guess a story ID or private fact. ')
@@ -3839,6 +3873,9 @@ class BoundedConversationEngine:
                 + f'Spoken text must use at most {age_words} words total. Express a shorter complete thought with normal separate words; never glue words or invent abbreviations to fit. '
                 + ('YOUNG_SPEECH: Сначала выбери одну простую законченную мысль на 3–6 слов. Вырази её сразу одним коротким русским предложением с обычными границами слов; не уплотняй длинную фразу склейкой или сокращениями. Strict maximum 8 words. Do not add a follow-up question unless the current scenario requires it. '
                    if response_contract.young else 'Use one or two short Russian sentences. '))
+            if not return_allowed:
+                output_format = output_format.replace('or type=say_return with text/target only when the scenario requires it. ',
+                    'with no return action. The application owns navigation; continue the current conversation without a goodbye or menu segue. ')
         native_streaming = _native_audio_stream_method(turn_tts) is not None
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
@@ -3848,6 +3885,7 @@ class BoundedConversationEngine:
                 " The proposed activity action was not supported by the current utterance. "
                 "Answer this SAME original utterance with ordinary speech, using its actual topic. "
                 "Do not offer or open games/stories/catalogues, and do not restart an interview. "
+                "Do not end this conversation or announce a goodbye or menu transition. "
                 "If the request is unclear, ask one short relevant clarification. SPEECH_FORM only.")
         llm_started=time.perf_counter(); llm_completed=False
         # Canonical runtime owns intent routing; no demo quick-reply
@@ -3870,7 +3908,7 @@ class BoundedConversationEngine:
             getattr(context, "_game_id", None) == "word_game" and context.turns + 1 >= context.max_turns
             and (word_turn is None or word_turn.accepted)) if structured else None
         try:
-            chunks=[]; actions=[]; spoken_chars=0; raw_spoken=""
+            chunks=[]; actions=[]; spoken_chars=0; raw_spoken=""; deferred_chunks=[]
             activity_receipt = None
             activity_rejected = False
             chunker=SentenceChunker(self.config.max_chunk_chars, self.config.first_chunk_chars,
@@ -4029,8 +4067,11 @@ class BoundedConversationEngine:
             async def flush_closed_say():
                 # Only a complete </say> block crosses the streaming audio
                 # boundary. An open or malformed tag remains buffered.
-                if activities_allowed:
-                    await close_chunks(chunker.flush())
+                ready = chunker.flush()
+                if defer_legacy_speech or not activities_allowed:
+                    deferred_chunks.extend(ready)
+                else:
+                    await close_chunks(ready)
 
             async def handle(item):
                 nonlocal spoken_chars, raw_spoken, activity_receipt, activity_rejected
@@ -4052,10 +4093,16 @@ class BoundedConversationEngine:
                         safe += " "
                     spoken_chars += len(safe)
                     if spoken_chars > self.config.max_response_chars: raise ValueError("total model speech exceeded limit")
-                    if activities_allowed:
-                        await close_chunks(chunker.feed(safe))
+                    ready = chunker.feed(safe)
+                    if defer_legacy_speech or not activities_allowed:
+                        deferred_chunks.extend(ready)
+                    else:
+                        await close_chunks(ready)
                 else:
                     if not activities_allowed:
+                        activity_rejected = True
+                        return
+                    if item.value == "return_to_scenario" and not return_allowed:
                         activity_rejected = True
                         return
                     if item.value in {"offer_game", "open_catalog", "play_story", "request_information"} and (context.node_id != "bear_dialogue" or raw_spoken.strip() or actions):
@@ -4093,6 +4140,8 @@ class BoundedConversationEngine:
                                 await consume_task
                             raise queue.error
                         await consume_task
+                except UnrequestedDialogueReturn:
+                    activity_rejected = True
                 finally:
                     if not consume_task.done():
                         consume_task.cancel()
@@ -4102,7 +4151,11 @@ class BoundedConversationEngine:
                         failure_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await failure_task
-            await close_chunks(chunker.flush())
+            if not activity_rejected:
+                if defer_legacy_speech or not activities_allowed:
+                    deferred_chunks.extend(chunker.flush())
+                else:
+                    await close_chunks(chunker.flush())
             if activity_rejected and activities_allowed:
                 await queue.abort(context.session_id, invalidate=False)
                 if self.cancel.cancelled(context.session_id, token):
@@ -4112,8 +4165,8 @@ class BoundedConversationEngine:
                                                  activities_allowed=False, expected_repair_token=token)
             if activity_rejected:
                 await close_chunks(("О чём поговорим?",))
-            elif not activities_allowed:
-                await close_chunks((raw_spoken,))
+            elif defer_legacy_speech or not activities_allowed:
+                await close_chunks(tuple(deferred_chunks))
             if not chunks and not actions:
                 raise ValueError("empty_model_speech")
             generation_started = time.perf_counter() - provider.elapsed_s

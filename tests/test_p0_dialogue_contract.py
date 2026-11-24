@@ -184,7 +184,7 @@ def test_late_bounded_result_after_hangup_cannot_speak_or_restore_context():
     asyncio.run(run())
 
 
-def test_limit_fallback_exits_dialogue_with_approved_recorded_phrase():
+def test_mid_turn_limit_keeps_dialogue_with_approved_recorded_recovery():
     class Limited:
         async def run_text_turn(self, text, context):
             return TurnResult((), (), True, "bounded_limit")
@@ -202,9 +202,11 @@ def test_limit_fallback_exits_dialogue_with_approved_recorded_phrase():
             transient_text="ещё",
         )
         spoken = [item for item in result["outputs"] if item.get("type") == "speak"]
-        assert spoken and spoken[-1]["phrase_id"] == "PHRASE_095"
-        assert result["canonical_state"]["mode"] == "root_menu"
-        assert sid not in app.conversation_contexts
+        assert spoken and spoken[-1]["phrase_id"] == "PHRASE_104" and spoken[-1]["playback_lease"]
+        assert not any(item.get("phrase_id") == "PHRASE_095" for item in spoken)
+        assert result["canonical_state"]["mode"] == "bear_dialogue"
+        context = app.conversation_contexts[sid]
+        assert context.turns == 0 and context.max_turns == 5 and context.max_duration_seconds == 120
 
     asyncio.run(run())
 

@@ -990,10 +990,35 @@ class CanonicalRuntime(SceneMenuMixin):
         state.expected_inputs = ["audio_completed", "handset_down"]
         state.state_version += 1
         return self._decision(state, [
+            {"type": "audio_stop"}, {"type": "capture_close"},
+            {"type": "lighting_dark"},
             {"type": "speak", "phrase_id": "PHRASE_107"},
             {"type": "lighting_select_button", "button": age_years, "state": 1},
             {"type": "exhibition_onboarding_step", "step": "age_selected", "age": age_years, "age_band": band, "source": source},
         ], "exhibition_age_selected", clear_audio=True)
+
+    def _exhibition_name_hint(self, state: CanonicalState, reason: str) -> dict[str, Any]:
+        state.mode = "exhibition_name_capture"
+        state.expected_inputs = ["speech", "button_5", "button_7", "audio_completed", "handset_down"]
+        state.state_version += 1
+        return self._decision(state, [
+            {"type": "audio_stop"}, {"type": "capture_close"},
+            {"type": "lighting_dark"},
+            {"type": "lighting", "elements": list(BUTTON_WAVE_ELEMENTS[5] + BUTTON_WAVE_ELEMENTS[7]), "state": 1},
+            self._dialogue_prompt("NAME_BUTTON_HINT", "Имя можно не говорить. Чтобы пропустить, нажми семь."),
+            {"type": "exhibition_onboarding_step", "step": "name_capture"},
+        ], reason, clear_audio=True)
+
+    def _start_exhibition_age(self, state: CanonicalState, reason: str) -> dict[str, Any]:
+        state.mode = "exhibition_age_prompt"
+        state.expected_inputs = [*(f"button_{button}" for button in range(1, 8)), "audio_completed", "handset_down"]
+        state.state_version += 1
+        return self._decision(state, [
+            {"type": "audio_stop"}, {"type": "capture_close"},
+            {"type": "lighting_wave_intent", "pattern": "age_digits_wave", "groups": "digits", "source": "canonical"},
+            {"type": "speak", "phrase_id": "PHRASE_108"},
+            {"type": "exhibition_onboarding_step", "step": "age_question"},
+        ], reason, clear_audio=True)
 
 
     def reset(self, session_id: str) -> None:
@@ -2326,6 +2351,45 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [], "event_ignored")
             if event.payload.get("playback_lease") and event.payload.get("playback_lease") != state.playback_lease:
                 return self._decision(state, [], "event_ignored")
+            if (self.exhibition_mode and event.event_type == "AudioFailed"
+                    and state.mode == "exhibition_name_question" and response_id == "PHRASE_099"
+                    and state.active_audio_id == response_id and state.playback_lease
+                    and event.payload.get("playback_lease") == state.playback_lease):
+                state.mode = "exhibition_name_capture"
+                state.audio_status = "failed"
+                state.expected_inputs = ["speech", "button_5", "button_7", "handset_down"]
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "audio_stop"}, {"type": "lighting_dark"},
+                    {"type": "lighting", "elements": list(BUTTON_WAVE_ELEMENTS[5] + BUTTON_WAVE_ELEMENTS[7]), "state": 1},
+                    {"type": "capture_open"},
+                    {"type": "content_blocked", "error_code": "exhibition_name_audio_unavailable"},
+                ], "exhibition_name_question_failed", clear_audio=True)
+            if (self.exhibition_mode and state.mode == "exhibition_name_capture"
+                    and response_id == "NAME_BUTTON_HINT"):
+                if (state.active_audio_id != response_id or not state.playback_lease
+                        or event.payload.get("playback_lease") != state.playback_lease):
+                    return self._decision(state, [], "exhibition_name_hint_stale_audio")
+                failed = event.event_type == "AudioFailed"
+                state.audio_status = "failed" if failed else "finished"
+                state.expected_inputs = ["speech", "button_5", "button_7", "handset_down"]
+                state.state_version += 1
+                return self._decision(state, [{"type": "capture_open"}],
+                    "exhibition_name_hint_failed" if failed else "exhibition_name_hint_finished", clear_audio=True)
+            if (self.exhibition_mode and event.event_type == "AudioFailed"
+                    and state.mode in {"exhibition_age_prompt", "exhibition_age_hint"}
+                    and response_id in {"PHRASE_108", "PHRASE_075"}
+                    and state.active_audio_id == response_id and state.playback_lease
+                    and event.payload.get("playback_lease") == state.playback_lease):
+                state.mode = "exhibition_age_selection"
+                state.audio_status = "failed"
+                state.expected_inputs = [*(f"button_{button}" for button in range(1, 8)), "speech", "handset_down"]
+                state.state_version += 1
+                return self._decision(state, [
+                    {"type": "lighting_wave_intent", "pattern": "age_digits_wave", "groups": "digits", "source": "canonical"},
+                    {"type": "capture_open"},
+                    {"type": "content_blocked", "error_code": "exhibition_age_audio_unavailable"},
+                ], "exhibition_age_audio_failed", clear_audio=True)
             if response_id in {"DIALOGUE_INTRO", "DIALOGUE_OFFER", "DIALOGUE_RETURN", "DIALOGUE_FINISH"}:
                 if (not state.active_audio_id or not event.payload.get("playback_lease")
                         or event.payload["playback_lease"] != state.playback_lease):
@@ -2513,22 +2577,18 @@ class CanonicalRuntime(SceneMenuMixin):
             if str(event.payload.get("response_id") or "") != "PHRASE_078":
                 return self._decision(state, [], "exhibition_introduction_completion_ignored")
             state.mode, state.substate = "exhibition_name_question", "awaiting_name_question_audio"
-            state.expected_inputs = ["audio_completed", "handset_down"]
+            state.expected_inputs = ["button_5", "button_7", "audio_completed", "handset_down"]
             state.state_version += 1
             return self._decision(state, [
+                {"type": "lighting_dark"},
+                {"type": "lighting", "elements": list(BUTTON_WAVE_ELEMENTS[5] + BUTTON_WAVE_ELEMENTS[7]), "state": 1},
                 {"type": "speak", "phrase_id": "PHRASE_099"},
                 {"type": "exhibition_onboarding_step", "step": "name_question"},
             ], "exhibition_name_question_started", clear_audio=True)
         if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_name_question":
             if str(event.payload.get("response_id") or "") != "PHRASE_099":
                 return self._decision(state, [], "exhibition_name_question_completion_ignored")
-            state.mode, state.substate = "exhibition_name_capture", "awaiting_name"
-            state.expected_inputs = ["speech", "handset_down"]
-            state.state_version += 1
-            return self._decision(state, [
-                {"type": "capture_open"},
-                {"type": "exhibition_onboarding_step", "step": "name_capture"},
-            ], "exhibition_name_capture_started", clear_audio=True)
+            return self._exhibition_name_hint(state, "exhibition_name_capture_started")
         if event.event_type == "AudioCompleted" and self.exhibition_mode and state.mode == "exhibition_name_capture":
             if str(event.payload.get("response_id") or "") != "PHRASE_074":
                 return self._decision(state, [], "exhibition_name_audio_completion_ignored")
@@ -2538,7 +2598,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if str(event.payload.get("response_id") or "") != "PHRASE_108":
                 return self._decision(state, [], "exhibition_age_question_completion_ignored")
             state.mode, state.substate = "exhibition_age_hint", "awaiting_age_hint_audio"
-            state.expected_inputs = ["audio_completed", "handset_down"]
+            state.expected_inputs = [*(f"button_{button}" for button in range(1, 8)), "audio_completed", "handset_down"]
             state.state_version += 1
             return self._decision(state, [
                 {"type": "speak", "phrase_id": "PHRASE_075"},
@@ -2936,7 +2996,18 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.story_menu_skip_button = button
                 state.state_version += 1
                 return self._decision(state, [{"type": "audio_stop"}], "story_menu_hint_skipped", clear_audio=True)
-            if self.exhibition_mode and state.mode in {"exhibition_name_capture", "exhibition_age_prompt", "exhibition_age_hint", "exhibition_onboarding_complete", "exhibition_age_complete"}:
+            if self.exhibition_mode and state.mode in {"exhibition_name_question", "exhibition_name_capture"}:
+                if not fresh_button_press:
+                    return self._decision(state, [], "exhibition_name_button_release_required")
+                if button == 7:
+                    return self._start_exhibition_age(state, "exhibition_name_skipped_to_age")
+                if button != 5:
+                    return self._exhibition_name_hint(state, "exhibition_name_button_hint")
+            if self.exhibition_mode and state.mode in {"exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"}:
+                if not fresh_button_press:
+                    return self._decision(state, [], "exhibition_age_button_release_required")
+                return self._select_exhibition_age(state, button, source="exhibition_button", now=now)
+            if self.exhibition_mode and state.mode in {"exhibition_onboarding_complete", "exhibition_age_complete"}:
                 return self._decision(state, [], "exhibition_onboarding_button_ignored")
             if self.exhibition_mode and state.mode in {
                 "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
@@ -3053,6 +3124,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 "idle", "visual_welcome", "anonymous_visual", "root_menu",
                 "dialogue_memory_expired", "dialogue_suspended_ram", "voice_welcome",
                 "awaiting_handset", "wellbeing_check", "personal_welcome_listen",
+                "exhibition_name_question", "exhibition_name_capture",
                 "game_active", "fixed_story_playing", "story_paused", "fixed_story_menu",
                 "game_menu", "support_intake", "personal_story_theme", "bear_dialogue",
                 "schedule_weather", "personal_story_generating",
@@ -3079,10 +3151,6 @@ class CanonicalRuntime(SceneMenuMixin):
                 if button == 7:
                     return self._personal_welcome_menu(state, "personal_welcome_menu_escape")
                 return self._decision(state, [], "personal_welcome_waiting")
-            if self.exhibition_mode and state.mode == "exhibition_age_selection":
-                if button not in range(1, 8):
-                    return self._decision(state, [], "exhibition_age_button_invalid")
-                return self._select_exhibition_age(state, button, source="exhibition_button", now=now)
             if state.mode == "automatic_mood_check":
                 mood = "low" if button in {1, 2, 3} else "calm" if button in {4, 5} else "good"
                 state.mood_result = mood
@@ -3305,14 +3373,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     return result
                 state.voice_retry_count = 0
                 if self.exhibition_mode and state.mode == "exhibition_name_capture":
-                    state.mode, state.substate = "exhibition_age_prompt", "awaiting_age_question_audio"
-                    state.expected_inputs = ["audio_completed", "handset_down"]
-                    state.state_version += 1
-                    return self._decision(state, [
-                        {"type": "capture_close"},
-                        {"type": "speak", "phrase_id": "PHRASE_108"},
-                        {"type": "exhibition_onboarding_step", "step": "age_question"},
-                    ], "exhibition_name_skipped_to_age", clear_audio=True)
+                    return self._start_exhibition_age(state, "exhibition_name_skipped_to_age")
                 if self.exhibition_mode and state.mode == "exhibition_age_selection":
                     state.expected_inputs = [f"button_{item}" for item in range(1, 8)] + ["handset_down"]
                     state.state_version += 1
@@ -3512,14 +3573,7 @@ class CanonicalRuntime(SceneMenuMixin):
                             {"type": "exhibition_name_rejected"},
                         ], "exhibition_name_unrecognized")
                     state.voice_retry_count = 0
-                    state.mode, state.substate = "exhibition_age_prompt", "awaiting_age_question_audio"
-                    state.expected_inputs = ["audio_completed", "handset_down"]
-                    state.state_version += 1
-                    return self._decision(state, [
-                        {"type": "capture_close"},
-                        {"type": "speak", "phrase_id": "PHRASE_108"},
-                        {"type": "exhibition_onboarding_step", "step": "age_question"},
-                    ], "exhibition_name_skipped_to_age", clear_audio=True)
+                    return self._start_exhibition_age(state, "exhibition_name_skipped_to_age")
                 state.voice_retry_count = 0
                 if state.profile_status != "identified":
                     state.display_name = name
@@ -3527,14 +3581,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.onboarding_name_collected = True
                 state.dialogue_memory.bounded_turns.append({"kind": "name", "value": name})
                 state.dialogue_memory.touch(now)
-                state.mode, state.substate = "exhibition_age_prompt", "awaiting_age_question_audio"
-                state.expected_inputs = ["audio_completed", "handset_down"]
-                state.state_version += 1
-                return self._decision(state, [
-                    {"type": "capture_close"},
-                    {"type": "speak", "phrase_id": "PHRASE_108"},
-                    {"type": "exhibition_onboarding_step", "step": "age_question"},
-                ], "exhibition_age_question_started", clear_audio=True)
+                return self._start_exhibition_age(state, "exhibition_age_question_started")
             if state.mode in {"support_intake", "wellbeing_check"}:
                 state.state_version += 1
                 if state.mode == "support_intake" and state.safety_severity == "none":

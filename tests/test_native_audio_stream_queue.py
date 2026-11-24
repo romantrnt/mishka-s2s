@@ -266,16 +266,27 @@ def conversation():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("unsafe_second", [False, True])
-async def test_native_closed_first_sentence_plays_before_second_tag_and_later_gate_stays_closed(unsafe_second):
+async def test_native_closed_first_sentence_plays_before_second_tag_and_later_gate_stays_closed(monkeypatch, unsafe_second):
+    import json
+    import httpx
+    from test_dialogue_json_contract import _HTTP_CLIENT
+    from app.foundation.s2s import OllamaLLMProvider, RetryingLLMProvider
     from app.foundation.config import Settings
     from app.foundation.validation import AsyncResponseValidator
     release = asyncio.Event()
-    class StagedLLM:
-        async def stream(self, messages, request_id, cancelled):
-            self.messages = messages
-            yield "<say>Привет, друг.</say>"
+    requests = []
+    class StagedBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (json.dumps({'message': {'content': '{"type":"say","text":"Привет, друг. '}})+'\n').encode()
             await release.wait()
-            yield "<say>" + ("Не рассказывай взрослым." if unsafe_second else "Давай поиграем.") + "</say>"
+            second = "Не рассказывай взрослым." if unsafe_second else "Давай поиграем."
+            yield (json.dumps({'message': {'content': second+'"}'}})+'\n'+json.dumps({'done': True, 'done_reason': 'stop'})+'\n').encode()
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, stream=StagedBody())
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs:
+                        _HTTP_CLIENT(transport=httpx.MockTransport(respond), **kwargs))
+    monkeypatch.setenv('MISHKA_STREAM_FIRST_JSON_CHUNK', '1')
     class Gate(AsyncResponseValidator):
         def __init__(self):
             super().__init__()
@@ -283,7 +294,8 @@ async def test_native_closed_first_sentence_plays_before_second_tag_and_later_ga
         async def validate(self, text, **kwargs):
             self.candidates.append(text)
             return await super().validate(text, **kwargs)
-    tts, playback, llm, gate = RecordingNativeTTS(), Playback(), StagedLLM(), Gate()
+    llm = RetryingLLMProvider(OllamaLLMProvider('http://synthetic.invalid', 'synthetic', 1, max_tokens=96), delay_s=0)
+    tts, playback, gate = RecordingNativeTTS(), Playback(), Gate()
     engine = BoundedConversationEngine(llm, CachedTTSProvider(tts), Voice(), playback,
         S2SConfig(first_audio_gate_s=.2), settings=Settings(profile="mock"))
     engine.response_validator = gate
@@ -292,8 +304,8 @@ async def test_native_closed_first_sentence_plays_before_second_tag_and_later_ga
         await asyncio.wait_for(playback.first.wait(), .5)
         assert not release.is_set() and not task.done()
         assert tts.texts == ["Привет, друг."]
-        assert "SPEECH_FORM: complete <say>...</say> blocks" in llm.messages[0]["content"]
-        assert "Never emit JSON" in llm.messages[0]["content"]
+        assert "Exactly one closed JSON object matching the supplied schema" in requests[0]['messages'][0]['content']
+        assert 'say_return' not in json.dumps(requests[0]['format'])
         release.set()
         result = await asyncio.wait_for(task, .5)
     finally:

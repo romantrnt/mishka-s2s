@@ -231,7 +231,8 @@ class PersonalStoryService:
         # Never request a full 6000-char native tuple or concatenate beyond
         # the age duration ceiling. A provider's own native allocations remain
         # its responsibility; this bounds accepted aggregate PCM in this owner.
-        spoken=re.findall(r'[^.!?]+[.!?]+|[^.!?]+$',text)
+        from .spoken_numbers import normalize_spoken_numbers
+        spoken=re.findall(r'[^.!?]+[.!?]+|[^.!?]+$',normalize_spoken_numbers(text))
         self._diagnostic('tts','begin',sentences=len(spoken))
         for sentence in spoken:
             if not current():return self._reject('tts','owner_stale')

@@ -3110,6 +3110,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             return stale_result()
                         live_context = self._bounded_dialogue_context(event.session_id, game_id=effect.get("game_id"))
                         turn_context = copy.deepcopy(live_context)
+                        from .s2s import TurnResult, dialogue_exit_requested, time as dialogue_clock
+                        ordinary_dialogue = (not effect.get("game_id")
+                            and turn_context.node_id in {"bear_dialogue", "support_intake"})
+                        exit_requested = ordinary_dialogue and dialogue_exit_requested(transient_text)
+                        if ordinary_dialogue and (turn_context.turns >= turn_context.max_turns
+                                or dialogue_clock.monotonic() - turn_context.started_at >= turn_context.max_duration_seconds):
+                            # Renew only this detached generation window, never
+                            # the session/idle owner or retained bounded history.
+                            turn_context.turns = 0
+                            turn_context.started_at = dialogue_clock.monotonic()
                         if effect.get("game_id") == "word_game":
                             def reserve_word(word_state):
                                 # Reserve an emitted word across barge-in; stale generations cannot write it.
@@ -3121,7 +3131,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             await self._append_journal_turn(event.session_id, journal_visit, "user", str(transient_text), still_current)
                             if not still_current() or self._identity_shutdown:
                                 return stale_result()
-                        turn = await self.bounded_s2s.run_text_turn(str(transient_text), turn_context)
+                        turn = (TurnResult((), (), True) if exit_requested else
+                            await self.bounded_s2s.run_text_turn(str(transient_text), turn_context))
                         await self.expire_identity_leases()
                         if not still_current():
                             return stale_result()
@@ -3135,9 +3146,16 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             turn_context._word_state = live_context._word_state
                         turn_context.__dict__.pop("_word_reserve", None)
                         self.conversation_contexts[event.session_id] = turn_context
-                        fallback_reason = turn.fallback_reason or (
-                            "dialogue_exit" if turn.return_to_scenario else None
-                        )
+                        fallback_reason = turn.fallback_reason
+                        if ordinary_dialogue and fallback_reason == "bounded_limit":
+                            # A window that expires during output is not a user
+                            # exit. Do not replay a possibly partly heard answer.
+                            turn_context.turns = 0
+                            turn_context.started_at = dialogue_clock.monotonic()
+                            fallback_reason = "turn_timeout"
+                        if fallback_reason is None and turn.return_to_scenario:
+                            if not ordinary_dialogue or exit_requested:
+                                fallback_reason = "dialogue_exit"
                         from .activity_requests import activity_target, activity_request_matches
                         if any(activity_target(action) is not None and not activity_request_matches(
                                 getattr(turn, "activity_request", None), transient_text, action, turn_context)
@@ -3814,7 +3832,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 utterance_guard = _ingress_guard
                 pipeline._canonical_private_owner = (_ingress_guard
                     if state is not None and state.mode in {"personal_welcome_listen", "game_active", 'game_menu', 'fixed_story_menu',
-                                                           'exhibition_menu_repeat_listen', 'wellbeing_check'} else None)
+                                                           'exhibition_menu_repeat_listen', 'wellbeing_check',
+                                                           'exhibition_name_capture', 'exhibition_age_selection'} else None)
         async def no_llm_turn(_text: str, _generation: int):
             return TurnResult((), (), False, None)
         with self._game_audio_wait(session_id, pipeline, utterance_guard) as audio_wait:
@@ -3899,6 +3918,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         version = state.state_version if state is not None else None
         private_phase = bool(state and state.mode == "personal_welcome_listen")
         menu_repeat_phase = bool(state and state.mode == 'exhibition_menu_repeat_listen')
+        onboarding_mode = state.mode if state and state.mode in {'exhibition_name_capture', 'exhibition_age_selection'} else None
         wellbeing_phase = bool(state and state.mode == 'wellbeing_check')
         wellbeing_question = state.support_question_kind if wellbeing_phase else None
         game_phase = bool(state and state.mode == "game_active")
@@ -3918,6 +3938,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             # answer a replacement question while its completion awaits expiry.
             and (not menu_repeat_phase or (self.canonical_runtime.sessions.get(session_id) is state
                 and state.state_version == version))
+            and (onboarding_mode is None or (self.canonical_runtime.sessions.get(session_id) is state
+                and state.mode == onboarding_mode and state.state_version == version))
             # A yes/no answer belongs to the particular wellbeing question,
             # including a repeated question with a fresh playback owner.
             and (not wellbeing_phase or (self.canonical_runtime.sessions.get(session_id) is state

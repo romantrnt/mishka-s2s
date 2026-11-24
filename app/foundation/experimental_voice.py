@@ -22,6 +22,7 @@ from typing import Any, AsyncIterator, Callable
 import uuid
 
 from .s2s import AudioChunk
+from .voice_pipeline import normalize_text
 
 ROUTES = ("qwen765", "voxcpm765", "vox555")
 _WORKER_SCRIPT = Path(__file__).resolve().parents[2] / "scripts/experimental_tts_worker.py"
@@ -485,6 +486,19 @@ class ExperimentalTTSProvider:
             else:
                 return
 
+    def _spoken_request_text(self, text):
+        limit = self._config["limits"]["max_text_chars"]
+        if not isinstance(text, str) or not text.strip() or len(text) > limit:
+            raise ExperimentalVoiceUnavailable("experimental_voice_text_limit")
+        try:
+            spoken = normalize_text(text)
+            valid = len(spoken) <= limit and len(spoken.encode("utf-8")) <= 8192
+        except (UnicodeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            raise ExperimentalVoiceUnavailable("experimental_voice_text_limit")
+        return spoken
+
     async def synthesize(self, text: str, token: int, cancelled: Callable[[], bool]) -> AudioChunk:
         return await self._synthesize(text, token, cancelled, first_chunk=None)
 
@@ -505,14 +519,7 @@ class ExperimentalTTSProvider:
             return
         if self._closed:
             raise ExperimentalVoiceUnavailable("experimental_voice_closed")
-        try:
-            valid = (isinstance(text, str) and bool(text.strip())
-                     and len(text) <= self._config["limits"]["max_text_chars"]
-                     and len(text.encode("utf-8")) <= 8192)
-        except UnicodeError:
-            valid = False
-        if not valid:
-            raise ExperimentalVoiceUnavailable("experimental_voice_text_limit")
+        text = self._spoken_request_text(text)
         if cancelled():
             raise asyncio.CancelledError
         if self._job_lock.locked() or (self._recovery_task and not self._recovery_task.done()):
@@ -698,13 +705,7 @@ class ExperimentalTTSProvider:
     async def _synthesize(self, text, token, cancelled, *, first_chunk):
         if self._closed:
             raise ExperimentalVoiceUnavailable("experimental_voice_closed")
-        try:
-            valid_text = (isinstance(text, str) and bool(text.strip())
-                and len(text) <= self._config["limits"]["max_text_chars"] and len(text.encode("utf-8")) <= 8192)
-        except UnicodeError:
-            valid_text = False
-        if not valid_text:
-            raise ExperimentalVoiceUnavailable("experimental_voice_text_limit")
+        text = self._spoken_request_text(text)
         if cancelled():
             raise asyncio.CancelledError
         if self._job_lock.locked() or (self._recovery_task and not self._recovery_task.done()):

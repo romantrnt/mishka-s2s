@@ -170,6 +170,10 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current == "story_pause_announcement" and target in {"story_paused", "fixed_story_choice_wave"})
             or (current == "story_resume_announcement" and target in {"fixed_story_playing", "fixed_story_choice_wave", "story_paused"})
         )
+    if event_type == "AudioFailed" and current in {"exhibition_age_prompt", "exhibition_age_hint"}:
+        return target == "exhibition_age_selection"
+    if event_type == "AudioFailed" and current == "exhibition_name_question":
+        return target == "exhibition_name_capture"
     if event_type == "ExhibitionMenuWaveComplete":
         return current == "exhibition_menu_wave" and target in {"exhibition_menu_repeat_prompt", "menu_ready"}
     if event_type == "StoryChoiceWaveComplete":
@@ -229,6 +233,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             target == "wellbeing_check"
             or (current == "wellbeing_check" and target in {"support_intake", "safety_stop", "root_menu"})
             or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
+            or (current in {"exhibition_age_prompt", "exhibition_age_hint"} and target == "exhibition_age_complete")
+            or (current in {"exhibition_name_question", "exhibition_name_capture"} and target in {"exhibition_name_capture", "exhibition_age_prompt"})
             or (current in {
                 "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
                 "exhibition_menu_tutorial_buttons", "exhibition_menu_wave",

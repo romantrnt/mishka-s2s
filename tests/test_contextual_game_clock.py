@@ -32,9 +32,14 @@ async def test_long_active_game_preserves_remaining_caller_time_without_reset(mo
         await h.send("SpeechReceived", text="А какого цвета трава?")
         assert h.state.mode == "bear_dialogue"
         assert h.app.conversation_contexts[h.state.session_id].turns == turns + 1
-        # The pre-game 40 seconds are retained; no fresh 120-second budget appears.
+        # Retained pre-game elapsed time expires only this generation window.
         h.clock += 81
+        previous = h.app.conversation_contexts[h.state.session_id]
+        history, owner, calls = list(previous.history), previous._owner, len(h.model.calls)
         await h.send("SpeechReceived", text="Давай ещё поговорим")
-        assert h.state.mode == "root_menu"
+        current = h.app.conversation_contexts[h.state.session_id]
+        assert h.state.mode == "bear_dialogue" and len(h.model.calls) == calls + 1
+        assert current.turns == 1 and current.started_at == h.clock and current._owner == owner
+        assert current.history[:-1] == history and not h.app._game_callers
     finally:
         await h.close()

@@ -50,3 +50,14 @@ for (const active of [true,false]) {
  assert(fields['guide-text'].textContent.includes('Тебе страшно?'));
  assert(fields['guide-text'].textContent.includes('7 — нужна помощь взрослого'));
 }
+for (const node of ['exhibition_name_question', 'exhibition_name_capture']) {
+ for (const pending of [false, true]) {
+  const text = context.interactionGuide({session:{node,handset_up:true}}, {...media,pending})[1];
+  assert(text.includes('7') && text.includes('пропустить'), 'name skip stays discoverable without microphone');
+ }
+}
+for (const node of ['exhibition_age_prompt', 'exhibition_age_hint', 'exhibition_age_selection']) {
+ const text = context.interactionGuide({session:{node,handset_up:true}}, media)[1];
+ assert(text.includes('1') && text.includes('7'), 'age choices are announced during speech too');
+ assert(!text.includes('Дослушай'), 'the guide must not claim safe buttons are unavailable');
+}

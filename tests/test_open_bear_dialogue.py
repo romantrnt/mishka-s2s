@@ -55,9 +55,13 @@ async def test_ordinary_replies_reach_llm_and_stay_bounded():
         context = app.conversation_contexts["open-dialogue"]
         assert context.turns == 5 and len(context.history) <= app.bounded_s2s.config.max_history_entries
         assert context.max_turns == 5 and context.max_duration_seconds == 120
+        owner, history = context._owner, list(context.history)
         result = await app.receive_async(event("SpeechReceived", 8), "Ещё поговорим")
-        assert llm.calls == 5
-        assert any(item.get("fallback_reason") == "bounded_limit" for item in result["outputs"])
+        renewed = app.conversation_contexts["open-dialogue"]
+        assert llm.calls == 6 and app.canonical_runtime.sessions["open-dialogue"].mode == "bear_dialogue"
+        assert renewed.turns == 1 and renewed.max_turns == 5 and renewed.max_duration_seconds == 120
+        assert renewed._owner == owner and renewed.history[:-1] == history
+        assert not any(item.get("fallback_reason") for item in result["outputs"])
     finally:
         print("DIALOGUE_PROBE " + json.dumps(rows, ensure_ascii=False))
         await app._cleanup_session_resources("open-dialogue")
