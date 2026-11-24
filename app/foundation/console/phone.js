@@ -42,12 +42,13 @@ function mountPhone() {
   let sessionPending=null;
   const sessionButtons={start:$('phone-start'),end:$('phone-end'),skip_interview:$('phone-skip-interview')};
   const sessionScope=action=>({action,instance_id:simulator?.instance_id,epoch:simulator?.epoch,session_id:simulator?.session?.session_id,
-    ...(action==='skip_interview'?{state_version:simulator?.session?.state_version}:{})});
+    ...(['skip_interview','enable_audio'].includes(action)?{state_version:simulator?.session?.state_version}:{})});
   const sameSessionScope=body=>body&&JSON.stringify(body)===JSON.stringify(sessionScope(body.action));
   const connected=()=>Boolean(bridge.media().connected&&!bridge.media().authBlocked);
   const canMutate=()=>Boolean(connected()&&bridge.media().inputReady&&simulator?.admission?.input_ready&&simulator?.admission?.connected);
   const showError=error=>{$('phone-error').textContent=String(error?.message||error);$('phone-error').hidden=false;};
   const send=async (body,path='/stand/simulator/action')=>{
+    if(!simulator)return null;
     if(bridge.media().authBlocked)throw new Error('Доступ отклонён. Обновите страницу и войдите снова.');
     const value=await bridge.post(path,{...(path.endsWith('/action')?{epoch:simulator?.epoch}:{}),...body});
     if(!value)return null;
@@ -100,12 +101,13 @@ function mountPhone() {
       key.dataset.pressed=String(down);key.setAttribute('aria-pressed',String(down));
       key.disabled=!canMutate()||!canonical?.enabled;
       key.setAttribute('aria-label',`Кнопка ${id}${id===6?', Мишка':id===7?', погода':''}, ${canonical?.color||'цвет неизвестен'}${key.disabled?', недоступна':''}`);
-      key.dataset.fill=String(simulator?.devices?.lighting?.[channels[id][0]]===1);
-      key.dataset.digit=String(simulator?.devices?.lighting?.[channels[id][1]]===1);
-      key.dataset.symbol=String(simulator?.devices?.lighting?.[channels[id][2]]===1);
+      const lighting=simulator?.devices?.lighting||((typeof state!=='undefined'&&!simulator)?state?.physical_lighting:null);
+      key.dataset.fill=String(lighting?.[channels[id][0]]===1);
+      key.dataset.digit=String(lighting?.[channels[id][1]]===1);
+      key.dataset.symbol=String(lighting?.[channels[id][2]]===1);
     }
     const cs=(typeof state!=='undefined'?state?.canonical_state:null)||simulator?.canonical_state;
-    if(cs?.mode==='game_active'&&cs?.active_game_id==='quiz'&&cs?.game_audio_stage==='playing') {
+    if(simulator&&cs?.mode==='game_active'&&cs?.active_game_id==='quiz'&&cs?.game_audio_stage==='playing') {
       const wakeKey=`${cs.game_round||0}:${cs.state_version||0}`;
       if(lastQuizWakeKey!==wakeKey&&lastQuizWakeKey!==`done:${cs.game_round||0}`) {
         lastQuizWakeKey=`done:${cs.game_round||0}`;
@@ -116,7 +118,7 @@ function mountPhone() {
     }
   }
   function cleanup({preserveMedia=false,...options}={}) {handsetGeneration++;handsetPending=null;sessionPending=null;input.cancel();pointers.clear();if(!preserveMedia)bridge.cleanup(options);}
-  async function sessionAction(action,body) {
+  async function sessionAction(action,body,connection=bridge.media().connection) {
     if(!sameSessionScope(body)||!bridge.sessionActionIsCurrent(body))return;
     const pendingStart=sessionPending?.action==='start'?sessionPending:null;
     if(action==='end') {
@@ -125,8 +127,12 @@ function mountPhone() {
     } else if(sessionPending || !bridge.sessionActionIsCurrent(body))return;
     const ticket={action,submitted:false};sessionPending=ticket;render();
     try {
-      if(action==='start')await bridge.unlockAudio();
-      if(sessionPending!==ticket||!sameSessionScope(body)||!bridge.sessionActionIsCurrent(body))return;
+      if(action==='start'||action==='enable_audio'){
+        const context=await bridge.unlockAudio();
+        if(action==='enable_audio'&&context?.state!=='running')throw new Error('Браузер не разрешил звук. Нажми кнопку ещё раз.');
+      }
+      if(sessionPending!==ticket||!sameSessionScope(body)||!bridge.sessionActionIsCurrent(body)
+          ||(action!=='end'&&(connection!==bridge.media().connection||!bridge.media().connected)))return;
       ticket.submitted=true;
       await send(body);
     } catch(error){if(sessionPending===ticket)showError(error);}
@@ -143,16 +149,23 @@ function mountPhone() {
     catch(error){if(generation===handsetGeneration)showError(error);}
     finally {if(generation===handsetGeneration){handsetPending=null;render();}}
   }
-  async function reset() {cleanup();try{await send({action:'reset'});}catch(error){showError(error);}}
+  async function reset() {if(!simulator)return;cleanup();try{await send({action:'reset'});}catch(error){showError(error);}}
   function renderInstruction(media=bridge.media()) {
+    if(state&&!simulator){$('phone-instruction').textContent='Сценарий: '+(state.session?.node||'ожидание')+'. Управляйте трубкой и кнопками на устройстве.';return;}
     const live=connected(),up=bridge.interactionActive(state);
     const hint=bridge.interactionGuide(state,media);
     const tutorial=['exhibition_menu_tutorial_intro','exhibition_menu_tutorial_prompt','exhibition_menu_tutorial_buttons','exhibition_menu_wave','exhibition_menu_repeat_prompt','exhibition_menu_repeat_listen','exhibition_menu_replay_buttons'].includes(simulator?.session?.node);
     const skipHint='Нажмите любую кнопку, чтобы пропустить подсказку. Затем нажмите нужную кнопку для выбора.';
-    $('phone-instruction').textContent=media.reloadRequired?'Сервис перезапущен. Обновите страницу, чтобы продолжить.':!simulator?'Подключение к телефону…':!live?'Соединение с телефоном потеряно':!media.inputReady?'Дождитесь актуального состояния телефона.':!simulator.admission?.input_ready?'Телефон пока недоступен':!simulator.admission.connected?'Устройство ввода отключено':state?.session.node==='session_closed'&&hint?hint[1]:simulator.prompt?.text || hint?.[1] || (tutorial?(simulator.session.node==='exhibition_menu_repeat_listen'?'Скажите «да» или «нет». ':'')+skipHint:up?'Выберите кнопку на лапе':'Поднимите трубку');
+    $('phone-instruction').textContent=media.reloadRequired?'Сервис перезапущен. Обновите страницу, чтобы продолжить.':!simulator?'Подключение к телефону…':!live?'Соединение с телефоном потеряно':!media.inputReady?'Дождитесь актуального состояния телефона.':!simulator.admission?.input_ready?'Телефон пока недоступен':!simulator.admission.connected?'Устройство ввода отключено':state?.session.node==='session_closed'&&hint?hint[1]:(state?.session.node==='awaiting_handset'?hint?.[1]:simulator.prompt?.text) || hint?.[1] || (tutorial?(simulator.session.node==='exhibition_menu_repeat_listen'?'Скажите «да» или «нет». ':'')+skipHint:up?'Выберите кнопку на лапе':'Поднимите трубку');
   }
   function renderMedia() {
     const media=bridge.media();
+    if(state&&!simulator){
+      $('phone-mic-indicator').textContent='Микрофон браузера выключен';$('phone-mic-indicator').dataset.live='false';
+      $('phone-microphone').disabled=true;$('phone-sound').disabled=true;
+      $('phone-media-status').textContent='Звук физического телефона — через динамик платы. Экран не включает микрофон браузера.';
+      renderInstruction(media);return;
+    }
     const live=media.microphone;
     const label=live?(media.microphoneAccepting?'● Микрофон включён':'Микрофон включён · приём на паузе'):media.pending?'Разрешение микрофона…':'Микрофон выключен';
     $('phone-mic-indicator').textContent=label;$('phone-mic-indicator').dataset.live=String(live);
@@ -160,18 +173,36 @@ function mountPhone() {
     button.disabled=!(live||media.pending||canMutate()&&simulator?.microphone?.eligible);
     $('phone-media-status').textContent=microphoneError|| (media.audioRetry?'Мишка не расслышал. Попробуй ещё раз. ':'')+(live?(media.microphoneAccepting?'● Мишка слушает через микрофон браузера':'Микрофон включён · Мишка пока не принимает речь'):media.pending?'Разрешите микрофон в запросе браузера':simulator?.microphone?.eligible?'Мишка готов слушать · микрофон выключен':media.playing?'Мишка говорит · микрофон выключен':'Микрофон выключен');
     $('phone-media-status').dataset.live=String(live);
-    $('phone-sound').textContent=media.audioReady?'Звук включён':'Включить звук';
-    $('phone-sound').setAttribute('aria-pressed',String(media.audioReady));
+    const quiet=state?.canonical_state?.silent_mode===true;
+    const enabling=sessionPending?.action==='enable_audio';
+    $('phone-sound').textContent=enabling?'Включаем звук…':quiet?'Включить звук сеанса':media.audioReady?'Звук включён':'Включить звук';
+    $('phone-sound').disabled=enabling||Boolean(sessionPending)||(quiet&&!bridge.sessionActionIsCurrent(sessionScope('enable_audio')));
+    $('phone-sound').setAttribute('aria-pressed',String(media.audioReady&&!quiet));
+    if(quiet)$('phone-media-status').textContent='Тихий режим. Можно пользоваться кнопками. Для озвучивания нажми «Включить звук»; микрофон не нужен.';
     renderInstruction(media);
     if(state)bridge.updateGuide(state);
   }
   function diagnostics() {
     const media=bridge.media();
     const pipeline=state?.pipeline_metrics?.pipeline||{};
-    const pairs=[['Браузер',connected()?'WebSocket подключён':media.authBlocked?'Доступ отклонён':'Соединение потеряно'],['Устройство ввода',simulator?.fault?.input_connected?'Подключено':'Отключено'],['Сеанс',simulator?.session?.state||'Нет данных'],['Сценарий',simulator?.session?.node||'—'],['Профиль',simulator?.profile||'—'],['Идентификация',simulator?.identity_mode||'—'],['Аудиовыход','Web Audio · динамик браузера'],['Маршрут голоса',pipeline.voice_conversion||'Нет данных'],['Резервный маршрут',$('fallback').classList.contains('hidden')?'Нет активного предупреждения':$('fallback').textContent],['Очередь браузера',`${media.queuedPosts} команд · ${media.pendingPCM} PCM`],['Очередь устройства',`${simulator?.fault?.pending_inputs??'—'} / ${simulator?.fault?.max_pending_inputs??'—'}`],['Задержка',`${simulator?.fault?.delay_ms??0} мс`],['Epoch',String(simulator?.epoch??'—')],['Реальное оборудование','Не проверено · виртуальное устройство']];
+    const pairs=state&&!simulator?[['Браузер',connected()?'Подключён · наблюдение':'Нет соединения'],['Устройство','Физический телефон'],['Сценарий',state.session?.node||'—'],['Трубка',state.session?.handset_up?'Поднята':'Опущена'],['Аудиовыход','Динамик платы'],['Подсветка','Команды runtime; фактический свет не подтверждён экраном']]:[['Браузер',connected()?'WebSocket подключён':media.authBlocked?'Доступ отклонён':'Соединение потеряно'],['Устройство ввода',simulator?.fault?.input_connected?'Подключено':'Отключено'],['Сеанс',simulator?.session?.state||'Нет данных'],['Сценарий',simulator?.session?.node||'—'],['Профиль',simulator?.profile||'—'],['Идентификация',simulator?.identity_mode||'—'],['Аудиовыход','Web Audio · динамик браузера'],['Маршрут голоса',pipeline.voice_conversion||'Нет данных'],['Резервный маршрут',$('fallback').classList.contains('hidden')?'Нет активного предупреждения':$('fallback').textContent],['Очередь браузера',`${media.queuedPosts} команд · ${media.pendingPCM} PCM`],['Очередь устройства',`${simulator?.fault?.pending_inputs??'—'} / ${simulator?.fault?.max_pending_inputs??'—'}`],['Задержка',`${simulator?.fault?.delay_ms??0} мс`],['Epoch',String(simulator?.epoch??'—')],['Реальное оборудование','Не проверено · виртуальное устройство']];
     $('phone-diagnostics').replaceChildren(...pairs.flatMap(([label,value])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;return[dt,dd];}));
   }
   function render() {
+    if(document.body)document.body.dataset.panelMode=state&&!simulator?'observer':'simulator';
+    if(state&&!simulator){
+      const physical=state.transport?.hardware?.acceptance==='physical';
+      $('phone-connection').dataset.live=String(connected());
+      $('phone-connection').textContent=connected()?(physical?'Физический телефон · наблюдение':'Наблюдение за runtime'):'Соединение с сервером потеряно';
+      $('phone-context').textContent=physical?'Физический телефон · звук через динамик платы':'Управление с этого экрана недоступно';
+      $('phone-tools-intro').textContent='Наблюдение за физическим устройством. Виртуальные кнопки, RFID и журнал симулятора здесь недоступны.';
+      $('phone-render-notice').textContent='Показаны команды подсветки. Фактический свет и слышимость проверяются на устройстве.';
+      for(const button of Object.values(sessionButtons))if(button){button.hidden=true;button.disabled=true;}
+      for(const id of ['phone-handset','phone-reset','phone-microphone','phone-sound','phone-input-disconnect','phone-input-reconnect','phone-text','phone-wav','phone-refresh-journal'])$(id).disabled=true;
+      $('phone-prompt').textContent='Текст личных ответов скрыт. Сценарий: '+(state.session?.node||'ожидание');
+      renderMechanical();renderMedia();if(tools.open)diagnostics();return;
+    }
+    $('phone-tools-intro').textContent='Виртуальное устройство использует тот же сценарий Мишки. RFID проходит через синтетическое чтение Max.';
     const live=connected(),up=simulator?.devices?.handset?.state==='up';
     const media=bridge.media();
     const admitted=simulator?.admission?.input_ready;
@@ -184,7 +215,7 @@ function mountPhone() {
     const actions=Array.isArray(simulator?.session?.session_actions)?simulator.session.session_actions:[];
     for(const [action,button] of Object.entries(sessionButtons))if(button){
       const pending=sessionPending?.action===action;
-      const available=actions.includes(action)||(action==='end'&&['start','end'].includes(sessionPending?.action));
+      const available=actions.includes(action)||(action==='end'&&['start','end','enable_audio'].includes(sessionPending?.action));
       button.hidden=!available;
       button.disabled=!available||pending||(action!=='end'&&Boolean(sessionPending))||!bridge.sessionActionIsCurrent(sessionScope(action));
       button.textContent=pending?{start:'Начинаем…',end:'Завершаем…',skip_interview:'Переходим к занятиям…'}[action]:{start:'Начать',end:'Завершить',skip_interview:'Сразу к занятиям'}[action];
@@ -204,7 +235,11 @@ function mountPhone() {
     renderMechanical();renderMedia();if(tools.open)diagnostics();
   }
   function update(value) {
-    if(!value?.simulator)return;
+    if(!value?.simulator){
+      if(!value?.session||!bridge.acceptSnapshot(value,state))return;
+      if(!state||simulator){cleanup();rendererGeneration++;model?.destroy();model=null;stage.dataset.renderer='observer';for(const key of keys.values())for(const property of ['left','top','width','height'])key.style.removeProperty(property);}
+      state=value;simulator=null;render();return;
+    }
     if(!bridge.acceptSnapshot(value,state))return;
     const next=value.simulator;
     // console.render already revoked old media before accepting the new owner.
@@ -215,7 +250,7 @@ function mountPhone() {
     if(tools.open)refreshJournal();
   }
   async function refreshJournal() {
-    if(journalInFlight||!connected())return;
+    if(journalInFlight||!connected()||!simulator)return;
     journalInFlight=true;
     try {
       const controller=new AbortController();const timer=window.setTimeout(()=>controller.abort(),7000);
@@ -240,7 +275,19 @@ function mountPhone() {
   $('phone-reset').onclick=reset;$('reset').onclick=reset;
   $('handset-up').onclick=()=>send({action:'handset',state:'up'}).catch(showError);
   $('handset-down').onclick=()=>{cleanup();send({action:'handset',state:'down'}).catch(showError);};
-  $('phone-sound').onclick=async()=>{try{await bridge.unlockAudio();if(state)bridge.render(state);renderMedia();}catch(error){showError(error);}};
+  let soundActivation=null;
+  const soundScope=()=>({body:simulator?.session?.session_actions?.includes('enable_audio')?sessionScope('enable_audio'):null,connection:bridge.media().connection});
+  async function enableSound(captured=soundScope()){
+    if(state&&!simulator)return;
+    if(captured.cancelled||captured.connection!==bridge.media().connection)return;
+    if(captured.body)return sessionAction('enable_audio',captured.body,captured.connection);
+    try{await bridge.unlockAudio();renderMedia();}catch(error){showError(error);}
+  }
+  $('phone-sound').onpointerdown=event=>{if(event.button===0)soundActivation=soundScope();};
+  $('phone-sound').onkeydown=event=>{if(['Space','Enter'].includes(event.code)){if(event.repeat)event.preventDefault();else soundActivation=soundScope();}};
+  $('phone-sound').onpointercancel=$('phone-sound').onblur=()=>{if(soundActivation)soundActivation.cancelled=true;};
+  $('phone-sound').onclick=event=>{const captured=soundActivation;soundActivation=null;if(captured?.cancelled||(event?.detail>0&&!captured))return;return enableSound(captured||soundScope());};
+  window.mishkaPhoneEnableAudio=()=>enableSound();
   $('phone-microphone').onclick=async()=>{
     microphoneError='';
     try{if(bridge.media().microphone||bridge.media().pending){bridge.stopMic();renderMedia();return;}const promise=bridge.startMic();renderMedia();await promise;}
@@ -307,6 +354,7 @@ function mountPhone() {
   async function threeView() {
     const generation=++rendererGeneration;
     try {
+      if(state&&!simulator)return;
       const {createPhoneModel}=await import('./phone-model.js?v=3-fill-channel-fix');
       if(generation!==rendererGeneration||stopped)return;
       model=createPhoneModel(stage,{press:id=>input.press(id,'model'),release:(id,cancel)=>input.release(id,cancel,'model'),handset,project:(id,x,y,w,ratio)=>{const key=keys.get(id);key.style.left=`${x*100}%`;key.style.top=`${y*100}%`;key.style.width=`${w*stage.clientWidth}px`;key.style.height=`${w*stage.clientWidth*ratio}px`;},onFailure:message=>{$('phone-render-notice').textContent=message;}});

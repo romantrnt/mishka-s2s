@@ -153,7 +153,7 @@ async def test_explicit_start_down_opens_logical_session_without_lift(tmp_path):
         assert h.state.interaction_route == "panel" and h.state.interaction_open
         assert h.scope() == before
         assert not h.app.sessions.get("stand").handset_up
-        assert h.stand.panel_snapshot()["simulator"]["session"]["session_actions"] == ["end"]
+        assert h.stand.panel_snapshot()["simulator"]["session"]["session_actions"] == ["end", "enable_audio"]
         version = h.state.state_version
         assert (await h.control("start"))["reason"] == "interaction_already_started"
         assert h.state.state_version == version

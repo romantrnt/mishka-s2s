@@ -12,6 +12,7 @@ from test_panel_session_actions import PanelStand
 async def dialogue(h):
     await h.control("start")
     await h.menu()
+    await h.control("enable_audio", {**h.scope(), "state_version": h.state.state_version})
     await h.key(6)
     while "stand" in h.app._active_audio:
         await h.done()
@@ -85,6 +86,7 @@ async def test_fixed_story_menu_selection_and_back_use_current_owned_media_at_do
     try:
         await h.control("start")
         await h.menu()
+        await h.control("enable_audio", {**h.scope(), "state_version": h.state.state_version})
         await h.key(2)
         old = dict(h.app._active_audio["stand"])
         selected = h.state.scene_menu_descriptor["items"][0]
@@ -151,6 +153,7 @@ async def test_playing_public_story_is_busy_and_pause_has_its_own_120_wait(tmp_p
     try:
         await h.control("start")
         await h.menu()
+        await h.control("enable_audio", {**h.scope(), "state_version": h.state.state_version})
         await h.key(2)
         await h.key(h.state.scene_menu_descriptor["items"][0]["slot"])
         assert h.state.mode == "fixed_story_playing"

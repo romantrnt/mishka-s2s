@@ -39,7 +39,7 @@ class Event:
 
 
 IDENTITY_INTERNAL_EVENT_TYPES = frozenset({"ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired"})
-EVENT_TYPES = frozenset({"AnonymousStart", "SessionStarted", "InterviewSkipped", "SessionReset", "SessionCancel", "InteractionIdleExpired", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SilentHoldTick", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"}) | IDENTITY_INTERNAL_EVENT_TYPES
+EVENT_TYPES = frozenset({"AnonymousStart", "SessionStarted", "SessionAudioEnabled", "InterviewSkipped", "SessionReset", "SessionCancel", "InteractionIdleExpired", "HandsetLifted", "HandsetPlaced", "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SilentHoldTick", "SpeechReceived", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected", "HardwareReconnected", "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep"}) | IDENTITY_INTERNAL_EVENT_TYPES
 
 
 @dataclass

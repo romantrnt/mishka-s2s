@@ -24,10 +24,14 @@ async def test_actual_sequence_timer_cannot_relight_failed_output(monkeypatch):
             failed[0]=True;raise TimeoutError('synthetic single native failure')
         return original_write(selected_fd,payload)
     try:
-        await h.button(1);await h.release(1);await h.button(1);await h.release(1)
-        for _ in range(2):
-            await h.button(6);await h.release(6);await h.button(1);await h.release(1)
-        await h.button(2);await h.release(2);await h.complete()
+        await h.button(1);await h.release(1)
+        assert h.state.scene_menu_descriptor['items'][2]['id']=='repeat_pattern'
+        await h.button(3);await h.release(3)
+        assert h.state.active_game_id=='repeat_pattern'
+        assert h.app._active_audio[h.sid]['content_id']=='PHRASE_020'
+        await h.complete()
+        assert h.app._active_audio[h.sid]['content_id']=='GAME_PROMPT'
+        await h.complete()
         assert h.state.game_engine_state.phase=='demonstrate'
         scope=h.app._game_timer_scopes[h.sid]
         await asyncio.to_thread(output.flush);tty.receive()

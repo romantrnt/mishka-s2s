@@ -156,7 +156,7 @@ function interactionActive(state = current) {
 
 function sessionActionIsCurrent(payload) {
   const simulator = current?.simulator;
-  if (!simulator || authBlocked || !['start', 'end', 'skip_interview'].includes(payload.action)
+  if (!simulator || authBlocked || !['start', 'end', 'skip_interview', 'enable_audio'].includes(payload.action)
     || !/^[a-f0-9]{16}$/.test(payload.instance_id || '') || payload.instance_id !== simulator.instance_id
     || !Number.isSafeInteger(payload.epoch) || payload.epoch !== simulator.epoch
     || typeof payload.session_id !== 'string' || payload.session_id !== simulator.session?.session_id) return false;
@@ -164,7 +164,7 @@ function sessionActionIsCurrent(payload) {
   if (payload.action === 'end') return true;
   return postAdmissionAvailable() && simulator.admission?.input_ready && simulator.admission.connected
     && Array.isArray(simulator.session.session_actions) && simulator.session.session_actions.includes(payload.action)
-    && (payload.action !== 'skip_interview' || (Number.isSafeInteger(payload.state_version)
+    && (!['skip_interview', 'enable_audio'].includes(payload.action) || (Number.isSafeInteger(payload.state_version)
       && payload.state_version === simulator.session.state_version));
 }
 
@@ -214,7 +214,7 @@ function post(path, body = {}) {
   const wireBody = JSON.stringify(path.startsWith('/stand/simulator/') ? body : { session_id: session(), ...body });
   const payload = JSON.parse(wireBody);
   const simulated = path === '/stand/simulator/action';
-  const sessionAction = simulated && ['start', 'end', 'skip_interview'].includes(payload.action);
+  const sessionAction = simulated && ['start', 'end', 'skip_interview', 'enable_audio'].includes(payload.action);
   if (sessionAction && !sessionActionIsCurrent(payload)) return Promise.resolve(null);
   const storyCancel = personalStoryCancelAvailable(path, payload);
   const urgent = path === '/stand/reset' || (path === '/stand/handset' && body.state === 'down')
@@ -826,7 +826,7 @@ async function refresh({ includeStatus = true, includeState = true } = {}) {
       }
       if (includeState && !authBlocked) {
         try {
-          const path = document.body.dataset.phone ? '/stand/simulator/state' : '/stand/state';
+          const path = '/stand/state';
           const state = await (await fetchWithTimeout(path, { signal: controller.signal })).json();
           render(state);
           stateSnapshotAvailable = true;
@@ -1567,6 +1567,7 @@ function resumeStoryAsset() {
 }
 
 function speakCommands(state) {
+  if (state.transport?.hardware?.acceptance === 'physical') return;
   if (state.session && (!interactionActive(state) || !['fixed_story_playing', 'story_paused',
       'story_pause_announcement', 'story_resume_announcement'].includes(state.session.node))) publicStoryBuffer = null;
   if (state.session && (!interactionActive(state) || !['personal_story_playing', 'story_paused',
@@ -1629,6 +1630,12 @@ function speakCommands(state) {
 }
 
 function interactionGuide(state, media) {
+  if (state?.transport?.hardware?.acceptance === 'physical' && !state.simulator) {
+    return ['Физический телефон · наблюдение', 'Сценарий: ' + (state.session?.node || 'ожидание') + '. Управляйте трубкой и кнопками на устройстве. Звук — через динамик платы.'];
+  }
+  if (state?.session?.node === 'awaiting_handset' && state?.simulator?.session?.interaction_route === 'panel') {
+    return ['Нужен звук', 'Нажми «Включить звук», чтобы продолжить без поднятия трубки. Можно также поднять трубку или нажать 7 для возврата.'];
+  }
   if (['accepted', 'preparing'].includes(state?.canonical_state?.story_audio_phase)) {
     return ['Выбор принят', 'Готовлю сказку. Можно подождать или нажать 7, чтобы вернуться.'];
   }
@@ -2047,6 +2054,8 @@ function createButtons() {
 }
 
 $('enable-audio').onclick = async () => {
+  if (typeof window.mishkaPhoneEnableAudio === 'function') return window.mishkaPhoneEnableAudio();
+  if (current?.transport?.hardware?.acceptance === 'physical') return;
   try {
     const context = await unlockAudio();
     if (context.state === 'running') {
@@ -2154,7 +2163,7 @@ function createMicResampler(sourceRate, sendFrame) {
   };
 }
 function microphoneEligible() {
-  if (authBlocked) return false;
+  if (authBlocked || current?.transport?.hardware?.acceptance === 'physical') return false;
   if (current?.simulator) return Boolean(current.simulator.microphone?.eligible);
   const micCapableNodes = new Set(['bear_dialogue', 'support_intake', 'voice_welcome', 'exhibition_name_capture', 'exhibition_age_selection', 'personal_story_theme', 'wellbeing_check', 'schedule_weather', 'game_menu', 'fixed_story_menu']);
   return Boolean(current && micCapableNodes.has(String(current.session?.node || '')));
@@ -2338,7 +2347,7 @@ window.MishkaConsole = Object.freeze({
   post, render, unlockAudio, startMic, clearMic, stopMic, interactionGuide, updateGuide, interactionActive, sessionActionIsCurrent,
   cleanup: ({preserveReconnect = false} = {}) => { if (!preserveReconnect) audioReconnectPending = false; suppressPhoneAudio = true; clearMic(); interruptAudioForInput(); },
   media: () => ({ microphone: Boolean(mic), microphoneAccepting: microphoneAccepting(), pending: micStarting, audioReady, audioRetry: Boolean(audioRetry),
-    connected: ws?.readyState === WebSocket.OPEN, authBlocked,
+    connected: ws?.readyState === WebSocket.OPEN, connection: ws, authBlocked,
     inputReady: wsSnapshotReady && !wsReloadRequired && !authBlocked, reloadRequired: wsReloadRequired,
     playing: activeSources.size > 0, pendingPCM: pendingPCM.length,
     queuedPosts: postQueue.length, activePost: Boolean(activePost) }),

@@ -83,7 +83,7 @@ ALLOWED_EVENTS = frozenset({
     "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SilentHoldTick", "SpeechStarted",
     "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
     "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected", "HardwareReconnected",
-    "SessionStarted", "InterviewSkipped", "SessionCancel", "SessionReset", "InteractionIdleExpired",
+    "SessionStarted", "SessionAudioEnabled", "InterviewSkipped", "SessionCancel", "SessionReset", "InteractionIdleExpired",
     "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete", "StoryChoiceWaveComplete", "MenuTutorialStep",
 })
 # Buttons 5 (help) and 7 (exit) preempt game scoring.
@@ -244,6 +244,7 @@ class CanonicalState:
     audio_failure_code: str | None = None
     pending_tool: str | None = None
     pending_mode: str | None = None
+    pending_story_theme: str | None = None
     support_question_kind: str | None = None
     timeout_at: float | None = None
     history_tail: list[str] = field(default_factory=list)
@@ -1260,6 +1261,22 @@ class CanonicalRuntime(SceneMenuMixin):
             state.dialogue_information_kind = kind
         return {'type':'typed_info_request', 'kind':kind}
 
+    def _request_personal_story(self, state, theme, *, button=None, reason="personal_story_requested"):
+        state.state_version += 1
+        if not state.audio_open:
+            state.pending_story_theme = theme
+            state.pending_mode, state.mode = "personal_story_generating", "awaiting_handset"
+            state.expected_inputs = ["handset_up", "button_7"]
+            return self._decision(state, [{"type": "visual", "view": "lift_handset"}], "story_audio_required")
+        state.mode = "personal_story_generating"
+        brief = {"age_band": state.age_band, "theme": theme,
+            "catalogue_story_id": theme if any(item["id"] == theme for item in state.personal_story_selection) else None,
+            "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"],
+            "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
+        return self._decision(state, [
+            {"type": "lighting_wave_intent", "pattern": "story_preparing_wave", **({"button_id": button} if button else {})},
+            {"type": "generate_personal_story", "brief": brief}], reason)
+
     def _start_fixed_story(self, state, story_id):
         from .menu_content import catalogue_items
         available = dict(catalogue_items('fixed_story_menu', state.age_band, stories=self.stories))
@@ -1465,7 +1482,9 @@ class CanonicalRuntime(SceneMenuMixin):
                 return decision
             effects = []
             # A release must not replace an in-flight free-light ripple.
-            success_wave = (outcome.status == "progress" and engine.game_id != "free_lights")
+            # The next demonstration owns its whole cue duration, including its first frame.
+            success_wave = (outcome.status == "progress" and engine.game_id != "free_lights"
+                            and outcome.state.phase != "demonstrate")
             if outcome.wave_origin is not None:
                 effects.append({"type":"game_lighting", "animation":"ripple", "origin_button":outcome.wave_origin})
             elif success_wave:
@@ -1557,6 +1576,8 @@ class CanonicalRuntime(SceneMenuMixin):
             state.game_prompt_is_hint = False
             state.game_target = None
             state.game_parameters = {}
+        if state.mode != "awaiting_handset":
+            state.pending_story_theme = None
         effects = self._prepare_scene_menu(state, effects, reason)
         # Acknowledgements, audio completion and handset changes cannot answer
         # an exit question. Its explicit 6/7 choices change substate/mode first.
@@ -1661,7 +1682,7 @@ class CanonicalRuntime(SceneMenuMixin):
             self.sessions[event.session_id] = state
         # Authority is an out-of-band server argument, never event.source or
         # client-controlled payload. Untrusted resolve does not consume sequence.
-        if event.event_type in {"SessionStarted", "InterviewSkipped"} and not session_action_authorized:
+        if event.event_type in {"SessionStarted", "SessionAudioEnabled", "InterviewSkipped"} and not session_action_authorized:
             return self._session_action_noop(state, "session_action_untrusted")
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired"} and not identity_event_authorized:
             return self._decision(state, [], "identity_outcome_untrusted")
@@ -1938,6 +1959,36 @@ class CanonicalRuntime(SceneMenuMixin):
             state.identity_ready_deadline = None
             state.state_version += 1
             return self._start_exhibition_welcome(state, monotonic_now, reason="panel_session_started")
+        if event.event_type == "SessionAudioEnabled":
+            if (not state.interaction_open or state.interaction_route != "panel"
+                    or state.substate == "profile_cleanup_failed" or state.interaction_idle):
+                return self._session_action_noop(state, "panel_audio_unavailable")
+            if not state.silent_mode:
+                return self._session_action_noop(state, "panel_audio_already_enabled")
+            state.silent_mode = False
+            state.state_version += 1
+            pending = state.pending_mode
+            state.pending_mode = None
+            if pending == "personal_story_generating" and state.pending_story_theme:
+                return self._request_personal_story(state, state.pending_story_theme)
+            if pending == "game_active" and state.pending_game_id:
+                game_id, state.pending_game_id = state.pending_game_id, None
+                return self._start_game(state, game_id, monotonic_now)
+            if pending == "fixed_story_playing" and state.active_story_id:
+                return self._start_fixed_story(state, state.active_story_id)
+            if pending in {"bear_dialogue", "support_intake"}:
+                state.mode = pending
+                state.expected_inputs = ["speech", "button_7", "handset_down"]
+                effects = [{"type": "capture_open"}, {"type": "lighting_preset",
+                    "preset": "BEAR_DIALOGUE" if pending == "bear_dialogue" else "SUPPORT"}]
+                if pending == "bear_dialogue":
+                    state.substate = "dialogue_started"
+                    state.dialogue_memory.touch(now)
+                    effects.append({"type": "speak", "phrase_id": "PHRASE_094"})
+                return self._decision(state, effects, "panel_audio_pending_started", clear_audio=True)
+            effects = ([{"type": "support_question", "question": state.support_question_kind or "pain_or_discomfort"}]
+                       if state.mode == "wellbeing_check" else [])
+            return self._decision(state, effects, "panel_audio_enabled")
         if event.event_type == "InterviewSkipped":
             if (not state.interaction_open or state.profile_status == "identified"
                     or state.mode not in {"exhibition_introduction", "exhibition_name_question",
@@ -2672,6 +2723,9 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._session_action_noop(state, "panel_handset_lifted")
             state.interaction_route = "handset"
             state.handset = "up"; state.state_version += 1
+            if state.pending_mode == "personal_story_generating" and state.pending_story_theme:
+                theme, state.pending_mode = state.pending_story_theme, None
+                return self._request_personal_story(state, theme)
             if state.pending_mode == "game_active" and state.pending_game_id:
                 gid = state.pending_game_id
                 state.pending_game_id = None
@@ -3077,11 +3131,8 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.mode, state.state_version = "root_menu", state.state_version + 1
                     return self._decision(state, [{"type": "lighting_preset", "preset": "ROOT_MENU"}], "personal_story_cancelled")
                 if theme is not None:
-                    state.mode, state.state_version = "personal_story_generating", state.state_version + 1
-                    brief = {"age_band": state.age_band, "theme": theme, "catalogue_story_id": theme if any(item["id"] == theme for item in state.personal_story_selection) else None, "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
-                    return self._decision(state, [
-                        {"type":"lighting_wave_intent", "pattern":"story_preparing_wave", "button_id":button},
-                        {"type": "generate_personal_story", "brief": brief}], "personal_story_requested_by_button")
+                    return self._request_personal_story(state, theme, button=button,
+                        reason="personal_story_requested_by_button")
             if state.mode == "story_paused" and button == 6:
                 if state.public_story_checkpoint_pending:
                     return self._decision(state, [], "public_story_checkpoint_pending")
@@ -3426,11 +3477,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 selected = next((item for item in state.personal_story_selection if item['id'] == intent), None)
                 if selected is None:
                     return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_075"}], "story_choice_unrecognized")
-                state.mode, state.state_version = "personal_story_generating", state.state_version + 1
-                brief = {"age_band": state.age_band, "theme": intent, "catalogue_story_id": selected['id'], "forbidden_topics": ["diagnosis", "treatment", "real_schedule", "secrets"], "content_constraints": list(state.accessibility_policy.get("content_constraints", ()))}
-                return self._decision(state, [
-                    {"type":"lighting_wave_intent", "pattern":"story_preparing_wave"},
-                    {"type": "generate_personal_story", "brief": brief}], "personal_story_requested")
+                return self._request_personal_story(state, intent)
             if state.mode == "bear_dialogue":
                 pending_information = state.dialogue_information_kind is not None
                 state.dialogue_information_kind = None

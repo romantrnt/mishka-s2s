@@ -90,7 +90,7 @@ class SceneMenuMixin:
         if (state.audio_open and getattr(self,'menu_voice_capable',False)
                 and state.scene_menu_phase != 'invite'
                 and (state.mode not in state.scene_menu_seen or reason in {'scene_menu_page','scene_menu_refresh'})
-                and (entering or changed or reason in {'voice_open_activity','typed_menu_after_handset','scene_menu_page','scene_menu_refresh','personal_story_failure_finished'})
+                and (entering or changed or reason in {'voice_open_activity','typed_menu_after_handset','scene_menu_page','scene_menu_refresh','personal_story_failure_finished','panel_audio_enabled'})
                 and not any(e.get('type') == 'speak' for e in effects)):
             state.scene_menu_seen.append(state.mode) if state.mode not in state.scene_menu_seen else None
             state.scene_menu_phase = 'narrating'

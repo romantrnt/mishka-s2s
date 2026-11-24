@@ -110,3 +110,5 @@ body[data-phone] .phone-key[data-ready-wake="true"] {animation:keyWake .38s ease
 @media(prefers-reduced-motion:reduce) {body[data-phone] *,body[data-phone] *::before {transition:none!important;animation:none!important;scroll-behavior:auto!important;}}
 body[data-phone] .phone-key[data-digit="true"] span {color:#ffffff;text-shadow:0 0 8px #fff7;}
 body[data-phone] .phone-key[data-symbol="true"] svg {color:#ffffff;filter:drop-shadow(0 0 6px #fff8);}
+
+body[data-phone][data-panel-mode="observer"] [data-simulator-control] {display:none;}

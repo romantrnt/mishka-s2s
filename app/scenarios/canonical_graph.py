@@ -181,6 +181,11 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
         return target in {"anonymous_visual", "idle", "session_closed"}
     if event_type == "SessionStarted":
         return target in {"voice_welcome", "menu_ready", "root_menu"}
+    if event_type == "HandsetLifted" and current == "awaiting_handset" and target == "personal_story_generating":
+        return True
+    if event_type == "SessionAudioEnabled":
+        return current == "awaiting_handset" and target in {
+            "game_active", "fixed_story_playing", "personal_story_generating", "bear_dialogue", "support_intake"}
     if event_type == "SilentHoldTick":
         return target in {"idle", "profile_ready", "menu_ready", "root_menu"}
     if event_type == "InterviewSkipped":
@@ -226,7 +231,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             } and target == "menu_ready")
             or (current in ROOT_ENTRY_MODES and target in BUTTON_TARGETS | {"awaiting_handset"})
             or (current == "awaiting_handset" and target == "root_menu")
-            or (current == "personal_story_theme" and target in {"personal_story_generating", "root_menu"})
+            or (current == "personal_story_theme" and target in {"personal_story_generating", "awaiting_handset", "root_menu"})
             or (current == "automatic_mood_check" and target == "root_menu")
             or (current == "game_menu" and target in {"game_active", "awaiting_handset"})
             or (current == "game_active" and target in {"root_menu", "game_menu"})
@@ -262,9 +267,9 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current == "exhibition_menu_repeat_listen" and target in {"exhibition_menu_repeat_listen", "exhibition_menu_replay_buttons", "menu_ready"})
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_paused", "story_speech_analysis"})
             or (current == "story_speech_analysis" and target == "support_intake")
-            or (current == "personal_story_theme" and target == "personal_story_generating")
+            or (current == "personal_story_theme" and target in {"personal_story_generating", "awaiting_handset"})
             or (current == "automatic_mood_check" and target == "mood_report")
-            or (current == "personal_story_theme" and target in {"personal_story_generating", "root_menu"})
+            or (current == "personal_story_theme" and target in {"personal_story_generating", "awaiting_handset", "root_menu"})
             or (current == "personal_story_generating" and target in {"personal_story_validating", "personal_story_theme"})
             or (current == "personal_story_validating" and target == "personal_story_playing")
             or (current == "story_paused" and target in {"root_menu", "fixed_story_playing"})
@@ -304,7 +309,7 @@ def _session_guard(state: AuthorizationState) -> AuthorizationState:
         "ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld", "SilentHoldTick", "SpeechStarted",
         "SpeechEnded", "VoiceIntentReady", "AudioStarted", "AudioCompleted", "AudioFailed",
         "PersonalStoryReady", "StoryPositionUpdated", "DialogueFallback", "TimeoutFired", "WelcomeTimerFired", "GameTimer", "HardwareDisconnected",
-        "HardwareReconnected", "SessionStarted", "InterviewSkipped", "SessionCancel", "SessionReset", "InteractionIdleExpired",
+        "HardwareReconnected", "SessionStarted", "SessionAudioEnabled", "InterviewSkipped", "SessionCancel", "SessionReset", "InteractionIdleExpired",
         "ExhibitionOnboardingComplete", "ExhibitionMenuWaveComplete",
         "StoryChoiceWaveComplete", "MenuTutorialStep",
     }

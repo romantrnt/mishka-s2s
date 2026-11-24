@@ -1727,7 +1727,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     await asyncio.shield(replacement[1])
             if not ownership_guard():
                 return self._identity_result(session_id, "stale_session_generation")
-            kind = {"start": "SessionStarted", "end": "SessionCancel", "skip_interview": "InterviewSkipped"}[action]
+            kind = {"start": "SessionStarted", "end": "SessionCancel", "skip_interview": "InterviewSkipped", "enable_audio": "SessionAudioEnabled"}[action]
             state = self.canonical_runtime.sessions.get(session_id)
             sequence = state.last_sequence_by_source.get("panel_session", 0) + 1 if state else 1
             payload = {"state_version": state_version} if state_version is not None else {}
@@ -2146,7 +2146,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                      or (session_action_authorized and event.event_type == "SessionCancel"))
         self.last_canonical_state = dict(snapshot)
         self.last_canonical_event = {"type": event_type, "source": event.source, "sequence": event.sequence, "session_id": event.session_id, "timestamp": event.timestamp, "monotonic_timestamp": accepted_monotonic, "correlation_id": event.correlation_id, "payload": dict(payload)}
-        voice_open = bool(snapshot.get("interaction_active"))
+        voice_open = bool(self.canonical_runtime.sessions[event.session_id].audio_open)
         authorization = self.transition_authorizer.authorize(
             previous_state.mode if previous_state is not None else "idle",
             str(snapshot.get("mode") or "idle"),
@@ -3400,7 +3400,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             return self._identity_result(event.session_id, "unsupported_event")
         if event.event_type == "InteractionIdleExpired":
             return self._identity_result(event.session_id, "interaction_idle_untrusted")
-        if event.event_type in {"SessionStarted", "InterviewSkipped"}:
+        if event.event_type in {"SessionStarted", "SessionAudioEnabled", "InterviewSkipped"}:
             return self._identity_result(event.session_id, "session_action_untrusted")
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared"}:
             return self._identity_result(event.session_id, "max_json_requires_private_client_boundary")

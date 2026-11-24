@@ -163,6 +163,8 @@ class RemoteDeviceSimulator:
                      and state.substate != "profile_cleanup_failed")))
         if ready and not active:
             actions.append("start")
+        if ready and active and state.interaction_route == "panel" and state.silent_mode and not state.interaction_idle:
+            actions.append("enable_audio")
         if (ready and active and state.profile_status != "identified" and state.mode in {
                 "exhibition_introduction", "exhibition_name_question", "exhibition_name_capture",
                 "exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"}):
@@ -172,12 +174,12 @@ class RemoteDeviceSimulator:
     async def _session_action(self, payload):
         action = payload["action"]
         fields = {"action", "instance_id", "epoch", "session_id"}
-        if action == "skip_interview":
+        if action in {"skip_interview", "enable_audio"}:
             fields.add("state_version")
         if (set(payload) != fields or type(payload.get("epoch")) is not int or payload["epoch"] < 0
                 or not isinstance(payload.get("session_id"), str)
                 or not isinstance(payload.get("instance_id"), str)
-                or (action == "skip_interview" and (type(payload["state_version"]) is not int
+                or (action in {"skip_interview", "enable_audio"} and (type(payload["state_version"]) is not int
                     or not 0 <= payload["state_version"] <= 2**63 - 1))):
             return _error("validation_error", "session action requires its exact current owner scope")
         def current():
@@ -194,6 +196,8 @@ class RemoteDeviceSimulator:
                 return blocked
             if not current():
                 return _error("stale_simulator_epoch", "session action belongs to an expired owner")
+            if not self.admits_users():
+                return _error("runtime_unavailable", "stand runtime is not ready")
             state = self.stand.application.canonical_runtime.sessions.get(payload["session_id"])
             if (getattr(self.stand, "_capture_hid_fault", None) is not None or self.stand._physical_output_faulted()):
                 return _error("runtime_unavailable", "session input is faulted")
@@ -282,7 +286,7 @@ class RemoteDeviceSimulator:
 
     async def action(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = payload.get("action")
-        if isinstance(action, str) and action in {"start", "end", "skip_interview"}:
+        if isinstance(action, str) and action in {"start", "end", "skip_interview", "enable_audio"}:
             return await self._session_action(payload)
         cleanup = action == "reset" or (action == "handset" and payload.get("state") == "down")
         if payload.get("epoch") is not None:

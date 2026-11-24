@@ -982,7 +982,7 @@ class HardwareIntegrationStand:
             and (not self._headless_turn_taking_enabled()
                  or (not self._headless_output_owners
                      and time.monotonic() >= self._headless_output_resume_at))
-            and bool(state and state.interaction_open)
+            and bool(state and state.audio_open)
             and not getattr(state, "interaction_idle", False)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
@@ -3721,7 +3721,9 @@ class HardwareIntegrationStand:
             "identity": dict(source.get("identity") or {}),
             "identity_ready": bool(source.get("identity_ready")),
             "reader_ready": bool(source.get("reader_ready")),
-            "transport": {"kind": source.get("transport", {}).get("kind"), "story_audio_mode": source.get("transport", {}).get("story_audio_mode"), "hardware": {"connected": source.get("transport", {}).get("hardware", {}).get("connected")}},
+            "transport": {"kind": source.get("transport", {}).get("kind"), "story_audio_mode": source.get("transport", {}).get("story_audio_mode"), "hardware": {"connected": source.get("transport", {}).get("hardware", {}).get("connected"),
+                "transport_mode": self.hardware_mode,
+                "acceptance": "physical" if self.hardware_mode == "physical" else "simulator"}},
             "session": {key: session[key] for key in ("state", "node", "scenario", "handset_up", "enabled_buttons", "visual_only", "retries") if key in session},
             "visual_only": bool(source.get("visual_only")),
             "raw_frames": [{"direction": item.get("direction"), "decoded": {key: item.get("decoded", {}).get(key) for key in ("type", "sequence") if isinstance(item.get("decoded"), dict) and key in item.get("decoded", {})}, "error": item.get("error")} for item in source.get("raw_frames", [])[-80:] if isinstance(item, dict)],
