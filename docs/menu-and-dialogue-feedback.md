@@ -34,6 +34,15 @@ revoke delayed preparation and playback owners. Cold synthesis latency remains
 a separate performance concern, not a reason to display the static button-1
 frame or pretend the conversation is already ready.
 
+For the exact authored public `DIALOGUE_INTRO` and the existing native
+ExperimentalTTS/voice-conversion-off path, trusted validation and owned streaming
+now expose the first PCM before synthesis reaches EOF. No MiniLLM hop or cache
+is used for that fixed instruction. Different text, unsupported providers,
+RETURN/OFFER and private/factual speech retain their existing validated path.
+An attempted stream failure cannot replay the full utterance; its current
+owned failure terminal restores a usable listening/exit state. Late failure
+callbacks cannot reset a newer turn's processing lights.
+
 ## Evidence and limits
 
 The [W3C cognitive-accessibility feedback pattern](https://www.w3.org/WAI/WCAG2/supplemental/patterns/o4p10-status-feedback/)

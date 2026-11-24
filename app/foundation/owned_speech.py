@@ -10,6 +10,7 @@ TYPED_AUDIO_IDS = frozenset({'TYPED_MENU','TYPED_DATE','TYPED_WEATHER','TYPED_WH
     'DIALOGUE_INTRO', 'DIALOGUE_OFFER', 'DIALOGUE_RETURN', 'DIALOGUE_FINISH', CATALOGUE_CLARIFY})
 PRIVATE_TYPED_AUDIO_IDS = frozenset({'TYPED_WHAT_NEXT','TYPED_WHERE_NOW', 'TYPED_CARD_DOCTORS'})
 MENU_AUDIO_IDS = frozenset(MENU_PCM_MODES)
+_PUBLIC_DIALOGUE_INTRO = 'Давай поговорим. Чтобы вернуться в меню, нажми семь.'
 OWNED_PCM_IDS = TYPED_AUDIO_IDS | MENU_AUDIO_IDS | {'PERSONAL_WELCOME', 'PERSONAL_STORY', 'GAME_PROMPT', 'GAME_HINT'}
 
 
@@ -52,7 +53,9 @@ class OwnedSpeechMixin:
         from .public_menu_audio import PublicMenuAudioCache, current_menu_page, providers
         from .s2s import AudioChunk, PassthroughVoiceProvider
         engine = self.bounded_s2s
-        if (engine is None or effect.get('content_id') not in MENU_AUDIO_IDS
+        public_intro = (effect.get('content_id') == 'DIALOGUE_INTRO'
+                        and text == _PUBLIC_DIALOGUE_INTRO)
+        if (engine is None or (effect.get('content_id') not in MENU_AUDIO_IDS and not public_intro)
                 or not getattr(self.audio, 'private_pcm_supported', False)
                 or not getattr(self.audio, 'private_pcm_stream_supported', False)
                 or not callable(getattr(self.audio, 'play_pcm_stream_owned', None))):
@@ -109,17 +112,21 @@ class OwnedSpeechMixin:
             try:
                 if not live():
                     return
-                page = current_menu_page(self, session_id, text)
-                if page is None or MENU_PCM_MODES[effect['content_id']] != page.scene:
-                    return
-                validation_text = await bounded(self._menu_validation_text(session_id, text))
+                if public_intro:
+                    # This one authored literal has no session facts or catalogue data.
+                    validation_text = text
+                else:
+                    page = current_menu_page(self, session_id, text)
+                    if page is None or MENU_PCM_MODES[effect['content_id']] != page.scene:
+                        return
+                    validation_text = await bounded(self._menu_validation_text(session_id, text))
                 if validation_text is None or not live():
                     return
                 validation = await bounded(validator.validate_trusted(validation_text))
                 if not validation.allowed or not live():
                     return
                 candidate = getattr(self, '_public_menu_audio_cache', None)
-                if isinstance(candidate, PublicMenuAudioCache):
+                if page is not None and isinstance(candidate, PublicMenuAudioCache):
                     cache = candidate
                     key = cache.key(self, page, text)
                     status['cached'] = cache.get(key, token, session_id)

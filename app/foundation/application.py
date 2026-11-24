@@ -2796,11 +2796,19 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     return bool(still_current() and state_owner.interaction_open
                         and state_owner.active_audio_id == effect.get("content_id")
                         and state_owner.playback_lease == effect.get("playback_lease"))
-                rendered = await self._render_typed_audio(event.session_id, effect["text"], effect,
-                                                         record.cancellation_token, prompt_current)
+                streamed = None
+                if effect["content_id"] == "DIALOGUE_INTRO":
+                    streamed = await self._stream_menu_audio(event.session_id, effect["text"], effect,
+                                                             record.cancellation_token, prompt_current)
                 if not prompt_current():
                     return stale_result()
-                if rendered is None:
+                rendered = None
+                if streamed is None:
+                    rendered = await self._render_typed_audio(event.session_id, effect["text"], effect,
+                                                             record.cancellation_token, prompt_current)
+                if not prompt_current():
+                    return stale_result()
+                if streamed is False or (streamed is None and rendered is None):
                     audio_failure = {"response_id": effect["content_id"],
                         "playback_lease": effect["playback_lease"], "error_code": "dialogue_prompt_unavailable"}
                     _set_audio_effect_status(effect, asset_status="unavailable", queued=False,
@@ -2811,7 +2819,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             await self._set_dialogue_lighting_phase(event.session_id, "output")
                             if not prompt_current():
                                 return stale_result()
-                        self._play_typed_audio(event.session_id, rendered, effect, record.cancellation_token)
+                        if streamed is None:
+                            self._play_typed_audio(event.session_id, rendered, effect, record.cancellation_token)
                         _set_audio_effect_status(effect, asset_status="approved", queued=True,
                                                  resolution="dialogue_prompt_pcm_queued")
                     except Exception:
@@ -3379,6 +3388,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             failure_effects = list(failure.get("outputs") or [])
             failure["outputs"] = [dict(item) for item in effects] + failure_effects
             self.last_canonical_effects = [dict(item) for item in failure["outputs"]]
+            if (audio_failure.get("response_id") == "DIALOGUE_INTRO"
+                    and failure.get("reason") == "dialogue_prompt_finished"
+                    and self._session_epochs.get(event.session_id, 0) == epoch
+                    and self.canonical_runtime.sessions.get(event.session_id) is state_owner
+                    and state_owner.state_version == failure.get("canonical_state", {}).get("state_version")
+                    and state_owner.mode == "bear_dialogue" and state_owner.active_audio_id is None):
+                # Internal dispatch failure is already terminal; it bypasses
+                # receive_async's ordinary AudioFailed lighting callback.
+                await self._set_dialogue_lighting_phase(event.session_id, "listening")
             return failure
         reset_cleanup = None
         if exhibition_reset:
