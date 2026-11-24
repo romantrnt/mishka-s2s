@@ -1,0 +1,24 @@
+{
+  "roots": [
+    "/home/khugardin/Desktop",
+    "/home/khugardin/Downloads",
+    "/home/khugardin/.local/share",
+    "/opt"
+  ],
+  "command_exit": 2,
+  "files": [
+    {
+      "path": "/home/khugardin/Desktop/backup_desk/MISHKA-Voice-2026-11-16/snapshots/20261116T092012.876020Z-remote-milestone/outputs/voice-project/training/qwen-full-corpus-v2-20261116/exports/step-0000765/speech_tokenizer/model.safetensors",
+      "bytes": 682293092
+    },
+    {
+      "path": "/home/khugardin/Desktop/backup_desk/MISHKA-Voice-2026-11-16/snapshots/20261116T092012.876020Z-remote-milestone/outputs/voice-project/training/qwen-full-corpus-v2-20261116/exports/step-0000765/model.safetensors",
+      "bytes": 3833402520
+    },
+    {
+      "path": "/home/khugardin/Desktop/backup_desk/MISHKA-Voice-2026-11-16/snapshots/20261116T092012.876020Z-remote-milestone/outputs/voice-project/training/qwen-full-corpus-v2-20261116/checkpoints/step-00000765-6cec86ff/model.safetensors",
+      "bytes": 3857413776
+    }
+  ],
+  "scope": "filename metadata only, no model/checkpoint deserialization, no network"
+}

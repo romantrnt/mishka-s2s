@@ -1,0 +1,8 @@
+{
+  "scripts/experimental_tts_worker.py": "a01616e7d42a94f4e96ed885639a143c1281592da23a96f35f60e45b4cfc8152",
+  "app/foundation/experimental_voice.py": "bcfcd11f4312b93f594c3508415d6bf06a55fbc6d334029edf9f7c022f49f661",
+  "app/foundation/voice_pipeline.py": "48bdfc975cb6cfba371d6cd7bfa735680a320c8dcf4d689e95820a99efe34521",
+  "app/foundation/game_presentation.py": "c29ec942f5cb036f59c2ed9b83f5cd4d02c0f22efa40fa23c115bde1b9d12c9b",
+  "app/foundation/s2s.py": "78ba0e75e2216c5dd0078a6d387a42546d91ee83a2ee1f68be554cf4fe41febf",
+  "app/foundation/spoken_numbers.py": "fb7de6e31fb43a3bb8dedff700fc86d24efba8cdd0b417dccd7cf234f531d9b1"
+}

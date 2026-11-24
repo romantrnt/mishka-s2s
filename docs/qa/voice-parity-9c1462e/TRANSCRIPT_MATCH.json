@@ -1,0 +1,210 @@
+{
+  "corpus_provenance_rows": 341,
+  "matching_fields": [
+    "text",
+    "original_supplied_plain_text"
+  ],
+  "method": "Unicode NFKD, lowercase, remove combining accents, ё/е-equivalence, word/digit tokens; discard punctuation and whitespace. Plus-annotated variant is never treated as transcript. Also check contiguous token subsequence. No ASR draft promoted to human verified.",
+  "human_reviewed_rows": 0,
+  "samples": [
+    {
+      "id": "castle",
+      "text": "На горе стоит старинный замок.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "на",
+        "горе",
+        "стоит",
+        "старинныи",
+        "замок"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "declension",
+      "text": "Позови Машу и Мишу, а потом расскажи о Маше.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "позови",
+        "машу",
+        "и",
+        "мишу",
+        "а",
+        "потом",
+        "расскажи",
+        "о",
+        "маше"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "demo",
+      "text": "Это демо нашей новой игры.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "это",
+        "демо",
+        "нашеи",
+        "новои",
+        "игры"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "game",
+      "text": "Обезьяна сидит на ветке, а слон стоит внизу.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "обезьяна",
+        "сидит",
+        "на",
+        "ветке",
+        "а",
+        "слон",
+        "стоит",
+        "внизу"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "greeting",
+      "text": "Здорово! Я Мишка. Давай играть.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "здорово",
+        "я",
+        "мишка",
+        "даваи",
+        "играть"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "lock",
+      "text": "На двери висит крепкий замок.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "на",
+        "двери",
+        "висит",
+        "крепкии",
+        "замок"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "names",
+      "text": "Алёна и Семён позвали Варвару.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "алена",
+        "и",
+        "семен",
+        "позвали",
+        "варвару"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "new_phrase",
+      "text": "Давай сначала послушаем, а потом спокойно попробуем ещё раз.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "даваи",
+        "сначала",
+        "послушаем",
+        "а",
+        "потом",
+        "спокоино",
+        "попробуем",
+        "еще",
+        "раз"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "sibilants",
+      "text": "Щётка шуршит, а ёжик тихо фырчит.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "щетка",
+        "шуршит",
+        "а",
+        "ежик",
+        "тихо",
+        "фырчит"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "story",
+      "text": "Кролик Мягкие Лапки посмотрел на далёкую звезду.",
+      "role": "historical current-contract transport",
+      "normalized_tokens": [
+        "кролик",
+        "мягкие",
+        "лапки",
+        "посмотрел",
+        "на",
+        "далекую",
+        "звезду"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "dev0",
+      "text": "Открой окно, пожалуйста. На улице уже светло, и птицы поют совсем рядом.",
+      "role": "historical checkpoint continuity only",
+      "normalized_tokens": [
+        "открои",
+        "окно",
+        "пожалуиста",
+        "на",
+        "улице",
+        "уже",
+        "светло",
+        "и",
+        "птицы",
+        "поют",
+        "совсем",
+        "рядом"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    },
+    {
+      "id": "dev1",
+      "text": "Я немного волнуюсь, но всё равно попробую. Поможешь мне сделать первый шаг?",
+      "role": "historical checkpoint continuity only",
+      "normalized_tokens": [
+        "я",
+        "немного",
+        "волнуюсь",
+        "но",
+        "все",
+        "равно",
+        "попробую",
+        "поможешь",
+        "мне",
+        "сделать",
+        "первыи",
+        "шаг"
+      ],
+      "exact_token_matches": [],
+      "token_subsequence_matches": []
+    }
+  ],
+  "matched_texts": 0,
+  "subsequence_matched_texts": 0,
+  "same_text_verified_adult_vox_pairs": 0
+}

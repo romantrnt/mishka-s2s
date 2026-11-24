@@ -1,0 +1,12 @@
+{
+  "roots_searched": [
+    "/home/khugardin/Documents/Codex/2026-11-16/project-manager/outputs/mishka-remote-stand",
+    "/home/khugardin/Documents/Codex/2026-11-16/project-manager/work/mishka-remote-stand",
+    "/home/khugardin/Documents/Codex/2026-11-13/task/mishka-s2s",
+    "/home/khugardin/Documents/AG/Mishka-Voice-Parity"
+  ],
+  "rg_exit": 1,
+  "vox_routes": [],
+  "metadata_candidates": 0,
+  "scope": "bounded known runner/manifest/config metadata; no env/secrets/model reads"
+}
