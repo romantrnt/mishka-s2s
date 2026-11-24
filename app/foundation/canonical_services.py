@@ -405,7 +405,12 @@ class TypedInfoRenderer:
                 timezone = ZoneInfo("Europe/Moscow")
             current = self.now().astimezone(timezone)
             months = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
-            return {"kind": "date", "text": f"Сегодня {current.day} {months[current.month - 1]} {current.year} года."}
+            # This typed date knows the grammatical case; generic digit
+            # normalization cannot infer it from an arbitrary utterance.
+            from num2words import num2words
+            day = num2words(current.day, lang="ru", to="ordinal", gender="neuter")
+            year = num2words(current.year, lang="ru", to="ordinal", case="genitive")
+            return {"kind": "date", "text": f"Сегодня {day} {months[current.month - 1]} {year} года."}
         if kind == 'card_doctors':
             return {'kind':kind, 'text':self._card_doctors_text()}
         if kind not in {"weather", "what_next", "where_now"}:
