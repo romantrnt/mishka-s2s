@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="ru">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f2f4f3"><title>Мишка — удалённый телефон</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/console/console.css?v=20261013-webpanel-storm-fix-2"><link rel="stylesheet" href="/console/phone.css?v=20261124-dialogue-controls"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f5f6f5"><title>Телефон Мишки</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/console/console.css?v=20261125-browser-sessions"><link rel="stylesheet" href="/console/phone.css?v=20261125-browser-sessions"></head>
 <body data-phone="true">
-<div id="engineer-root" class="phone-console"><header class="toolbar"><div class="brand"><strong>Телефон Мишки</strong><span>CANONICAL RUNTIME / OPERATOR CONSOLE</span></div><div class="toolbar-actions"><span id="connection" class="status-chip offline">DISCONNECTED</span><span id="health" class="status-chip">HEALTH —</span><button id="reset" class="tool-button">Reset</button><button id="export" class="tool-button">Export diagnostics</button><div class="phone-top-actions"><button id="phone-sound" data-simulator-control type="button">Включить звук</button><span id="phone-mic-indicator" class="phone-mic-indicator">Микрофон выключен</span><a href="/console/operator" target="_blank" rel="noopener">Оператор</a><button id="phone-open-tools" type="button" aria-haspopup="dialog">Инструменты <span aria-hidden="true">☰</span></button></div></div></header>
+<div id="engineer-root" class="phone-console"><header class="toolbar"><div class="brand"><strong>Телефон Мишки</strong></div><div class="toolbar-actions"><span id="connection" class="status-chip offline">DISCONNECTED</span><span id="health" class="status-chip">HEALTH —</span><button id="reset" class="tool-button">Reset</button><button id="export" class="tool-button">Export diagnostics</button><div class="phone-top-actions"><button id="phone-sound" data-simulator-control type="button">Включить звук</button><span id="phone-mic-indicator" class="phone-mic-indicator">Микрофон выключен</span><a href="/console/operator" target="_blank" rel="noopener">Оператор</a><form class="logout-form" method="post" action="/stand/logout"><button type="submit">Выйти</button></form><button id="phone-open-tools" type="button" aria-haspopup="dialog">Инструменты <span aria-hidden="true">☰</span></button></div></div></header>
 <main class="workbench">
-  <section class="stage panel"><div class="panel-heading"><div><h1>Front panel</h1><span class="subheading">7-button hardware simulator</span></div><span class="mode-label">CANONICAL INGRESS</span></div>
+  <section class="stage panel">
     <section class="tester-guide"><div class="guide-title"><span class="guide-step">BUTTON CONTRACT</span><strong id="guide-title">Тест продолжается</strong></div><p id="guide-text">Button colors are loaded from the runtime contract.</p><div id="button-legend" class="guide-map" aria-label="Canonical button mapping"></div></section>
     <section class="phone-experience" aria-label="Удалённый телефон">
 <div class="phone-connection-line"><span id="phone-connection" role="status">Подключение…</span></div>
@@ -55,6 +55,6 @@
 <section class="phone-tool-section" data-simulator-control><h3>Отдельные режимы ввода</h3><p>Текст и WAV передаются отдельно от записи микрофона.</p><form id="phone-text-form"><label for="phone-text">Текстовый ввод</label><input id="phone-text" maxlength="512" autocomplete="off" placeholder="Введите реплику"><button type="submit">Отправить текст</button></form><label class="phone-file-label" for="phone-wav">Аудиофайл WAV, до 15 секунд<input id="phone-wav" type="file" accept="audio/wav,.wav"></label></section>
 <section class="phone-tool-section" data-simulator-control><h3>Журнал устройства</h3><div class="phone-journal-actions"><button id="phone-refresh-journal" type="button">Обновить журнал</button><span id="phone-journal-status"></span></div><ol id="phone-journal" class="phone-journal"></ol></section>
 </dialog>
-<script src="/console/console.js?v=20261124-dialogue-controls"></script>
-<script type="module" src="/console/phone.js?v=20261124-dialogue-controls"></script>
+<script src="/console/console.js?v=20261125-browser-sessions"></script>
+<script type="module" src="/console/phone.js?v=20261125-browser-sessions"></script>
 </body></html>
