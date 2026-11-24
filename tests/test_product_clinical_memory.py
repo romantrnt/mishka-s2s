@@ -14,13 +14,14 @@ class Harness:
         self.app.now = lambda: self.clock[0]
         self.seen = []
         harness = self
-        class Engine:
-            async def run_text_turn(self, text, context):
-                harness.seen.append(list(context.history))
-                context.history.append((text, 'ответ'))
-                context.turns += 1
-                return TurnResult(('ответ',), (), False)
-        self.app.bounded_s2s = Engine()
+        async def run_text_turn(text, context):
+            harness.seen.append(list(context.history))
+            context.history.append((text, 'ответ'))
+            context.turns += 1
+            return TurnResult(('ответ',), (), False)
+        # Keep the built mock engine's real typed-audio interface for the owned
+        # root-six intro; only the dialogue reply/history are synthetic here.
+        self.app.bounded_s2s.run_text_turn = run_text_turn
     @property
     def state(self): return self.app.canonical_runtime.sessions['memory']
     async def send(self, kind, payload=None, text=None):
