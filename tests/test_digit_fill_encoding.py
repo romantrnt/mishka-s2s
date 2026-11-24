@@ -5,7 +5,7 @@ import pytest
 
 from app.foundation.config import Settings, SettingsError
 from app.foundation.lighting import (
-    BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS,
+    BUTTON_DIGIT_ELEMENTS, BUTTON_FILL_ELEMENTS, LIGHTING_ELEMENT_IDS, PICTOGRAM_ELEMENTS,
     LightingCommand, PhysicalLightingOutput, SerialLightingAdapter,
 )
 
@@ -45,8 +45,11 @@ def test_final_pair_is_projected_before_writing_regardless_of_batch_order(button
     commands = (LightingCommand(d,digit,100), LightingCommand(f,fill,200))
     try:
         adapter.send_batch(commands[::-1] if reverse else commands)
-        assert targets(wire) == {f:fill, d:expected}
-        assert wire.lines[-1] == f'{d},{expected},100\n'.encode()
+        expected_targets = {f:fill, d:expected}
+        if button in PICTOGRAM_ELEMENTS:
+            expected_targets[PICTOGRAM_ELEMENTS[button]] = 2 if fill else 0
+        assert targets(wire) == expected_targets
+        assert f'{d},{expected},100\n'.encode() in wire.lines
     finally: adapter.close()
 
 
@@ -79,11 +82,13 @@ def test_animation_frames_and_reconnect_keep_pair_state_and_channel_contract():
             assert set(result) == set(LIGHTING_ELEMENT_IDS)
             for button in range(1,8):
                 assert result[BUTTON_DIGIT_ELEMENTS[button][1]] == (2 if button==active else 0)
-            assert all(result[i] in (0,1) for i in (4,5,16,17))
+            assert all(result[i] in (0,1) for i in (5,16))
+            assert result[4] == (2 if active == 6 else 0)
+            assert result[17] == (2 if active == 7 else 0)
         adapter.reconnect()
         wire.lines.clear()
         adapter.send(LightingCommand(BUTTON_FILL_ELEMENTS[7],0))
-        assert targets(wire) == {1:0,0:0}
+        assert targets(wire) == {1:0,0:0,17:0}
         wire.failures=1
         adapter.send(LightingCommand(14,1))
         assert targets(wire)[15] == 2
@@ -170,3 +175,93 @@ def test_mode_is_explicit_validated_config_and_journal_defaults_off(monkeypatch)
     monkeypatch.setenv('LIGHTING_DIGIT_MODE','legacy')
     monkeypatch.setenv('DIALOGUE_JOURNAL_ENABLED','perhaps')
     with pytest.raises(SettingsError):Settings.from_env()
+
+
+@pytest.mark.parametrize('button,fill,emblem,digit', [(6,3,4,2),(7,1,17,0)])
+@pytest.mark.parametrize('on,filled,expected', [(0,0,0),(1,0,1),(1,1,1),(0,1,2)])
+@pytest.mark.parametrize('reverse', [False,True])
+def test_emblem_matches_digit_fill_colour_contract(button,fill,emblem,digit,on,filled,expected,reverse):
+    assert PICTOGRAM_ELEMENTS[button] == emblem
+    assert BUTTON_FILL_ELEMENTS[button] == fill
+    adapter,wire=opened()
+    commands=(LightingCommand(emblem,on,100),LightingCommand(fill,filled,200))
+    try:
+        adapter.send_batch(commands[::-1] if reverse else commands)
+        assert targets(wire) == {fill:filled,emblem:expected,digit:2 if filled else 0}
+        assert f'{emblem},{expected},100\n'.encode() in wire.lines
+        assert set(adapter._logical_targets.values()) <= {0,1}
+    finally:adapter.close()
+
+
+@pytest.mark.parametrize('fill,emblem,digit', [(3,4,2),(1,17,0)])
+@pytest.mark.parametrize('cutoff', [2,3,4,5])
+def test_emblem_only_recovers_whole_cancelled_group(fill,emblem,digit,cutoff):
+    adapter,wire=opened()
+    checks=0
+    def current():
+        nonlocal checks
+        checks+=1
+        return checks<cutoff
+    try:
+        assert not adapter.send_batch((LightingCommand(fill,1),LightingCommand(digit,1),LightingCommand(emblem,1)),is_current=current)
+        adapter.send(LightingCommand(emblem,0))
+        assert targets(wire) == {fill:0,digit:0,emblem:0}
+        assert set(adapter._logical_targets.values()) == {0}
+    finally:adapter.close()
+
+
+def test_legacy_keeps_all_eighteen_channel_bytes_including_emblems():
+    adapter,wire=opened('legacy')
+    commands=tuple(LightingCommand(i,int(i%2==0),60+i) for i in LIGHTING_ELEMENT_IDS)
+    try:
+        adapter.send_batch(commands)
+        assert wire.lines == [f'{c.element_id},{c.state},{c.transition_ms}\n'.encode() for c in commands]
+    finally:adapter.close()
+
+
+def test_fill_colour_keeps_compensation_channels_binary_and_independent():
+    adapter,wire=opened()
+    try:
+        adapter.send_batch((LightingCommand(5,1,80),LightingCommand(16,1,90),
+                            LightingCommand(3,1,100),LightingCommand(1,1,120)))
+        assert targets(wire) == {5:1,16:1,3:1,2:2,4:2,1:1,0:2,17:2}
+        assert b'5,1,80\n' in wire.lines and b'16,1,90\n' in wire.lines
+        wire.lines.clear()
+        adapter.send_batch((LightingCommand(5,0,30),LightingCommand(16,0,40)))
+        assert wire.lines == [b'5,0,30\n',b'16,0,40\n']
+    finally:adapter.close()
+
+
+@pytest.mark.parametrize('fill,emblem,digit', [(3,4,2),(1,17,0)])
+def test_emblem_retry_and_reconnect_keep_the_completed_group_baseline(fill,emblem,digit):
+    adapter,wire=opened()
+    try:
+        adapter.send(LightingCommand(fill,1,120))
+        adapter.send(LightingCommand(emblem,1,80))
+        assert targets(wire) == {fill:1,digit:2,emblem:1}
+        wire.failures=1
+        adapter.send(LightingCommand(emblem,0,60))
+        assert targets(wire) == {fill:1,digit:2,emblem:2}
+        assert adapter._logical_targets[emblem] == 0
+        adapter.reconnect()
+        wire.lines.clear()
+        adapter.send(LightingCommand(fill,0,40))
+        assert targets(wire) == {fill:0,digit:0,emblem:0}
+        assert set(adapter._logical_targets.values()) == {0}
+    finally:adapter.close()
+
+
+@pytest.mark.parametrize('fill,emblem,digit', [(3,4,2),(1,17,0)])
+def test_group_writes_final_values_in_order_and_keeps_each_explicit_transition(fill,emblem,digit):
+    adapter,wire=opened()
+    try:
+        adapter.send_batch((LightingCommand(emblem,1,25),LightingCommand(digit,0,10),
+                            LightingCommand(fill,1,200),LightingCommand(emblem,0,60),
+                            LightingCommand(digit,1,90)))
+        assert wire.lines == [f'{fill},1,200\n'.encode(),f'{digit},1,90\n'.encode(),
+                              f'{emblem},2,60\n'.encode()]
+        wire.lines.clear()
+        adapter.send_batch((LightingCommand(emblem,1,50),LightingCommand(digit,0,70)))
+        assert wire.lines == [f'{fill},1,70\n'.encode(),f'{digit},2,70\n'.encode(),
+                              f'{emblem},1,50\n'.encode()]
+    finally:adapter.close()

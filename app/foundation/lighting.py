@@ -773,7 +773,7 @@ class SerialLightingAdapter:
     This is separate from the legacy JSONL/CRC32 simulator transport. The
     only bytes written here are canonical CSV/LF lighting lines:
     <element_id>,<state>,<transition_ms>\n. Logical state is always binary;
-    only explicit fill_color mode projects a digit's wire state to 0/1/2.
+    only explicit fill_color mode projects digits and emblems to wire state 0/1/2.
     """
 
     def __init__(self, path: str, *, baudrate: int = 115200,
@@ -949,20 +949,23 @@ class SerialLightingAdapter:
             logical = dict(self._logical_targets)
             latest = {command.element_id: command for command in validated}
             logical.update({channel: command.state for channel, command in latest.items()})
-            digits = {pair[1] for pair in BUTTON_DIGIT_ELEMENTS.values()}
-            # Fills precede digits; every digit is computed from the final pair,
-            # including when this batch changed only its fill channel.
-            projected = [(latest[i], None) for i in sorted(latest) if i not in digits]
-            for button in BUTTON_FILL_ELEMENTS:
-                fill, digit = BUTTON_FILL_ELEMENTS[button], BUTTON_DIGIT_ELEMENTS[button][1]
-                if fill not in latest and digit not in latest:
+            indicators = {pair[1] for pair in BUTTON_DIGIT_ELEMENTS.values()} | set(PICTOGRAM_ELEMENTS.values())
+            # Project digits and emblems from the final shared fill state.
+            projected = [(latest[i], None) for i in sorted(latest) if i not in indicators]
+            for button, fill in BUTTON_FILL_ELEMENTS.items():
+                elements = (BUTTON_DIGIT_ELEMENTS[button][1],)
+                if button in PICTOGRAM_ELEMENTS:
+                    elements += (PICTOGRAM_ELEMENTS[button],)
+                if fill not in latest and not any(element in latest for element in elements):
                     continue
-                transition = latest[digit] if digit in latest else latest[fill]
+                trigger = latest[fill] if fill in latest else next(latest[element] for element in elements if element in latest)
                 if fill not in latest:
-                    # Reconcile both halves after a superseded partial frame.
-                    projected.append((LightingCommand(fill, logical[fill], transition.transition_ms), None))
-                command = LightingCommand(digit, logical[digit], transition.transition_ms)
-                projected.append((command, 1 if logical[digit] else 2 if logical[fill] else 0))
+                    # Restore the whole shared-fill group after a superseded frame.
+                    projected.append((LightingCommand(fill, logical[fill], trigger.transition_ms), None))
+                for element in elements:
+                    transition = latest.get(element, trigger).transition_ms
+                    command = LightingCommand(element, logical[element], transition)
+                    projected.append((command, 1 if logical[element] else 2 if logical[fill] else 0))
         last_index = len(projected) - 1
         for index, (command, wire_state) in enumerate(projected):
             if callable(is_current) and not is_current():
