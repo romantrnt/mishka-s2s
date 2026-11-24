@@ -22,11 +22,10 @@ def test_dialogue_fallback_is_internal_only_across_uart_and_websocket():
     stand_api.state.lifecycle.admits_users = lambda: True
     stand = stand_api.state.stand
     stand.active_session_id = sid
-    stand.application.canonical_runtime.sessions[sid] = CanonicalState(
-        sid, mode="bear_dialogue", handset="up",
-    )
     try:
         with TestClient(stand_api) as client:
+            stand.application.canonical_runtime.sessions[sid] = CanonicalState(
+                sid, mode="bear_dialogue", handset="up")
             client.headers.update({"x-stand-token": "test-token"})
             frame = encode_frame("DialogueFallback", stand.adapter._last_received_sequence + 1, {
                 "reason": "bounded_limit", "authorized": True,
@@ -42,12 +41,10 @@ def test_dialogue_fallback_is_internal_only_across_uart_and_websocket():
         profile="mock", runtime_mode="clinical", stand_access_token="test-token",
         mutation_auth_policy="token_required",
     ))
-    app.canonical_runtime.sessions[sid] = CanonicalState(
-        sid, mode="bear_dialogue", handset="up",
-    )
     api = create_app(app)
     api.state.lifecycle.admits_users = lambda: True
     with TestClient(api) as client:
+        app.canonical_runtime.sessions[sid] = CanonicalState(sid, mode="bear_dialogue", handset="up")
         with client.websocket_connect(f"/ws/{sid}", headers={"x-stand-token": "test-token"}) as ws:
             ws.send_json({"type": "DialogueFallback", "sequence": 1,
                           "reason": "bounded_limit", "authorized": True,
@@ -97,8 +94,8 @@ def test_story_menu_transition_lights_digit_channels_and_only_resume_stop_fills(
         from app.foundation.canonical_services import BUTTON_ELEMENTS
         page = result["canonical_state"]["scene_menu_descriptor"]
         assert page["scene"] == "fixed_story_menu"
-        assert page["buttons"] == [1, 2, 5, 6, 7]
-        expected = {element for button in page["buttons"] for element in BUTTON_ELEMENTS[button]}
+        assert page["buttons"] == [1, 2, 3, 4, 5, 7]
+        expected = {element for button in range(1, 6) for element in BUTTON_ELEMENTS[button]} | {0}
         frame = app.led.output.state.elements
         assert {element for element, value in frame.items() if value} == expected
         for button in range(1, 8):

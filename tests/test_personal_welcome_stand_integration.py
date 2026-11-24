@@ -37,14 +37,17 @@ async def test_actual_app_stand_owned_pcm_completion(outcome):
         assert (await deadline(h))['reason'] == 'personal_welcome_started'
         await asyncio.gather(*tuple(stand._response_audio_tasks))
         assert len(stand.playback.played) == 1
-        assert 'PHRASE_007' not in h.played
         assert not h.app.bounded_s2s.tts.cache
         if outcome == 'success':
-            assert h.state.mode == 'personal_welcome_listen'
-            assert stand._headless_audio_accepting()
-            assert (await speech(h, 'Хорошо'))['reason'] == 'personal_welcome_answer_received'
-            assert h.played[-1] == 'PHRASE_007'
+            assert h.state.mode == 'exhibition_menu_tutorial_prompt'
+            assert h.state.active_audio_id == 'PHRASE_007' and h.played[-1] == 'PHRASE_007'
+            assert not stand._headless_audio_accepting()
+            current = dict(h.app._active_audio[h.boundary.session_id])
+            await speech(h, 'Хорошо')
+            assert h.state.mode == 'exhibition_menu_tutorial_prompt' and h.state.mood_result is None
+            assert h.app._active_audio[h.boundary.session_id] == current
         else:
+            assert 'PHRASE_007' not in h.played
             assert h.state.audio_status == 'failed'
             assert not stand._headless_audio_accepting()
             await speech(h, 'Хорошо')

@@ -128,6 +128,7 @@ async def test_stale_typed_callback_cannot_stop_new_recorded_help():
     h=Harness()
     try:
         await h.start();await h.button(1);old=h.callback()
+        await h.button(7)  # Day slots contain facts; help remains on the root.
         await h.button(5)
         await h.send('AudioCompleted',old)
         assert h.state.mode=='wellbeing_check'

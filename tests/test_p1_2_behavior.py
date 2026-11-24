@@ -25,9 +25,14 @@ def test_story_emotional_reaction_keeps_playback_and_game_has_safety_escape():
     assert runtime.handle(_event("AnonymousStart", 1, 0))["state"]["mode"] == "anonymous_visual"
     game_menu = runtime.handle(_event("ButtonPressed", 2, 1, {"button_id": 1}))
     assert game_menu["state"]["mode"] == "game_menu"
-    active = runtime.handle(_event("ButtonPressed", 3, 2, {"button_id": 1}))
-    safety = runtime.handle(_event("ButtonPressed", 4, active["state"]["state_version"], {"button_id": 5}))
-    assert safety["state"]["mode"] == "wellbeing_check"
+    release = runtime.handle(_event("ButtonReleased", 3, game_menu["state"]["state_version"], {"button_id": 1}))
+    active = runtime.handle(_event("ButtonPressed", 4, release["state"]["state_version"], {"button_id": 1}))
+    assert active["state"]["active_game_id"] == "free_lights"
+    # Five is a valid game control; explicit help keeps its safety priority.
+    safety = runtime.handle(_event("VoiceIntentReady", 5, active["state"]["state_version"],
+        {"intent": "help_request", "safety_severity": "none"}))
+    assert safety["state"]["mode"] == "safety_stop"
+    assert safety["state"]["active_game_id"] is None
 
     runtime.reset("p1-2")
     runtime.handle(_event("AnonymousStart", 1, 0))

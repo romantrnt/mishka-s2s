@@ -4,7 +4,9 @@ from app.foundation.game_engine import start, advance, desired_buttons
 from app.foundation.api import build_application
 from app.foundation.config import Settings
 from app.foundation.domain import Event
-from app.foundation.canonical_services import BUTTON_ELEMENTS
+
+# Independent physical contract for the legacy mechanics' colors display.
+COLOR_FILLS = {1: 14, 2: 13, 3: 10, 4: 9}
 
 
 def test_target_fresh_edges_and_finite_rounds():
@@ -44,8 +46,8 @@ def test_property_no_reserved_targets_or_duplicate_scoring():
             assert advance(state, edge=edge, button=button, sequence=seq, now=float(seq)).state == state
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('selection', [1, 2])
-async def test_real_application_output(selection):
+@pytest.mark.parametrize('game', ['catch_light', 'visual_free_play'])
+async def test_synthetic_legacy_mechanic_uses_real_application_output(game):
     app, *_ = build_application(settings=Settings(profile='mock', runtime_mode='clinical'), background_scheduler=False)
     seq = 0
     async def send(kind, button=None):
@@ -54,23 +56,32 @@ async def test_real_application_output(selection):
         return await app.receive_async(Event(kind, 'realgame', seq, float(seq), 'test',
             {} if button is None else {'button_id': button}, f'game:{seq}', float(seq)))
     def lit(buttons):
-        ids = {i for b in buttons for i in BUTTON_ELEMENTS[b]}
+        ids = {COLOR_FILLS[b] for b in buttons}
         return {str(i): int(i in ids) for i in range(18)}
     try:
         await send('ButtonPressed', 1)
         await send('ButtonReleased', 1)
-        result = await send('ButtonPressed', selection)
+        result = await send('ButtonPressed', 1)
         assert result['reason'] == 'game_started'
         state = app.canonical_runtime.sessions['realgame']
-        await send('ButtonReleased', selection)
-        assert app.led.output.snapshot() == lit([1] if selection == 1 else [])
+        assert state.active_game_id == 'free_lights'
+        await send('ButtonReleased', 1)
+        # These retained mechanics are not public menu choices. Seed only
+        # their pure engine after real admission to exercise the effect bridge.
+        state.active_game_id = game
+        state.game_engine_state = start(game, sequence=0, now=float(seq), selection_button=0,
+            held_buttons=tuple(state.accepted_buttons_down), immersive=False)
+        state.game_audio_stage = 'playing'
+        assert state.game_engine_state.game_id == game and not state.game_engine_state.immersive
+        await send('ButtonReleased', 1)
+        assert app.led.output.snapshot() == lit([1] if game == 'catch_light' else [])
         await send('ButtonPressed', 1)
-        assert app.led.output.snapshot() == lit([2] if selection == 1 else [1])
+        assert app.led.output.snapshot() == lit([2] if game == 'catch_light' else [1])
         before = state.game_engine_state.round
         await send('ButtonHeld', 1)
         await send('ButtonPressed', 1)
         assert state.game_engine_state.round == before
-        if selection == 2:
+        if game == 'visual_free_play':
             await send('ButtonPressed', 3)
             assert app.led.output.snapshot() == lit([1,3])
             await send('ButtonReleased', 1)
@@ -83,14 +94,16 @@ async def test_real_application_output(selection):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['clinical', 'exhibition'])
-async def test_real_game_hangup_policy_and_completion(mode):
-    app, *_ = build_application(settings=Settings(profile='mock', runtime_mode=mode), background_scheduler=False)
+async def test_current_free_game_hangup_policy_and_explicit_exit(mode):
+    clock = [100.]
+    app, *_ = build_application(settings=Settings(profile='mock', runtime_mode=mode),
+        monotonic_now=lambda: clock[0], background_scheduler=False)
     seq = 0
     async def send(kind, button=None):
         nonlocal seq
         seq += 1
-        return await app.receive_async(Event(kind, 'resetgame', seq, float(seq), 'test',
-            {} if button is None else {'button_id': button}, f'reset:{seq}', float(seq)))
+        return await app.receive_async(Event(kind, 'resetgame', seq, clock[0], 'test',
+            {} if button is None else {'button_id': button}, f'reset:{seq}', clock[0]))
     try:
         await send('HandsetLifted')
         state = app.canonical_runtime.sessions['resetgame']
@@ -100,11 +113,7 @@ async def test_real_game_hangup_policy_and_completion(mode):
         await send('ButtonReleased', 1)
         await send('ButtonPressed', 1)
         await send('ButtonReleased', 1)
-        if state.mode == 'game_menu':
-            # New first-entry narration is interrupted, not selected, by this press.
-            await send('ButtonPressed', 1)
-            await send('ButtonReleased', 1)
-        assert state.game_engine_state is not None
+        assert state.mode == 'game_active' and state.active_game_id == 'free_lights'
         before = dict(app.led.output.snapshot())
         await send('HandsetPlaced')
         state = app.canonical_runtime.sessions.get('resetgame')
@@ -119,7 +128,15 @@ async def test_real_game_hangup_policy_and_completion(mode):
                 target = state.game_engine_state.target
                 await send('ButtonReleased', target)
                 result = await send('ButtonPressed', target)
-            assert result['reason'] == 'game_completed'
+                assert result['reason'] == 'game_free_play'
+                assert state.mode == 'game_active' and state.game_engine_state.round == 0
+            # Public free play is endless. Only the genuine held/released exit
+            # ends it; the finite legacy target loop is tested above.
+            await send('ButtonReleased', target)
+            await send('ButtonPressed', 7)
+            clock[0] += 6.
+            result = await send('ButtonReleased', 7)
+            assert result['reason'] == 'game_exited_by_long_button'
             assert state.mode == 'root_menu'
             assert state.game_engine_state is None
             assert 'resetgame' not in app._active_audio

@@ -135,7 +135,7 @@ def test_p1_12_hub_delivery_failure_is_not_silent():
         stand.application = app
         stand.hub = FailingHub()
         stand.results = deque()
-        stand.snapshot = lambda: {"bounded": True}
+        stand.panel_snapshot = lambda: {"bounded": True}
         await stand._publish_audio_completion("s", {"correlation_id": "corr", "chunk_index": 2, "token": 5})
         event = app._audio_completion_diagnostics[-1]
         assert event["event_type"] == "audio_update_hook_error"

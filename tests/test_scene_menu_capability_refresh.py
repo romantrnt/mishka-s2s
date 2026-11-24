@@ -87,7 +87,10 @@ async def test_refresh_failure_keeps_help_and_back_available(button):
     try:
         service=await weather_page(h);service.weather_provider=None
         await h.button(1);await h.release(1);await h.complete(failed=True)
-        await h.button(button)
+        await h.button(7)
+        assert h.state.mode == 'root_menu'
+        if button == 5:
+            await h.button(5)
         assert h.state.mode==('wellbeing_check' if button==5 else 'root_menu')
         assert not h.state.scene_menu_refresh_required
     finally:await h.close()

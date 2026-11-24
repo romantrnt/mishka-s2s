@@ -9,8 +9,8 @@ from app.foundation.domain import Event
 @pytest.mark.asyncio
 @pytest.mark.parametrize("buttons,expected_mode", [
     ([1], "game_menu"), ([2], "fixed_story_menu"),
-    ([4], "personal_story_theme"), ([5], "wellbeing_check"),
-    ([7], "schedule_weather"), ([1, 1], "game_active"),
+    ([3], "personal_story_theme"), ([5], "wellbeing_check"),
+    ([7], "schedule_weather"), ([1, 3], "game_active"),
 ])
 async def test_lift_does_not_replace_visual_activity_controls(buttons, expected_mode):
     app, *_ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"), background_scheduler=False)
@@ -30,6 +30,11 @@ async def test_lift_does_not_replace_visual_activity_controls(buttons, expected_
         state = app.canonical_runtime.sessions[sid]
         assert state.mode == expected_mode
         assert state.handset == "down"
+        if expected_mode == "game_active":
+            # The current visual sequence has an actual lit demonstration;
+            # free_lights intentionally has no static target between presses.
+            assert state.active_game_id == "repeat_pattern"
+            assert state.game_engine_state.phase == "demonstrate"
         before = dict(app.led.output.snapshot())
         assert any(before.values()), "visual controls must be visible before voice joins"
         result = await send("HandsetLifted")

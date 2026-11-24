@@ -76,7 +76,7 @@ def test_prior_audio_callback_does_not_cancel_new_playback_watchdog():
         await app.receive_async(_event("HandsetLifted", sid, 1))
         app._register_audio_lease(sid, "PHRASE_001", 0, "play-a", "lease-a")
         old = dict(app._active_audio[sid])
-        async def transition(_event, _text=None):
+        async def transition(_event, _text=None, *, _story_checkpoint_guard=None):
             app._register_audio_lease(sid, "PHRASE_001", 0, "play-b", "lease-b")
             return {"reason": "new_playback", "outputs": []}
         app._receive_canonical_event = transition
