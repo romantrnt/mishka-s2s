@@ -5,7 +5,7 @@ import re
 import math
 from dataclasses import dataclass
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Mapping
 
 from .canonical_contract import PERSONA_FORBIDDEN, VoiceManifest
@@ -316,7 +316,10 @@ class TypedInfoRenderer:
     """Render only typed provider facts; it never asks an LLM for information."""
     def __init__(self, service: Any, profile: Mapping[str, Any] | None, schedule_ref: str | None, *, now=None) -> None:
         self.service, self.profile, self.schedule_ref = service, profile, schedule_ref
-        zone = ZoneInfo(str((profile or {}).get("timezone") or "Europe/Moscow"))
+        try:
+            zone = ZoneInfo(str((profile or {}).get("timezone") or "Europe/Moscow"))
+        except (ValueError, ZoneInfoNotFoundError):
+            zone = ZoneInfo("Europe/Moscow")
         self.now = now or (lambda: datetime.now(zone))
 
     def _select_schedule_item(self, schedule, kind):

@@ -20,3 +20,12 @@ async def test_calendar_speaks_ordinals_in_the_selected_timezone(instant, expect
     report = await renderer.render('date')
     assert report['kind'] == 'date'
     assert prepare_vox_text(report['text']) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('zone', ['Not/AZone', '../invalid'])
+async def test_invalid_profile_timezone_reaches_existing_moscow_fallback(zone):
+    renderer = TypedInfoRenderer(None, {'timezone':zone}, None,
+        now=lambda: datetime.fromisoformat('2026-12-31T22:00:00+00:00'))
+    report = await renderer.render('date')
+    assert report['text'].startswith('Сегодня первое января ')
