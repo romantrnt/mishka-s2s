@@ -79,7 +79,7 @@ async def test_positive_request_receipt_uses_current_utterance_and_exact_target(
     assert text not in repr(result.activity_request)
     assert not activity_request_matches(result.activity_request, text, result.actions[0], object())
     assert not tts.texts and not e.playback.played
-    assert len(requests) == 1 and len(model.calls) == 1 and context.turns == 0
+    assert len(requests) == 1 and len(model.calls) == (0 if 'type="offer_game"' in action else 1) and context.turns == 0
     data = json.loads(requests[0]["messages"][1]["content"])
     assert data["utterance"] == text and data["target"] == result.activity_request.target
     assert set(data) == {"utterance", "current_request_evidence", "proposed_action", "target", "public_title", "public_aliases"}
@@ -142,26 +142,27 @@ async def test_malformed_classifier_result_never_approves_navigation(content):
 
 @pytest.mark.asyncio
 async def test_missing_classifier_is_fail_closed_without_network_or_default_approval():
-    e, context, model, tts = engine('<action type="offer_game" game_id="quiz"/>', '<say>Я тебя слушаю.</say>')
+    e, context, model, tts = engine('<say>Я тебя слушаю.</say>')
     assert e.activity_request_gate.classifier is None
     result = await e.run_text_turn("Хочу квиз", context)
     assert not result.actions and result.chunks == ("Я тебя слушаю.",)
-    assert len(model.calls) == 2
+    assert len(model.calls) == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text,action", [
-    ("Хочу игру в слова", '<action type="offer_game" game_id="quiz"/>'),
-    ("Не хочу сказки, хочу квиз", '<action type="open_catalog" catalog="stories"/>'),
-    ("Хочу поиграть", '<action type="offer_game" game_id="quiz"/>'),
-    ("Мама читала «Айболит»", '<action type="play_story" story_id="fixed_aibolit_v1"/>'),
+@pytest.mark.parametrize("text,action,pre_admission", [
+    ("Хочу игру в слова", '<action type="offer_game" game_id="quiz"/>', True),
+    ("Не хочу сказки, хочу квиз", '<action type="open_catalog" catalog="stories"/>', True),
+    ("Хочу поиграть", '<action type="offer_game" game_id="quiz"/>', False),
+    ("Мама читала «Айболит»", '<action type="play_story" story_id="fixed_aibolit_v1"/>', False),
 ])
-async def test_semantically_wrong_target_never_gets_a_receipt(text, action):
-    e, context, model, tts = engine(action, '<say>Уточни, во что поиграем?</say>')
+async def test_semantically_wrong_target_never_gets_a_receipt(text, action, pre_admission):
+    repair = '<say>Уточни, во что поиграем?</say>'
+    e, context, model, tts = engine(*((repair,) if pre_admission else (action, repair)))
     e.activity_request_gate, requests = classified("block")
     result = await e.run_text_turn(text, context)
     assert not result.actions and not result.activity_request and not result.fallback_reason
-    assert len(requests) <= 1 and len(model.calls) == 2
+    assert len(requests) <= 1 and len(model.calls) == (1 if pre_admission else 2)
     assert tts.texts == ["Уточни, во что поиграем?"]
 
 
@@ -426,6 +427,6 @@ async def test_repeated_bare_game_name_offers_but_only_current_heard_yes_launche
         await h.done()
         assert (await h.send("SpeechReceived", text="Да"))["reason"] == "game_started"
         assert h.state.mode == "game_active" and h.state.active_game_id == "quiz"
-        assert len(requests) == 2 and len(h.model.calls) == 2
+        assert len(requests) == 2 and len(h.model.calls) == 0
     finally:
         await h.close()

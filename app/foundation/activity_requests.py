@@ -125,6 +125,13 @@ def normalized_request(text):
     return re.sub(r"\s+", " ", html.unescape(str(text)).strip())
 
 
+def named_game_candidate(text):
+    """A unique public target is a candidate; only the semantic gate grants it."""
+    candidates = [game.game_id for game in IMMERSIVE_GAME_SPECS
+                  if game.available and consistent_activity_evidence(text, "offer_game", game.game_id)]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def activity_target(action):
     if action.value == "offer_game":
         game = next((game for game in IMMERSIVE_GAME_SPECS if game.game_id == action.params.get("game_id")), None)

@@ -23,7 +23,7 @@ import time
 import uuid
 import wave
 from .activity_requests import (ActivityRequestGate, ActivityRequestReceipt,
-                                OllamaActivityRequestClassifier, activity_target)
+                                OllamaActivityRequestClassifier, activity_target, named_game_candidate)
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
@@ -2683,6 +2683,8 @@ class AudioSynthesisQueue:
         self.error: BaseException | None = None
         self.next_chunk_index=0
         self.first_audio_ready: asyncio.Event | None = None
+        self.first_pcm_hook = None
+        self._first_pcm_notified = False
         self.failure_event: asyncio.Event | None = None
         self.session_id: str | None = None
         self.token: int | None = None
@@ -2708,6 +2710,15 @@ class AudioSynthesisQueue:
         if inspect.isawaitable(result):
             await result
 
+    def _notify_first_pcm(self, audio):
+        """One current PCM submission; neither a wait timeout nor proof of hearing."""
+        if (self._first_pcm_notified or not audio.samples
+                or self.cancel.cancelled(self.session_id or "", self.token or 0)):
+            return
+        self._first_pcm_notified = True
+        if callable(self.first_pcm_hook):
+            self.first_pcm_hook()
+
     async def start(self,session_id,token):
         if self.worker is not None and not self.worker.done():
             raise RuntimeError("audio synthesis queue already running")
@@ -2722,6 +2733,7 @@ class AudioSynthesisQueue:
         self.queued_bytes=0; self.submitted_chunks=0; self.cancelled_chunks=0
         self.completed_chunks=0; self.failed_chunks=0; self.active_audio_bytes=0
         self._ownership={}
+        self._first_pcm_notified = False
         self._output_lifecycle_notified = False
         self._native_pcm_queued_bytes = 0
         self._native_producer = None
@@ -3080,6 +3092,7 @@ class AudioSynthesisQueue:
                             self.metrics.mark_voice(session_id, "playback_start", generation_id=self.trace_generation_id)
                             if hasattr(self.metrics, "mark_playback_start"):
                                 self.metrics.mark_playback_start(session_id)
+                            self._notify_first_pcm(audio)
                         else:
                             ownership = self._ownership[chunk_index]
                             self.active_audio_bytes += audio.size_bytes - ownership.active_audio_bytes
@@ -3130,6 +3143,7 @@ class AudioSynthesisQueue:
                             self.active_audio_bytes += audio.size_bytes - ownership.active_audio_bytes
                             ownership.active_audio_bytes = audio.size_bytes
                         started = time.perf_counter()
+                        self._notify_first_pcm(audio)
                         await asyncio.wait_for(self.playback.play(audio), self.config.playback_timeout_s)
                         self.metrics.observe("playback", started)
                         self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
@@ -3212,6 +3226,7 @@ class AudioSynthesisQueue:
                                     if hasattr(self.metrics, "mark_playback_start"):
                                         self.metrics.mark_playback_start(session_id)
                                     playback_started = True
+                                    self._notify_first_pcm(sub_audio)
 
                             self.playback.active_token = token
                             pb_started = time.perf_counter()
@@ -3261,6 +3276,7 @@ class AudioSynthesisQueue:
                                     if hasattr(self.metrics, "mark_playback_start"):
                                         self.metrics.mark_playback_start(session_id)
                                     playback_started = True
+                                self._notify_first_pcm(sub_audio)
                                 await asyncio.wait_for(self.playback.play(sub_audio), self.config.playback_timeout_s)
                                 sub_idx += 1
                     finally:
@@ -3330,6 +3346,7 @@ class AudioSynthesisQueue:
                     if hasattr(self.metrics, "mark_playback_start"):
                         self.metrics.mark_playback_start(session_id)
                     playback_started=True
+                    self._notify_first_pcm(audio)
                     await asyncio.wait_for(self.playback.play(audio),self.config.playback_timeout_s); self.metrics.observe(stage,started); self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
                     if cancelled():
                         self._transition(chunk_index,"cancelled")
@@ -3831,6 +3848,9 @@ class BoundedConversationEngine:
                 final=context.turns + 1 >= context.max_turns,
                 return_to_dialogue=getattr(context, "_word_return_to_dialogue", False))
             provider_source = AuthoredWordTurn(word_turn.text, structured)
+            reserve = getattr(context, "_word_reserve", None)
+            if word_turn.accepted and callable(reserve):
+                queue.first_pcm_hook = lambda: reserve(word_turn.state)
             self.metrics.event("word_rule_turn", accepted=word_turn.accepted)
         provider = _LLMGenerationBudget(provider_source, self.config.llm_timeout_s)
         from .validation import SpokenResponseRequirement
@@ -3839,7 +3859,6 @@ class BoundedConversationEngine:
             and (word_turn is None or word_turn.accepted)) if structured else None
         try:
             chunks=[]; actions=[]; spoken_chars=0; raw_spoken=""
-            word_reserved = False
             activity_receipt = None
             activity_rejected = False
             chunker=SentenceChunker(self.config.max_chunk_chars, self.config.first_chunk_chars,
@@ -3875,7 +3894,6 @@ class BoundedConversationEngine:
                     await out_q.put(("err", exc))
 
             async def close_chunks(values):
-                nonlocal word_reserved
                 if values and not chunks:
                     if self.cancel.cancelled(context.session_id, token):
                         raise asyncio.CancelledError
@@ -3941,11 +3959,6 @@ class BoundedConversationEngine:
                             if len(chunks) == 1:
                                 self.metrics.event("first_audio_gate_entered", timeout_s=self.config.first_audio_gate_s)
                                 await queue.wait_first_audio(self.config.first_audio_gate_s)
-                                if word_turn is not None and word_turn.accepted and not word_reserved:
-                                    reserve = getattr(context, "_word_reserve", None)
-                                    if callable(reserve):
-                                        reserve(word_turn.state)
-                                    word_reserved = True
                                 self.metrics.event("first_audio_gate_released")
                         return
                     except BaseException:
@@ -4000,11 +4013,6 @@ class BoundedConversationEngine:
                     if len(chunks) == 1:
                         self.metrics.event("first_audio_gate_entered", timeout_s=self.config.first_audio_gate_s)
                         await queue.wait_first_audio(self.config.first_audio_gate_s)
-                        if word_turn is not None and word_turn.accepted and not word_reserved:
-                            reserve = getattr(context, "_word_reserve", None)
-                            if callable(reserve):
-                                reserve(word_turn.state)
-                            word_reserved = True
                         self.metrics.event("first_audio_gate_released")
             async def flush_closed_say():
                 # Only a complete </say> block crosses the streaming audio
@@ -4054,30 +4062,34 @@ class BoundedConversationEngine:
                             activity_rejected = True
                             return
                     actions.append(item)
-            consume_provider = (_DialogueJSONBridge(provider, response_contract, self.consumer.max_chars,
-                                token_received, self.metrics.event) if structured else provider)
-            consume_task=asyncio.create_task(self.consumer.consume_parsed(consume_provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,None if structured else token_received,flush_closed_say), name=f"s2s-llm-{context.session_id}-{token}")
-            failure_task=asyncio.create_task(queue.failure_event.wait(), name=f"s2s-queue-failure-{{context.session_id}}-{{token}}") if queue.failure_event is not None else None
-            try:
-                if failure_task is None:
-                    await consume_task
-                else:
-                    done,_=await asyncio.wait((consume_task,failure_task),return_when=asyncio.FIRST_COMPLETED)
-                    if failure_task in done and queue.error is not None:
+            candidate = named_game_candidate(text) if activities_allowed and context.node_id == "bear_dialogue" else None
+            if candidate is not None:
+                await handle(ParsedOutput("action", "offer_game", {"game_id": candidate}))
+            else:
+                consume_provider = (_DialogueJSONBridge(provider, response_contract, self.consumer.max_chars,
+                                    token_received, self.metrics.event) if structured else provider)
+                consume_task=asyncio.create_task(self.consumer.consume_parsed(consume_provider,messages,str(uuid.uuid4()),lambda:self.cancel.cancelled(context.session_id,token),self.parser,handle,None if structured else token_received,flush_closed_say), name=f"s2s-llm-{context.session_id}-{token}")
+                failure_task=asyncio.create_task(queue.failure_event.wait(), name=f"s2s-queue-failure-{{context.session_id}}-{{token}}") if queue.failure_event is not None else None
+                try:
+                    if failure_task is None:
+                        await consume_task
+                    else:
+                        done,_=await asyncio.wait((consume_task,failure_task),return_when=asyncio.FIRST_COMPLETED)
+                        if failure_task in done and queue.error is not None:
+                            consume_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await consume_task
+                            raise queue.error
+                        await consume_task
+                finally:
+                    if not consume_task.done():
                         consume_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await consume_task
-                        raise queue.error
-                    await consume_task
-            finally:
-                if not consume_task.done():
-                    consume_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await consume_task
-                if failure_task is not None and not failure_task.done():
-                    failure_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await failure_task
+                    if failure_task is not None and not failure_task.done():
+                        failure_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await failure_task
             await close_chunks(chunker.flush())
             if activity_rejected and activities_allowed:
                 await queue.abort(context.session_id, invalidate=False)
