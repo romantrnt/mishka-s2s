@@ -165,38 +165,40 @@ def test_session_cancel_while_up_without_optional_identity_allows_handset_placed
     assert reopened["reason"] == "exhibition_handset_lifted" and reopened["state"]["mode"] == "voice_welcome"
 
 
-def test_silent_menu_pending_help_dialogue_and_weather_emit_real_prompts_on_handset_lift():
+@pytest.mark.parametrize("button,expected_mode", [(5, "wellbeing_check"), (6, "bear_dialogue"), (7, "schedule_weather")])
+def test_silent_panel_help_and_day_are_available_before_lift_while_dialogue_waits(button, expected_mode):
     runtime = CanonicalRuntime(exhibition_mode=True, optional_identity=True)
-    for button, expected_mode, expected_effect_type, expected_phrase in [
-        (5, "wellbeing_check", "support_question", "PHRASE_084"),
-        (6, "bear_dialogue", "speak", "PHRASE_094"),
-        (7, "schedule_weather", "scene_menu_page", None),
-    ]:
-        sid = f"silent-lift-{button}"
-        now = 200.0
-        started = runtime.handle(
-            CanonicalEvent("SessionStarted", sid, 1, 0, "panel", {}, "s1", now),
-            session_action_authorized=True,
-        )
-        assert started["state"]["mode"] == "menu_ready"
-        pressed = runtime.handle(
-            CanonicalEvent("ButtonPressed", sid, 2, started["state"]["state_version"], "button", {"button_id": button}, "p1", now + 1)
-        )
-        released = runtime.handle(
-            CanonicalEvent("ButtonReleased", sid, 3, pressed["state"]["state_version"], "button", {"button_id": button}, "r1", now + 2)
-        )
-        assert released["state"]["mode"] == "awaiting_handset"
-        assert released["state"]["pending_mode"] == expected_mode
-
-        lifted = runtime.handle(
-            CanonicalEvent("HandsetLifted", sid, 4, released["state"]["state_version"], "handset", {}, "h1", now + 3)
-        )
-        assert lifted["state"]["mode"] == expected_mode
-        assert lifted["state"]["handset"] == "up"
-        effect_types = [e["type"] for e in lifted["effects"]]
-        assert "capture_open" in effect_types
-        assert expected_effect_type in effect_types
-        if expected_phrase is not None:
-            matched = [e for e in lifted["effects"] if e["type"] == expected_effect_type]
-            assert matched and matched[0]["phrase_id"] == expected_phrase
-
+    sid = f"silent-lift-{button}"
+    def send(kind, sequence, payload=None):
+        state = runtime.sessions.get(sid)
+        return runtime.handle(CanonicalEvent(kind, sid, sequence,
+            state.state_version if state else 0, "panel" if sequence == 1 else "button",
+            payload or {}, f"s{sequence}", 200. + sequence), session_action_authorized=sequence == 1)
+    started = send("SessionStarted", 1)
+    assert started["state"]["mode"] == "menu_ready"
+    pressed = send("ButtonPressed", 2, {"button_id": button})
+    released = send("ButtonReleased", 3, {"button_id": button})
+    state = runtime.sessions[sid]
+    assert state.handset == "down" and state.silent_mode
+    if button == 6:
+        assert state.mode == "awaiting_handset" and state.pending_mode == expected_mode
+    else:
+        assert state.mode == expected_mode and state.pending_mode is None
+        if button == 5:
+            assert any(e["type"] == "support_question" and e["phrase_id"] == "PHRASE_084"
+                       for e in pressed["effects"])
+        else:
+            page = state.scene_menu_descriptor
+            assert page["scene"] == "schedule_weather" and page["buttons"] == [1, 7]
+    lifted = send("HandsetLifted", 4)
+    assert state.mode == expected_mode and state.handset == "up" and not state.silent_mode
+    if button == 6:
+        assert lifted["reason"] == "voice_open_pending_activity"
+        assert any(e["type"] == "capture_open" for e in lifted["effects"])
+        assert any(e["type"] == "speak" and e["phrase_id"] == "PHRASE_094" for e in lifted["effects"])
+        assert state.pending_mode is None
+    else:
+        assert lifted["reason"] == "panel_handset_lifted" and not lifted["effects"]
+        assert state.interaction_route == "panel"
+        if button == 7:
+            assert state.scene_menu_descriptor == page

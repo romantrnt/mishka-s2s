@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.foundation.config import Settings
 from app.foundation.events import EventValidationError, parse_event
-from app.foundation.lifecycle import StartupLifecycle
+from app.foundation.lifecycle import RuntimeBusyError, StartupLifecycle
 from app.foundation.stand import create_stand_app
 
 
@@ -40,10 +40,21 @@ def test_cancelled_warmup_cannot_rewrite_newer_lifecycle(replacement):
             await asyncio.Event().wait()
 
         await gate.start(warmup)
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 1.)
         task = gate._warmup
         gate.dependency_failed("synthetic", "lost")
+        fields = ("state", "reason", "changed_monotonic", "last_degraded", "generation", "recovery")
         if replacement in {"recovering", "ready", "failed"}:
+            # Revocation does not release a still-draining maintenance owner.
+            degraded = gate.snapshot()
+            with pytest.raises(RuntimeBusyError, match="runtime_busy"):
+                await gate.begin_recovery("synthetic", "audit-overlap")
+            assert gate.snapshot() == degraded
+            assert not gate.admits_users()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 1.)
+            for field in fields:
+                assert gate.snapshot()[field] == degraded[field], field
             generation = await gate.begin_recovery("synthetic", "audit-recovery")
             if replacement != "recovering":
                 gate.finish_recovery(generation, {"ok": replacement == "ready", "e2e": {"ok": True},
@@ -52,9 +63,10 @@ def test_cancelled_warmup_cannot_rewrite_newer_lifecycle(replacement):
             gate.begin_shutdown()
         before = gate.snapshot()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await asyncio.wait_for(task, 1.)
+        await asyncio.sleep(0)  # Flush the old task's token-specific done callback.
         after = gate.snapshot()
-        for field in ("state", "reason", "changed_monotonic", "last_degraded", "generation", "recovery"):
+        for field in fields:
             assert after[field] == before[field], field
         assert gate.admits_users() is (replacement == "ready")
 
@@ -191,15 +203,10 @@ def test_real_watchdog_loop_survives_more_than_two_hundred_observations():
 @pytest.mark.parametrize("game", ["catch_light", "hold_light"])
 @pytest.mark.parametrize("terminal", ["AudioCompleted", "AudioFailed"])
 @pytest.mark.parametrize("extra_releases", [0, 3])
-def test_game_completion_after_releases_closes_only_its_owned_audio(monkeypatch, game, terminal, extra_releases):
-    import app.foundation.canonical_contract as contract
+def test_game_completion_after_releases_closes_only_its_owned_audio(game, terminal, extra_releases):
     from app.foundation.api import build_application
     from app.foundation.domain import Event
-    from app.foundation.game_engine import AVAILABLE_GAME_SPECS
-
-    # Keep menu paging out of this regression, as existing game mechanic tests do.
-    monkeypatch.setattr(contract, "AVAILABLE_GAME_SPECS", tuple(
-        spec for spec in AVAILABLE_GAME_SPECS if spec.game_id == game))
+    from app.foundation.game_engine import start
 
     async def scenario():
         clock = [100.]
@@ -218,10 +225,20 @@ def test_game_completion_after_releases_closes_only_its_owned_audio(monkeypatch,
 
         try:
             await send("HandsetLifted")
-            for _ in range(3):
+            for _ in range(2):
                 await send("ButtonPressed", 1)
                 await send("ButtonReleased", 1)
-            assert app.canonical_runtime.sessions[sid].mode == "game_active"
+            state = app.canonical_runtime.sessions[sid]
+            assert state.mode == "game_active" and state.active_game_id == "free_lights"
+            # Synthetic compatibility bridge only: these legacy mechanics are
+            # not public chooser entries and complete only when nonimmersive.
+            state.game_engine_state = start(game, sequence=0, now=clock[0], selection_button=0,
+                                            held_buttons=tuple(state.accepted_buttons_down), immersive=False)
+            state.active_game_id = game
+            state.game_audio_stage = "playing"
+            assert state.game_engine_state.game_id == game
+            assert not state.game_engine_state.immersive
+            assert not state.game_engine_state.held
             if game == "hold_light":
                 await send("ButtonPressed", 1)
                 clock[0] += .1
@@ -266,12 +283,14 @@ def test_game_completion_after_releases_closes_only_its_owned_audio(monkeypatch,
     asyncio.run(scenario())
 
 
-def test_game_release_authorizer_allows_only_the_terminal_menu_edge():
+def test_game_authorizer_menu_edges_are_distinct_from_gesture_execution():
     from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
     graph = CanonicalLangGraphAuthorizer()
     assert graph.authorize("game_active", "root_menu", "ButtonReleased")["ok"]
-    for event in ("ButtonHeld", "ButtonLongHeld"):
-        assert not graph.authorize("game_active", "root_menu", event)["ok"]
+    assert not graph.authorize("game_active", "root_menu", "ButtonHeld")["ok"]
+    # The graph admits decision edges; the engine's hold/release tests verify
+    # that LongHeld itself never executes an exit.
+    assert graph.authorize("game_active", "root_menu", "ButtonLongHeld")["ok"]
     assert not graph.authorize("game_menu", "game_active", "ButtonReleased")["ok"]
     assert not graph.authorize("bear_dialogue", "root_menu", "ButtonReleased")["ok"]
     assert not graph.authorize("game_active", "fixed_story_menu", "ButtonReleased")["ok"]

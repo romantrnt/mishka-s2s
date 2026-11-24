@@ -87,7 +87,7 @@ def test_existing_root_repeat_choice_and_reentry(answer):
 def test_console_mapping_is_honest_without_unapproved_audio():
     text=Path('app/foundation/console/console.js').read_text()
     assert 'Выберите сказку кнопками 1–5' not in text
-    assert 'Выберите одну из пяти' not in text
+    # The authored library has five choices; recorded choices come from the descriptor below.
     assert 'scene_menu_descriptor' in text
     assert '${item.slot} — ${item.title}' in text
     assert 'Озвучка меню временно недоступна.' not in text

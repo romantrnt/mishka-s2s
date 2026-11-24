@@ -174,8 +174,13 @@ def test_generic_session_events_discard_private_payloads(name):
     private = {"tag_id": "UID_PRIVATE_MARKER", "uid": "UID_PRIVATE_MARKER", "profile_ref": "REF_PRIVATE_MARKER",
                "display_name": "NAME_PRIVATE_MARKER", "schedule": [{"private": "SCHEDULE_PRIVATE_MARKER"}],
                "profile": {"private": "PROFILE_PRIVATE_MARKER"}, "_identity_authorized": True}
-    parsed = parse_event({"type": name, **private}, "test", 1)
-    assert parsed.payload == {}
+    if name == "SessionStarted":
+        with pytest.raises(EventValidationError, match="internal event") as error:
+            parse_event({"type": name, **private}, "test", 1)
+        assert "PRIVATE_MARKER" not in str(error.value)
+    else:
+        parsed = parse_event({"type": name, **private}, "test", 1)
+        assert parsed.payload == {}
     direct = Event(name, "test", 1, 0, "internal", private)
     assert redacted_event(direct)["payload"] == {}
     assert "PRIVATE_MARKER" not in json.dumps(redacted_event(direct))

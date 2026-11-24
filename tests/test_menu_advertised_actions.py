@@ -23,7 +23,7 @@ async def enter(h, button, phase):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('button,phase', [(button, phase) for button in (1, 2, 4, 7)
+@pytest.mark.parametrize('button,phase', [(button, phase) for button in (1, 2, 3, 7)
     for phase in ('narrating', 'repeat_prompt', 'repeat_listen')] + [(1, 'invite')])
 async def test_back_is_immediate_in_every_owned_chooser_phase(button, phase):
     h = Harness()
@@ -44,10 +44,10 @@ async def test_back_is_immediate_in_every_owned_chooser_phase(button, phase):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('button,target', [(1, 'game_active'), (2, 'fixed_story_playing'),
-    (4, 'personal_story_playing'), (7, 'schedule_weather')])
+    (3, 'personal_story_playing'), (7, 'schedule_weather')])
 async def test_current_selection_interrupts_narration_without_hidden_skip(button, target):
     h = Harness()
-    if button == 4:
+    if button == 3:
         story_providers(h)
     try:
         await enter(h, button, 'narrating')
@@ -126,16 +126,17 @@ async def test_existing_day_request_supersedes_repeat_question(text, content):
 
 
 @pytest.mark.asyncio
-async def test_existing_supported_voice_theme_supersedes_repeat_question():
+async def test_existing_supported_voice_authored_story_supersedes_repeat_question():
     h = Harness()
     providers = story_providers(h)
     try:
-        await enter(h, 4, 'repeat_listen')
+        await enter(h, 3, 'repeat_listen')
         assert h.app.personal_story_available()
-        assert any(item['id'] == 'космос' for item in h.state.scene_menu_descriptor['items'])
-        result = await h.send('SpeechReceived', text='Расскажи сказку про космос')
+        selected = h.state.scene_menu_descriptor['items'][0]
+        result = await h.send('SpeechReceived', text=selected['title'])
         assert result['reason'] == 'personal_story_ready'
-        assert h.state.mode == 'personal_story_playing' and len(providers.llm.calls) == 1
+        assert h.state.mode == 'personal_story_playing'
+        assert not providers.llm.calls and providers.tts.calls
     finally:
         await h.close()
 
@@ -182,16 +183,16 @@ async def test_back_cancels_pending_menu_render_without_late_pcm():
     pending = None
     try:
         pending = asyncio.create_task(h.button(2))
-        await h.render.entered.wait()
+        await asyncio.wait_for(h.render.entered.wait(), 2)
         result = await h.button(7)
         assert result['reason'] == 'story_menu_back' and h.state.mode == 'root_menu'
         gate.set()
-        await pending
+        await asyncio.wait_for(pending, 2)
         assert not h.played and h.sid not in h.app._active_audio
     finally:
         gate.set()
         if pending:
-            await asyncio.gather(pending, return_exceptions=True)
+            await asyncio.wait_for(asyncio.gather(pending, return_exceptions=True), 2)
         await h.close()
 
 
@@ -212,7 +213,7 @@ async def test_untrusted_day_request_cannot_dismiss_repeat_question_or_authorize
 async def test_explicit_help_in_theme_repeat_listen_keeps_safety_priority(text):
     h = Harness()
     try:
-        await enter(h, 4, 'repeat_listen')
+        await enter(h, 3, 'repeat_listen')
         result = await h.send('SpeechReceived', text=text)
         assert result['reason'] == 'help_requested'
         assert h.state.mode == 'safety_stop' and h.state.active_audio_id == 'PHRASE_091'

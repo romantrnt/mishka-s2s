@@ -113,11 +113,12 @@ def test_all_root_selections_send_only_the_current_scene_channels(button, band):
         h = Harness(band)
         try:
             await h.press(button)
-            if button in {1, 2, 4, 7}:
+            if button in {1, 2, 3, 7}:
                 descriptor = h.state.scene_menu_descriptor
-                assert descriptor and 5 in descriptor["buttons"]
+                assert descriptor and 7 in descriptor["buttons"]
+                assert descriptor["buttons"] == [item["slot"] for item in descriptor["items"]] + ([6] if descriptor["page_count"] > 1 else []) + [7]
                 h.assert_lit(set().union(*(({0} if b == 7 else BUTTON_CHANNELS[b]) for b in descriptor["buttons"])))
-            elif button == 3:
+            elif button == 4:
                 h.assert_lit({0, 2, 14})
             elif button == 5:
                 h.assert_lit({1, 14, 16})
@@ -133,27 +134,47 @@ def test_all_root_selections_send_only_the_current_scene_channels(button, band):
     asyncio.run(scenario())
 
 
-def test_game_target_retry_exit_resume_and_hangup_replace_entire_serial_frame():
+def test_game_retry_hold_abort_exit_and_hangup_replace_entire_serial_frame():
     async def scenario():
         h = Harness()
+        digit_channels = {1:{14,15}, 2:{12,13}, 3:{10,11}, 4:{8,9},
+                          5:{6,7}, 6:{2,3}, 7:{0,1}}
+        def digits(buttons):
+            return set().union(*(digit_channels[b] for b in buttons))
         try:
             await h.press(1); await h.release(1)
-            assert (await h.press(1))["reason"] == "scene_menu_skipped"
-            await h.release(1)
-            assert (await h.press(1))["reason"] == "game_started"
-            h.assert_lit({14, 15})
-            await h.release(1); await h.press(1); await h.release(1)
-            h.assert_lit({12, 13})
-            assert (await h.press(3))["reason"] == "game_retry"
-            await h.release(3)
-            h.assert_lit({12, 13})
-            await h.press(7); await h.release(7)
-            h.assert_lit({0, 1, 2, 3, 5, 16})
-            assert (await h.press(6))["reason"] == "game_exit_cancelled"
-            await h.release(6)
-            h.assert_lit({12, 13})
-            await h.press(7); await h.release(7); await h.press(7); await h.release(7)
-            h.assert_lit(ROOT_MENU)
+            assert (await h.press(2))["reason"] == "game_started"
+            await h.release(2)
+            assert h.state.active_game_id == "quiz"
+            await h.complete(); await h.complete()
+            challenge = h.state.game_engine_state.deck[0]
+            assert challenge.display == "digits" and len(challenge.options) > 3
+            h.assert_lit(digits(button for button, _ in challenge.options))
+            wrong = next(button for button, _ in challenge.options if button != challenge.answer)
+            assert (await h.press(wrong))["reason"] == "game_retry"
+            await h.release(wrong); await h.complete()
+            narrowed = h.state.game_engine_state.narrowed_options
+            assert len(narrowed) == 3 and challenge.answer in narrowed
+            h.assert_lit(digits(narrowed))
+            assert (await h.press(7))["reason"] == "game_exit_pending"
+            h.clock += .6
+            assert (await h.app.flush_game_timers())[0]["reason"] == "game_exit_progress"
+            h.output.flush(); h.assert_lit({14})
+            stale_timer = h.app._game_timer_scopes[h.sid]
+            assert (await h.release(7))["reason"] == "game_exit_aborted"
+            await h.complete()
+            assert h.state.mode == "game_active" and h.state.game_engine_state.seven_exit_phase == "idle"
+            h.assert_lit(digits(narrowed))
+            assert await h.app._fire_game_timer(h.sid, stale_timer) is None
+            h.assert_lit(digits(narrowed))
+            await h.press(7); h.clock += 5.
+            assert (await h.app.flush_game_timers())[0]["reason"] == "game_exit_ready"
+            h.output.flush(); h.assert_lit(FILLS)
+            assert (await h.release(7))["reason"] == "game_exited_by_long_button"
+            assert h.state.mode == "game_menu"
+            menu = h.state.scene_menu_descriptor
+            assert menu["buttons"] == [1,2,3,4,5,7]
+            h.assert_lit(digits(range(1,6)) | {0})
             await h.send("HandsetPlaced")
             h.led.advance_effects(h.clock + 30.)
             h.assert_lit(set())

@@ -27,6 +27,9 @@ class MenuStand:
             self.app.canonical_runtime.sessions["stand"] = CanonicalState(
                 "stand", mode="root_menu", handset="up", age_band=band)
         self.app.canonical_runtime.stories = catalogue(tmp_path)
+        # Synthetic audio is not an approved Telefon asset; use a safe fixture
+        # title instead of relying on that exact production SHA exception.
+        self.app.canonical_runtime.stories.stories['fixed_neznayka_v1']['display_title'] = 'Лесная сказка'
         self.app.bounded_s2s.tts = self.app.bounded_s2s.voice = Render()
         # Exercise actual owned rendering/leases without playing fixture audio.
         self.app.audio._private_available = lambda: True
@@ -67,33 +70,33 @@ class MenuStand:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("band,pages", [("1-3", 5), ("3-5", 3), ("5-7", 2)])
-async def test_actual_story_pages_project_only_current_choices_and_next_help_back(tmp_path, band, pages):
+@pytest.mark.parametrize("band", ["1-3", "3-5", "5-7"])
+@pytest.mark.parametrize("slot", range(1, 6))
+async def test_actual_five_story_controls_project_choices_and_select_verified_asset(tmp_path, band, slot):
     h = MenuStand(tmp_path, band)
     try:
         await h.key(2)
         assert h.state.mode == "fixed_story_menu" and h.state.scene_menu_phase == "narrating"
-        assert h.state.scene_menu_descriptor["page_count"] == pages
-        reached = set()
-        for page in range(pages):
-            h.assert_menu_controls()
-            assert h.state.scene_menu_descriptor["page"] == page
-            reached.update(item["id"] for item in h.state.scene_menu_descriptor["items"])
-            assert 6 in h.stand.panel_snapshot()["session"]["enabled_buttons"]
-            await h.key(6)  # Same enabled control that the browser sends, through PTY ingress.
-        assert reached == set(h.app.canonical_runtime.stories.stories)
-        assert h.state.scene_menu_descriptor["page"] == 0
+        page = h.state.scene_menu_descriptor
+        assert page["page_count"] == 1 and page["page"] == 0
+        assert page["buttons"] == [1, 2, 3, 4, 5, 7]
+        assert {item["id"] for item in page["items"]} == set(h.app.canonical_runtime.stories.stories)
         h.assert_menu_controls()
+        selected = page["items"][slot - 1]
+        assert selected["slot"] == slot
+        assert (await h.key(slot))["reason"] == "fixed_story_started"
+        assert h.state.mode == "fixed_story_playing" and h.state.active_story_id == selected["id"]
+        assert h.app._active_audio["stand"]["content_id"] == selected["id"]
     finally:
         await h.close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("band,weather,buttons", [
-    ("1-3", True, [1, 5, 6, 7]),
-    ("3-5", True, [1, 2, 5, 7]),
-    ("5-7", True, [1, 2, 5, 7]),
-    ("1-3", False, [1, 5, 7]),
+    ("1-3", True, [1, 6, 7]),
+    ("3-5", True, [1, 2, 7]),
+    ("5-7", True, [1, 2, 7]),
+    ("1-3", False, [1, 7]),
 ])
 async def test_actual_day_controls_follow_available_items_and_age_page(tmp_path, band, weather, buttons):
     h = MenuStand(tmp_path, band, weather=weather)
@@ -106,7 +109,9 @@ async def test_actual_day_controls_follow_available_items_and_age_page(tmp_path,
             await h.key(6)
             assert h.state.scene_menu_descriptor["items"][0]["id"] == "weather"
             h.assert_menu_controls()
-        # Help advertised by the real page must be accessible too.
+        # Day slots contain facts; back leads to the root help control.
+        await h.key(7)
+        assert h.state.mode == "root_menu"
         await h.key(5)
         assert h.state.mode == "wellbeing_check"
         assert h.stand.panel_snapshot()["session"]["enabled_buttons"] == [1, 5, 7]
@@ -118,7 +123,7 @@ async def test_actual_day_controls_follow_available_items_and_age_page(tmp_path,
 async def test_page_edges_keep_hold_and_old_audio_guards_then_back_reset_and_new_entry(tmp_path):
     h = MenuStand(tmp_path)
     try:
-        await h.key(2)
+        await h.key(7)  # The one-choice young day page genuinely advertises next.
         old = dict(h.app._active_audio["stand"])
         assert (await h.edge(6))["reason"] == "scene_menu_page"
         page, current = copy.deepcopy(h.state.scene_menu_descriptor), dict(h.app._active_audio["stand"])
@@ -169,7 +174,7 @@ async def test_day_capability_refresh_revokes_old_page_control_without_reusing_h
         await h.key(1)  # Refresh consumes this edge; it cannot become a date request.
         assert h.state.scene_menu_refresh_required
         assert h.state.scene_menu_descriptor["items"][0]["id"] == "date"
-        assert h.stand.panel_snapshot()["session"]["enabled_buttons"] == [1, 5, 7]
+        assert h.stand.panel_snapshot()["session"]["enabled_buttons"] == [1, 7]
         assert h.state.active_audio_id == "MENU_DAY"
         current = dict(h.app._active_audio["stand"])
         await h.done(old)
