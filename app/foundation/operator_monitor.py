@@ -74,7 +74,8 @@ class OperatorMonitor:
                 self._append("state", {"from": self._mode or "unknown", "to": mode})
                 self._mode = mode
             if self._alert and self._alert["kind"] != kind:
-                self._append("alert_ended", {"kind": self._alert["kind"], "adult_acknowledged": False})
+                if kind is None:
+                    self._append("alert_ended", {"kind": self._alert["kind"], "adult_acknowledged": False})
                 self._alert = None
             if kind and self._alert is None:
                 item = self._append("alert_opened", {"kind": kind}, "error")
