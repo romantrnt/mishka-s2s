@@ -18,6 +18,8 @@ praat-parselmouth>=0.4.5,<1
 pydantic==2.13.4
 pydantic-settings==2.15.0
 psutil>=7.1,<8
+pymorphy3==2.0.6
+pymorphy3-dicts-ru==2.4.417150.4580142
 PyYAML==6.0.3
 regex>=2024.11,<2027
 scipy==1.18.0

@@ -14,6 +14,13 @@ from app.foundation.s2s import ResponseTagParser
 from app.foundation.activity_requests import ActivityRequestGate
 
 
+WORD_GAME_WORDS = {
+    '1-3': ('Кот', 'Лиса', 'Слон', 'Мышь'),
+    '4-5': ('Кот', 'Лиса', 'Слон', 'Мышь', 'Ёж'),
+    '6-7': ('Кот', 'Рыба', 'Апельсин', 'Груша', 'Телефон', 'Олень'),
+}
+
+
 class ApprovedActivityRequests:
     """This fixture's navigation actions model an independently approved request."""
     async def classify(self, text, action, target):
@@ -332,13 +339,13 @@ async def test_word_game_has_explicit_small_round_and_soft_contextual_completion
     h = Harness(band=band)
     try:
         await h.launch('word_game')
-        for index in range(turns):
-            result = await h.send('SpeechReceived', text=f'Кот {index}')
+        for index, word in enumerate(WORD_GAME_WORDS[band]):
+            result = await h.send('SpeechReceived', text=word)
             assert h.state.mode == ('bear_dialogue' if index == turns - 1 else 'game_active')
         assert h.state.active_audio_id is None
         assert not any(e.get('type') in {'audio_stop', 'dialogue_prompt'} for e in result['outputs'])
         assert not h.app._game_callers
-        assert len(h.model.calls) == turns + 1
+        assert len(h.model.calls) == 1  # Only the offer; word rules own every game turn.
     finally:
         await h.close()
 
@@ -421,10 +428,10 @@ async def test_natural_word_completion_keeps_last_real_browser_pcm_without_stop(
     h.app.bounded_s2s.playback = BrowserPlaybackController(hub)
     try:
         await h.launch('word_game')
-        for index in range(3):
-            await h.send('SpeechReceived', text='Кот')
+        for word in WORD_GAME_WORDS['1-3'][:-1]:
+            await h.send('SpeechReceived', text=word)
         hub.messages.clear()
-        await h.send('SpeechReceived', text='Лиса')
+        await h.send('SpeechReceived', text=WORD_GAME_WORDS['1-3'][-1])
         assert h.state.mode == 'bear_dialogue'
         assert any(message['type'] == 'audio_pcm_output' for message in hub.messages)
         assert not any(message['type'] == 'audio_stop' for message in hub.messages)

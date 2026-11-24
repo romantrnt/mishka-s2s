@@ -12,7 +12,7 @@ from app.foundation.config import Settings
 from app.foundation.domain import Event
 from app.foundation.lighting import FakeLightingOutput
 from app.foundation.stand import BrowserPlaybackController, UARTLEDController
-from test_contextual_game_flow import Model, ApprovedActivityRequests
+from test_contextual_game_flow import Model, ApprovedActivityRequests, WORD_GAME_WORDS
 from app.foundation.activity_requests import ActivityRequestGate
 from test_scene_menu_runtime import Render
 
@@ -167,11 +167,10 @@ async def test_real_root_word_completion_preserves_last_pcm_and_restores_caller(
         caller, history, turns, _ = await h.launch("word_game")
         await h.terminal()
         limit = h.app._canonical_audio_context(h.sid).max_turns
-        h.model.answers.extend(["<say>Лиса, теперь твоя очередь.</say>"] * (limit - 1)
-            + ["<say>Спасибо, мы вернулись к разговору.</say>"])
-        for index in range(limit):
+        band = {'3-5':'4-5', '5-7':'6-7'}.get(h.state.age_band, h.state.age_band)
+        for index, word in enumerate(WORD_GAME_WORDS[band]):
             h.messages.clear()
-            result = await h.send("SpeechReceived", text="Кот")
+            result = await h.send("SpeechReceived", text=word)
             assert result["reason"] == ("word_game_finished" if index == limit - 1 else "word_game_turn_finished")
             if index < limit - 1:
                 assert h.state.mode == "game_active" and h.state.game_engine_state.round == index + 1
@@ -192,24 +191,28 @@ async def test_real_root_word_completion_preserves_last_pcm_and_restores_caller(
 
 
 @pytest.mark.asyncio
-async def test_late_word_model_cannot_replace_restored_caller_or_its_return_prompt():
+async def test_late_word_tts_cannot_replace_restored_caller_or_its_return_prompt():
     h = NestedGame()
     entered, release = asyncio.Event(), asyncio.Event()
     pending = None
 
-    class LateModel:
-        async def stream(self, messages, request_id, cancelled):
-            entered.set()
-            try:
-                await release.wait()
-            except asyncio.CancelledError:
-                await release.wait()
-            yield "<say>Игра ещё продолжается.</say>"
+    class LateTTS:
+        delayed = False
+        async def synthesize(self, text, token, cancelled):
+            audio = await h.render.synthesize(text, token, cancelled)
+            if not self.delayed:
+                self.delayed = True
+                entered.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+            return audio
 
     try:
         caller, history, turns, _ = await h.launch("word_game")
         await h.terminal()
-        h.app.bounded_s2s.llm = LateModel()
+        h.app.bounded_s2s.tts = LateTTS()
         pending = asyncio.create_task(h.send("SpeechReceived", text="Кот"))
         await asyncio.wait_for(entered.wait(), 2)
         await h.key(7, duration=6.)

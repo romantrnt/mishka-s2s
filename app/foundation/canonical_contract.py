@@ -1382,11 +1382,8 @@ class CanonicalRuntime(SceneMenuMixin):
         engine = state.game_engine_state
         challenge = current_challenge(engine)
         spec = next(item for item in IMMERSIVE_GAME_SPECS if item.game_id == engine.game_id)
-        word_prompt = ("Сыграем небольшую партию. Назови животное или еду. Я назову другое."
-            if state.age_band == "1-3" else
-            "Сыграем небольшую партию. Называем слова на последнюю букву предыдущего. Мягкий и твёрдый знак, ы пропускаем. Назови первое слово."
-            if state.age_band in {"5-7", "6-7"} else
-            "Сыграем небольшую партию. Будем по очереди называть животных. Назови любое животное.")
+        from .word_game import introduction
+        word_prompt = introduction(state.age_band)
         prompt = text or (challenge.prompt if challenge else {
             "free_lights":"Нажимай кнопки и смотри, как расходится свет.",
             "repeat_pattern":"Посмотри на огоньки. Потом повтори их порядок.",
@@ -2241,6 +2238,11 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"},
                     {"type": "lighting_preset", "preset": "GAME_OFFER"},
                     self._dialogue_prompt("DIALOGUE_OFFER", prompt)], "game_offered", clear_audio=True)
+            if (event.payload.get("reason") == "word_retry_complete" and state.mode == "game_active"
+                    and state.active_game_id == "word_game" and state.game_engine_state is not None):
+                state.game_engine_state = arm_wait(state.game_engine_state, monotonic_now)
+                state.state_version += 1
+                return self._decision(state, [], "word_game_retry_finished")
             if (event.payload.get("reason") == "word_turn_complete" and state.mode == "game_active"
                     and state.active_game_id == "word_game" and state.game_engine_state is not None):
                 engine = state.game_engine_state

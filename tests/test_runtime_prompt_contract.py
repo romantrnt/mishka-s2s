@@ -9,7 +9,7 @@ from app.foundation.domain import Event
 from app.foundation.s2s import (BoundedConversationEngine, ConversationContext, MockPlaybackController,
     MockTTSProvider, ProfileContext, RVCProvider, S2SConfig)
 from app.foundation.validation import AsyncResponseValidator, OllamaMiniLLMValidator
-from test_contextual_game_flow import Harness, Model, ApprovedActivityRequests
+from test_contextual_game_flow import Harness, Model, ApprovedActivityRequests, WORD_GAME_WORDS
 from app.foundation.activity_requests import ActivityRequestGate
 
 
@@ -122,17 +122,18 @@ async def test_effective_mode_format_matches_unchanged_parser_authority(mode, re
 
 @pytest.mark.asyncio
 async def test_young_word_game_final_turn_keeps_one_sentence_and_real_completion():
-    h = Harness(*(['<say>Лиса, теперь ты.</say>']*3), '<say>Вернулись к разговору, я слушаю.</say>', band='1-3')
+    from test_conversation_catalogue_gateway import quick_public_audio
+    h = Harness(band='1-3')
+    render = quick_public_audio(h)
     try:
         await h.launch('word_game')
-        for _ in range(4):
-            await h.send('SpeechReceived',text='Кот')
-        prompt = h.model.calls[-1][0]['content']
-        assert 'Лиса. Теперь ты' not in prompt
-        assert 'одной короткой фразой' in prompt
-        assert 'ПОСЛЕДНИЙ ХОД' in prompt and 'без нового слова или вопроса' in prompt
-        assert 'YOUNG_SPEECH: one complete thought in one Russian sentence' in prompt
-        assert 'at most 8 words total' in prompt
+        render.texts.clear()
+        for word in WORD_GAME_WORDS['1-3']:
+            await h.send('SpeechReceived',text=word)
+        assert len(render.texts) == 4
+        assert all(len(text.split()) <= 8 and text.count('.') == 1 for text in render.texts)
+        assert 'разговору' in render.texts[-1] and '?' not in render.texts[-1]
+        assert len(h.model.calls) == 1  # No generator may override the rules.
         assert h.state.mode == 'bear_dialogue' and h.state.active_game_id is None
         assert not h.app._game_callers
     finally:

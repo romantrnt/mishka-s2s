@@ -3394,6 +3394,7 @@ class TurnResult:
     return_to_scenario: bool
     fallback_reason: str|None=None
     activity_request: ActivityRequestReceipt | None = field(default=None, repr=False, compare=False)
+    word_accepted: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -3735,6 +3736,11 @@ class BoundedConversationEngine:
         if safety!="allow": return TurnResult((),(),True,"safety_signal" if safety=="signal" else "blocked_input")
         if not self.topic_policy.check(text, context.allowed_topics, context.forbidden_topics): return TurnResult((),(),True,"unknown_topic")
         if context.turns>=context.max_turns or time.monotonic()-context.started_at>=context.max_duration_seconds: return TurnResult((),(),True,"bounded_limit")
+        if getattr(context, "_game_id", None) == "word_game":
+            from .word_game import MAX_SEEN_WORDS, WordState
+            state = getattr(context, "_word_state", WordState())
+            if len((state.pending or state).used) >= MAX_SEEN_WORDS:
+                return TurnResult((), (), True, "bounded_limit")
         self.metrics.event("turn_started", source="text")
         if expected_repair_token is not None and self.cancel.cancelled(context.session_id, expected_repair_token):
             raise asyncio.CancelledError
@@ -3817,13 +3823,23 @@ class BoundedConversationEngine:
         llm_started=time.perf_counter(); llm_completed=False
         # Canonical runtime owns intent routing; no demo quick-reply
         # table is allowed to bypass the bounded provider contract.
-        provider = _LLMGenerationBudget(_DialogueLLMRequest(self.llm, response_contract) if structured else self.llm,
-                                        self.config.llm_timeout_s)
+        word_turn = None
+        provider_source = _DialogueLLMRequest(self.llm, response_contract) if structured else self.llm
+        if getattr(context, "_game_id", None) == "word_game":
+            from .word_game import AuthoredWordTurn, WordState, play
+            word_turn = play(text, getattr(context, "_word_state", WordState()), context.profile.age_band,
+                final=context.turns + 1 >= context.max_turns,
+                return_to_dialogue=getattr(context, "_word_return_to_dialogue", False))
+            provider_source = AuthoredWordTurn(word_turn.text, structured)
+            self.metrics.event("word_rule_turn", accepted=word_turn.accepted)
+        provider = _LLMGenerationBudget(provider_source, self.config.llm_timeout_s)
         from .validation import SpokenResponseRequirement
         spoken_requirement = SpokenResponseRequirement(context.profile.age_band, context.node_id,
-            getattr(context, "_game_id", None) == "word_game" and context.turns + 1 >= context.max_turns) if structured else None
+            getattr(context, "_game_id", None) == "word_game" and context.turns + 1 >= context.max_turns
+            and (word_turn is None or word_turn.accepted)) if structured else None
         try:
             chunks=[]; actions=[]; spoken_chars=0; raw_spoken=""
+            word_reserved = False
             activity_receipt = None
             activity_rejected = False
             chunker=SentenceChunker(self.config.max_chunk_chars, self.config.first_chunk_chars,
@@ -3859,6 +3875,7 @@ class BoundedConversationEngine:
                     await out_q.put(("err", exc))
 
             async def close_chunks(values):
+                nonlocal word_reserved
                 if values and not chunks:
                     if self.cancel.cancelled(context.session_id, token):
                         raise asyncio.CancelledError
@@ -3924,6 +3941,11 @@ class BoundedConversationEngine:
                             if len(chunks) == 1:
                                 self.metrics.event("first_audio_gate_entered", timeout_s=self.config.first_audio_gate_s)
                                 await queue.wait_first_audio(self.config.first_audio_gate_s)
+                                if word_turn is not None and word_turn.accepted and not word_reserved:
+                                    reserve = getattr(context, "_word_reserve", None)
+                                    if callable(reserve):
+                                        reserve(word_turn.state)
+                                    word_reserved = True
                                 self.metrics.event("first_audio_gate_released")
                         return
                     except BaseException:
@@ -3978,6 +4000,11 @@ class BoundedConversationEngine:
                     if len(chunks) == 1:
                         self.metrics.event("first_audio_gate_entered", timeout_s=self.config.first_audio_gate_s)
                         await queue.wait_first_audio(self.config.first_audio_gate_s)
+                        if word_turn is not None and word_turn.accepted and not word_reserved:
+                            reserve = getattr(context, "_word_reserve", None)
+                            if callable(reserve):
+                                reserve(word_turn.state)
+                            word_reserved = True
                         self.metrics.event("first_audio_gate_released")
             async def flush_closed_say():
                 # Only a complete </say> block crosses the streaming audio
@@ -4073,13 +4100,16 @@ class BoundedConversationEngine:
             self.metrics.observe_voice_stage(context.session_id, "queue", queue_started, generation_id=trace_generation_id)
             # A proposal is navigation, not a spoken conversational answer.
             control_offer = not chunks and len(actions) == 1 and actions[0].value in {"offer_game", "open_catalog", "play_story", "request_information"}
-            context.turns += int(not control_offer)
+            if word_turn is not None and word_turn.accepted:
+                context._word_state = word_turn.state
+            context.turns += int(not control_offer and (word_turn is None or word_turn.accepted))
             context.history=self._bound_history(context.history+[(text," ".join(chunks))], protect_last=True)
             self.metrics.mark_voice(context.session_id, "turn_complete", generation_id=trace_generation_id)
             self.metrics.finish_voice_turn(context.session_id, "completed", generation_id=trace_generation_id)
             await self._notify_lifecycle(context.session_id, "listening", source="turn_finished")
             return TurnResult(tuple(chunks),tuple(actions),any(x.value=="return_to_scenario" for x in actions),
-                              activity_request=activity_receipt)
+                              activity_request=activity_receipt,
+                              word_accepted=word_turn.accepted if word_turn is not None else None)
         except TTSQueueOverflowError:
             await queue.abort(context.session_id, invalidate=False)
             self.metrics.finish_voice_turn(context.session_id, "tts_queue_overflow", generation_id=trace_generation_id)

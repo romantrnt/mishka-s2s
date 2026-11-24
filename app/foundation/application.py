@@ -3082,8 +3082,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         await self.expire_identity_leases()
                         if not still_current():
                             return stale_result()
-                        turn_context = copy.deepcopy(self._bounded_dialogue_context(event.session_id, game_id=effect.get("game_id")))
-                        journal_visit = self._journal_visit(event.session_id)
+                        live_context = self._bounded_dialogue_context(event.session_id, game_id=effect.get("game_id"))
+                        turn_context = copy.deepcopy(live_context)
+                        if effect.get("game_id") == "word_game":
+                            def reserve_word(word_state):
+                                # Reserve an emitted word across barge-in; stale generations cannot write it.
+                                if still_current() and self.conversation_contexts.get(event.session_id) is live_context:
+                                    live_context._word_state = replace(live_context._word_state, pending=word_state)
+                            turn_context._word_reserve = reserve_word
+                        journal_visit = None if effect.get("game_id") == "word_game" else self._journal_visit(event.session_id)
                         if journal_visit is not None:
                             await self._append_journal_turn(event.session_id, journal_visit, "user", str(transient_text), still_current)
                             if not still_current() or self._identity_shutdown:
@@ -3098,6 +3105,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                 return stale_result()
                         # Commit only the current generation. A cancelled or late
                         # provider owns a detached copy, never retained RAM.
+                        if effect.get("game_id") == "word_game" and turn.fallback_reason:
+                            turn_context._word_state = live_context._word_state
+                        turn_context.__dict__.pop("_word_reserve", None)
                         self.conversation_contexts[event.session_id] = turn_context
                         fallback_reason = turn.fallback_reason or (
                             "dialogue_exit" if turn.return_to_scenario else None
@@ -3149,7 +3159,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         if fallback_reason is None and effect.get("game_id") == "word_game":
                             followup = await self._receive_canonical_event(self._internal_followup(
                                 event, "DialogueFallback",
-                                "bounded_word_turn", {"reason": "word_turn_complete"},
+                                "bounded_word_turn", {"reason": "word_retry_complete" if turn.word_accepted is False else "word_turn_complete"},
                                 "word-complete"),
                                 dialogue_fallback_authorized=True)
                             return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
@@ -3600,6 +3610,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             owner += (game_id, getattr(getattr(state, "game_engine_state", None), "run_id", None))
         if game_id == "word_game":
             fresh._game_id = game_id
+            from .word_game import WordState
+            fresh._word_state = WordState()
+            fresh._word_return_to_dialogue = state.game_return_mode == "bear_dialogue"
             fresh.allowed_topics = ("__all__",)
             fresh.system_prompt += self._word_game_instructions(fresh.profile.age_band)
         current = self.conversation_contexts.get(session_id)
