@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 import secrets
+import re
 import time
 from typing import Any
 
@@ -288,7 +289,9 @@ class RemoteDeviceSimulator:
                 "cursor": self._cursor, "oldest_cursor": oldest, "limit": self.JOURNAL_LIMIT,
                 "gap": after < oldest - 1, "epoch": self.epoch}
 
-    async def action(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def action(self, payload: dict[str, Any], *, input_owner='operator_http', input_guard=None) -> dict[str, Any]:
+        if input_guard is not None and not input_guard():
+            return _error('stale_input_owner', 'input connection no longer owns this request')
         action = payload.get("action")
         if isinstance(action, str) and action in {"start", "end", "skip_interview", "enable_audio"}:
             return await self._session_action(payload)
@@ -306,11 +309,15 @@ class RemoteDeviceSimulator:
                 return _error("validation_error", "handset requires state up or down")
             return await self.stand.inject("handset", {"state": payload["state"]}, wait_for_audio=False)
         if action == "button":
-            if (set(payload) - {"action", "button_id", "press", "duration_ms", "epoch",'cancelled'}
+            if (set(payload) - {"action", "button_id", "press", "duration_ms", "epoch",'cancelled','gesture_id'}
                     or type(payload.get("button_id")) is not int or payload["button_id"] not in range(1, 8)
                     or not isinstance(payload.get("press", "press"), str) or payload.get("press", "press") not in PRESS_TYPES):
                 return _error("validation_error", "button requires id 1..7 and a supported press kind")
             press = payload.get("press", "press")
+            gesture = payload.get('gesture_id')
+            if 'gesture_id' in payload and (not isinstance(gesture, str)
+                    or re.fullmatch(r'[A-Za-z0-9_.:-]{1,80}', gesture) is None):
+                return _error('validation_error', 'gesture_id must be 1..80 ASCII identifier characters')
             outgoing = {"button_id": payload["button_id"]}
             if 'cancelled' in payload:
                 if press != 'release' or type(payload['cancelled']) is not bool:
@@ -323,7 +330,8 @@ class RemoteDeviceSimulator:
                 outgoing["duration_ms"] = duration
             elif "duration_ms" in payload:
                 return _error("validation_error", "duration_ms applies only to hold events")
-            return await self.stand.inject(PRESS_TYPES[press], outgoing, wait_for_audio=False)
+            return await self.stand.inject(PRESS_TYPES[press], outgoing, wait_for_audio=False,
+                _button_input=(input_owner, gesture), _ingress_guard=input_guard)
         if action == "reset":
             if set(payload) - {"action", "epoch"}:
                 return _error("validation_error", "reset accepts no session or profile override")

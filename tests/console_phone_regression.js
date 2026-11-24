@@ -253,12 +253,12 @@ async function gestures(){
 }
 async function workbenchCancelledRelease(){
  const sent=[],buttonInputs={},buttonRefs=new Map(),listeners=new Map();let now=0;
- const context=vm.createContext({Promise,BUTTON_IDS:[1,7],buttonInputs,buttonRefs,buttonInputOwners:new Map(),session:()=> 'same-session',performance:{now:()=>now},
+ const context=vm.createContext({Promise,BUTTON_IDS:[1,7],buttonInputs,buttonRefs,buttonInputOwners:new Map(),buttonGestures:new Map(),buttonTerminals:new Map(),buttonGestureInstance:'test',buttonGestureCounter:0,current:null,showError:error=>{throw error;},session:()=> 'same-session',performance:{now:()=>now},
   post:async(path,body)=>sent.push({path,...body}),$:()=>({append(){}}),
   document:{body:{dataset:{}},activeElement:null,createElement:()=>({classList:{add(){},remove(){}},setAttribute(){},setPointerCapture(){}})},
   window:{addEventListener:(type,handler)=>listeners.set(type,handler)},
  });
- vm.runInContext(source.slice(source.indexOf('function releaseButton('),source.indexOf("$('enable-audio').onclick")),context);
+ vm.runInContext(source.slice(source.indexOf('function buttonGestureScope('),source.indexOf("$('enable-audio').onclick")),context);
  context.createButtons();const button=buttonRefs.get(7),event={preventDefault(){},pointerId:1};
  await button.onpointerdown(event);now=7000;
  const other={preventDefault(){},pointerId:2};await button.onpointerdown(other);await button.onpointerup(other);await button.onpointercancel(other);
@@ -447,6 +447,8 @@ function snapshotFences(){
  vm.runInContext(phone,context);
  assert.strictEqual(typeof context.window.mishkaPhoneConnection,'function');
  const connectStart=source.indexOf('function connect()'),connectEnd=source.indexOf('async function fetchWithTimeout(',connectStart);
+ Object.assign(context,{wsButtonSockets:new Map(),wsButtonAcks:new Map(),wsButtonRequest:0});
+ vm.runInContext(source.slice(source.indexOf('function rejectButtonAcks('),source.indexOf('function postAdmissionAvailable(')),context);
  vm.runInContext(source.slice(connectStart,connectEnd),context);
  context.render(snapshot(9,24,true));
  context.connect();context.ws.onopen();

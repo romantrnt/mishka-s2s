@@ -3,29 +3,69 @@
 class DeviceInput {
   constructor({send, snapshot, enabled, change, error, clock = () => performance.now()}) {
     Object.assign(this,{send,snapshot,enabled,change,error,clock});
-    this.active=new Map();
+    this.active=new Map();this.pending=new Map();this.counter=0;
+    this.instance=Math.random().toString(36).slice(2)+Date.now().toString(36);
+  }
+  scope() {const s=this.snapshot();return JSON.stringify([s?.instance_id,s?.epoch,s?.session?.session_id,s?.session?.context_generation,s?.session?.node]);}
+  body(id,record,press,extra={}) {return {action:'button',button_id:id,press,epoch:record.epoch,gesture_id:record.gesture,...extra};}
+  forget(id,record) {
+    const pending=this.pending.get(id);pending?.delete(record);
+    if(!pending?.size)this.pending.delete(id);this.change();
+  }
+  recover(id,record) {
+    if(record.recovering)return record.recovering;
+    record.cancelled=true;
+    record.recovering=this.send(this.body(id,record,'release',{cancelled:true})).then(()=>this.forget(id,record))
+      .finally(()=>{record.recovering=null;});
+    return record.recovering;
   }
   press(id,owner=null) {
     if(this.active.has(id)||!this.enabled(id))return false;
-    const record={at:this.clock(),epoch:this.snapshot()?.epoch,owner};
+    const prior=[...(this.pending.get(id)||[])];
+    if(prior.length>=2){this.error(new Error('Отпускание кнопки ещё не подтверждено.'));return false;}
+    const record={at:this.clock(),epoch:this.snapshot()?.epoch,scope:this.scope(),owner,gesture:`${this.instance}:${++this.counter}`};
+    record.dispatched=new Promise(resolve=>{record.didDispatch=resolve;});
     this.active.set(id,record);this.change();
-    this.send({action:'button',button_id:id,press:'press',epoch:record.epoch}).catch(error=>{
-      this.error(error);if(this.active.get(id)===record)this.release(id,true);
-    });
+    (async()=>{
+      try {
+        for(const old of prior)await this.recover(id,old);
+        if(record.scope!==this.scope()||!this.enabled(id)||record.cancelled){record.didDispatch(false);return;}
+        const receipt=this.send(this.body(id,record,'press'));
+        record.didDispatch(true);
+        await receipt;
+      } catch(error) {
+        this.error(error);record.didDispatch(false);
+        if(this.active.get(id)===record)this.release(id,true);
+        else if(this.pending.get(id)?.has(record))this.recover(id,record).catch(this.error);
+      } finally {
+        if(record.cancelled&&this.active.get(id)===record){this.active.delete(id);this.change();}
+      }
+    })();
     return true;
   }
   release(id,cancelled=false,owner=null) {
     const record=this.active.get(id);if(!record||(owner!==null&&record.owner!==owner))return Promise.resolve();
-    this.active.delete(id);this.change();
+    this.active.delete(id);record.cancelled=cancelled;this.change();
+    if(!this.pending.has(id))this.pending.set(id,new Set());this.pending.get(id).add(record);
     const duration=Math.min(120000,Math.max(0,Math.round(this.clock()-record.at)));
-    const send=press=>this.send({action:'button',button_id:id,press,epoch:record.epoch,...(press==='hold'||press==='long_hold'?{duration_ms:duration}:{})});
     return (async()=>{
-      try {if(!cancelled&&id!==7&&duration>=600)await send(duration>=5000?'long_hold':'hold');}
-      catch(error){this.error(error);}
-      finally {await this.send({action:'button',button_id:id,press:'release',epoch:record.epoch,...(cancelled?{cancelled:true}:{})}).catch(this.error);}
+      if(!await record.dispatched){this.forget(id,record);return;}
+      try {
+        if(!record.cancelled&&id!==7&&duration>=600)
+          await this.send(this.body(id,record,duration>=5000?'long_hold':'hold',{duration_ms:duration}));
+      } catch(error){record.cancelled=true;this.error(error);}
+      try {
+        await this.send(this.body(id,record,'release',record.cancelled?{cancelled:true}:{}));
+        this.forget(id,record);
+      } catch(error){record.cancelled=true;this.error(error);}
     })();
   }
-  cancel() {for(const id of [...this.active.keys()])this.release(id,true);}
+  cancel() {
+    const pending=[...this.pending].map(([id,records])=>[id,[...records]]);
+    for(const id of [...this.active.keys()])this.release(id,true);
+    for(const [id,records] of pending)for(const record of records)
+      this.recover(id,record).catch(this.error);
+  }
   pressed() {return new Set(this.active.keys());}
 }
 

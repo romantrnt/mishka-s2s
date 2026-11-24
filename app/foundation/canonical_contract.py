@@ -14,6 +14,8 @@ import wave
 import re
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -968,10 +970,78 @@ from .scene_menus import SceneMenuMixin
 class CanonicalRuntime(SceneMenuMixin):
     """In-memory state machine with stale-event, effect and RAM-TTL guarantees."""
     def __init__(self, *, now: Callable[[], float] = _utc_now, monotonic_now: Callable[[], float] = time.monotonic, stories: FixedStoryManifest | None = None, allow_development_placeholders: bool = False, exhibition_mode: bool = False, optional_identity: bool = False) -> None:
+        self._button_ingress = ContextVar('canonical_button_ingress', default=None)
+        self._button_gesture_counter = 0
         self.now, self.monotonic_now, self.stories, self.sessions = now, monotonic_now, stories, {}
         self.allow_development_placeholders = bool(allow_development_placeholders)
         self.exhibition_mode = bool(exhibition_mode)
         self.optional_identity = bool(optional_identity)
+
+    @contextmanager
+    def button_input_scope(self, owner: str, gesture_id: str | None = None, *, current=None):
+        """Trusted ingress metadata never travels in a caller's event payload."""
+        if not isinstance(owner, str) or not owner or len(owner) > 128:
+            raise ValueError('invalid button input owner')
+        if gesture_id is not None and (not isinstance(gesture_id, str)
+                or re.fullmatch(r'[A-Za-z0-9_.:-]{1,80}', gesture_id) is None):
+            raise ValueError('invalid button gesture id')
+        token = self._button_ingress.set((owner, gesture_id, current))
+        try:
+            yield
+        finally:
+            self._button_ingress.reset(token)
+
+    def button_input_guard(self):
+        receipt = self._button_ingress.get()
+        return receipt[2] if receipt and receipt[2] is not None else lambda: True
+
+    def owned_button_gestures(self, session_id: str, owner: str):
+        state = self.sessions.get(session_id)
+        return tuple((button, record[1] if record[2] else None)
+                     for button, record in getattr(state, '_button_gesture_owners', {}).items()
+                     if record[0] == owner and button in state.accepted_buttons_down)
+
+    def _track_button_gesture(self, state, event):
+        button = int(event.payload['button_id'])
+        ingress = self._button_ingress.get()
+        if ingress and ingress[2] is not None and not ingress[2]():
+            return False, 'stale_button_owner'
+        owner, gesture = ingress[:2] if ingress else ('legacy:' + event.source, None)
+        if not hasattr(state, '_button_gesture_owners'):
+            state._button_gesture_owners = {}
+            state._button_gesture_terminals = {}
+        owners, terminals = state._button_gesture_owners, state._button_gesture_terminals
+        held = owners.get(button)
+        identity = (owner, gesture)
+
+        def remember_terminal():
+            if gesture is not None:
+                recent = terminals.setdefault(button, [])
+                if identity not in recent:
+                    # The client permits at most two unfinished gestures per key.
+                    recent[:] = [*recent[-1:], identity]
+
+        if event.event_type != 'ButtonPressed':
+            if (button not in state.accepted_buttons_down or held is None
+                    or held[0] != owner or (held[2] and held[1] != gesture)):
+                if (held is None and button not in state.accepted_buttons_down
+                        and event.event_type == 'ButtonReleased' and event.payload.get('cancelled') is True):
+                    remember_terminal()
+                return False, 'button_gesture_not_owned'
+            if event.event_type == 'ButtonReleased':
+                state.accepted_buttons_down.remove(button)
+                owners.pop(button, None)
+                remember_terminal()
+            return False, None
+        if gesture is not None and identity in terminals.get(button, ()):
+            return False, 'button_gesture_completed'
+        fresh = button not in state.accepted_buttons_down
+        if fresh:
+            state.accepted_buttons_down.append(button)
+            self._button_gesture_counter += 1
+            owners[button] = (owner, gesture or str(self._button_gesture_counter), gesture is not None)
+        return fresh, None
+
     @staticmethod
     def _story_id_for_button(button: int) -> str | None:
         return {
@@ -1819,13 +1889,11 @@ class CanonicalRuntime(SceneMenuMixin):
             return self._enter_local_safety(state, severity=state.safety_severity,
                                             reason="hardware_disconnected", guidance=False)
         fresh_button_press = False
-        if event.event_type in {"ButtonPressed", "ButtonReleased"}:
+        if event.event_type in {"ButtonPressed", "ButtonReleased", "ButtonHeld", "ButtonLongHeld"}:
             button = int(event.payload["button_id"])
-            fresh_button_press = event.event_type == "ButtonPressed" and button not in state.accepted_buttons_down
-            if event.event_type == "ButtonPressed" and button not in state.accepted_buttons_down:
-                state.accepted_buttons_down.append(button)
-            elif event.event_type == "ButtonReleased" and button in state.accepted_buttons_down:
-                state.accepted_buttons_down.remove(button)
+            fresh_button_press, rejected = self._track_button_gesture(state, event)
+            if rejected:
+                return self._session_action_noop(state, rejected)
             if event.event_type == "ButtonPressed" and not fresh_button_press:
                 # A held edge cannot answer or navigate in a successor scene.
                 if self.exhibition_mode and state.mode in {"exhibition_name_question", "exhibition_name_capture"}:
