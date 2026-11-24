@@ -85,16 +85,23 @@ class WordTurn:
     text: str
     state: WordState
     accepted: bool = False
+    hint_level: int = 0
 
 
-def play(text, state, band, *, final=False, return_to_dialogue=False):
+def play(text, state, band, *, final=False, return_to_dialogue=False, hint_level=0):
+    from .word_game_hints import hint_for, hint_level as bounded_level, local_hint_request
+    hint_level = bounded_level(hint_level)
+    def assist(reason=None):
+        hint, level = hint_for(state, band, hint_level, reason=reason)
+        return WordTurn(hint, state, hint_level=level)
+    if local_hint_request(text):
+        return assist()
     word, error = noun(text, band)
     chain = band in {"5-7", "6-7"}
     if error == "unavailable":
-        return WordTurn("Не могу проверить слово, для выхода держи семь.", state)
+        return WordTurn("Не могу проверить слово, для выхода держи семь.", state, hint_level=hint_level)
     if error:
-        hint = "Не уверен, назови животное или еду." if band == "1-3" else "Не уверен, назови другое знакомое животное." if not chain else "Не уверен, назови одно обычное существительное."
-        return WordTurn(hint, state)
+        return assist()
     key = spelling(word)
     if state.pending is not None:
         # PCM delivery cannot prove the word was heard. Accept a continuation
@@ -103,9 +110,9 @@ def play(text, state, band, *, final=False, return_to_dialogue=False):
         state = (pending if key not in pending.used and (not chain or key.startswith(pending.required))
                  else WordState(state.used, state.required))
     if key in state.used:
-        return WordTurn("Это слово уже было, назови другое.", state)
+        return assist('repeat')
     if chain and state.required and not key.startswith(state.required):
-        return WordTurn(f"Нужно слово на букву {state.required.upper()}, попробуй ещё.", state)
+        return assist('letter')
     used = (*state.used, key)
     if final:
         ending = "Спасибо, мы вернулись к разговору." if return_to_dialogue else "Спасибо за игру, теперь можно выбрать другое занятие."
@@ -116,7 +123,7 @@ def play(text, state, band, *, final=False, return_to_dialogue=False):
                    and (not letter or spelling(candidate).startswith(letter))), None)
     if answer is None:
         # An authored vocabulary must not invent an answer to an uncovered letter.
-        return WordTurn("Не нашёл подходящее слово, попробуй другое.", state)
+        return WordTurn("Не нашёл подходящее слово, попробуй другое.", state, hint_level=hint_level)
     required = next_letter(answer) if chain else ""
     response = f"{answer.capitalize()}, теперь твоё слово на букву {required.upper()}." if chain else f"{answer.capitalize()}, теперь твоя очередь."
     return WordTurn(response, WordState((*used, spelling(answer)), required), True)
