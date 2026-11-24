@@ -45,7 +45,7 @@ def test_tutorial_skip_and_handset_down_survive_stuck_audio_cleanup() -> None:
 
     async def scenario() -> None:
         app.audio_cleanup_timeout_seconds = 0.01
-        app.bounded_s2s = HangingAudioOwner()
+        app.bounded_s2s.cancel_session = HangingAudioOwner().cancel_session
         session_id = "stuck-audio-skip"
         state = app.canonical_runtime._new_state(session_id, None)
         state.handset = "up"
