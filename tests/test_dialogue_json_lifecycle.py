@@ -356,7 +356,8 @@ async def test_controlled_xml_vs_json_first_pcm_tradeoff_is_measured(monkeypatch
             for name in ("json_complete","llm_clean_terminal","spoken_semantic_started","spoken_semantic_finished"):
                 value[name+"_after_raw_ms"]=round((stamp(name)-first)*1000,2)
         measurements["json" if structured else "xml"]=value
-    assert measurements["xml"]["pcm_before_terminal"]
+    # Legacy XML must await the complete action set; a late return cannot leak PCM.
+    assert not measurements["xml"]["pcm_before_terminal"]
     assert not measurements["json"]["pcm_before_terminal"]
     print("CONTROLLED_JSON_XML_TIMINGS="+json.dumps(measurements,sort_keys=True))
 
