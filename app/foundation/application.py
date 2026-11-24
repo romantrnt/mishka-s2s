@@ -3216,8 +3216,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             lighting_owner = (asyncio.current_task(), still_current)
                             self._support_lighting_owners[event.session_id] = lighting_owner
                         try:
-                            turn = (TurnResult((), (), True) if exit_requested else
-                                await self.bounded_s2s.run_text_turn(str(transient_text), turn_context))
+                            if exit_requested:
+                                # This path skips run_text_turn's previous-output cancellation.
+                                await self._cancel_audio_owner(self.bounded_s2s, event.session_id,
+                                    operation="dialogue_exit", ownership_guard=still_current)
+                                if not still_current():
+                                    return stale_result()
+                                turn = TurnResult((), (), True)
+                            else:
+                                turn = await self.bounded_s2s.run_text_turn(str(transient_text), turn_context)
                         finally:
                             if lighting_owner is not None and self._support_lighting_owners.get(event.session_id) is lighting_owner:
                                 self._support_lighting_owners.pop(event.session_id, None)

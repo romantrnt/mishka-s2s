@@ -59,19 +59,27 @@ def test_short_model_speech_never_bypasses_semantic_gate(candidate, failure):
     asyncio.run(run())
 
 
-def test_each_output_gate_sees_prior_closed_blocks():
+@pytest.mark.parametrize("allow", [True, False])
+def test_each_output_gate_sees_prior_closed_blocks(allow):
     class Gate:
         calls = []
         async def validate(self, text, context=()):
             self.calls.append(text)
-            return ValidationDecision("allow", True, "safe", 1., "test")
+            return ValidationDecision("allow" if allow else "block", allow, "test", 1., "test")
     async def run():
+        playback = MockPlaybackController()
         engine = BoundedConversationEngine(MockLLMProvider(tokens=["<say>Привет.</say><say>Поиграем?</say>"]),
-            MockTTSProvider(), RVCProvider(), MockPlaybackController(), settings=Settings(profile="mock"))
+            MockTTSProvider(), RVCProvider(), playback, settings=Settings(profile="mock"))
         gate = Gate(); engine.response_validator = AsyncResponseValidator(gate)
         result = await engine.run_text_turn("привет", context())
-        assert not result.return_to_scenario
-        assert len(gate.calls) == 2 and "Привет." in gate.calls[1] and "Поиграем?" in gate.calls[1]
+        # Legacy speech waits for the full action set before validating or playback.
+        assert gate.calls == ["Привет. Поиграем?"]
+        assert result.return_to_scenario is not allow
+        if allow:
+            assert " ".join(result.chunks) == "Привет. Поиграем?"
+            assert playback.played
+        else:
+            assert not playback.played
     asyncio.run(run())
 
 

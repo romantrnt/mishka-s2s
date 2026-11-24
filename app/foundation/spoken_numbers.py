@@ -166,9 +166,11 @@ def normalize_spoken_numbers(text: str) -> str:
             else:
                 parts=raw.split('-' if '-' in raw else '.')
                 year,month,day=map(int,parts) if '-' in raw else map(int,reversed(parts))
-            try: date(year or 2000,month,day)
+            try: date(2000 if year is None else year,month,day)
             except ValueError:
                 # An invalid date remains a literal sequence, not a fabricated date.
+                if match['datewords']:
+                    return re.sub(r'\d+', lambda token: _words(token[0]), raw)
                 return ' точка '.join(_words(part) for part in re.split(r'[.-]',raw))
             if re.search(r'\b(?:с|со|приём|прием|встреча|занятие|запись)\s*$',prefix,re.I): case='genitive'
             day_case=case if case in {'genitive','dative','instrumental','prepositional'} else 'nominative'

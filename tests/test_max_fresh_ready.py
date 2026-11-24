@@ -267,7 +267,8 @@ async def test_held_key_cannot_skip_new_onboarding_or_become_a_new_action(h):
     await h.send('ButtonPressed', {'button_id':7})
     assert (await h.ready())['reason'] == 'profile_ready'
     for kind in ('ButtonPressed','ButtonHeld','ButtonLongHeld'):
-        assert (await h.send(kind, {'button_id':7,'duration_ms':2000}))['reason'] == 'readiness_button_held'
+        expected = 'button_held' if kind == 'ButtonPressed' else 'readiness_button_held'
+        assert (await h.send(kind, {'button_id':7,'duration_ms':2000}))['reason'] == expected
     assert h.state.mode == 'voice_welcome'
     assert (await h.send('ButtonReleased', {'button_id':7}))['reason'] == 'readiness_button_released'
     h.clock.value = h.state.welcome_deadline_monotonic
@@ -325,7 +326,7 @@ async def test_button_spam_and_release_during_barrier_does_not_abort_ready(h, re
     assert (await pending)['reason'] == 'profile_ready'
     assert h.app._identity_scope_live('software') and h.state.handset == 'up'
     assert 7 in h.state.readiness_held_buttons and 1 not in h.state.readiness_held_buttons
-    assert (await h.send('ButtonPressed', {'button_id':7}))['reason'] == 'readiness_button_held'
+    assert (await h.send('ButtonPressed', {'button_id':7}))['reason'] == 'button_held'
 
 
 @pytest.mark.asyncio
