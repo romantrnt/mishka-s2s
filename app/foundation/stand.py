@@ -935,9 +935,13 @@ class HardwareIntegrationStand:
 
     def _headless_turn_taking_enabled(self) -> bool:
         record = self.application.sessions.get(self.active_session_id)
+        state = self.application.canonical_runtime.sessions.get(self.active_session_id)
+        node = getattr(record, "current_node", None)
         return bool(getattr(self, "hardware_mode", None) == "physical"
                     and getattr(self.settings, "headless_turn_taking", False)
-                    and getattr(record, "current_node", None) in {"bear_dialogue", "game_active"})
+                    and (node in {"bear_dialogue", "game_active"}
+                         or (node == "support_intake" and state is not None
+                             and state.mode == node and state.safety_severity == "none")))
 
     def _headless_output_started(self, sid: str | None):
         sid = sid or self.active_session_id

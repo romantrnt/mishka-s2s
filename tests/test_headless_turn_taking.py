@@ -9,7 +9,7 @@ import pytest
 
 from app.foundation.config import Settings, SettingsError
 from app.foundation.domain import Event, PlaybackHandle
-from app.foundation.s2s import AudioChunk, AudioIngressPipeline, AudioSynthesisQueue, PCMPlaybackResult, SoundDevicePlaybackController
+from app.foundation.s2s import AudioChunk, AudioIngressPipeline, AudioSynthesisQueue, PCMPlaybackResult, SoundDevicePlaybackController, STTResult
 from app.foundation.stand import HardwareIntegrationStand, HEADLESS_OUTPUT_TAIL_S, _HeadlessTurnTakingPlaybackController
 
 
@@ -58,6 +58,133 @@ async def generated_queue(stand):
     await queue.start(sid, engine.cancel.start(sid))
     engine.active_queues[sid] = queue
     return queue
+
+
+async def root_four_stand(monkeypatch, *, enabled=True):
+    stand, calls = await active_stand(monkeypatch, enabled=enabled)
+    app, sid = stand.application, stand.active_session_id
+    for button in (7, 4):
+        await stand.inject("button", {"button_id": button, "state": "pressed"})
+    state = app.canonical_runtime.sessions[sid]
+    assert state.mode == app.sessions.get(sid).current_node == "support_intake"
+    assert state.safety_severity == "none" and state.handset == "up"
+    return stand, calls
+
+
+@run_async
+async def test_actual_root_four_output_mutes_capture_and_rejects_pre_output_frames(monkeypatch):
+    stand, calls = await root_four_stand(monkeypatch)
+    app, sid = stand.application, stand.active_session_id
+    ingress = AudioIngressPipeline(app.s2s_audio.vad, app.s2s_audio.config)
+    app.s2s_audio.ingress[sid] = ingress
+    ingress.feed((.1,) * 600, 0)
+    owner = stand._headless_frame_owner()
+    stand._enqueue_headless_audio_frame((.3,) * 512, owner)
+    operation = asyncio.create_task(stand.playback.play(AudioChunk((.1,) * 512, 16000, 1, sid)))
+    try:
+        release = await asyncio.wait_for(calls.get(), 2)
+        assert not stand._headless_audio_accepting()
+        assert not ingress.active and not ingress._vad_pending and not ingress._pre_roll
+        denied = stand._headless_frame_owner()
+        stand._enqueue_headless_audio_frame((.4,) * 512, denied)
+        assert stand._headless_audio_queue.qsize() == 1
+        assert owner[1].lifecycle_current() and not owner[1]()
+        release.set()
+        await operation
+        assert not stand._headless_audio_accepting()
+        await asyncio.sleep(HEADLESS_OUTPUT_TAIL_S + .02)
+        assert stand._headless_audio_accepting() and not owner[1]() and not denied[1]()
+        stand._enqueue_headless_audio_frame((.1,) * 512)
+        stand._headless_audio_queue.put_nowait(None)
+        await stand._headless_audio_worker()
+        assert ingress.active and len(ingress.buffer._samples) == 512
+    finally:
+        operation.cancel()
+        await asyncio.gather(operation, return_exceptions=True)
+        await close(stand)
+
+
+@run_async
+async def test_actual_root_four_queue_holds_mute_across_chunk_gap_and_tail(monkeypatch):
+    stand, calls = await root_four_stand(monkeypatch)
+    queue = await generated_queue(stand)
+    try:
+        assert stand._headless_audio_accepting()
+        await queue.submit("Облака состоят из маленьких капель.")
+        release = await asyncio.wait_for(calls.get(), 2)
+        assert not stand._headless_audio_accepting()
+        release.set()
+        await asyncio.sleep(HEADLESS_OUTPUT_TAIL_S + .02)
+        assert not stand._headless_audio_accepting() and not queue.worker.done()
+        await queue.submit("Капли отражают свет.")
+        release = await asyncio.wait_for(calls.get(), 2)
+        assert not stand._headless_audio_accepting()
+        release.set()
+        await queue.finish()
+        assert not stand._headless_audio_accepting()
+        await asyncio.sleep(HEADLESS_OUTPUT_TAIL_S + .02)
+        assert stand._headless_audio_accepting() and queue.completed_chunks == 2
+    finally:
+        await queue.abort(stand.active_session_id, invalidate=False)
+        await close(stand)
+
+
+@pytest.mark.parametrize("boundary", ["flag_off", "browser", "concern", "record_only_mismatch", "recorded_story"])
+@run_async
+async def test_root_four_policy_does_not_mute_other_admitted_voice_paths(monkeypatch, boundary):
+    stand, calls = await root_four_stand(monkeypatch, enabled=boundary != "flag_off")
+    app, sid = stand.application, stand.active_session_id
+    state = app.canonical_runtime.sessions[sid]
+    if boundary == "browser":
+        stand.hardware_mode = "simulator"
+    elif boundary == "record_only_mismatch":
+        state.mode = "bear_dialogue"
+        assert app.sessions.get(sid).current_node == "support_intake"
+    elif boundary == "recorded_story":
+        for sequence, button in ((4, 7), (5, 2)):
+            await app.receive_async(Event("ButtonPressed", sid, sequence, float(sequence), "root4-test",
+                {"button_id": button}, f"story-{sequence}"))
+        await app.receive_async(Event("ButtonReleased", sid, 6, 6., "root4-test", {"button_id": 2}, "story-release"))
+        await app.receive_async(Event("ButtonPressed", sid, 7, 7., "root4-test", {"button_id": 1}, "story-select"))
+        assert state.mode == app.sessions.get(sid).current_node == "fixed_story_playing"
+    operation = asyncio.create_task(stand.playback.play(AudioChunk((.1,) * 512, 16000, 1, sid)))
+    try:
+        release = await asyncio.wait_for(calls.get(), 2)
+        assert stand._headless_output_owners
+        if boundary == "concern":
+            assert not stand._headless_audio_accepting()
+            await app.receive_async(Event("VoiceIntentReady", sid, 4, 4., "root4-test",
+                {"intent": "free_speech", "safety_severity": "concern"}, "root4-concern"))
+            assert state.mode == app.sessions.get(sid).current_node == "support_intake"
+            assert state.safety_severity == "concern" and stand._headless_output_owners
+        assert not stand._headless_turn_taking_enabled()
+        assert stand._headless_audio_accepting()
+        stand._enqueue_headless_audio_frame((.25,) * 512)
+        assert stand._headless_audio_queue.qsize() == 1
+        if boundary == "concern":
+            recognized = []
+            class Recognizer:
+                async def transcribe(self, audio, cancelled):
+                    recognized.append(audio.samples)
+                    return STTResult("не хочу жить", .99, .1)
+            app.s2s_audio.recognizer = Recognizer()
+            for _ in range(14):
+                stand._enqueue_headless_audio_frame((.25,) * 512)
+            for _ in range(20):
+                stand._enqueue_headless_audio_frame((0.,) * 512)
+            stand._headless_audio_queue.put_nowait(None)
+            await asyncio.wait_for(stand._headless_audio_worker(), 3)
+            pending = tuple(app._audio_completions.get(sid, ()))
+            if pending:
+                await asyncio.wait_for(asyncio.gather(*pending), 3)
+            assert len(recognized) == 1
+            assert state.mode == "safety_stop" and state.safety_severity == "urgent"
+        release.set()
+        await operation
+    finally:
+        operation.cancel()
+        await asyncio.gather(operation, return_exceptions=True)
+        await close(stand)
 
 
 @run_async
