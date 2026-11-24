@@ -101,22 +101,41 @@ def test_new_payload_field_is_allowlisted_at_storage_boundary():
 
 def test_actual_validator_timeout_reaches_panel_with_fallback_and_no_text():
     async def run():
-        app, _, _, _ = build_application(settings=Settings(profile="mock"), background_scheduler=False)
+        app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="clinical"),
+            monotonic_now=lambda: 100., background_scheduler=False)
         sid = "PRIVATE_SYNTHETIC_SESSION"
+        sequence = 0
+
+        async def send(kind, payload=None, text=None):
+            nonlocal sequence
+            sequence += 1
+            return await asyncio.wait_for(app.receive_async(Event(kind, sid, sequence, 100., "test",
+                payload or {}, f"PRIVATE_CORRELATION{sequence}", 100.), text), 5)
+
         try:
-            await app.receive_async(Event("HandsetLifted", sid, 1, 1., "test", {}, "PRIVATE_CORRELATION"))
-            app.canonical_runtime.sessions[sid].mode = "bear_dialogue"
-            app.sessions.get(sid).current_node = "bear_dialogue"
+            await send("HandsetLifted")
+            await send("ButtonPressed", {"button_id": 6})
+            await send("ButtonReleased", {"button_id": 6})
+            owner = dict(app._active_audio[sid])
+            assert owner["content_id"] == "PHRASE_094"
+            await send("AudioCompleted", {**owner, "response_id": owner["content_id"]})
+            state = app.canonical_runtime.sessions[sid]
+            assert state.mode == "bear_dialogue" and state.audio_open
+            assert sid not in app._active_audio
             app.bounded_s2s.response_validator = AsyncResponseValidator(MockMiniLLMValidator(delay_s=.1), timeout_ms=10)
-            result = await app.receive_async(Event("SpeechReceived", sid, 2, 2., "test", {}, "PRIVATE_CORRELATION2"), "Привет")
+            result = await send("SpeechReceived", text="Привет")
+            assert result["reason"] == "dialogue_turn"
+            assert app.bounded_s2s.response_validator.metrics.mini_calls > 0
             stored = {"at": 2., "input": "text", "result": HardwareIntegrationStand._public_result(result)}
             # This is exactly the in-memory envelope used by inject and the
             # asynchronous audio-completion callback, without a physical PTY.
             stand = HardwareIntegrationStand.__new__(HardwareIntegrationStand)
+            stand.hardware_mode = "simulator"
             stand._panel_snapshot_lock = threading.Lock()
             stand._panel_snapshot_revision = 0
             stand.snapshot = lambda: {"results": [stored], "pipeline_metrics": app.bounded_s2s.metrics.snapshot()}
             panel = stand.panel_snapshot()
+            assert panel["transport"]["hardware"]["acceptance"] == "simulator"
             reasons = [out.get("fallback_reason") for item in panel["results"] for out in item.get("outputs", [])]
             assert "provider_or_validation_failure" in reasons
             events = [item for item in panel["pipeline_metrics"]["events"] if item["event"] == "validation_block"]
@@ -126,8 +145,8 @@ def test_actual_validator_timeout_reaches_panel_with_fallback_and_no_text():
             serialized = json.dumps(panel, ensure_ascii=False, allow_nan=False)
             assert "PRIVATE_" not in serialized and "Привет" not in serialized
         finally:
-            await app._cleanup_session_resources(sid)
-            await app.runtime_manager.close()
+            await asyncio.wait_for(app._cleanup_session_resources(sid), 3)
+            await asyncio.wait_for(app.runtime_manager.close(), 3)
     asyncio.run(run())
 
 
