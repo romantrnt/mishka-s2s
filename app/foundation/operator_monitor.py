@@ -102,10 +102,11 @@ class OperatorMonitor:
             safe_health[key] = enum(source.get("status") if isinstance(source, dict) else None, STATUSES)
         targets = lighting if isinstance(lighting, dict) else {}
         safe_health["lit_channels"] = sum(type(targets.get(str(i))) is int and targets[str(i)] == 1 for i in range(18))
+        component_health = {key: value for key, value in safe_health.items() if key != "lit_channels"}
         with self._lock:
-            if safe_health != self._health:
-                self._append("health", dict(safe_health))
-                self._health = safe_health
+            if component_health != self._health:
+                self._append("health", component_health)
+                self._health = component_health
             restart = bool(stream and stream != self._stream) or after > self._cursor
             oldest = self._items[0]["cursor"]
             gap = restart or (after > 0 and after < oldest - 1)

@@ -56,7 +56,7 @@
     if(item.kind==='alert_ended') return ['Сигнал больше не активен','Режим или сеанс завершён. Подтверждения помощи взрослого нет.'];
     if(item.kind==='reset') return ['Сброс сеанса','История технических событий сохранена до перезапуска процесса.'];
     if(item.kind==='started') return ['Технический буфер запущен','Здесь сохраняются только технические события.'];
-    if(item.kind==='health') return ['Состояние компонентов изменилось',`Звук: ${label(statuses,d.audio)}. Ввод: ${label(statuses,d.hid)}. Подсветка: ${label(statuses,d.lighting)}.`];
+    if(item.kind==='health') return ['Состояние компонентов изменилось',`Контур: ${label(statuses,d.runtime)}. Трубка: ${label(statuses,d.handset)}. Звук: ${label(statuses,d.audio)}. Ввод: ${label(statuses,d.hid)}. Подсветка: ${label(statuses,d.lighting)}.`];
     return ['Техническое событие',''];
   }
   function row(item) {

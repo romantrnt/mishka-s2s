@@ -260,3 +260,16 @@ def test_concurrent_operator_reads_preserve_unique_ordered_bounded_cursors():
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(work,range(4)))
     assert len(monitor.snapshot()['items']) == 240
+
+
+def test_light_animation_updates_current_count_without_flooding_technical_log():
+    from app.foundation.operator_monitor import OperatorMonitor
+    monitor = OperatorMonitor()
+    health = {'status':'ready','handset':'down','audio':{'status':'available'},'hid':{'status':'active'},'lighting':{'status':'available'}}
+    first = monitor.snapshot(health=health,runtime='READY',lighting={'0':1})
+    next_frame = monitor.snapshot(after=first['cursor'],stream=first['stream'],health=health,runtime='READY',lighting={'0':1,'1':1})
+    assert next_frame['health']['lit_channels'] == 2
+    assert next_frame['items'] == []
+    health['lighting']['status'] = 'unavailable'
+    failed = monitor.snapshot(after=first['cursor'],stream=first['stream'],health=health,runtime='READY',lighting={})
+    assert any(item['kind']=='health' and item['data']['lighting']=='unavailable' for item in failed['items'])
