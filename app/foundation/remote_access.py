@@ -316,7 +316,14 @@ class PrivateStandGateway:
             if message["type"] in {"http.response.start", "websocket.accept"}:
                 message = dict(message)
                 outgoing = list(message.get("headers", []))
-                outgoing.extend([(b"cache-control", b"no-store"), (b"referrer-policy", b"no-referrer"),
+                console_document = (scope["type"] == "http"
+                    and scope.get("path") in {"/console", "/console/operator"}
+                    and any(key.lower() == b"content-type" and value.split(b";", 1)[0].strip().lower() == b"text/html"
+                            for key, value in outgoing))
+                # no-referrer makes native form POST Origin null; keep strict Origin admission.
+                policy = b"same-origin" if console_document else b"no-referrer"
+                outgoing = [(key, value) for key, value in outgoing if key.lower() != b"referrer-policy"]
+                outgoing.extend([(b"cache-control", b"no-store"), (b"referrer-policy", policy),
                                  (b"x-content-type-options", b"nosniff"), (b"x-frame-options", b"DENY")])
                 if mode == "basic":
                     old_sid = self._cookie_sid(headers)
