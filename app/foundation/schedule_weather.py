@@ -6,7 +6,7 @@ import json
 import math
 import re
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 import httpx
 from typing import Any
 
@@ -20,7 +20,7 @@ class ScheduleWeatherSchemaError(ScheduleWeatherProviderError):
 
 
 class YandexWeatherProvider:
-    """Production adapter for the Yandex Weather REST forecast endpoint."""
+    """Current observations from the configured Yandex Weather REST endpoint."""
 
     _endpoint = "https://api.weather.yandex.ru/v2/forecast"
     _conditions = {
@@ -28,9 +28,12 @@ class YandexWeatherProvider:
         "partly-cloudy": "переменная облачность",
         "cloudy": "облачно",
         "overcast": "пасмурно",
+        "drizzle": "морось",
         "light-rain": "небольшой дождь",
         "rain": "дождь",
+        "moderate-rain": "умеренный дождь",
         "heavy-rain": "сильный дождь",
+        "continuous-heavy-rain": "сильный продолжительный дождь",
         "showers": "ливень",
         "wet-snow": "мокрый снег",
         "light-snow": "небольшой снег",
@@ -80,7 +83,10 @@ class YandexWeatherProvider:
     MAX_FUTURE_SKEW_S = 5 * 60
 
     async def _fetch(self) -> dict[str, Any]:
-        query = urlencode({"lat": self.latitude, "lon": self.longitude, "lang": "ru_RU", "limit": 1, "hours": "false"})
+        params = {"lat": self.latitude, "lon": self.longitude, "lang": "ru_RU"}
+        if urlsplit(self.endpoint).path.rstrip("/") != "/v2/informers":
+            params.update(limit=1, hours="false")
+        query = urlencode(params)
         try:
             async with asyncio.timeout(self.timeout_s):
                 async with self._http_slots:
@@ -109,9 +115,9 @@ class YandexWeatherProvider:
 
     @classmethod
     def _normalize(cls, payload: Any) -> dict[str, Any]:
-        if (not isinstance(payload, dict)
-                or not isinstance(payload.get("info"), dict)
-                or not isinstance(payload.get("forecasts"), list)):
+        # Current observations use fact; forecast/informers have different
+        # prediction envelopes, neither of which supplies current authority.
+        if not isinstance(payload, dict) or not isinstance(payload.get("info"), dict):
             raise ScheduleWeatherSchemaError("malformed_yandex_weather_response")
         fact = payload.get("fact")
         if not isinstance(fact, dict):
