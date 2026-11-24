@@ -93,12 +93,12 @@ async def test_inherited_back_hold_and_unknown_key_do_not_activate_actions():
     h = Harness('1-3')
     try:
         await h.button(7)
-        assert (await h.button(7))['reason'] == 'scene_menu_release_required'
+        assert (await h.button(7))['reason'] == 'button_held'
         assert h.state.mode == 'schedule_weather'
         await h.release(7)
         await h.button(4)  # Not offered on this one-choice page.
         assert h.state.mode == 'schedule_weather' and h.state.scene_menu_phase == 'ready'
-        assert (await h.button(4))['reason'] == 'scene_menu_release_required'
+        assert (await h.button(4))['reason'] == 'button_held'
         await h.button(7)
         assert h.state.mode == 'root_menu'
     finally:

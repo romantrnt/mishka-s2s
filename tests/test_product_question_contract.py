@@ -24,7 +24,10 @@ class Harness:
     async def send(self,kind,payload=None,text=None):
         self.sequence+=1
         return await self.app.receive_async(Event(kind,'questions',self.sequence,1.,'test',payload or {},f'q:{self.sequence}',1.),text)
-    async def button(self,value):return await self.send('ButtonPressed',{'button_id':value})
+    async def button(self,value):
+        result=await self.send('ButtonPressed',{'button_id':value})
+        await self.send('ButtonReleased',{'button_id':value})
+        return result
     async def answer(self,answer,source):
         return await self.button(7 if answer=='yes' else 1) if source=='button' else await self.send('SpeechReceived',text='Да' if answer=='yes' else 'Нет')
     @property

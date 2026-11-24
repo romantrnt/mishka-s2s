@@ -39,7 +39,7 @@ def test_menu_any_fresh_press_interrupt_and_stale_audio_inert(button):
         assert result['reason']=='story_menu_back' and s.mode=='root_menu'
     else:
         assert result['reason']=='scene_menu_skipped' and s.mode=='fixed_story_menu'
-        assert send(r,'ButtonPressed',{'button_id':button})['reason']=='scene_menu_release_required'
+        assert send(r,'ButtonPressed',{'button_id':button})['reason']=='button_held'
     assert not any(x['type']=='speak' for x in send(r,'AudioCompleted',old)['effects'])
 
 

@@ -1731,7 +1731,7 @@ class CanonicalRuntime(SceneMenuMixin):
         if _voice_admission is None:
             reason = self._admit(event, state)
             if reason:
-                return self._decision(state, [], reason)
+                return self._session_action_noop(state, reason)
         else:
             # This single-use receipt is private server state, never payload.
             if (event.event_type != "VoiceIntentReady" or _voice_admission.consumed
@@ -1789,6 +1789,13 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.accepted_buttons_down.append(button)
             elif event.event_type == "ButtonReleased" and button in state.accepted_buttons_down:
                 state.accepted_buttons_down.remove(button)
+            if event.event_type == "ButtonPressed" and not fresh_button_press:
+                # A held edge cannot answer or navigate in a successor scene.
+                reason = ("exhibition_menu_choice_held"
+                    if button == state.menu_early_choice_button
+                    or (self.exhibition_mode and state.mode.startswith("exhibition_menu_"))
+                    else "button_held")
+                return self._session_action_noop(state, reason)
         if event.event_type == "HandsetPlaced" and state.handset == "down":
             return self._decision(state, [], "handset_already_placed")
         if event.event_type == "HandsetLifted" and state.handset == "up":
