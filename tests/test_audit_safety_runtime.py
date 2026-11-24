@@ -394,8 +394,9 @@ def test_owned_audio_dispatch_failure_is_terminal_even_during_completion(kind):
                 # Initialize the actual descriptor through an edge; don't bypass
                 # the verified catalogue or replay a held key as a selection.
                 app._owned_menu_voice_capable = lambda: False
-                await app.receive_async(event("ButtonReleased", 1, {"button_id": 1}))
-                result = await app.receive_async(event("ButtonPressed", 2, {"button_id": 1}))
+                await app.receive_async(event("ButtonPressed", 1, {"button_id": 1}))
+                await app.receive_async(event("ButtonReleased", 2, {"button_id": 1}))
+                result = await app.receive_async(event("ButtonPressed", 3, {"button_id": 1}))
             if kind == "placeholder":
                 assert state.scene_menu_descriptor["items"] == []
                 assert not calls and state.active_audio_id is None

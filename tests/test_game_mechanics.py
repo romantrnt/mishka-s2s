@@ -104,6 +104,7 @@ async def test_actual_application_frames_for_each_mechanic(game):
         ids = {BUTTON_FILL_ELEMENTS[b] for b in buttons}
         assert app.led.output.snapshot() == {str(i):int(i in ids) for i in range(18)}
     try:
+        await send('ButtonPressed',4)
         await send('ButtonReleased',4)
         assert state.game_engine_state.game_id==game and not state.game_engine_state.immersive
         assert_lit([1,2] if game != 'hold_light' else [1])

@@ -32,6 +32,7 @@ async def test_game_telemetry_preserves_single_owned_target(mode, progress):
         assert state.active_game_id == 'free_lights'
         # The public free-light game has no static target. Exercise the
         # retained catch-light bridge explicitly, without restoring its slot.
+        await send('ButtonPressed', {'button_id': 1})
         state.active_game_id = 'catch_light'
         state.game_engine_state = start('catch_light', sequence=0, now=1., selection_button=0,
             held_buttons=tuple(state.accepted_buttons_down), immersive=False)

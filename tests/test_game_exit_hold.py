@@ -453,8 +453,10 @@ def test_ws_simulator_action_enforces_owner_and_preserves_fifo():
     api = create_stand_app(Settings(profile='mock', hardware_mode='simulator', stand_access_token='ws-hold-test'))
     stand = api.state.stand
     seen = []
-    async def fake_action(payload):
+    owners = []
+    async def fake_action(payload, *, input_owner, input_guard):
         seen.append(dict(payload))
+        owners.append((input_owner, input_guard()))
         return {"reason": "ok"}
     stand.remote_devices.action = fake_action
     with TestClient(api) as client:
@@ -468,8 +470,17 @@ def test_ws_simulator_action_enforces_owner_and_preserves_fifo():
                 guest_ws.send_json({'type': 'simulator_action', 'action': 'button', 'button_id': 7, 'press': 'press', 'epoch': 1})
                 err = guest_ws.receive_json()
                 assert err['type'] == 'error' and err['error']['code'] == 'conflict'
-            owner_ws.send_json({'type': 'simulator_action', 'action': 'button', 'button_id': 7, 'press': 'press', 'epoch': 1})
-            owner_ws.send_json({'type': 'simulator_action', 'action': 'button', 'button_id': 7, 'press': 'release', 'epoch': 1})
+            owner_ws.send_json({'type': 'simulator_action', 'action': 'button', 'button_id': 7, 'press': 'press', 'epoch': 1, 'request_id': 'press-7'})
+            owner_ws.send_json({'type': 'simulator_action', 'action': 'button', 'button_id': 7, 'press': 'release', 'epoch': 1, 'request_id': 'release-7'})
+            completed = []
+            while len(completed) < 2:
+                ack = owner_ws.receive_json()
+                assert ack['type'] == 'button_ack' and ack['error'] is None
+                if ack['stage'] == 'completed':
+                    completed.append(ack['request_id'])
+            assert completed == ['press-7', 'release-7']
             owner_ws.send_json({'type': 'ping'})
             assert owner_ws.receive_json()['type'] == 'pong'
     assert [(item['press'], item['button_id']) for item in seen] == [('press', 7), ('release', 7)]
+    assert owners[0][0] == owners[1][0] and owners[0][0].startswith('browser_ws:')
+    assert all(current for _, current in owners)
