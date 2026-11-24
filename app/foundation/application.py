@@ -2725,11 +2725,17 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         and state_owner.playback_lease==effect.get("playback_lease"))
                 try:
                     text=str(state_owner.scene_menu_descriptor.get("spoken_text") or "")
-                    audio=await self._render_typed_audio(event.session_id,text,effect,
+                    streamed=await self._stream_menu_audio(event.session_id,text,effect,
                         record.cancellation_token,menu_current)
                     if not menu_current():return stale_result()
-                    if audio is None:raise RuntimeError("menu_audio_unavailable")
-                    self._play_typed_audio(event.session_id,audio,effect,record.cancellation_token)
+                    if streamed is None:
+                        audio=await self._render_typed_audio(event.session_id,text,effect,
+                            record.cancellation_token,menu_current)
+                        if not menu_current():return stale_result()
+                        if audio is None:raise RuntimeError("menu_audio_unavailable")
+                        self._play_typed_audio(event.session_id,audio,effect,record.cancellation_token)
+                    elif not streamed:
+                        raise RuntimeError("menu_audio_unavailable")
                     _set_audio_effect_status(effect,asset_status="approved",queued=True,resolution="scene_menu_audio_queued")
                 except Exception:
                     if not still_current():return stale_result()

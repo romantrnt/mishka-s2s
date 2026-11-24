@@ -46,6 +46,210 @@ class OwnedSpeechMixin:
             if getattr(task, '_mishka_session_id', None) == session_id:
                 task.cancel()
 
+    async def _stream_menu_audio(self, session_id, text, effect, token, current):
+        """None means unsupported; False forbids replay, True means queued."""
+        from .experimental_voice import ExperimentalTTSProvider
+        from .public_menu_audio import PublicMenuAudioCache, current_menu_page, providers
+        from .s2s import AudioChunk, PassthroughVoiceProvider
+        engine = self.bounded_s2s
+        if (engine is None or effect.get('content_id') not in MENU_AUDIO_IDS
+                or not getattr(self.audio, 'private_pcm_supported', False)
+                or not getattr(self.audio, 'private_pcm_stream_supported', False)
+                or not callable(getattr(self.audio, 'play_pcm_stream_owned', None))):
+            return None
+        tts, voice = providers(self)
+        if (not isinstance(tts, ExperimentalTTSProvider) or tts.provider_name == 'qwen765'
+                or not callable(getattr(tts, 'synthesize_audio_stream', None))
+                or not isinstance(voice, PassthroughVoiceProvider)
+                or getattr(self.settings, 'voice_conversion', None) not in {'off', 'disabled'}):
+            return None
+        if len(self._owned_text_jobs) >= 2:
+            return False
+        text = engine.normalizer.normalize(str(text or ''))
+        if not text or len(text) > engine.config.max_response_chars:
+            return False
+        loop = asyncio.get_running_loop()
+        generation_budget = min(float(getattr(self.audio, 'owned_render_timeout_s', 8.)),
+                                engine.config.max_turn_seconds)
+        lifetime = min(60., float(getattr(self.settings, 'playback_timeout_s', 60.)))
+        queue, changed = asyncio.Queue(maxsize=2), asyncio.Event()
+        status = {'aborted': False, 'complete': False, 'cached': None}
+        page = key = cache = None
+        normalizer, validator = engine.normalizer, engine.response_validator
+
+        def live():
+            return bool(not status['aborted'] and not producer.cancelling()
+                and not self._identity_shutdown and current()
+                and self.bounded_s2s is engine and engine.normalizer is normalizer
+                and engine.response_validator is validator
+                and all(a is b for a, b in zip(providers(self), (tts, voice)))
+                and (page is None or current_menu_page(self, session_id, text) == page)
+                and (cache is None or cache.key(self, page, text) == key))
+
+        def abort():
+            status['aborted'] = True
+            changed.set()
+            if not producer.done():
+                producer.cancel()
+
+        async def generate():
+            nonlocal page, key, cache, generation_budget
+            iterator = None
+            # Provider generation excludes queue backpressure and real-time playback.
+            async def bounded(awaitable):
+                nonlocal generation_budget
+                started = loop.time()
+                timer = loop.call_later(max(0., generation_budget), abort)
+                try:
+                    return await awaitable
+                finally:
+                    timer.cancel()
+                    generation_budget -= loop.time() - started
+            overall = loop.call_later(lifetime, abort)
+            try:
+                if not live():
+                    return
+                page = current_menu_page(self, session_id, text)
+                if page is None or MENU_PCM_MODES[effect['content_id']] != page.scene:
+                    return
+                validation_text = await bounded(self._menu_validation_text(session_id, text))
+                if validation_text is None or not live():
+                    return
+                validation = await bounded(validator.validate_trusted(validation_text))
+                if not validation.allowed or not live():
+                    return
+                candidate = getattr(self, '_public_menu_audio_cache', None)
+                if isinstance(candidate, PublicMenuAudioCache):
+                    cache = candidate
+                    key = cache.key(self, page, text)
+                    status['cached'] = cache.get(key, token, session_id)
+                    if status['cached'] is not None:
+                        return
+                await bounded(tts.wait_for_idle(lambda: not live()))
+                if not live():
+                    return
+                iterator = tts.synthesize_audio_stream(text, token, lambda: not live(), first_chunk=True).__aiter__()
+                samples, rate, count = [], None, 0
+                while live():
+                    # At most two pending chunks, in addition to the one playing.
+                    while queue.full() and live():
+                        changed.clear()
+                        await changed.wait()
+                    if not live():
+                        return
+                    try:
+                        audio = await bounded(anext(iterator))
+                    except StopAsyncIteration:
+                        break
+                    if not live():
+                        return
+                    count += 1
+                    if (not valid_pcm(audio) or audio.token != token
+                            or audio.session_id not in (None, session_id)
+                            or not 8000 <= audio.sample_rate <= 96000
+                            or (rate is not None and audio.sample_rate != rate)
+                            # Native frames are smaller than semantic TTS chunks.
+                            or count > 4096):
+                        raise ValueError('menu_native_pcm_invalid')
+                    rate = audio.sample_rate
+                    if len(samples) + len(audio.samples) > rate * lifetime:
+                        raise ValueError('menu_native_pcm_limit')
+                    samples.extend(audio.samples)
+                    queue.put_nowait(audio)
+                    changed.set()
+                if not samples or not live():
+                    return
+                # Close the native iterator before publishing a successful EOF/cache.
+                await iterator.aclose()
+                iterator = None
+                if not live():
+                    return
+                if cache is not None:
+                    cache.put(key, AudioChunk(tuple(samples), rate, token))
+                status['complete'] = True
+            except asyncio.CancelledError:
+                status['aborted'] = True
+                raise
+            except Exception:
+                status['aborted'] = True
+            finally:
+                if iterator is not None:
+                    try:
+                        await iterator.aclose()
+                    except (Exception, asyncio.CancelledError):
+                        status['aborted'] = True
+                overall.cancel()
+                changed.set()
+
+        producer = asyncio.create_task(generate(), name='mishka-menu-native')
+        producer._mishka_session_id = session_id
+        producer._mishka_owner_current = current
+        self._owned_text_jobs.add(producer)
+        def observe(done):
+            self._owned_text_jobs.discard(done)
+            changed.set()
+            if not done.cancelled():
+                done.exception()
+        producer.add_done_callback(observe)
+
+        class Stream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    while live():
+                        if not queue.empty():
+                            audio = queue.get_nowait()
+                            changed.set()
+                            return replace(audio, token=token, session_id=session_id,
+                                           generation_id=handle.generation), ()
+                        if producer.done():
+                            if status['complete']:
+                                raise StopAsyncIteration
+                            break
+                        changed.clear()
+                        await changed.wait()
+                    raise RuntimeError('menu_native_stream_unavailable')
+                except BaseException:
+                    abort()
+                    raise
+
+            async def aclose(self):
+                # Port rejection may close us before its first __anext__ call.
+                abort()
+
+        try:
+            while queue.empty() and not producer.done() and not status['aborted']:
+                changed.clear()
+                await changed.wait()
+            if not live():
+                abort()
+                return False
+            if status['cached'] is not None:
+                self._play_typed_audio(session_id, status['cached'], effect, token)
+                return True
+            if queue.empty():
+                abort()
+                return False
+            import uuid
+            handle = PlaybackHandle(session_id=session_id,
+                generation=self._session_epochs.get(session_id, 0),
+                playback_id=f'{session_id}:{uuid.uuid4().hex}',
+                playback_lease=effect['playback_lease'], response_id=effect['content_id'], token=token)
+            self._register_audio_lease(session_id, handle.response_id, token, handle.playback_id,
+                                       handle.playback_lease, duration_ms=0)
+            effect.update(playback_id=handle.playback_id, generation=handle.generation, session_id=session_id)
+            self.audio.play_pcm_stream_owned(handle, Stream())
+            return True
+        except asyncio.CancelledError:
+            abort()
+            raise
+        except Exception:
+            abort()
+            self._invalidate_audio_lease(session_id, 'failed')
+            return False
+
     async def _render_typed_audio(self, session_id, text, effect, token, current):
         engine = self.bounded_s2s
         if (engine is None or not getattr(self.audio, 'private_pcm_supported', False)
