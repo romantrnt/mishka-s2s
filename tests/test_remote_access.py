@@ -61,7 +61,7 @@ def test_login_sets_private_secure_cookie_and_injects_canonical_header():
         cookie = response.headers["set-cookie"]
         assert all(flag in cookie for flag in ("Path=/", "HttpOnly", "SameSite=Strict", "Secure"))
         assert client.get("/stand/state").json() == {"canonical_auth": True}
-        assert TOKEN not in response.text
+        assert TOKEN not in response.text and TOKEN not in cookie
         assert response.headers["cache-control"] == "no-store"
 
 
@@ -155,4 +155,5 @@ def test_browser_html_login_page_and_cookie_session_without_basic_popup():
         assert ok.status_code == 303 and ok.headers["location"] == "/console"
         cookie = ok.headers["set-cookie"]
         assert all(flag in cookie for flag in ("Path=/", "HttpOnly", "SameSite=Strict", "Secure"))
+        assert TOKEN not in cookie and "stand_session=" in cookie
         assert client.get("/console").json() == {"canonical_auth": True}

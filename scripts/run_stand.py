@@ -127,6 +127,8 @@ def resolve_port() -> int:
         port = int(raw)
     except ValueError as exc:
         raise RuntimeError(f"MISHKA_PORT must be an integer, got {raw!r}") from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError("MISHKA_PORT must be between 1 and 65535")
     if port != CANONICAL_PORT and os.getenv("MISHKA_ALLOW_NONCANONICAL_PORT") != "1":
         raise RuntimeError(
             f"canonical stand launch only supports port {CANONICAL_PORT}; "
@@ -140,6 +142,7 @@ from app.foundation.stand import create_stand_app
 if __name__ == "__main__":
     import uvicorn
 
+    from app.foundation.remote_access import build_browser_gateway
     from app.foundation.config import Settings
     from app.foundation.max_client_runtime import build_configured_app, MaxClientStartupError
     port = resolve_port()
@@ -159,8 +162,9 @@ if __name__ == "__main__":
     # uvicorn.error logger, while HTTP access lines use uvicorn.access.
     log_config["handlers"]["default"].setdefault("filters", []).append("stand_access_redaction")
     try:
+        gateway = build_browser_gateway(application, settings, port=port)
         uvicorn.run(
-            application,
+            gateway,
             host=host,
             port=port,
             log_level=os.getenv("MISHKA_LOG_LEVEL", "info"),
