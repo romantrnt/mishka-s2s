@@ -65,6 +65,7 @@ async def root_four_stand(monkeypatch, *, enabled=True):
     app, sid = stand.application, stand.active_session_id
     for button in (7, 4):
         await stand.inject("button", {"button_id": button, "state": "pressed"})
+        await stand.inject("button_released", {"button_id": button, "state": "released"})
     state = app.canonical_runtime.sessions[sid]
     assert state.mode == app.sessions.get(sid).current_node == "support_intake"
     assert state.safety_severity == "none" and state.handset == "up"

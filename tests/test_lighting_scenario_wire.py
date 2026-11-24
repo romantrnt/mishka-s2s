@@ -119,7 +119,7 @@ def test_all_root_selections_send_only_the_current_scene_channels(button, band):
                 assert descriptor["buttons"] == [item["slot"] for item in descriptor["items"]] + ([6] if descriptor["page_count"] > 1 else []) + [7]
                 h.assert_lit(set().union(*(({0} if b == 7 else BUTTON_CHANNELS[b]) for b in descriptor["buttons"])))
             elif button == 4:
-                h.assert_lit({0, 2, 14})
+                h.assert_lit({0, 7, 9})  # Back/help digits and support's own activity fill.
             elif button == 5:
                 h.assert_lit({1, 14, 16})
             else:
