@@ -1,0 +1,271 @@
+{
+  "source_commit": "9c1462e2a3176525b045edc25f77fce74fcfc2e9",
+  "scope": "Only authorized adult narrator originals and public synthetic Vox555 WAVs; no real visit/name/profile/child audio.",
+  "identities": {
+    "source_revision": "300e4260b509066151d623dc9c0aa922cf82232b",
+    "model_sha256": "f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d",
+    "adapter_sha256": "1142e35de2eb2bcad19bae70a35a5360b90a2909834c83c7a7ffb41e226c5270",
+    "reference_sha256": "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c"
+  },
+  "original_to_vox_exact_text_pairs": 0,
+  "pairs": [
+    {
+      "id": "castle",
+      "text": "На горе стоит старинный замок.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/castle-baseline-full.wav",
+        "sha256": "e5dfd052c30446554f28dd1ac24b84edcdd09b6d355c8fa43ca7202842ae06d9",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/castle-baseline-stream.wav",
+        "sha256": "2d3a7e6851dab7dd9737d6b129805de987cd45d0d1e4cd22db11c5949390a92f",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "declension",
+      "text": "Позови Машу и Мишу, а потом расскажи о Маше.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/declension-baseline-full.wav",
+        "sha256": "ddc46591335d7df95a8bea7eca6a1bee1218b754304bc587e99dfb0b75f251a3",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/declension-baseline-stream.wav",
+        "sha256": "906b5c3fc2251dbc81e8a732d05adc22c7f0b50c73ad1048c11c0c55be2886e2",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "demo",
+      "text": "Это демо нашей новой игры.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/demo-baseline-full.wav",
+        "sha256": "e28b75eb84155645f7e318e7e62c63c228410f6b13c523fc3cc608d43b6c4db8",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/demo-baseline-stream.wav",
+        "sha256": "a1b75114f95a8e57048448ef3be2f798bce91fd23d3a584c815f3ca218caf283",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "game",
+      "text": "Обезьяна сидит на ветке, а слон стоит внизу.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/game-baseline-full.wav",
+        "sha256": "4ce6822df93a67b5823b74d3bb1aab02c9bebf219357c895c8029bb7ab38c47c",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/game-baseline-stream.wav",
+        "sha256": "64ea4dbaa7fcf524765d8c77f34c88e86a441c6b2a031dd92a9637d51413159e",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "greeting",
+      "text": "Здорово! Я Мишка. Давай играть.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/greeting-baseline-full.wav",
+        "sha256": "7a6032241e77d689d5bb0657b41c962a6d3d5cf44682335634f912a46a8a4d13",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/greeting-baseline-stream.wav",
+        "sha256": "90e3bd21123e1e8d17e70505dad4746b984cce7a997aee858f770964f9af0a42",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "lock",
+      "text": "На двери висит крепкий замок.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/lock-baseline-full.wav",
+        "sha256": "16c790db7f5df6429a8205e84bb06e41db78be896aacd6bbf5f4108f870be6cd",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/lock-baseline-stream.wav",
+        "sha256": "e73df7e6bc61f6f7c24513797854590ba90fa689332d0664d1b2ad6bd11e2ea0",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "names",
+      "text": "Алёна и Семён позвали Варвару.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/names-baseline-full.wav",
+        "sha256": "9c4be4788af197c0dc4af42d77c18f3ce31b657dd4d78cc9dcdf4385dc7fae66",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/names-baseline-stream.wav",
+        "sha256": "9e2bc8b7465a6c0ffd6d51904e8facb39d00d5a173573c032f5e6afe15b8b655",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "new_phrase",
+      "text": "Давай сначала послушаем, а потом спокойно попробуем ещё раз.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/new_phrase-baseline-full.wav",
+        "sha256": "5d70c00af3699a08a113bbc79d6a83446aa1a3ebec3579dc360971b32f872d48",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/new_phrase-baseline-stream.wav",
+        "sha256": "78a504d3de267c33ad76a4ad5532a57bba758656622667bfbf603925991074fc",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "sibilants",
+      "text": "Щётка шуршит, а ёжик тихо фырчит.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/sibilants-baseline-full.wav",
+        "sha256": "c7fba32fe2da85eeed31ac750a072ebc461e9ed40aae378a83506214977056a2",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/sibilants-baseline-stream.wav",
+        "sha256": "2e3dcce179936e54b253ddf393ede5d33facafe21e7072f2dfe60bdf3eba339b",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    },
+    {
+      "id": "story",
+      "text": "Кролик Мягкие Лапки посмотрел на далёкую звезду.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/story-baseline-full.wav",
+        "sha256": "f3ebb661925ac2bcba1221b8eef616043f0f24644539813e828f1bcacfc0f040",
+        "speaker_scope": "public_synthetic_vox555"
+      },
+      "b": {
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/story-baseline-stream.wav",
+        "sha256": "71e364d3ec0fb7e95ccecb2c9a96fe5b728b076c79d2ea867a99ae7a2d2a1b3f",
+        "speaker_scope": "public_synthetic_vox555"
+      }
+    }
+  ],
+  "originals": [
+    {
+      "id": "greeting",
+      "path": "/home/khugardin/Documents/dataset_tr/phrases_og/привет_я_мишка.wav",
+      "sha256": "ecc44ef9e2d77f4bc92f456670b4964fb8f519d4ee6cf0731491f36a589a9a48",
+      "speaker_scope": "approved_adult_original",
+      "source_relative_path": "phrases_og/привет_я_мишка.wav",
+      "source_sha256": "ecc44ef9e2d77f4bc92f456670b4964fb8f519d4ee6cf0731491f36a589a9a48",
+      "text": "привет, я мишка!",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "alignment_human_reviewed": false,
+      "base_voice_verified": false,
+      "style": "unreviewed_mixed_performances_preserved",
+      "same_text_vox555_render_available": false
+    },
+    {
+      "id": "numbers",
+      "path": "/home/khugardin/Documents/dataset_tr/phrases_og/а_теперь_наоборот_пять_четыре_три_два_один.wav",
+      "sha256": "e375f8799b7ad50e53dfc7c9c17435a45b450bb5a87afdf23dda34f93c695e38",
+      "speaker_scope": "approved_adult_original",
+      "source_relative_path": "phrases_og/а_теперь_наоборот_пять_четыре_три_два_один.wav",
+      "source_sha256": "e375f8799b7ad50e53dfc7c9c17435a45b450bb5a87afdf23dda34f93c695e38",
+      "text": "а теперь наоборот пять, четыре, три, два, один",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "alignment_human_reviewed": false,
+      "base_voice_verified": false,
+      "style": "unreviewed_mixed_performances_preserved",
+      "same_text_vox555_render_available": false
+    },
+    {
+      "id": "dialogue",
+      "path": "/home/khugardin/Documents/dataset_tr/phrases_og/как_у_тебя_настроение_можно_ответить_кнопкой.wav",
+      "sha256": "ecbd62d72c9ecb3b05e5f388b3223f7ff5473d41d987985d35e4fe208a5bef1c",
+      "speaker_scope": "approved_adult_original",
+      "source_relative_path": "phrases_og/как_у_тебя_настроение_можно_ответить_кнопкой.wav",
+      "source_sha256": "ecbd62d72c9ecb3b05e5f388b3223f7ff5473d41d987985d35e4fe208a5bef1c",
+      "text": "как у тебя настроение можно ответить кнопкой",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "alignment_human_reviewed": false,
+      "base_voice_verified": false,
+      "style": "unreviewed_mixed_performances_preserved",
+      "same_text_vox555_render_available": false
+    },
+    {
+      "id": "games",
+      "path": "/home/khugardin/Documents/dataset_tr/phrases_og/давай_поиграем.wav",
+      "sha256": "005b5f74760e3e182813e4d9880aef2b6fc92f83a1f0903402b46869d06b4e29",
+      "speaker_scope": "approved_adult_original",
+      "source_relative_path": "phrases_og/давай_поиграем.wav",
+      "source_sha256": "005b5f74760e3e182813e4d9880aef2b6fc92f83a1f0903402b46869d06b4e29",
+      "text": "давай поиграем",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "alignment_human_reviewed": false,
+      "base_voice_verified": false,
+      "style": "unreviewed_mixed_performances_preserved",
+      "same_text_vox555_render_available": false
+    },
+    {
+      "id": "weather_menu",
+      "path": "/home/khugardin/Documents/dataset_tr/phrases_og/что_хочешь_узнать.wav",
+      "sha256": "e41a554a9653525f9dacd36cf8d117c98a47271b0b1f65821a2cee04bdfa60f4",
+      "speaker_scope": "approved_adult_original",
+      "source_relative_path": "phrases_og/что_хочешь_узнать.wav",
+      "source_sha256": "e41a554a9653525f9dacd36cf8d117c98a47271b0b1f65821a2cee04bdfa60f4",
+      "text": "Что хочешь узнать? Один сегодняшний день, два -",
+      "transcript_status": "actual_small_asr_draft_unreviewed",
+      "alignment_human_reviewed": false,
+      "base_voice_verified": false,
+      "style": "unreviewed_mixed_performances_preserved",
+      "same_text_vox555_render_available": false
+    },
+    {
+      "id": "story_excerpt",
+      "path": "/home/khugardin/Documents/Codex/2026-11-16/project-manager/outputs/voice-project/dataset/full-corpus-v2/audio/rec_e37f5455c0391ddf_seg_0001.wav",
+      "sha256": "29e78c8cf117b9e393dd31ec35637a99dd6b4bb7ee07459035ca0a73b691d899",
+      "speaker_scope": "approved_adult_derived",
+      "source_relative_path": "skazki_og/Сказка Айболит.wav",
+      "source_sha256": "e37f5455c0391ddf1facb1715be987cfab950fbfec67c0e6c78ca8082698884c",
+      "text": "Сказка Айболит, автор Корней Чуковский. Добрый доктор",
+      "transcript_status": "actual_small_asr_draft_unreviewed",
+      "alignment_human_reviewed": false,
+      "base_voice_verified": false,
+      "style": "unreviewed_mixed_performances_preserved",
+      "same_text_vox555_render_available": false,
+      "fresh_original_frame_slice_exact": true,
+      "start_frame": 0,
+      "end_frame": 291060
+    },
+    {
+      "id": "current_reference_PHRASE_014",
+      "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/reference-PHRASE_014.wav",
+      "sha256": "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c",
+      "speaker_scope": "approved_adult_original",
+      "scope": "ExactSHA match to approvedadultoriginal, currenthistoricalmodelreference",
+      "same_text_vox555_render_available": false,
+      "source_relative_path": "phrases_og/один_два_или_три_тяжело_четыре_или_пять_спокойно_шесть_или_семь_хорошо.wav",
+      "source_sha256": "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c",
+      "text": "один, два или три тяжело. четыре или пять спокойно. шесть или семь хорошо",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "base_voice_verified": false,
+      "style": "unreviewed_mixed_performances_preserved"
+    }
+  ],
+  "provenance_limits": [
+    "Adult narrator corpus includes unreviewed mixed character performances; no base-voice-only claim.",
+    "Two checkpoint555 dev texts and ten phonetics texts have no exact original-corpus row match.",
+    "Weather original is a menu mentioning weather, not a spoken current temperature baseline."
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "historical_manifest_path": "/home/khugardin/Documents/Codex/2026-11-16/project-manager/outputs/mishka-remote-stand/models/MODEL_MANIFEST.json",
+  "historical_manifest_sha256": "8a85cfc1b814ff6563cd8a47cfac1d52ea6bb73996cce0cd31fc70b48d6a2a9b",
+  "model_route": "vox555",
+  "base_required_files": [
+    {
+      "file": "audiovae.pth",
+      "bytes": 376951122,
+      "sha256": "94b5d51e107e0507d4acc976cfdadb64edd6fd06d1f751dadbf2fd1594274bf1",
+      "availability": "historically verified remote base; not included in LoRA Desktop milestones"
+    },
+    {
+      "file": "config.json",
+      "bytes": 4336,
+      "sha256": "405f0dcd92f7feba6011ed4eac5c8d4f74cba9712f07fd5cfa3063bbdd95402c",
+      "availability": "historically verified remote base; not included in LoRA Desktop milestones"
+    },
+    {
+      "file": "model.safetensors",
+      "bytes": 4580080592,
+      "sha256": "f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d",
+      "availability": "historically verified remote base; not included in LoRA Desktop milestones"
+    },
+    {
+      "file": "special_tokens_map.json",
+      "bytes": 1632,
+      "sha256": "068594063e37662c02b21acf42ebb334ef6a74fb810e68a2368f88f08351de76",
+      "source_url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/special_tokens_map.json",
+      "status": "fetched metadata only; training runtime copy not currently inspected"
+    },
+    {
+      "file": "tokenization_voxcpm2.py",
+      "bytes": 2895,
+      "sha256": "84489ea32b6ee0cae22ed5480cacb6df85c46624c3119be9a2021c3649a12729",
+      "source_url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/tokenization_voxcpm2.py",
+      "status": "fetched metadata only; training runtime copy not currently inspected"
+    },
+    {
+      "file": "tokenizer.json",
+      "bytes": 3676772,
+      "sha256": "f8984687e4a92a3503d521396d454b7d68e9fdaab2a0288eb3536c7c1aa4bc20",
+      "source_url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/tokenizer.json",
+      "status": "fetched metadata only; training runtime copy not currently inspected"
+    },
+    {
+      "file": "tokenizer_config.json",
+      "bytes": 5059,
+      "sha256": "e78a3ebb48a0b9437efd1823b6b726c823da89e49dd8bcc90c02419d9baa772b",
+      "source_url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/tokenizer_config.json",
+      "status": "fetched metadata only; training runtime copy not currently inspected"
+    }
+  ],
+  "base_required_bytes": 4960722408,
+  "base_local_search": "Not found in recorded bounded filename searches; not a claim about every mounted filesystem or inaccessible directory. Desktop candidates are Qwen765, not compatible Vox base.",
+  "historical_pretrained_path": "/workspace/models/voxcpm2",
+  "local_adapter_root": "/home/khugardin/Documents/Codex/2026-11-16/project-manager/outputs/voice-project/training/voxcpm2-full-20261116/checkpoints/step_0000555",
+  "adapter_sha256": "1142e35de2eb2bcad19bae70a35a5360b90a2909834c83c7a7ffb41e226c5270",
+  "runtime_pth_role": "14552-byte training RNG/runtime resume state, not standalone inference weights; not deserialized",
+  "source_revision": "300e4260b509066151d623dc9c0aa922cf82232b",
+  "source_runtime_requirement": "Pinned Vox source and complete hash-inventoried operator manifest; Transformers5.3.0, exact worker CUDA bfloat16/optimization/warmup path. No compatible local Vox serving environment established.",
+  "reference_audio": {
+    "id": "current_reference_PHRASE_014",
+    "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/reference-PHRASE_014.wav",
+    "sha256": "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c",
+    "speaker_scope": "approved_adult_original",
+    "scope": "ExactSHA match to approvedadultoriginal, currenthistoricalmodelreference",
+    "same_text_vox555_render_available": false,
+    "source_relative_path": "phrases_og/один_два_или_три_тяжело_четыре_или_пять_спокойно_шесть_или_семь_хорошо.wav",
+    "source_sha256": "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c",
+    "text": "один, два или три тяжело. четыре или пять спокойно. шесть или семь хорошо",
+    "transcript_status": "supplied_text_acoustically_unverified",
+    "base_voice_verified": false,
+    "style": "unreviewed_mixed_performances_preserved"
+  },
+  "resources_observed": {
+    "cpu_ram_available_mib_initial": 1297,
+    "cpu_ram_available_mib_later": 957,
+    "swap": false,
+    "gpu": "RTX2060",
+    "compute_capability": "7.5",
+    "vram_total_mib": 6144,
+    "vram_free_mib": 4967,
+    "historical_555_comparison_peak_reserved_bytes": 6320816128,
+    "historical_memory_not_portable_capacity_proof": true,
+    "cuda_bfloat16_runtime_compatibility": "NOT RUN on cc7.5; no guarantee"
+  },
+  "local_render_status": "BLOCKED: no located complete base/environment; no resource ACK to load while full baseline runs. No downloads/install/model loading attempted."
+}

@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "scope": "Public fixtures/authorized adult source transcript candidates only. Current-contract reference E5AF, RVCoff.",
+  "expected_identity": {
+    "source_revision": "300e4260b509066151d623dc9c0aa922cf82232b",
+    "model_sha256": "f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d",
+    "adapter_sha256": "1142e35de2eb2bcad19bae70a35a5360b90a2909834c83c7a7ffb41e226c5270",
+    "reference_sha256": "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c"
+  },
+  "cases": [
+    {
+      "id": "greeting",
+      "family": "greeting",
+      "text": "привет, я мишка!",
+      "speaker_scope": "approved_adult_original",
+      "original_sha256": "ecc44ef9e2d77f4bc92f456670b4964fb8f519d4ee6cf0731491f36a589a9a48",
+      "original_catalogue_asset": "original-target-greeting.wav",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "human_transcript_verified": false,
+      "parity_grade": "NOT RUN; candidate text must be verified against original before same-text voice scoring",
+      "caveat": "Supplied human text preserved, acoustic verification pending."
+    },
+    {
+      "id": "numbers",
+      "family": "numbers",
+      "text": "а теперь наоборот пять, четыре, три, два, один",
+      "speaker_scope": "approved_adult_original",
+      "original_sha256": "e375f8799b7ad50e53dfc7c9c17435a45b450bb5a87afdf23dda34f93c695e38",
+      "original_catalogue_asset": "original-target-numbers.wav",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "human_transcript_verified": false,
+      "parity_grade": "NOT RUN; candidate text must be verified against original before same-text voice scoring",
+      "caveat": "Supplied human text preserved, acoustic verification pending."
+    },
+    {
+      "id": "dialogue",
+      "family": "dialogue",
+      "text": "как у тебя настроение можно ответить кнопкой",
+      "speaker_scope": "approved_adult_original",
+      "original_sha256": "ecbd62d72c9ecb3b05e5f388b3223f7ff5473d41d987985d35e4fe208a5bef1c",
+      "original_catalogue_asset": "original-target-dialogue.wav",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "human_transcript_verified": false,
+      "parity_grade": "NOT RUN; candidate text must be verified against original before same-text voice scoring",
+      "caveat": "Supplied human text preserved, acoustic verification pending."
+    },
+    {
+      "id": "games",
+      "family": "games",
+      "text": "давай поиграем",
+      "speaker_scope": "approved_adult_original",
+      "original_sha256": "005b5f74760e3e182813e4d9880aef2b6fc92f83a1f0903402b46869d06b4e29",
+      "original_catalogue_asset": "original-target-games.wav",
+      "transcript_status": "supplied_text_acoustically_unverified",
+      "human_transcript_verified": false,
+      "parity_grade": "NOT RUN; candidate text must be verified against original before same-text voice scoring",
+      "caveat": "Supplied human text preserved, acoustic verification pending."
+    },
+    {
+      "id": "weather_menu",
+      "family": "weather_menu",
+      "text": "Что хочешь узнать? Один сегодняшний день, два -",
+      "speaker_scope": "approved_adult_original",
+      "original_sha256": "e41a554a9653525f9dacd36cf8d117c98a47271b0b1f65821a2cee04bdfa60f4",
+      "original_catalogue_asset": "original-target-weather_menu.wav",
+      "transcript_status": "actual_small_asr_draft_unreviewed",
+      "human_transcript_verified": false,
+      "parity_grade": "NOT RUN; candidate text must be verified against original before same-text voice scoring",
+      "caveat": "Menu mentioning weather, not current temperature. Supplied text is incomplete; do not score same-text parity."
+    },
+    {
+      "id": "story_excerpt",
+      "family": "story_excerpt",
+      "text": "Сказка Айболит, автор Корней Чуковский. Добрый доктор",
+      "speaker_scope": "approved_adult_derived",
+      "original_sha256": "29e78c8cf117b9e393dd31ec35637a99dd6b4bb7ee07459035ca0a73b691d899",
+      "original_catalogue_asset": "original-target-story_excerpt.wav",
+      "transcript_status": "actual_small_asr_draft_unreviewed",
+      "human_transcript_verified": false,
+      "parity_grade": "NOT RUN; candidate text must be verified against original before same-text voice scoring",
+      "caveat": "Unreviewed story ASR/alignment; do not score same-text parity."
+    },
+    {
+      "id": "weather_numeric_synthetic",
+      "family": "weather",
+      "text": "Сегодня минус два градуса по Цельсию. Завтра плюс двадцать один градус.",
+      "speaker_scope": "public_synthetic_vox555",
+      "original_sha256": null,
+      "human_transcript_verified": false,
+      "parity_grade": "NOT RUN; synthetic pronunciation/transport only, no adult-original weather counterpart",
+      "caveat": "Synthetic values, not a current forecast or product data."
+    }
+  ]
+}

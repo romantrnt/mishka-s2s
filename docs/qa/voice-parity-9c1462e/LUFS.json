@@ -1,0 +1,219 @@
+{
+  "method": "ffmpeg ebur128=peak=true, null output, sequential files; 0.1 LUFS report precision",
+  "command": [
+    "ffmpeg",
+    "-hide_banner",
+    "-nostats",
+    "-i",
+    "FILE",
+    "-filter:a",
+    "ebur128=peak=true",
+    "-f",
+    "null",
+    "-"
+  ],
+  "pairs": [
+    {
+      "id": "castle",
+      "assets": [
+        {
+          "label": "a",
+          "file": "castle-a-level-matched.wav",
+          "sha256": "f3e94e02bc0766d2b41d76aa434ffb53b53f0ba140b3f0bc19626708ec424ea9",
+          "integrated_lufs": -24.3,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "castle-b-level-matched.wav",
+          "sha256": "4b69a62d03361b8a7497b79de73c161032fe0a3aedc0055f70b1ce3e23062177",
+          "integrated_lufs": -24.3,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "declension",
+      "assets": [
+        {
+          "label": "a",
+          "file": "declension-a-level-matched.wav",
+          "sha256": "9def22ece8018ef00bc81ad493190ff8dffa600d4e54487e748fc5c9415c7744",
+          "integrated_lufs": -24.7,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "declension-b-level-matched.wav",
+          "sha256": "e287570d6f7d82aee2bb427f758f22c85483a33871369dc4e145390a961a42e9",
+          "integrated_lufs": -24.7,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "demo",
+      "assets": [
+        {
+          "label": "a",
+          "file": "demo-a-level-matched.wav",
+          "sha256": "3d2868a5c52642c453e275cc4cd00b7de871bd308cd72307ea78baf218e95579",
+          "integrated_lufs": -25.0,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "demo-b-level-matched.wav",
+          "sha256": "c1686245ec3a023ab338110442aead5ab1b174c696fa53bda9f7321c80dbeee7",
+          "integrated_lufs": -25.0,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "game",
+      "assets": [
+        {
+          "label": "a",
+          "file": "game-a-level-matched.wav",
+          "sha256": "e64b84e977fe3ac7f9dd1960162d99b2e4d3acbb7aeaaac179fbb24cfa35a0aa",
+          "integrated_lufs": -24.2,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "game-b-level-matched.wav",
+          "sha256": "abb8518a07008fa742efe894b6d8c87fe3dd0678a6a55ed24c20d14f341c99fa",
+          "integrated_lufs": -24.2,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "greeting",
+      "assets": [
+        {
+          "label": "a",
+          "file": "greeting-a-level-matched.wav",
+          "sha256": "043fb597154970fd7bcce31eac120cab6d29f59fb173a1a767a0745f63d3d8a9",
+          "integrated_lufs": -24.9,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "greeting-b-level-matched.wav",
+          "sha256": "0f1b159d9d23b816d9bc9d4ff5bdb627a6977e202755a2c10effcc64193d8f9d",
+          "integrated_lufs": -24.9,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "lock",
+      "assets": [
+        {
+          "label": "a",
+          "file": "lock-a-level-matched.wav",
+          "sha256": "74d318a8fc30550d06a9cf684f786a90de246f0219157eb0b2ac689a2b0d4601",
+          "integrated_lufs": -24.2,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "lock-b-level-matched.wav",
+          "sha256": "50432784db1ec33b332beafa4409239b044ed57649537f7a0425c5065bfc6cce",
+          "integrated_lufs": -24.2,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "names",
+      "assets": [
+        {
+          "label": "a",
+          "file": "names-a-level-matched.wav",
+          "sha256": "0da7b02dec10125d48276f293005dcd0db56c645d6912b1dade64e1bd9a8c44f",
+          "integrated_lufs": -24.5,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "names-b-level-matched.wav",
+          "sha256": "d8b28ae3e032c74b6bff49d98a877ac1607bbf49b2936fcba2f9e778e051f581",
+          "integrated_lufs": -24.5,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "new_phrase",
+      "assets": [
+        {
+          "label": "a",
+          "file": "new_phrase-a-level-matched.wav",
+          "sha256": "41cce6f83140580a0606bbcfb33aab854b4b638935bd701ac90c597f22831f02",
+          "integrated_lufs": -24.0,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "new_phrase-b-level-matched.wav",
+          "sha256": "ff83d64f62576d940bb415581f09960d6d04ab84ff24a6eef0b3c6ff08d00425",
+          "integrated_lufs": -24.0,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "sibilants",
+      "assets": [
+        {
+          "label": "a",
+          "file": "sibilants-a-level-matched.wav",
+          "sha256": "968808a56cb364772b0644f26a2e4cf0032c8b5640516b55141206a5d695aeb4",
+          "integrated_lufs": -24.4,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "sibilants-b-level-matched.wav",
+          "sha256": "078c2e512ee21b737d9a98f71c6ba3c29842b367435036656e1fa266290c9c01",
+          "integrated_lufs": -24.4,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    },
+    {
+      "id": "story",
+      "assets": [
+        {
+          "label": "a",
+          "file": "story-a-level-matched.wav",
+          "sha256": "679afb4e3a3b3f513ad07b2248a18c7ebe93821ee67f148c5819c0380139409d",
+          "integrated_lufs": -24.1,
+          "exit": 0
+        },
+        {
+          "label": "b",
+          "file": "story-b-level-matched.wav",
+          "sha256": "4410fa2bbdc81304b4481ab6c51d69ea6e424e7e063ef82236718373514ca424",
+          "integrated_lufs": -24.1,
+          "exit": 0
+        }
+      ],
+      "absolute_delta_lu": 0.0
+    }
+  ],
+  "maximum_pair_delta_lu": 0.0,
+  "voice_identity_or_listening_acceptance": false
+}

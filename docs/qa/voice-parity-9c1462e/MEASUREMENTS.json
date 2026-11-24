@@ -1,0 +1,1166 @@
+{
+  "source_commit": "9c1462e2a3176525b045edc25f77fce74fcfc2e9",
+  "scope": "Only authorized adult narrator originals and public synthetic Vox555 WAVs; no real visit/name/profile/child audio.",
+  "pairs": [
+    {
+      "id": "castle",
+      "text": "На горе стоит старинный замок.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 130560,
+        "duration_s": 2.72,
+        "peak": 0.710906982421875,
+        "rms_dbfs": -18.15285824604586,
+        "active_rms_dbfs": -16.7075916477246,
+        "dc": -0.00019545788858451094,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.55946421306949,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.33000000000000007,
+        "internal_pauses_s": [],
+        "active_fraction": 0.7169117647058824,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 100,
+          "median_hz": 99.44137921683837,
+          "p10_hz": 91.39852316285653,
+          "p90_hz": 150.16502218780735,
+          "median_strength": 0.6140716860065181
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 130560,
+        "duration_s": 2.72,
+        "peak": 0.710906982421875,
+        "rms_dbfs": -18.154098140348275,
+        "active_rms_dbfs": -16.70883165338813,
+        "dc": -0.00019803818534402286,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.56542810547572,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.33000000000000007,
+        "internal_pauses_s": [],
+        "active_fraction": 0.7169117647058824,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 100,
+          "median_hz": 99.44732094917006,
+          "p10_hz": 91.3907495326625,
+          "p90_hz": 150.16292159247922,
+          "median_strength": 0.613995385154
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999657647044312,
+        "envelope_correlation": 0.9999984842798657,
+        "difference_rms_dbfs": -59.79712792749205,
+        "max_absolute_difference": 0.01153564453125,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 4.085101080583667e-09
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -6.292408352275399,
+          -6.291168346611865
+        ]
+      },
+      "assets": {
+        "a": "castle-a-level-matched.wav",
+        "b": "castle-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "declension",
+      "text": "Позови Машу и Мишу, а потом расскажи о Маше.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 238080,
+        "duration_s": 4.96,
+        "peak": 0.828094482421875,
+        "rms_dbfs": -19.399334989528736,
+        "active_rms_dbfs": -17.616536240306267,
+        "dc": -0.00015852797415948682,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.69204765986143,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.41000000000000014,
+        "internal_pauses_s": [
+          0.33,
+          0.54
+        ],
+        "active_fraction": 0.6633064516129032,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 102,
+          "median_hz": 101.93969515711721,
+          "p10_hz": 92.45736518178042,
+          "p90_hz": 159.89474678677308,
+          "median_strength": 0.6279715440864471
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 238080,
+        "duration_s": 4.96,
+        "peak": 0.828094482421875,
+        "rms_dbfs": -19.398262363647238,
+        "active_rms_dbfs": -17.615463600923157,
+        "dc": -0.00015788155217324535,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.69251071103882,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.41000000000000014,
+        "internal_pauses_s": [
+          0.33,
+          0.54
+        ],
+        "active_fraction": 0.6633064516129032,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 100,
+          "median_hz": 101.94336268214542,
+          "p10_hz": 92.72155765594329,
+          "p90_hz": 159.58983087632708,
+          "median_strength": 0.6281823281625051
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999556332721037,
+        "envelope_correlation": 0.9999984950335586,
+        "difference_rms_dbfs": -59.91718596804232,
+        "max_absolute_difference": 0.0185546875,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 6.776307391201835e-09
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -5.383463759693731,
+          -5.384536399076842
+        ]
+      },
+      "assets": {
+        "a": "declension-a-level-matched.wav",
+        "b": "declension-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "demo",
+      "text": "Это демо нашей новой игры.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 168960,
+        "duration_s": 3.52,
+        "peak": 0.699188232421875,
+        "rms_dbfs": -19.007833279135347,
+        "active_rms_dbfs": -17.289953135909307,
+        "dc": -4.567702611287435e-06,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.442196451013785,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.31000000000000005,
+        "internal_pauses_s": [
+          0.25,
+          0.26
+        ],
+        "active_fraction": 0.6732954545454546,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 107,
+          "median_hz": 98.10246632126989,
+          "p10_hz": 90.82492746080595,
+          "p90_hz": 139.83022707917686,
+          "median_strength": 0.6138441889681443
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 168960,
+        "duration_s": 3.52,
+        "peak": 0.695281982421875,
+        "rms_dbfs": -19.009119574508457,
+        "active_rms_dbfs": -17.29123947159907,
+        "dc": 9.663177259040601e-08,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.431795515473695,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.31000000000000005,
+        "internal_pauses_s": [
+          0.25,
+          0.26
+        ],
+        "active_fraction": 0.6732954545454546,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 107,
+          "median_hz": 98.1044984156892,
+          "p10_hz": 90.82614177694458,
+          "p90_hz": 139.83249566214474,
+          "median_strength": 0.6150780739505409
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999646895528158,
+        "envelope_correlation": 0.9999988703749391,
+        "difference_rms_dbfs": -60.51768940920095,
+        "max_absolute_difference": 0.01123046875,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 4.562891681966522e-09
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -5.710046864090691,
+          -5.70876052840093
+        ]
+      },
+      "assets": {
+        "a": "demo-a-level-matched.wav",
+        "b": "demo-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "game",
+      "text": "Обезьяна сидит на ветке, а слон стоит внизу.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 215040,
+        "duration_s": 4.48,
+        "peak": 0.734344482421875,
+        "rms_dbfs": -19.003427595273816,
+        "active_rms_dbfs": -17.715150712269626,
+        "dc": -0.00012752087343306768,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.80980035227403,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.4200000000000008,
+        "internal_pauses_s": [
+          0.25
+        ],
+        "active_fraction": 0.7433035714285714,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 144,
+          "median_hz": 97.15885509106445,
+          "p10_hz": 92.0102542961238,
+          "p90_hz": 103.88311414537378,
+          "median_strength": 0.6051102704214019
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 215040,
+        "duration_s": 4.48,
+        "peak": 0.734344482421875,
+        "rms_dbfs": -19.0034548306489,
+        "active_rms_dbfs": -17.715178066493237,
+        "dc": -0.00012435827936444963,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.812841900657595,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.4200000000000008,
+        "internal_pauses_s": [
+          0.25
+        ],
+        "active_fraction": 0.7433035714285714,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 144,
+          "median_hz": 97.15450969288938,
+          "p10_hz": 92.00721542266638,
+          "p90_hz": 103.88397134424696,
+          "median_strength": 0.6049819586105112
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999491813927049,
+        "envelope_correlation": 0.9999986112183993,
+        "difference_rms_dbfs": -58.9328847579302,
+        "max_absolute_difference": 0.0234375,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 8.2825374639465e-09
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -5.28484928773037,
+          -5.284821933506762
+        ]
+      },
+      "assets": {
+        "a": "game-a-level-matched.wav",
+        "b": "game-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "greeting",
+      "text": "Здорово! Я Мишка. Давай играть.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 161280,
+        "duration_s": 3.36,
+        "peak": 0.796844482421875,
+        "rms_dbfs": -20.59086831716686,
+        "active_rms_dbfs": -18.205562302654396,
+        "dc": -1.7181275382874504e-06,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -49.15984489164943,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.48,
+        "internal_pauses_s": [
+          0.41000000000000003,
+          0.25
+        ],
+        "active_fraction": 0.5773809523809523,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 52,
+          "median_hz": 121.8848323713963,
+          "p10_hz": 95.39437743868515,
+          "p90_hz": 196.39301235720052,
+          "median_strength": 0.6442089762236902
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 161280,
+        "duration_s": 3.36,
+        "peak": 0.796844482421875,
+        "rms_dbfs": -20.590676759158114,
+        "active_rms_dbfs": -18.20537071157051,
+        "dc": -1.4524611215742807e-06,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -49.15741649946855,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.48,
+        "internal_pauses_s": [
+          0.41000000000000003,
+          0.25
+        ],
+        "active_fraction": 0.5773809523809523,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 52,
+          "median_hz": 121.8892135105104,
+          "p10_hz": 95.39081907659707,
+          "p90_hz": 196.38797096502006,
+          "median_strength": 0.6444944182406704
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.999957415867399,
+        "envelope_correlation": 0.9999986054112162,
+        "difference_rms_dbfs": -61.28796931384038,
+        "max_absolute_difference": 0.01171875,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 9.74382938167875e-09
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -4.794437697345602,
+          -4.794629288429491
+        ]
+      },
+      "assets": {
+        "a": "greeting-a-level-matched.wav",
+        "b": "greeting-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "lock",
+      "text": "На двери висит крепкий замок.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 122880,
+        "duration_s": 2.56,
+        "peak": 0.640594482421875,
+        "rms_dbfs": -19.453033907938064,
+        "active_rms_dbfs": -17.923391047016548,
+        "dc": -0.00016992539167404175,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.77351993346914,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.41999999999999993,
+        "internal_pauses_s": [],
+        "active_fraction": 0.703125,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 49,
+          "median_hz": 97.92137857848137,
+          "p10_hz": 91.97890348225344,
+          "p90_hz": 127.114323022382,
+          "median_strength": 0.6123525586048799
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 122880,
+        "duration_s": 2.56,
+        "peak": 0.640594482421875,
+        "rms_dbfs": -19.45308203057061,
+        "active_rms_dbfs": -17.923439302853836,
+        "dc": -0.0001703230043252309,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.78877434344361,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.41999999999999993,
+        "internal_pauses_s": [],
+        "active_fraction": 0.703125,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 49,
+          "median_hz": 97.90871761199226,
+          "p10_hz": 91.97890208521673,
+          "p90_hz": 127.11696419552557,
+          "median_strength": 0.6119648521150832
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999601122198138,
+        "envelope_correlation": 0.9999985938349689,
+        "difference_rms_dbfs": -60.43436798270107,
+        "max_absolute_difference": 0.010498046875,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 3.147518091626846e-09
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -5.076608952983449,
+          -5.076560697146164
+        ]
+      },
+      "assets": {
+        "a": "lock-a-level-matched.wav",
+        "b": "lock-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "names",
+      "text": "Алёна и Семён позвали Варвару.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 168960,
+        "duration_s": 3.52,
+        "peak": 0.874969482421875,
+        "rms_dbfs": -17.45619033901093,
+        "active_rms_dbfs": -15.531873833905474,
+        "dc": -4.9578962904034236e-05,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -47.43536354445609,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.3599999999999999,
+        "internal_pauses_s": [
+          0.6
+        ],
+        "active_fraction": 0.6420454545454546,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 109,
+          "median_hz": 137.15167362161372,
+          "p10_hz": 90.94282317042367,
+          "p90_hz": 196.80421641756456,
+          "median_strength": 0.671346735221626
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 168960,
+        "duration_s": 3.52,
+        "peak": 0.874969482421875,
+        "rms_dbfs": -17.454798163716124,
+        "active_rms_dbfs": -15.530481641443963,
+        "dc": -4.86198699835575e-05,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -47.435083527822584,
+        "leading_quiet_s": 0.27,
+        "trailing_quiet_s": 0.3599999999999999,
+        "internal_pauses_s": [
+          0.6
+        ],
+        "active_fraction": 0.6420454545454546,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 108,
+          "median_hz": 138.17086543302926,
+          "p10_hz": 91.49524739867111,
+          "p90_hz": 196.82747099312033,
+          "median_strength": 0.6726309782726703
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999723445664107,
+        "envelope_correlation": 0.9999992219334934,
+        "difference_rms_dbfs": -60.02536941641297,
+        "max_absolute_difference": 0.00927734375,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 1.0212208074165504e-08
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -7.468126166094525,
+          -7.469518358556035
+        ]
+      },
+      "assets": {
+        "a": "names-a-level-matched.wav",
+        "b": "names-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "new_phrase",
+      "text": "Давай сначала послушаем, а потом спокойно попробуем ещё раз.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 230400,
+        "duration_s": 4.8,
+        "peak": 0.839813232421875,
+        "rms_dbfs": -17.99774864418731,
+        "active_rms_dbfs": -17.01737582626132,
+        "dc": -5.798035197787815e-05,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -47.988986223489505,
+        "leading_quiet_s": 0.2,
+        "trailing_quiet_s": 0.27000000000000046,
+        "internal_pauses_s": [
+          0.39
+        ],
+        "active_fraction": 0.7979166666666667,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 139,
+          "median_hz": 116.90202720051286,
+          "p10_hz": 92.97953532462557,
+          "p90_hz": 170.23286118799982,
+          "median_strength": 0.6360510637467334
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 230400,
+        "duration_s": 4.8,
+        "peak": 0.839813232421875,
+        "rms_dbfs": -17.997929212771567,
+        "active_rms_dbfs": -17.017556289418177,
+        "dc": -5.772060818142361e-05,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -47.9871492864154,
+        "leading_quiet_s": 0.2,
+        "trailing_quiet_s": 0.27000000000000046,
+        "internal_pauses_s": [
+          0.39
+        ],
+        "active_fraction": 0.7979166666666667,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 139,
+          "median_hz": 116.90290933431257,
+          "p10_hz": 92.97882262343569,
+          "p90_hz": 170.23161984274734,
+          "median_strength": 0.6358137100769921
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999616117745057,
+        "envelope_correlation": 0.9999983392619438,
+        "difference_rms_dbfs": -59.14553483177546,
+        "max_absolute_difference": 0.0103759765625,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 5.878997916128414e-09
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -5.98262417373868,
+          -5.982443710581819
+        ]
+      },
+      "assets": {
+        "a": "new_phrase-a-level-matched.wav",
+        "b": "new_phrase-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "sibilants",
+      "text": "Щётка шуршит, а ёжик тихо фырчит.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 145920,
+        "duration_s": 3.04,
+        "peak": 0.671844482421875,
+        "rms_dbfs": -18.50582554335674,
+        "active_rms_dbfs": -17.42471719169355,
+        "dc": -0.00020106779901604902,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -47.576215753108244,
+        "leading_quiet_s": 0.04,
+        "trailing_quiet_s": 0.20000000000000018,
+        "internal_pauses_s": [
+          0.25
+        ],
+        "active_fraction": 0.7796052631578947,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 70,
+          "median_hz": 111.17515828880366,
+          "p10_hz": 98.87595535667137,
+          "p90_hz": 231.36028495044388,
+          "median_strength": 0.6420279121366745
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 145920,
+        "duration_s": 3.04,
+        "peak": 0.671844482421875,
+        "rms_dbfs": -18.50639606187273,
+        "active_rms_dbfs": -17.425287495155136,
+        "dc": -0.00020372198339094194,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -47.58108590316376,
+        "leading_quiet_s": 0.04,
+        "trailing_quiet_s": 0.20000000000000018,
+        "internal_pauses_s": [
+          0.25
+        ],
+        "active_fraction": 0.7796052631578947,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 70,
+          "median_hz": 111.17053078297727,
+          "p10_hz": 98.87731650085901,
+          "p90_hz": 231.34575314032867,
+          "median_strength": 0.6423705801098396
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999502797573085,
+        "envelope_correlation": 0.9999983629964903,
+        "difference_rms_dbfs": -58.53028061194932,
+        "max_absolute_difference": 0.01171875,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 32.5,
+        "removed_energy_fraction": 9.735134179744314e-10
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -5.575282808306451,
+          -5.574712504844863
+        ]
+      },
+      "assets": {
+        "a": "sibilants-a-level-matched.wav",
+        "b": "sibilants-b-level-matched.wav"
+      }
+    },
+    {
+      "id": "story",
+      "text": "Кролик Мягкие Лапки посмотрел на далёкую звезду.",
+      "scope": "Historical62dd254 Vox555/current-model-adapter-reference contract; same-text buffered/native transport comparison, NOT adult-original parity",
+      "a": {
+        "sample_rate": 48000,
+        "frames": 184320,
+        "duration_s": 3.84,
+        "peak": 0.789031982421875,
+        "rms_dbfs": -17.011359726945837,
+        "active_rms_dbfs": -16.206005417492662,
+        "dc": -6.4601997534434e-05,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -47.54921321304824,
+        "leading_quiet_s": 0.17,
+        "trailing_quiet_s": 0.3799999999999999,
+        "internal_pauses_s": [],
+        "active_fraction": 0.8307291666666666,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 144,
+          "median_hz": 115.19502554419245,
+          "p10_hz": 99.90891486889967,
+          "p90_hz": 151.0602018483683,
+          "median_strength": 0.6705033398379059
+        }
+      },
+      "b": {
+        "sample_rate": 48000,
+        "frames": 184320,
+        "duration_s": 3.84,
+        "peak": 0.789031982421875,
+        "rms_dbfs": -17.01057588694117,
+        "active_rms_dbfs": -16.20522145518674,
+        "dc": -6.540401114357842e-05,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -47.552352283462014,
+        "leading_quiet_s": 0.17,
+        "trailing_quiet_s": 0.3799999999999999,
+        "internal_pauses_s": [],
+        "active_fraction": 0.8307291666666666,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 144,
+          "median_hz": 115.20284096548318,
+          "p10_hz": 99.908895577141,
+          "p90_hz": 151.05211381891905,
+          "median_strength": 0.6721186558574551
+        }
+      },
+      "comparison": {
+        "duration_delta_ms": 0.0,
+        "waveform_correlation": 0.9999742986907271,
+        "envelope_correlation": 0.9999985125534039,
+        "difference_rms_dbfs": -59.90042560140769,
+        "max_absolute_difference": 0.00994873046875,
+        "frames_equal": true
+      },
+      "game_onset_probe": {
+        "scope": "SciPy resampling surrogate plus current game first-subchunk trim rule; excludes fade/app execution/phoneme recognition",
+        "threshold": 0.004,
+        "retained_pre_onset_ms": 15,
+        "removed_ms": 14.333333333333334,
+        "removed_energy_fraction": 3.09550741948142e-09
+      },
+      "level_matching": {
+        "kind": "active-frame RMS,not EBU integrated loudness",
+        "target_dbfs": -23.0,
+        "gains_db": [
+          -6.793994582507338,
+          -6.7947785448132585
+        ]
+      },
+      "assets": {
+        "a": "story-a-level-matched.wav",
+        "b": "story-b-level-matched.wav"
+      }
+    }
+  ],
+  "originals": [
+    {
+      "id": "greeting",
+      "provenance": {
+        "id": "greeting",
+        "path": "/home/khugardin/Documents/dataset_tr/phrases_og/привет_я_мишка.wav",
+        "sha256": "ecc44ef9e2d77f4bc92f456670b4964fb8f519d4ee6cf0731491f36a589a9a48",
+        "speaker_scope": "approved_adult_original",
+        "source_relative_path": "phrases_og/привет_я_мишка.wav",
+        "source_sha256": "ecc44ef9e2d77f4bc92f456670b4964fb8f519d4ee6cf0731491f36a589a9a48",
+        "text": "привет, я мишка!",
+        "transcript_status": "supplied_text_acoustically_unverified",
+        "alignment_human_reviewed": false,
+        "base_voice_verified": false,
+        "style": "unreviewed_mixed_performances_preserved",
+        "same_text_vox555_render_available": false
+      },
+      "metrics": {
+        "sample_rate": 22050,
+        "frames": 58877,
+        "duration_s": 2.67015873015873,
+        "peak": 0.68701171875,
+        "rms_dbfs": -19.970690295554107,
+        "active_rms_dbfs": -17.97375645135412,
+        "dc": -0.00025063267904513857,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -49.12654161459805,
+        "leading_quiet_s": 0.13,
+        "trailing_quiet_s": 0.18015873015872996,
+        "internal_pauses_s": [
+          0.08,
+          0.33,
+          0.23
+        ],
+        "active_fraction": 0.6305970149253731,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 49,
+          "median_hz": 124.74410110529207,
+          "p10_hz": 88.83206417932693,
+          "p90_hz": 197.23048712920203,
+          "median_strength": 0.6033120521423602
+        }
+      },
+      "asset": "original-target-greeting.wav"
+    },
+    {
+      "id": "numbers",
+      "provenance": {
+        "id": "numbers",
+        "path": "/home/khugardin/Documents/dataset_tr/phrases_og/а_теперь_наоборот_пять_четыре_три_два_один.wav",
+        "sha256": "e375f8799b7ad50e53dfc7c9c17435a45b450bb5a87afdf23dda34f93c695e38",
+        "speaker_scope": "approved_adult_original",
+        "source_relative_path": "phrases_og/а_теперь_наоборот_пять_четыре_три_два_один.wav",
+        "source_sha256": "e375f8799b7ad50e53dfc7c9c17435a45b450bb5a87afdf23dda34f93c695e38",
+        "text": "а теперь наоборот пять, четыре, три, два, один",
+        "transcript_status": "supplied_text_acoustically_unverified",
+        "alignment_human_reviewed": false,
+        "base_voice_verified": false,
+        "style": "unreviewed_mixed_performances_preserved",
+        "same_text_vox555_render_available": false
+      },
+      "metrics": {
+        "sample_rate": 22050,
+        "frames": 163997,
+        "duration_s": 7.43750566893424,
+        "peak": 0.732574462890625,
+        "rms_dbfs": -20.967819106208523,
+        "active_rms_dbfs": -18.329344530107047,
+        "dc": -0.00034134944934682495,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -49.90045883127784,
+        "leading_quiet_s": 0.17,
+        "trailing_quiet_s": 0.2875056689342408,
+        "internal_pauses_s": [
+          0.23,
+          0.44,
+          0.46,
+          0.54,
+          0.5700000000000001,
+          0.48
+        ],
+        "active_fraction": 0.5442359249329759,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 117,
+          "median_hz": 123.61074796047332,
+          "p10_hz": 91.09906595487472,
+          "p90_hz": 192.2725479061689,
+          "median_strength": 0.6563787483348676
+        }
+      },
+      "asset": "original-target-numbers.wav"
+    },
+    {
+      "id": "dialogue",
+      "provenance": {
+        "id": "dialogue",
+        "path": "/home/khugardin/Documents/dataset_tr/phrases_og/как_у_тебя_настроение_можно_ответить_кнопкой.wav",
+        "sha256": "ecbd62d72c9ecb3b05e5f388b3223f7ff5473d41d987985d35e4fe208a5bef1c",
+        "speaker_scope": "approved_adult_original",
+        "source_relative_path": "phrases_og/как_у_тебя_настроение_можно_ответить_кнопкой.wav",
+        "source_sha256": "ecbd62d72c9ecb3b05e5f388b3223f7ff5473d41d987985d35e4fe208a5bef1c",
+        "text": "как у тебя настроение можно ответить кнопкой",
+        "transcript_status": "supplied_text_acoustically_unverified",
+        "alignment_human_reviewed": false,
+        "base_voice_verified": false,
+        "style": "unreviewed_mixed_performances_preserved",
+        "same_text_vox555_render_available": false
+      },
+      "metrics": {
+        "sample_rate": 22050,
+        "frames": 90762,
+        "duration_s": 4.116190476190476,
+        "peak": 0.659637451171875,
+        "rms_dbfs": -19.786968502943004,
+        "active_rms_dbfs": -18.041232984460574,
+        "dc": -0.0004645001880131897,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.649446403540814,
+        "leading_quiet_s": 0.12,
+        "trailing_quiet_s": 0.21619047619047604,
+        "internal_pauses_s": [
+          0.92
+        ],
+        "active_fraction": 0.6682808716707022,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 86,
+          "median_hz": 124.69511954940896,
+          "p10_hz": 89.67962018994643,
+          "p90_hz": 177.0587840796945,
+          "median_strength": 0.6710154529415453
+        }
+      },
+      "asset": "original-target-dialogue.wav"
+    },
+    {
+      "id": "games",
+      "provenance": {
+        "id": "games",
+        "path": "/home/khugardin/Documents/dataset_tr/phrases_og/давай_поиграем.wav",
+        "sha256": "005b5f74760e3e182813e4d9880aef2b6fc92f83a1f0903402b46869d06b4e29",
+        "speaker_scope": "approved_adult_original",
+        "source_relative_path": "phrases_og/давай_поиграем.wav",
+        "source_sha256": "005b5f74760e3e182813e4d9880aef2b6fc92f83a1f0903402b46869d06b4e29",
+        "text": "давай поиграем",
+        "transcript_status": "supplied_text_acoustically_unverified",
+        "alignment_human_reviewed": false,
+        "base_voice_verified": false,
+        "style": "unreviewed_mixed_performances_preserved",
+        "same_text_vox555_render_available": false
+      },
+      "metrics": {
+        "sample_rate": 22050,
+        "frames": 42416,
+        "duration_s": 1.9236281179138321,
+        "peak": 0.667938232421875,
+        "rms_dbfs": -19.04700802199144,
+        "active_rms_dbfs": -17.370569988612623,
+        "dc": -0.0004801957034381189,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -49.23384334254546,
+        "leading_quiet_s": 0.16,
+        "trailing_quiet_s": 0.243628117913832,
+        "internal_pauses_s": [
+          0.2
+        ],
+        "active_fraction": 0.6787564766839378,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 55,
+          "median_hz": 128.1281145210053,
+          "p10_hz": 98.12462613268704,
+          "p90_hz": 208.92450712298808,
+          "median_strength": 0.6502192370077786
+        }
+      },
+      "asset": "original-target-games.wav"
+    },
+    {
+      "id": "weather_menu",
+      "provenance": {
+        "id": "weather_menu",
+        "path": "/home/khugardin/Documents/dataset_tr/phrases_og/что_хочешь_узнать.wav",
+        "sha256": "e41a554a9653525f9dacd36cf8d117c98a47271b0b1f65821a2cee04bdfa60f4",
+        "speaker_scope": "approved_adult_original",
+        "source_relative_path": "phrases_og/что_хочешь_узнать.wav",
+        "source_sha256": "e41a554a9653525f9dacd36cf8d117c98a47271b0b1f65821a2cee04bdfa60f4",
+        "text": "Что хочешь узнать? Один сегодняшний день, два -",
+        "transcript_status": "actual_small_asr_draft_unreviewed",
+        "alignment_human_reviewed": false,
+        "base_voice_verified": false,
+        "style": "unreviewed_mixed_performances_preserved",
+        "same_text_vox555_render_available": false
+      },
+      "metrics": {
+        "sample_rate": 22050,
+        "frames": 337012,
+        "duration_s": 15.283990929705215,
+        "peak": 0.736602783203125,
+        "rms_dbfs": -20.129202504648482,
+        "active_rms_dbfs": -17.457595748187384,
+        "dc": -0.00032211288679075226,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.63376242220803,
+        "leading_quiet_s": 0.2,
+        "trailing_quiet_s": 0.3739909297052151,
+        "internal_pauses_s": [
+          1.04,
+          0.44,
+          0.63,
+          0.51,
+          0.74,
+          0.42,
+          0.81,
+          0.6,
+          0.13,
+          0.51,
+          0.42
+        ],
+        "active_fraction": 0.5404699738903395,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 243,
+          "median_hz": 119.80459903484436,
+          "p10_hz": 89.06299969432028,
+          "p90_hz": 204.68789071891032,
+          "median_strength": 0.6801700688120849
+        }
+      },
+      "asset": "original-target-weather_menu.wav"
+    },
+    {
+      "id": "story_excerpt",
+      "provenance": {
+        "id": "story_excerpt",
+        "path": "/home/khugardin/Documents/Codex/2026-11-16/project-manager/outputs/voice-project/dataset/full-corpus-v2/audio/rec_e37f5455c0391ddf_seg_0001.wav",
+        "sha256": "29e78c8cf117b9e393dd31ec35637a99dd6b4bb7ee07459035ca0a73b691d899",
+        "speaker_scope": "approved_adult_derived",
+        "source_relative_path": "skazki_og/Сказка Айболит.wav",
+        "source_sha256": "e37f5455c0391ddf1facb1715be987cfab950fbfec67c0e6c78ca8082698884c",
+        "text": "Сказка Айболит, автор Корней Чуковский. Добрый доктор",
+        "transcript_status": "actual_small_asr_draft_unreviewed",
+        "alignment_human_reviewed": false,
+        "base_voice_verified": false,
+        "style": "unreviewed_mixed_performances_preserved",
+        "same_text_vox555_render_available": false,
+        "fresh_original_frame_slice_exact": true,
+        "start_frame": 0,
+        "end_frame": 291060
+      },
+      "metrics": {
+        "sample_rate": 44100,
+        "frames": 291060,
+        "duration_s": 6.6,
+        "peak": 0.892364501953125,
+        "rms_dbfs": -20.821021508050794,
+        "active_rms_dbfs": -18.42094522649083,
+        "dc": -0.0003894462787285053,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -49.21260285454369,
+        "leading_quiet_s": 0.19,
+        "trailing_quiet_s": 0.0,
+        "internal_pauses_s": [
+          0.19,
+          0.29,
+          0.24,
+          1.74
+        ],
+        "active_fraction": 0.5757575757575758,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 30,
+          "median_hz": 103.02689990030103,
+          "p10_hz": 87.52013862346124,
+          "p90_hz": 404.15290499734715,
+          "median_strength": 0.5786893013236374
+        }
+      },
+      "asset": "original-target-story_excerpt.wav"
+    },
+    {
+      "id": "current_reference_PHRASE_014",
+      "provenance": {
+        "id": "current_reference_PHRASE_014",
+        "path": "/home/khugardin/Documents/Obsidian/Mishka/Antigravity/demo-checkpoint-20261124/phonetics-vox555-62dd254/reference-PHRASE_014.wav",
+        "sha256": "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c",
+        "speaker_scope": "approved_adult_original",
+        "scope": "ExactSHA match to approvedadultoriginal, currenthistoricalmodelreference",
+        "same_text_vox555_render_available": false,
+        "source_relative_path": "phrases_og/один_два_или_три_тяжело_четыре_или_пять_спокойно_шесть_или_семь_хорошо.wav",
+        "source_sha256": "e5af4c97f73398927ad026c5616390ec59f03625ead46f981c5912288845ba8c",
+        "text": "один, два или три тяжело. четыре или пять спокойно. шесть или семь хорошо",
+        "transcript_status": "supplied_text_acoustically_unverified",
+        "base_voice_verified": false,
+        "style": "unreviewed_mixed_performances_preserved"
+      },
+      "metrics": {
+        "sample_rate": 22050,
+        "frames": 219566,
+        "duration_s": 9.957641723356009,
+        "peak": 0.701263427734375,
+        "rms_dbfs": -19.74105860571291,
+        "active_rms_dbfs": -17.87228754917539,
+        "dc": -0.0003661155900482372,
+        "clipped_sample_fraction": 0.0,
+        "activity_threshold_dbfs": -48.56309698610212,
+        "leading_quiet_s": 0.13,
+        "trailing_quiet_s": 0.30764172335600826,
+        "internal_pauses_s": [
+          0.17,
+          0.18,
+          0.55,
+          0.61,
+          0.46,
+          0.53,
+          0.3
+        ],
+        "active_fraction": 0.6496496496496497,
+        "pitch_proxy": {
+          "algorithm": "40ms window/10ms hop autocorrelation,65–450Hz,strength>=0.55;octave errors possible",
+          "voiced_frames": 164,
+          "median_hz": 110.43556854772652,
+          "p10_hz": 92.91434875301658,
+          "p90_hz": 191.087577761245,
+          "median_strength": 0.6410213733600326
+        }
+      },
+      "asset": "original-target-current_reference_PHRASE_014.wav"
+    }
+  ],
+  "listening_performed": false,
+  "original_to_vox_exact_text_pairs": 0,
+  "limits": [
+    "F0 proxies are not verified pitch/identity or articulation scores.",
+    "Active-frame RMS matching is not a hearing test or EBU loudness certification.",
+    "Saved renders are historical metadata-pinned samples, not a new live/runtime render."
+  ],
+  "execution": {
+    "elapsed_s": 2.093,
+    "peak_rss_kib": 112612,
+    "torch_imported": false,
+    "numpy": "2.5.5",
+    "scipy": "1.18.1"
+  }
+}
