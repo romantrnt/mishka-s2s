@@ -22,6 +22,8 @@ import threading
 import time
 import uuid
 import wave
+from .activity_requests import (ActivityRequestGate, ActivityRequestReceipt,
+                                OllamaActivityRequestClassifier, activity_target)
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
@@ -588,6 +590,7 @@ class DialogueResponseContract:
     young: bool
     catalogue: bool
     story_ids: tuple[str, ...] = ()
+    speech_only: bool = False
 
     @classmethod
     def from_context(cls, context):
@@ -623,6 +626,8 @@ class DialogueResponseContract:
         branches = [branch("say", text=text),
                     branch("say_led", text=dict(text), pattern=enum(("calm","attention","off"))),
                     branch("say_return", text=dict(text), target=enum(("root_menu","fixed_story_menu","menu_ready")))]
+        if self.speech_only:
+            return {"oneOf": branches[:1]}
         if self.catalogue:
             branches += [branch("offer_game", game_id=enum(spec.game_id for spec in IMMERSIVE_GAME_SPECS)),
                          branch("open_catalog", catalog=enum(("games","stories"))),
@@ -3388,6 +3393,7 @@ class TurnResult:
     actions: tuple[ParsedOutput,...]
     return_to_scenario: bool
     fallback_reason: str|None=None
+    activity_request: ActivityRequestReceipt | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -3618,6 +3624,9 @@ class BoundedConversationEngine:
         validation_mini=(OllamaMiniLLMValidator(base_url=getattr(settings, "ollama_base_url", "http://127.0.0.1:11434"), model=validation_model, timeout_s=validation_timeout_ms/1000.0, fail_closed=validation_fail_closed, num_ctx=validation_num_ctx, keep_alive=getattr(settings, "validation_keep_alive", "-1"))
                          if validation_provider == "ollama" else MockMiniLLMValidator())
         self.response_validator=AsyncResponseValidator(mini=validation_mini, timeout_ms=validation_timeout_ms, fail_closed=validation_fail_closed)
+        self.activity_request_gate = ActivityRequestGate(
+            OllamaActivityRequestClassifier(validation_mini) if validation_provider == "ollama" else None,
+            timeout_s=min(2., validation_timeout_ms / 1000.))
         from .story_context import load_story_contracts
         self.story_backend_contracts=load_story_contracts(
             getattr(settings,"story_backend_receipt_path",""),
@@ -3718,7 +3727,8 @@ class BoundedConversationEngine:
                       else "turn_timeout")
             return TurnResult((), (), True, reason)
 
-    async def _run_text_turn(self,text,context,*,trace_generation_id=None):
+    async def _run_text_turn(self,text,context,*,trace_generation_id=None,activities_allowed=True,
+                             expected_repair_token=None):
         text=self.normalizer.normalize(text)
         if len(text)>self.config.max_input_chars: return TurnResult((),(),True,"oversized_input")
         safety=self.input_safety.check(text)
@@ -3726,7 +3736,11 @@ class BoundedConversationEngine:
         if not self.topic_policy.check(text, context.allowed_topics, context.forbidden_topics): return TurnResult((),(),True,"unknown_topic")
         if context.turns>=context.max_turns or time.monotonic()-context.started_at>=context.max_duration_seconds: return TurnResult((),(),True,"bounded_limit")
         self.metrics.event("turn_started", source="text")
+        if expected_repair_token is not None and self.cancel.cancelled(context.session_id, expected_repair_token):
+            raise asyncio.CancelledError
         await self._notify_lifecycle(context.session_id, "processing", source="turn_started")
+        if expected_repair_token is not None and self.cancel.cancelled(context.session_id, expected_repair_token):
+            raise asyncio.CancelledError
         # There is one conversational generation per installation session.
         # A new text/voice turn must invalidate and await the previous one
         # before replacing its queue, otherwise two LLM/TTS workers can race
@@ -3760,6 +3774,9 @@ class BoundedConversationEngine:
         age_words = POLICIES.get(context.profile.age_band, POLICIES["3-5"]).max_words
         structured = getattr(self.llm, "supports_dialogue_json", False) is True
         response_contract = DialogueResponseContract.from_context(context)
+        if not activities_allowed:
+            response_contract = DialogueResponseContract(response_contract.max_words, response_contract.young,
+                                                         False, response_contract.story_ids, speech_only=True)
         topic_instruction = ("Open developer dialogue: accept any topic unless it violates the safety rules. "
                              if "__all__" in context.allowed_topics else
                              "Allowed topics: "+", ".join(context.allowed_topics)+". ")
@@ -3791,6 +3808,12 @@ class BoundedConversationEngine:
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
         messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}\nNON_NEGOTIABLE_RUNTIME_OUTPUT: "+output_format},{"role":"user","content":text}]
+        if not activities_allowed:
+            messages[0]["content"] += (
+                " The proposed activity action was not supported by the current utterance. "
+                "Answer this SAME original utterance with ordinary speech, using its actual topic. "
+                "Do not offer or open games/stories/catalogues, and do not restart an interview. "
+                "If the request is unclear, ask one short relevant clarification. SPEECH_FORM only.")
         llm_started=time.perf_counter(); llm_completed=False
         # Canonical runtime owns intent routing; no demo quick-reply
         # table is allowed to bypass the bounded provider contract.
@@ -3801,6 +3824,8 @@ class BoundedConversationEngine:
             getattr(context, "_game_id", None) == "word_game" and context.turns + 1 >= context.max_turns) if structured else None
         try:
             chunks=[]; actions=[]; spoken_chars=0; raw_spoken=""
+            activity_receipt = None
+            activity_rejected = False
             chunker=SentenceChunker(self.config.max_chunk_chars, self.config.first_chunk_chars,
                                     **({"min_sentences": 1, "max_sentences": 1} if native_streaming else {}))
             token_index=0
@@ -3957,12 +3982,13 @@ class BoundedConversationEngine:
             async def flush_closed_say():
                 # Only a complete </say> block crosses the streaming audio
                 # boundary. An open or malformed tag remains buffered.
-                await close_chunks(chunker.flush())
+                if activities_allowed:
+                    await close_chunks(chunker.flush())
 
             async def handle(item):
-                nonlocal spoken_chars, raw_spoken
+                nonlocal spoken_chars, raw_spoken, activity_receipt, activity_rejected
                 if item.kind=="say":
-                    if any(action.value in {"offer_game", "open_catalog", "play_story", "request_information"} for action in actions):
+                    if activity_rejected or any(action.value in {"offer_game", "open_catalog", "play_story", "request_information"} for action in actions):
                         raise ValueError("game_offer_mixed_with_speech")
                     raw_spoken += item.value
                     # Validate the complete text seen so far as well as the
@@ -3979,12 +4005,27 @@ class BoundedConversationEngine:
                         safe += " "
                     spoken_chars += len(safe)
                     if spoken_chars > self.config.max_response_chars: raise ValueError("total model speech exceeded limit")
-                    await close_chunks(chunker.feed(safe))
+                    if activities_allowed:
+                        await close_chunks(chunker.feed(safe))
                 else:
+                    if not activities_allowed:
+                        activity_rejected = True
+                        return
                     if item.value in {"offer_game", "open_catalog", "play_story", "request_information"} and (context.node_id != "bear_dialogue" or raw_spoken.strip() or actions):
                         raise ValueError("game_offer_mixed_or_out_of_context")
-                    if any(action.value in {"offer_game", "open_catalog", "play_story", "request_information"} for action in actions):
+                    if activity_rejected or any(action.value in {"offer_game", "open_catalog", "play_story", "request_information"} for action in actions):
                         raise ValueError("game_offer_mixed_actions")
+                    if activity_target(item) is not None:
+                        if activities_allowed:
+                            activity_started = time.perf_counter()
+                            activity_receipt = await self.activity_request_gate.authorize(text, item, context)
+                            self.metrics.observe_voice_stage(context.session_id, "activity_request", activity_started,
+                                activity_receipt is not None, generation_id=trace_generation_id)
+                        if self.cancel.cancelled(context.session_id, token):
+                            raise asyncio.CancelledError
+                        if activity_receipt is None:
+                            activity_rejected = True
+                            return
                     actions.append(item)
             consume_provider = (_DialogueJSONBridge(provider, response_contract, self.consumer.max_chars,
                                 token_received, self.metrics.event) if structured else provider)
@@ -4011,6 +4052,17 @@ class BoundedConversationEngine:
                     with contextlib.suppress(asyncio.CancelledError):
                         await failure_task
             await close_chunks(chunker.flush())
+            if activity_rejected and activities_allowed:
+                await queue.abort(context.session_id, invalidate=False)
+                if self.cancel.cancelled(context.session_id, token):
+                    raise asyncio.CancelledError
+                self.metrics.event("activity_request_repair", generation_id=trace_generation_id)
+                return await self._run_text_turn(text, context, trace_generation_id=trace_generation_id,
+                                                 activities_allowed=False, expected_repair_token=token)
+            if activity_rejected:
+                await close_chunks(("О чём поговорим?",))
+            elif not activities_allowed:
+                await close_chunks((raw_spoken,))
             if not chunks and not actions:
                 raise ValueError("empty_model_speech")
             generation_started = time.perf_counter() - provider.elapsed_s
@@ -4026,7 +4078,8 @@ class BoundedConversationEngine:
             self.metrics.mark_voice(context.session_id, "turn_complete", generation_id=trace_generation_id)
             self.metrics.finish_voice_turn(context.session_id, "completed", generation_id=trace_generation_id)
             await self._notify_lifecycle(context.session_id, "listening", source="turn_finished")
-            return TurnResult(tuple(chunks),tuple(actions),any(x.value=="return_to_scenario" for x in actions))
+            return TurnResult(tuple(chunks),tuple(actions),any(x.value=="return_to_scenario" for x in actions),
+                              activity_request=activity_receipt)
         except TTSQueueOverflowError:
             await queue.abort(context.session_id, invalidate=False)
             self.metrics.finish_voice_turn(context.session_id, "tts_queue_overflow", generation_id=trace_generation_id)

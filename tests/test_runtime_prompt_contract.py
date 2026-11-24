@@ -9,7 +9,8 @@ from app.foundation.domain import Event
 from app.foundation.s2s import (BoundedConversationEngine, ConversationContext, MockPlaybackController,
     MockTTSProvider, ProfileContext, RVCProvider, S2SConfig)
 from app.foundation.validation import AsyncResponseValidator, OllamaMiniLLMValidator
-from test_contextual_game_flow import Harness, Model
+from test_contextual_game_flow import Harness, Model, ApprovedActivityRequests
+from app.foundation.activity_requests import ActivityRequestGate
 
 
 async def young_guest(app):
@@ -99,6 +100,7 @@ async def test_effective_mode_format_matches_unchanged_parser_authority(mode, re
     model = Model(response)
     engine = BoundedConversationEngine(model,MockTTSProvider(),RVCProvider(),MockPlaybackController(),
         config=S2SConfig(),profile='mock')
+    engine.activity_request_gate = ActivityRequestGate(ApprovedActivityRequests())
     context = ConversationContext('prompt-mode','canonical_product',mode,('__all__',),('diagnosis',),4,120,2,
         profile=ProfileContext(age=2,age_band='1-3'))
     try:

@@ -11,6 +11,13 @@ from app.foundation.config import Settings
 from app.foundation.domain import Event
 from app.foundation.game_engine import current_challenge, game_answer_buttons
 from app.foundation.s2s import ResponseTagParser
+from app.foundation.activity_requests import ActivityRequestGate
+
+
+class ApprovedActivityRequests:
+    """This fixture's navigation actions model an independently approved request."""
+    async def classify(self, text, action, target):
+        return True
 
 
 class Model:
@@ -34,6 +41,7 @@ class Harness:
         self.app.canonical_runtime.sessions[self.state.session_id] = self.state
         self.model = Model(*answers)
         self.app.bounded_s2s.llm = self.model
+        self.app.bounded_s2s.activity_request_gate = ActivityRequestGate(ApprovedActivityRequests())
         self.seq = 0
 
     async def send(self, kind, payload=None, text=None):

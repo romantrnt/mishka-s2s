@@ -15,6 +15,8 @@ from test_dialogue_json_lifecycle import catalogue
 from test_card_doctors_profile import doctor_card, NAME
 from test_profile_onboarding import Client
 from test_scene_menu_runtime import Render
+from test_contextual_game_flow import ApprovedActivityRequests
+from app.foundation.activity_requests import ActivityRequestGate
 
 
 class MenuStand:
@@ -23,6 +25,7 @@ class MenuStand:
             profile="mock", hardware_mode="simulator", identity_mode="max_json" if identity else "guest_only"))
         self.stand = self.harness.stand
         self.app = self.stand.application
+        self.app.bounded_s2s.activity_request_gate = ActivityRequestGate(ApprovedActivityRequests())
         if not identity:
             self.app.canonical_runtime.sessions["stand"] = CanonicalState(
                 "stand", mode="root_menu", handset="up", age_band=band)

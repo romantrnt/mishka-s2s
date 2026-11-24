@@ -3102,6 +3102,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         fallback_reason = turn.fallback_reason or (
                             "dialogue_exit" if turn.return_to_scenario else None
                         )
+                        from .activity_requests import activity_target, activity_request_matches
+                        if any(activity_target(action) is not None and not activity_request_matches(
+                                getattr(turn, "activity_request", None), transient_text, action, turn_context)
+                               for action in turn.actions):
+                            fallback_reason = "activity_request_unverified"
                         effect["resolution"] = ("bounded_dialogue_completed" if fallback_reason is None
                                                 else "bounded_dialogue_fallback")
                         effect["fallback_reason"] = fallback_reason

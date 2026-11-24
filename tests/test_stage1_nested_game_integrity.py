@@ -12,7 +12,8 @@ from app.foundation.config import Settings
 from app.foundation.domain import Event
 from app.foundation.lighting import FakeLightingOutput
 from app.foundation.stand import BrowserPlaybackController, UARTLEDController
-from test_contextual_game_flow import Model
+from test_contextual_game_flow import Model, ApprovedActivityRequests
+from app.foundation.activity_requests import ActivityRequestGate
 from test_scene_menu_runtime import Render
 
 
@@ -37,6 +38,7 @@ class NestedGame:
         self.render = SyntheticVoice()
         self.model = Model("<say>У кота мягкая шерсть.</say>")
         self.app.bounded_s2s.llm = self.model
+        self.app.bounded_s2s.activity_request_gate = ActivityRequestGate(ApprovedActivityRequests())
         self.app.bounded_s2s.tts = self.app.bounded_s2s.voice = self.render
         self.output = FakeLightingOutput()
         self.app.led = UARTLEDController(None, output=self.output,

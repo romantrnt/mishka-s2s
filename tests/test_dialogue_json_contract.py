@@ -13,6 +13,8 @@ from app.foundation.s2s import (BoundedConversationEngine, ConversationContext,
 from app.foundation.menu_content import STORY_TITLES
 from app.foundation.validation import (AsyncResponseValidator, OllamaMiniLLMValidator,
     SpokenResponseRequirement)
+from app.foundation.activity_requests import ActivityRequestGate
+from test_contextual_game_flow import ApprovedActivityRequests
 
 _HTTP_CLIENT = httpx.AsyncClient
 
@@ -39,8 +41,10 @@ def wire(monkeypatch, content, *, terminal="stop"):
 
 def engine():
     provider = OllamaLLMProvider("http://synthetic.invalid", "synthetic", 1, max_tokens=96)
-    return BoundedConversationEngine(RetryingLLMProvider(provider, delay_s=0), MockTTSProvider(),
+    result = BoundedConversationEngine(RetryingLLMProvider(provider, delay_s=0), MockTTSProvider(),
         RVCProvider(), MockPlaybackController(), config=S2SConfig(), profile="mock")
+    result.activity_request_gate = ActivityRequestGate(ApprovedActivityRequests())
+    return result
 
 
 @pytest.mark.asyncio
