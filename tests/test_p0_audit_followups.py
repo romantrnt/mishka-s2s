@@ -71,9 +71,9 @@ def test_real_bounded_provider_fallback_still_emits_approved_phrase():
             "provider-limit-1", 0.0,
         ), transient_text="ещё")
         assert result["reason"] == "dialogue_turn"
-        assert any(effect.get("type") == "speak" and effect.get("phrase_id") == "PHRASE_095"
+        assert any(effect.get("type") == "speak" and effect.get("phrase_id") == "PHRASE_104"
                    for effect in result["outputs"])
-        assert app.canonical_runtime.sessions[sid].mode == "root_menu"
+        assert app.canonical_runtime.sessions[sid].mode == "bear_dialogue"
 
     asyncio.run(run())
 

@@ -312,6 +312,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             fresh.last_sequence_by_source = dict(old.last_sequence_by_source)
             fresh.seen_correlations = set(old.seen_correlations)
             fresh.accepted_buttons_down = list(old.accepted_buttons_down)
+            fresh._button_gesture_owners = copy.deepcopy(getattr(old, '_button_gesture_owners', {}))
+            fresh._button_gesture_terminals = copy.deepcopy(getattr(old, '_button_gesture_terminals', {}))
             fresh.readiness_held_buttons = list(dict.fromkeys(old.readiness_held_buttons + old.accepted_buttons_down))
             runtime.clear_identity(old)
         fresh.substate = 'profile_replacing'
@@ -1956,9 +1958,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 self.publisher.publish(event)
             if not rejected and event.event_type == 'ButtonPressed':
                 button = event.payload['button_id']
-                if button not in current.accepted_buttons_down:
-                    current.accepted_buttons_down.append(button)
-                if button not in current.readiness_held_buttons:
+                fresh, rejected = self.canonical_runtime._track_button_gesture(current, candidate)
+                if fresh and button not in current.readiness_held_buttons:
                     current.readiness_held_buttons.append(button)
             return self._identity_result(event.session_id, rejected or 'profile_replacing')
         if (self._profile_replacing(event.session_id) and event.event_type == 'VoiceIntentReady'
@@ -2402,9 +2403,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 reset_sync_step("lighting", lambda: cancel_effects(clear=True)
                                 if callable(cancel_effects) else self.led.clear_all())
 
+        button_current = (self.canonical_runtime.button_input_guard()
+            if event.event_type in {'ButtonPressed', 'ButtonReleased', 'ButtonHeld', 'ButtonLongHeld'} else lambda: True)
         def still_current() -> bool:
             return (
-                self._session_revisions.get(event.session_id) == revision
+                button_current() and self._session_revisions.get(event.session_id) == revision
                 and self._session_epochs.get(event.session_id, 0) == epoch
                 and self.canonical_runtime.sessions.get(event.session_id) is state_owner
                 and (not fresh_profile_prepared or identity_current is None or identity_current(False))
@@ -2782,6 +2785,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         self.led.set_element(element_id, target_state)
             elif kind == "scene_menu_page":
                 descriptor=effect["descriptor"]
+                if (snapshot.get("mode") == "game_menu"
+                        and any(item.get("type") == "game_lighting" and item.get("animation") == "success"
+                                and item.get("next_preset") == "GAME_MENU" for item in effects)
+                        and getattr(getattr(self.led, "exhibition_effects", None), "wave_phase", None) == "game_success"):
+                    # This same completion's wave already owns the final menu frame.
+                    continue
                 cancel_effects=getattr(self.led,"cancel_effects",None)
                 if callable(cancel_effects): cancel_effects(clear=False)
                 buttons=descriptor["buttons"]
@@ -2971,6 +2980,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 # on the large weather pictogram (element 17).
                 effects_engine = getattr(self.led, "exhibition_effects", None)
                 if (preset == "ROOT_MENU"
+                        and any(item.get("type") == "game_lighting" and item.get("animation") == "success"
+                                and item.get("next_preset") == preset for item in effects)
                         and getattr(effects_engine, "effect", None) == "wave"
                         and getattr(effects_engine, "wave_phase", None) == "game_success"):
                     continue
@@ -3176,6 +3187,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     audio_failure = {"response_id": phrase, "token": record.cancellation_token,
                                      "error_code": str(diagnosis.get("code") or "content_unavailable")[:80]}
             elif kind == "bounded_dialogue_turn":
+                game_run_id = (getattr(state_owner.game_engine_state, "run_id", None)
+                               if effect.get("game_id") == "word_game" else None)
                 effect["response_policy"] = "bounded_validated_dialogue"
                 fallback_reason = None
                 if not voice_open or not (transient_text or "").strip():
@@ -3298,7 +3311,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         if fallback_reason is None and effect.get("game_id") == "word_game":
                             followup = await self._receive_canonical_event(self._internal_followup(
                                 event, "DialogueFallback",
-                                "bounded_word_turn", {"reason": "word_retry_complete" if turn.word_accepted is False else "word_turn_complete"},
+                                "bounded_word_turn", {"reason": "word_turn_complete" if turn.word_accepted is True else "word_retry_complete",
+                                    "game_run_id": game_run_id},
                                 "word-complete"),
                                 dialogue_fallback_authorized=True)
                             return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
@@ -3844,6 +3858,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 "status": state.dialogue_memory.status,
                 "turns": list(state.dialogue_memory.bounded_turns),
             }
+            if (is_information_dialogue(state.mode, state.safety_severity)
+                    and state.dialogue_memory.status != "expired"
+                    and (state.dialogue_memory.expires_at is None or self.now() < state.dialogue_memory.expires_at)):
+                state_snapshot["dialogue_memory"]["last_game"] = state.dialogue_memory.last_game
         prompt = build_system_prompt(profile=private_profile or None, state=state_snapshot)
         profile_context = ProfileContext.from_profile(private_profile or None)
         selected_age = trusted_canonical_age(state_snapshot)
