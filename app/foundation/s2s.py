@@ -859,11 +859,17 @@ class MockSpeechRecognizer:
 
 
 class FasterWhisperRecognizer:
+    _MAX_NATIVE_JOBS = 2
+
     def __init__(self, model_loader: Callable[[], Any], config:S2SConfig, model_name: str = ""):
         self.loader=model_loader; self.config=config; self.model_name=model_name; self._model: Any=None
         self._native_tasks: set[asyncio.Task] = set()
+        self._model_loading: asyncio.Task | None = None
 
     async def _run_native(self, call):
+        # Preserve two concurrent recognitions; abandoned native jobs still own their slots.
+        if sum(not task.done() for task in self._native_tasks) >= self._MAX_NATIVE_JOBS:
+            raise RuntimeError("faster-whisper native workers are busy")
         task = asyncio.create_task(asyncio.to_thread(call), name="mishka-whisper-native")
         self._native_tasks.add(task)
 
@@ -878,6 +884,23 @@ class FasterWhisperRecognizer:
     def native_worker_snapshot(self):
         return {"active_jobs": sum(not task.done() for task in self._native_tasks), "queued_jobs": 0}
 
+    async def _ensure_model(self):
+        if self._model is not None:
+            return
+        if self._model_loading is None:
+            async def load():
+                self._model = await self._run_native(self.loader)
+            loading = asyncio.create_task(load(), name="mishka-whisper-load")
+            self._model_loading = loading
+            def finished(done):
+                if not done.cancelled():
+                    done.exception()
+                if self._model_loading is done:
+                    self._model_loading = None
+            loading.add_done_callback(finished)
+        # A cancelled requester cannot abandon or duplicate the resident weights owner.
+        await asyncio.shield(self._model_loading)
+
     def readiness(self) -> dict[str, Any]:
         package = importlib.util.find_spec("faster_whisper") is not None
         path = Path(self.model_name)
@@ -890,8 +913,7 @@ class FasterWhisperRecognizer:
     async def warmup(self) -> dict[str, Any]:
         started = time.perf_counter()
         try:
-            if self._model is None:
-                self._model = await self._run_native(self.loader)
+            await self._ensure_model()
             return {"ok": True, "latency_ms": round((time.perf_counter()-started)*1000, 2)}
         except Exception as exc:
             return {"ok": False, "latency_ms": round((time.perf_counter()-started)*1000, 2),
@@ -899,7 +921,7 @@ class FasterWhisperRecognizer:
     async def transcribe(self, audio, cancelled):
         if cancelled(): raise asyncio.CancelledError
         try:
-            if self._model is None: self._model=await self._run_native(self.loader)
+            await self._ensure_model()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
