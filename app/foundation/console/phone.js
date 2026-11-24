@@ -328,6 +328,7 @@ function mountPhone() {
   window.addEventListener('blur',()=>input.cancel());
   document.addEventListener('visibilitychange',()=>{if(document.hidden){cleanup();clearTimeout(mediaTimer);}else if(!stopped)tickMedia();});
   window.addEventListener('pagehide',()=>{stopped=true;cleanup();clearTimeout(mediaTimer);rendererGeneration++;model?.destroy();model=null;});
+  window.addEventListener('pageshow',event=>{if(!event.persisted)return;stopped=false;tickMedia();if(!model)threeView();render();});
   for(const button of document.querySelectorAll('[data-phone-card]'))button.onclick=async()=>{
     const card=button.dataset.phoneCard;
     $('phone-rfid-result').textContent=`Чтение ${card} через Max…`;

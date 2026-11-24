@@ -890,7 +890,7 @@ function schedulePolling() {
 
 function startPanelLifecycle() {
   pageLifecycleStopped = false;
-  if (authBlocked) return;
+  if (authBlocked || document.hidden) return;
   refresh({ includeStatus: true }).finally(schedulePolling);
   if (ws?.readyState !== WebSocket.OPEN) connect();
 }
@@ -2313,6 +2313,10 @@ window.addEventListener('pagehide', () => {
   }
   clearMic();
   interruptAudioForInput();
+});
+
+window.addEventListener('pageshow', event => {
+  if (event.persisted) startPanelLifecycle();
 });
 
 window.addEventListener('keydown', event => {

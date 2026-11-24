@@ -5,6 +5,75 @@ const phone=fs.readFileSync(root+'/phone.js','utf8'),source=fs.readFileSync(root
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const micState=(epoch=3,id='owner')=>({session:{handset_up:true,state:'ACTIVE'},simulator:{epoch,session:{session_id:id},admission:{input_ready:true,connected:true},microphone:{eligible:true}}});
 const loadInteraction=context=>vm.runInContext(source.slice(source.indexOf('function interactionActive('),source.indexOf('function sessionActionIsCurrent(')),context);
+const loadPanelLifecycle=context=>{
+ vm.runInContext(source.slice(source.indexOf('function startPanelLifecycle()'),source.indexOf('function normalizeColor(')),context);
+ vm.runInContext(source.slice(source.indexOf("document.addEventListener('visibilitychange'"),source.indexOf("window.addEventListener('keydown', event => {")),context);
+};
+async function browserLifecycle(){
+ const handlers={};let refreshes=0,connects=0,cleanups=0,polls=0;
+ const context=vm.createContext({pageLifecycleStopped:false,authBlocked:false,reconnectTimer:null,wsIntentionalClose:false,
+  document:{hidden:false,addEventListener:(name,fn)=>handlers[name]=fn},
+  window:{addEventListener:(name,fn)=>handlers[name]=fn,clearTimeout(){}},WebSocket:{OPEN:1,CONNECTING:0},ws:null,
+  refresh:async()=>{refreshes++;},connect:()=>{connects++;context.ws={readyState:1,close(){this.readyState=3;}};},
+  stopPolling:()=>{polls++;},schedulePolling(){},clearMic:()=>{cleanups++;},interruptAudioForInput(){},
+ });
+ loadPanelLifecycle(context);context.startPanelLifecycle();
+ handlers.pageshow({persisted:false});assert.strictEqual(refreshes,1,'initial pageshow does not repeat startup');
+ for(let cycle=0;cycle<2;cycle++){
+  handlers.pagehide({persisted:true});assert(context.pageLifecycleStopped);
+  const before=refreshes;handlers.pageshow({persisted:true});await tick();
+  assert(!context.pageLifecycleStopped);assert.strictEqual(refreshes,before+1);assert.strictEqual(connects,cycle+2);
+ }
+ context.document.hidden=true;handlers.visibilitychange();handlers.pagehide({persisted:true});
+ const before=refreshes;handlers.pageshow({persisted:true});await tick();
+ assert.strictEqual(refreshes,before,'a hidden BFCache return waits for visibility');
+ context.document.hidden=false;handlers.visibilitychange();assert.strictEqual(refreshes,before+1);
+ handlers.pagehide({persisted:true});context.authBlocked=true;
+ const blockedConnects=connects,blockedRefreshes=refreshes;
+ handlers.pageshow({persisted:true});handlers.visibilitychange();await tick();
+ assert.strictEqual(connects,blockedConnects);assert.strictEqual(refreshes,blockedRefreshes,'restore cannot bypass authBlocked');
+ assert(cleanups>=4&&polls>=4,'hide boundaries retain media and refresh cleanup');
+}
+async function phoneLifecycle(){
+ const {context,fields,snapshot}=snapshotFences(),handlers={},imports=[],timers=new Map(),sent=[];
+ let timerId=0,created=0,destroyed=0,micStarts=0;
+ const listen=(name,fn)=>(handlers[name]||=[]).push(fn);
+ const emit=(name,event={})=>{for(const fn of handlers[name]||[])fn(event);};
+ context.window.addEventListener=listen;context.document.addEventListener=listen;
+ context.setTimeout=(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;};
+ context.clearTimeout=id=>timers.delete(id);
+ const key={dataset:{phoneKey:'1'},style:{removeProperty(){}},setAttribute(){},addEventListener(){}};
+ context.document.querySelectorAll=selector=>selector==='[data-phone-key]'?[key]:[];
+ context.post=async(path,body)=>{sent.push(body);return null;};context.startMic=async()=>{micStarts++;};
+ context.__importPhone=()=>new Promise(resolve=>imports.push(resolve));
+ const resolveImport=()=>imports.shift()({createPhoneModel:()=>{created++;return {update(){},destroy(){destroyed++;}};}});
+ context.authBlocked=false;context.wsReloadRequired=false;context.wsSnapshotReady=true;context.current=null;
+ const state=snapshot(99,100,true);state.simulator.devices.buttons=[{id:1,enabled:true}];context.render(state);
+ vm.runInContext(source.slice(source.indexOf('window.MishkaConsole =')),context);
+ vm.runInContext(phone.slice(phone.indexOf('function mountPhone')).replace("import('./phone-model.js?v=3-fill-channel-fix')",'__importPhone()'),context);
+ const mediaTimers=()=>[...timers.values()].filter(timer=>timer.delay===350).length;
+ assert.strictEqual(imports.length,1);assert.strictEqual(mediaTimers(),1);
+ emit('pageshow',{persisted:false});assert.strictEqual(imports.length,1,'initial pageshow never duplicates the renderer');
+ emit('keydown',{key:'1',code:'Digit1',preventDefault(){}});
+ assert.strictEqual(sent.length,1);emit('pagehide',{persisted:true});await tick();
+ assert.strictEqual(mediaTimers(),0);assert.strictEqual(sent.length,2);assert.strictEqual(sent[1].cancelled,true);
+ assert.strictEqual(sent[1].epoch,99,'cancelled press retains its original epoch');
+ emit('pageshow',{persisted:true});assert.strictEqual(imports.length,2);
+ resolveImport();await tick();assert.strictEqual(created,0,'pre-hide pending import cannot install its renderer');
+ resolveImport();await tick();assert.strictEqual(created,1);assert.strictEqual(mediaTimers(),1);
+ emit('keyup',{key:'1',code:'Digit1',preventDefault(){}});assert.strictEqual(sent.length,2,'late release cannot resurrect an old press');
+ emit('pageshow',{persisted:true});await tick();assert.strictEqual(created,1);assert.strictEqual(imports.length,0);assert.strictEqual(mediaTimers(),1);
+ context.document.hidden=true;emit('visibilitychange');emit('pagehide',{persisted:true});
+ assert.strictEqual(destroyed,1);emit('pageshow',{persisted:true});resolveImport();await tick();
+ assert.strictEqual(created,2);assert.strictEqual(mediaTimers(),0,'hidden return keeps the media timer paused');
+ context.document.hidden=false;emit('visibilitychange');assert.strictEqual(mediaTimers(),1);
+ emit('pagehide',{persisted:true});context.authBlocked=true;emit('pageshow',{persisted:true});resolveImport();await tick();
+ assert.strictEqual(fields['phone-microphone'].disabled,true);assert.strictEqual(key.disabled,true);
+ assert.strictEqual(micStarts,0,'return never grants or restarts microphone capture');
+ assert.strictEqual(context.suppressPhoneAudio,true,'return cannot reopen the cleared audio owner');
+ assert.strictEqual(context.pendingPCM.length,0);assert.strictEqual(sent.length,2,'restore sends no old gesture or session action');
+ assert.strictEqual(mediaTimers(),1,'repeated restore owns a single media timer');
+}
 function modelKeyTravel(){
  const text=fs.readFileSync(root+'/phone-model.js','utf8');
  const extrusion=kind=>text.match(new RegExp('const '+kind+'=new THREE.Mesh\\(extruded\\(shape,([^,]+),([^\\)]+)\\)')).slice(1).map(Number);
@@ -199,7 +268,12 @@ async function latePermission(){
  loadInteraction(context);
  vm.runInContext(source.slice(start,end),context);
  const pending=context.startMic();await tick();assert(context.micStarting);
- context.clearMic();permission(stream);await pending;
+ const hideHandlers={};
+ Object.assign(context,{pageLifecycleStopped:false,reconnectTimer:null,document:{hidden:false},stopPolling(){},interruptAudioForInput(){}});
+ context.window.addEventListener=(name,fn)=>hideHandlers[name]=fn;
+ context.ws.close=()=>{};
+ vm.runInContext(source.slice(source.indexOf("window.addEventListener('pagehide'"),source.indexOf("window.addEventListener('keydown', event => {")),context);
+ hideHandlers.pagehide({persisted:true});permission(stream);await pending;
  assert.strictEqual(trackStopped,1,'permission resolved after hangup stops every returned track');
  assert.strictEqual(created,0,'late permission never creates a capture node');assert.strictEqual(context.mic,null);assert.strictEqual(flushed,0,'cleanup never flushes captured speech');
  const active=context.startMic();await tick();permission(stream);await active;
@@ -752,4 +826,4 @@ async function legacyObserverFallback(){
  requests[1].resolve();assert.strictEqual((await second).order,2);
  assert.deepStrictEqual(results,[1,2],'both legacy HTTP results complete in order without a WebSocket');
 }
-(async()=>{modelKeyTravel();lightingProjection();serverInstanceRecovery();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();await panelSessionControls();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone key travel, lighting, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{modelKeyTravel();lightingProjection();serverInstanceRecovery();await browserLifecycle();await phoneLifecycle();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();await panelSessionControls();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone key travel, lighting, BFCache/hidden lifecycle restore, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});
