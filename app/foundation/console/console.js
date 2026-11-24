@@ -1697,6 +1697,11 @@ function interactionGuide(state, media) {
     return ['Сказка на паузе', 'Место в сказке ещё не подтверждено. Если продолжить не получилось, нажми 7 и выбери сказку заново.'];
   }
   if (state?.session?.state === 'ENDED' || state?.session?.node === 'session_closed') {
+    if (state?.simulator?.session?.session_actions?.includes('start')) {
+      return ['Сеанс завершён', state.session?.handset_up
+        ? 'Нажми «Начать», чтобы начать новый сеанс.'
+        : 'Нажми «Начать» (без звука), держи 6 пять секунд или подними трубку.'];
+    }
     return state.session?.handset_up
       ? ['Сеанс завершён', 'Сеанс завершён. Положи трубку, чтобы начать заново.']
       : ['Сеанс завершён', 'Поднимите трубку'];
