@@ -373,6 +373,7 @@ def test_pure_expired_result_is_cleared_before_next_input():
     h = Flow().start(); h.round(); h.exit()
     h.state.dialogue_memory.suspend(h.wall)
     h.wall = h.state.dialogue_memory.expires_at + .1
+    h.send('ButtonPressed', {'button_id': 1})
     h.send('ButtonReleased', {'button_id': 1})
     assert h.state.dialogue_memory.last_game is None
 
