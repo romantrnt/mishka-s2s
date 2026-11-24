@@ -3594,7 +3594,7 @@ class CanonicalRuntime(SceneMenuMixin):
             if state.mode in {"game_active", "game_menu"} and severity == "none":
                 text = " ".join(str(transient_text or "").casefold().split()).strip(" .!?…")
                 leaving = ((not text and intent in {'stop', 'stop_game', 'exit_game', 'return_to_menu'})
-                    or bool(re.fullmatch(r"(?:мишка[,!:]?\s+)?(?:(?:не хочу|не буду)(?: больше)? (?:играть|игру)|стоп(?: игра| играть)?|хватит(?: играть)?|"
+                    or bool(re.fullmatch(r"(?:мишка[,!:]?\s+)?(?:(?:я )?(?:не хочу|не буду)(?: больше)? (?:играть|игру)|стоп(?: игра| играть)?|хватит(?: играть)?|"
                                       r"закончим(?: игру| играть)?|закончить игру|останови игру|выйди из игры|выйти(?: из игры)?|"
                                       r"давай (?:закончим|в меню)|вернись в меню|надоело играть)(?:,? пожалуйста)?", text)))
                 if leaving:
