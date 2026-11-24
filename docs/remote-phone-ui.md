@@ -24,11 +24,32 @@ The procedural model is an interpretation of their proportions, not measured CAD
   workbench. The legacy duplicate device and raw-input surfaces stay hidden; all
   phone mutations still use the shared adapter. No reader location is invented
   on the physical model.
-- **Плоский вид** uses the same semantic buttons, canonical state, transport, and
-  audio. WebGL initialization or context loss also switches to this usable view.
+- If WebGL initialization, model import or context loss fails, the same native
+  buttons remain visible and usable in the flat view. Projected coordinates are
+  removed; canonical state, input ownership, transport and audio stay shared.
 
-The gateway establishes a same-origin HttpOnly authentication cookie. JavaScript
-never asks for, stores, or exports the token. An unavailable/admission-blocked
+The login form uses `mishka` and the configured server access credential. Its
+standard `username` / `current-password` fields support native browser autofill.
+After login, only an opaque `stand_session` cookie reaches the browser. The cookie
+is host-only, HttpOnly, SameSite=Strict, Path=/, and Secure for TLS. The API key is
+never placed in HTML, JavaScript or a URL. A session expires absolutely after one
+hour; reading the page does not extend it. **Выйти** revokes that browser session
+and its open WebSockets without resetting the phone's physical session.
+Only `/console` and `/console/operator` are accepted as post-login destinations.
+
+The canonical `scripts/run_stand.py` launcher wraps its existing application in
+the gateway; Stand creation, hardware, Max ownership and shutdown stay unchanged.
+Set `MISHKA_BROWSER_ORIGINS` to comma-separated explicit HTTP(S) browser origins
+when using a non-loopback address or reverse proxy. Wildcards and request Host
+headers are never trusted. If omitted, only localhost, 127.0.0.1 and [::1] origins
+at the validated launcher port are allowed. `MISHKA_BROWSER_SESSION_TTL_S` may
+explicitly set an absolute lifetime from 1 to 86400 seconds (default 3600).
+A configured nonempty `STAND_ACCESS_TOKEN` and `token_required` policy are required;
+URL-token authentication is rejected. Existing canonical API clients keep using
+`x-stand-token`; the synthetic remote launcher's default gateway still requires
+Basic or a browser session rather than raw API headers. Basic clients may omit
+Origin, while an explicitly foreign Origin on a mutation or WebSocket is rejected.
+JavaScript never asks for, stores, or exports the token. An unavailable/admission-blocked
 runtime is shown explicitly and new device inputs are disabled. Browser connection
 and injected virtual-input disconnection are shown separately.
 
@@ -80,6 +101,7 @@ node tests/console_audio_regression.js app/foundation/console/console.js
 node tests/console_queue_regression.js app/foundation/console/console.js
 node tests/console_guide_regression.js app/foundation/console/console.js
 node tests/console_phone_regression.js app/foundation/console
+node tests/console_renderer_regression.js
 ```
 
 The new check exercises hold/long hold, duplicate-key suppression, guaranteed

@@ -2,12 +2,12 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#f2f4f3"><title>Мишка — оператор</title>
-<link rel="icon" href="data:,"><link rel="stylesheet" href="/console/console.css?v=20261124-operator"><link rel="stylesheet" href="/console/operator.css?v=20261124-operator">
-<script src="/console/operator.js?v=20261124-operator" defer></script>
+<meta name="theme-color" content="#f5f6f5"><title>Телефон Мишки — оператор</title>
+<link rel="icon" href="data:,"><link rel="stylesheet" href="/console/console.css?v=20261125-browser-sessions"><link rel="stylesheet" href="/console/operator.css?v=20261125-browser-sessions">
+<script src="/console/operator.js?v=20261125-browser-sessions" defer></script>
 </head>
 <body class="operator-console">
-<header class="toolbar"><div class="brand"><strong>Телефон Мишки</strong><span>Оператор</span></div><nav class="toolbar-actions" aria-label="Панели"><a href="/console">Телефон</a><span id="operator-connection" class="status-chip offline" role="status">Подключение…</span><button id="operator-refresh" type="button">Обновить</button></nav></header>
+<header class="toolbar"><div class="brand"><strong>Телефон Мишки</strong></div><nav class="toolbar-actions" aria-label="Панели"><a href="/console">Телефон</a><span id="operator-connection" class="status-chip offline" role="status">Подключение…</span><button id="operator-refresh" type="button">Обновить</button><form class="logout-form" method="post" action="/stand/logout"><button type="submit">Выйти</button></form></nav></header>
 <main class="operator-workbench">
 <div class="operator-intro"><h1>Что происходит с телефоном</h1><p>Техническое состояние, события и локальные сигналы помощи.</p></div>
 <p id="operator-error" class="operator-error" role="status" hidden></p>

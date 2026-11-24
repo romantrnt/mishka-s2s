@@ -355,15 +355,25 @@ function mountPhone() {
   $('phone-text-form').onsubmit=async event=>{event.preventDefault();const text=$('phone-text').value.trim();if(!text||!canMutate())return;bridge.clearMic();try{await bridge.post('/stand/text',{text});$('phone-text').value='';}catch(error){showError(error);}};
   $('phone-wav').onchange=event=>{bridge.clearMic();$('wav').onchange(event).catch(showError);};
   $('phone-refresh-journal').onclick=refreshJournal;
+  function flatView(message,generation) {
+    if(generation!==rendererGeneration||stopped)return;
+    rendererGeneration++;
+    const failed=model;model=null;
+    failed?.destroy();
+    stage.dataset.renderer='flat';
+    for(const key of keys.values())for(const property of ['left','top','width','height'])key.style.removeProperty(property);
+    $('phone-render-notice').textContent=message;
+    renderMechanical();
+  }
   async function threeView() {
     const generation=++rendererGeneration;
     try {
       if(state&&!simulator)return;
       const {createPhoneModel}=await import('./phone-model.js?v=3-fill-channel-fix');
       if(generation!==rendererGeneration||stopped)return;
-      model=createPhoneModel(stage,{press:id=>input.press(id,'model'),release:(id,cancel)=>input.release(id,cancel,'model'),handset,project:(id,x,y,w,ratio)=>{const key=keys.get(id);key.style.left=`${x*100}%`;key.style.top=`${y*100}%`;key.style.width=`${w*stage.clientWidth}px`;key.style.height=`${w*stage.clientWidth*ratio}px`;},onFailure:message=>{$('phone-render-notice').textContent=message;}});
+      model=createPhoneModel(stage,{press:id=>input.press(id,'model'),release:(id,cancel)=>input.release(id,cancel,'model'),handset,project:(id,x,y,w,ratio)=>{const key=keys.get(id);key.style.left=`${x*100}%`;key.style.top=`${y*100}%`;key.style.width=`${w*stage.clientWidth}px`;key.style.height=`${w*stage.clientWidth*ratio}px`;},onFailure:message=>flatView(message,generation)});
       stage.dataset.renderer='three';model.update(simulator,input.pressed());$('phone-render-notice').textContent='';
-    } catch(error){if(generation===rendererGeneration)$('phone-render-notice').textContent='3D недоступен в этом браузере. Используйте клавиши 1–7 и Пробел.';}
+    } catch(error){flatView('3D недоступен: включено плоское управление.',generation);}
   }
   window.mishkaPhoneUpdate=update;
   window.mishkaPhoneError=showError;

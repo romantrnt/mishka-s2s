@@ -1,11 +1,11 @@
 .operator-console .brand span {display:block;color:var(--muted);font-size:12px;margin-top:2px;}
 .operator-console a {color:var(--ink);text-underline-offset:4px;}
 .operator-console button,.operator-console select {min-height:44px;font:inherit;}
-.operator-console :focus-visible {outline:3px solid #08778b;outline-offset:3px;}
+.operator-console :focus-visible {outline:3px solid #b82c23;outline-offset:3px;}
 .operator-workbench {display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px;max-width:1340px;margin:auto;padding:24px;}
 .operator-workbench>* {min-width:0;}
 .operator-intro,.operator-alert,.operator-health,.operator-error,.operator-footer {grid-column:1/-1;}
-.operator-intro h1 {font-size:26px;font-weight:620;line-height:1.25;margin:0 0 8px;}
+.operator-intro h1 {font-size:28px;font-weight:700;line-height:1.25;margin:0 0 8px;}
 .operator-intro p {margin:0;color:var(--muted);}
 .operator-alert {border-left:4px solid var(--line);}
 .operator-alert[data-active="false"] {border-left-color:var(--ok);}
