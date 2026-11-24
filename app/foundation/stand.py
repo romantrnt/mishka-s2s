@@ -3727,6 +3727,9 @@ class HardwareIntegrationStand:
             if canonical.get("game_audio_stage") in ("idle", "starting", "prompt", "playing", "prompt_failed"):
                 canonical_safe["game_audio_stage"] = canonical["game_audio_stage"]
             game = canonical.get("game_engine_state")
+            round_number = game.get("round") if isinstance(game, dict) else None
+            if type(round_number) is int and 0 <= round_number < 8:
+                canonical_safe["game_round"] = round_number
             phase = game.get("phase") if isinstance(game, dict) else None
             if phase in ("instruction", "awaiting_prompt", "demonstrate", "playing", "completed"):
                 canonical_safe["game_phase"] = phase

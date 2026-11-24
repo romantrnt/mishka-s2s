@@ -1234,6 +1234,8 @@ class CanonicalRuntime(SceneMenuMixin):
             effects.append({"type": "capture_open"})
         elif reason == "word_game_finished" and not preserve_output:
             effects.append(self._dialogue_prompt("DIALOGUE_FINISH", "Хорошо поиграли! Теперь можно выбрать другое занятие."))
+        elif reason == "game_completed" and state.interaction_open and not return_to_game_menu:
+            effects.append({"type": "speak", "phrase_id": "PHRASE_028"})
         return self._decision(state, effects, reason, clear_audio=True)
 
     @staticmethod
@@ -1511,8 +1513,6 @@ class CanonicalRuntime(SceneMenuMixin):
                         "type": "game_lighting", "animation": "success",
                         "origin_button": button_id, "next_preset": "ROOT_MENU",
                     })
-                if state.interaction_open:
-                    decision["effects"].append({"type": "speak", "phrase_id": outcome.feedback_id or "PHRASE_028"})
                 return decision
             effects = []
             # A release must not replace an in-flight free-light ripple.
