@@ -825,7 +825,10 @@ async function refresh({ includeStatus = true, includeState = true } = {}) {
         if (healthSnapshot || readinessSnapshot) lastHealthRefresh = Date.now();
         renderRuntimeStatus();
       }
-      if (includeState && !authBlocked) {
+      const staleAdmission = typeof readinessSnapshot?.ready === 'boolean'
+        && typeof current?.simulator?.admission?.input_ready === 'boolean'
+        && readinessSnapshot.ready !== current.simulator.admission.input_ready;
+      if ((includeState || staleAdmission) && !authBlocked) {
         try {
           const path = '/stand/state';
           const state = await (await fetchWithTimeout(path, { signal: controller.signal })).json();

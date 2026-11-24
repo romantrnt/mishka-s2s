@@ -74,6 +74,47 @@ async function phoneLifecycle(){
  assert.strictEqual(context.pendingPCM.length,0);assert.strictEqual(sent.length,2,'restore sends no old gesture or session action');
  assert.strictEqual(mediaTimers(),1,'repeated restore owns a single media timer');
 }
+async function readinessAdmissionRefresh(){
+ const {context,snapshot}=snapshotFences(),requests=[];
+ Object.assign(context,{authBlocked:false,wsReloadRequired:false,wsSnapshotReady:true,current:null,
+  healthSnapshot:null,readinessSnapshot:null,lastHealthRefresh:0,HEALTH_REFRESH_MS:0,
+  refreshInFlight:null,refreshAbortController:null,refreshBackoff:0,POLL_FALLBACK_MS:800,
+  stateSnapshotAvailable:false,AbortController,renderRuntimeStatus(){},showError:error=>{throw error;}});
+ let ready=false,next;
+ const state=(cursor,admitted,instance='a'.repeat(16))=>{
+  const value=snapshot(99,cursor,false);
+  Object.assign(value.simulator,{instance_id:instance,snapshot_revision:cursor});
+  value.simulator.admission.input_ready=admitted;
+  return value;
+ };
+ context.fetchWithTimeout=async path=>{
+  requests.push(path);
+  return {json:async()=>path==='/ready'?{ready}:path==='/health'?{status:'ok'}:next};
+ };
+ vm.runInContext(source.slice(source.indexOf('async function refresh('),source.indexOf('function stopPolling(')),context);
+ context.render(state(100,false));ready=true;next=state(101,true);
+ await context.refresh({includeStatus:true,includeState:false});
+ assert(requests.includes('/stand/state'),'healthy status polling must refresh a stale simulator admission even while WS is live');
+ assert.strictEqual(context.current,next);
+ assert.strictEqual(context.current.simulator.admission.input_ready,true);
+ requests.length=0;
+ await context.refresh({includeStatus:true,includeState:false});
+ assert(!requests.includes('/stand/state'),'unchanged admission does not add a state poll on every health tick');
+ ready=false;next=state(102,false);requests.length=0;
+ await context.refresh({includeStatus:true,includeState:false});
+ assert.strictEqual(context.current,next,'readiness loss also refreshes the input gate');
+ context.authBlocked=true;ready=true;next=state(103,true);requests.length=0;
+ await context.refresh({includeStatus:true,includeState:false});
+ assert(!requests.includes('/stand/state'),'a readiness change cannot bypass authBlocked');
+ context.authBlocked=false;context.wsReloadRequired=true;context.wsSnapshotReady=false;
+ const retained=context.current;next=state(104,true,'b'.repeat(16));requests.length=0;
+ await context.refresh({includeStatus:true,includeState:false});
+ assert(requests.includes('/stand/state'));
+ assert.strictEqual(context.current,retained,'HTTP readiness refresh cannot replace a different server instance');
+ assert.strictEqual(context.wsReloadRequired,true);
+ assert.strictEqual(context.wsSnapshotReady,false,'HTTP never verifies the replacement WebSocket');
+ assert.strictEqual(context.window.MishkaConsole.media().inputReady,false);
+}
 function modelKeyTravel(){
  const text=fs.readFileSync(root+'/phone-model.js','utf8');
  const extrusion=kind=>text.match(new RegExp('const '+kind+'=new THREE.Mesh\\(extruded\\(shape,([^,]+),([^\\)]+)\\)')).slice(1).map(Number);
@@ -826,4 +867,4 @@ async function legacyObserverFallback(){
  requests[1].resolve();assert.strictEqual((await second).order,2);
  assert.deepStrictEqual(results,[1,2],'both legacy HTTP results complete in order without a WebSocket');
 }
-(async()=>{modelKeyTravel();lightingProjection();serverInstanceRecovery();await browserLifecycle();await phoneLifecycle();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();await panelSessionControls();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone key travel, lighting, BFCache/hidden lifecycle restore, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{modelKeyTravel();lightingProjection();serverInstanceRecovery();await browserLifecycle();await phoneLifecycle();await readinessAdmissionRefresh();await gestures();await workbenchCancelledRelease();await latePermission();await microphoneWireFlow();await handsetGeneration();await panelSessionControls();menuCopy();gameGuidance();await onboardingGuidance();await simulatorQueue();await queuedAdmissionBoundaries();await legacyObserverFallback();console.log('remote phone key travel, lighting, BFCache/hidden lifecycle restore, readiness admission refresh, gestures, onboarding/dialogue/story guidance, scoped speech retry, menu copy, verified reconnect/reload admission, simulator queue cancellation, legacy HTTP fallback, handset cancellation, owned microphone pause/resume/flush and stale snapshot fences passed');})().catch(error=>{console.error(error);process.exitCode=1;});

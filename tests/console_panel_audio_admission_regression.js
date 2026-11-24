@@ -110,7 +110,7 @@ async function physicalObserver(){
  h.context.speakCommands({...value,commands:[{type:'PlayAudio',payload:{}}]});
  vm.runInContext(source.slice(source.indexOf('function microphoneEligible('),source.indexOf('function microphoneAccepting(')),h.context);
  assert.strictEqual(h.context.microphoneEligible(),false,'physical observer never admits the browser microphone');
- const paths=[];Object.assign(h.context,{refreshInFlight:null,lastHealthRefresh:0,HEALTH_REFRESH_MS:1000,healthSnapshot:null,AbortController,refreshAbortController:null,fetchWithTimeout:async path=>{paths.push(path);return {json:async()=>value};}});
+ const paths=[];Object.assign(h.context,{refreshInFlight:null,lastHealthRefresh:0,HEALTH_REFRESH_MS:1000,healthSnapshot:null,readinessSnapshot:null,AbortController,refreshAbortController:null,fetchWithTimeout:async path=>{paths.push(path);return {json:async()=>value};}});
  vm.runInContext(source.slice(source.indexOf('async function refresh('),source.indexOf('function stopPolling(')),h.context);
  await h.context.refresh({includeStatus:false});assert.deepStrictEqual(paths,['/stand/state'],'phone polling uses the supported public snapshot in physical mode');
 }
