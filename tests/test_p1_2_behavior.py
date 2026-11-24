@@ -56,6 +56,7 @@ def test_exhibition_button_six_starts_bear_dialogue_capture():
     assert result["state"]["mode"] == "bear_dialogue"
     assert result["state"]["expected_inputs"] == ["speech", "button_7", "handset_down"]
     assert [effect["type"] for effect in result["effects"]] == [
-        "exhibition_menu_selected", "lighting_preset", "capture_open", "speak",
+        "exhibition_menu_selected", "lighting_preset", "capture_open", "dialogue_prompt",
     ]
-    assert result["effects"][-1]["phrase_id"] == "PHRASE_094"
+    assert result["effects"][-1]["content_id"] == "DIALOGUE_INTRO"
+    assert result["effects"][-1]["text"] == "Давай поговорим. Чтобы вернуться в меню, нажми семь."

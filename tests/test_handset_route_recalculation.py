@@ -85,6 +85,9 @@ async def test_panel_story_playing_paused_and_dialogue_survive_handset_lift(tmp_
         assert lifted_story["reason"] == "fixed_story_started_after_handset"
         assert h.state.mode == "fixed_story_playing"
         story_audio = dict(h.app._active_audio["stand"])
+        async def pause_at_known_position():
+            return {"story_id": story_audio["content_id"], "offset_ms": 250}
+        h.app.audio.pause = pause_at_known_position
         await h.key(6)
         while h.state.mode == "story_pause_announcement":
             await h.done()
@@ -92,6 +95,9 @@ async def test_panel_story_playing_paused_and_dialogue_survive_handset_lift(tmp_
         assert h.state.handset == "up"
         assert h.state.profile_status == "identified"
         assert h.state.active_story_id is not None
+        assert h.state.story_checkpoint_confirmed
+        assert h.state.dialogue_memory.story_checkpoint == {
+            "story_id": story_audio["content_id"], "offset_ms": 250}
         # Resume story -> plays without repeating welcome
         await h.key(6)
         while h.state.mode == "story_resume_announcement":
@@ -195,7 +201,8 @@ def test_silent_panel_help_and_day_are_available_before_lift_while_dialogue_wait
     if button == 6:
         assert lifted["reason"] == "voice_open_pending_activity"
         assert any(e["type"] == "capture_open" for e in lifted["effects"])
-        assert any(e["type"] == "speak" and e["phrase_id"] == "PHRASE_094" for e in lifted["effects"])
+        assert any(e["type"] == "dialogue_prompt" and e["content_id"] == "DIALOGUE_INTRO"
+                   and e["text"] == "Давай поговорим. Чтобы вернуться в меню, нажми семь." for e in lifted["effects"])
         assert state.pending_mode is None
     else:
         assert lifted["reason"] == "panel_handset_lifted" and not lifted["effects"]

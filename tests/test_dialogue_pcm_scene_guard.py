@@ -8,6 +8,7 @@ from test_owned_private_pcm import setup, install, HANDLE
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("response_id, mode", [
+    ("DIALOGUE_INTRO", "bear_dialogue"),
     ("DIALOGUE_OFFER", "bear_dialogue"),
     ("DIALOGUE_RETURN", "bear_dialogue"),
     ("DIALOGUE_FINISH", "root_menu"),

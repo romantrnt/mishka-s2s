@@ -629,6 +629,10 @@ async function onboardingGuidance(){
  const dialoguePaused='Дослушай Мишку. Потом расскажи что-нибудь или задай вопрос. Можно написать в «Инструментах». 7 — вернуться в меню.';
  const retry='Мишка не расслышал. Попробуй ещё раз. ';
  const dialogue=show('bear_dialogue');assertHint(dialogueOff);
+ dialogue.simulator.prompt={text:'Давай поговорим. Я слушаю'};context.render(dialogue);
+ assertHint(dialogueOff);
+ assert.strictEqual(fields['phone-prompt'].textContent,'Давай поговорим. Я слушаю','recorded transcript stays available without hiding microphone/exit controls');
+ delete dialogue.simulator.prompt;context.render(dialogue);
  dialogue.simulator.microphone.eligible=false;context.render(dialogue);assertHint(unavailable);
  dialogue.simulator.microphone.eligible=true;context.render(dialogue);
  const talking=fields['phone-microphone'].onclick();assertHint(dialoguePending);await tick();

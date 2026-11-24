@@ -70,7 +70,7 @@ class NestedGame:
     async def launch(self, game):
         await self.send("HandsetLifted")
         await self.key(6)
-        assert self.state.mode == "bear_dialogue" and self.state.active_audio_id == "PHRASE_094"
+        assert self.state.mode == "bear_dialogue" and self.state.active_audio_id == "DIALOGUE_INTRO"
         await self.terminal()
         assert self.app.led.effect_snapshot()["effect"] == "breathing"
         await self.send("SpeechReceived", text=CALLER_TEXT)

@@ -81,7 +81,7 @@ async def test_actual_dialogue_listening_uses_same_logical_frame_as_static_prese
         await h.send('ButtonReleased',{'button_id':6})
         await h.send('ButtonPressed',{'button_id':6})
         await h.send('ButtonReleased',{'button_id':6})
-        assert h.state.mode=='bear_dialogue' and h.state.active_audio_id=='PHRASE_094'
+        assert h.state.mode=='bear_dialogue' and h.state.active_audio_id=='DIALOGUE_INTRO'
         await h.complete()
         expected=set(DIALOGUE_FILL_ELEMENTS+DIALOGUE_ANCHOR_ELEMENTS)
         assert {key for key,value in LED_PRESETS['LISTENING'] if value}==expected

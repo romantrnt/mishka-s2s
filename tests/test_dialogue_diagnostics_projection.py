@@ -117,7 +117,7 @@ def test_actual_validator_timeout_reaches_panel_with_fallback_and_no_text():
             await send("ButtonPressed", {"button_id": 6})
             await send("ButtonReleased", {"button_id": 6})
             owner = dict(app._active_audio[sid])
-            assert owner["content_id"] == "PHRASE_094"
+            assert owner["content_id"] == "DIALOGUE_INTRO"
             await send("AudioCompleted", {**owner, "response_id": owner["content_id"]})
             state = app.canonical_runtime.sessions[sid]
             assert state.mode == "bear_dialogue" and state.audio_open

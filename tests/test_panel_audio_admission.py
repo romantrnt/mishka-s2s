@@ -39,7 +39,7 @@ async def test_sound_button_resumes_pending_dialogue_and_late_action_cannot_reop
         result = await h.control("enable_audio", scope)
         assert result["reason"] == "panel_audio_pending_started", result
         assert h.state.mode == "bear_dialogue" and h.state.pending_mode is None
-        assert h.state.active_audio_id == "PHRASE_094" and h.state.handset == "down"
+        assert h.state.active_audio_id == "DIALOGUE_INTRO" and h.state.handset == "down"
         await h.control("end")
         result = await h.control("enable_audio", scope)
         assert result["error"]["code"] == "stale_simulator_epoch"

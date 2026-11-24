@@ -1229,7 +1229,7 @@ class CanonicalRuntime(SceneMenuMixin):
         effects = ([] if preserve_output else [{"type":"audio_stop"}, {"type":"capture_close"}]) + [{"type":"game_exit"},
                    {"type":"lighting_preset","preset":preset}]
         if returning and not preserve_output:
-            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору."))
+            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору. Чтобы вернуться в меню, нажми семь."))
         elif returning and preserve_output:
             effects.append({"type": "capture_open"})
         elif reason == "word_game_finished" and not preserve_output:
@@ -1253,7 +1253,7 @@ class CanonicalRuntime(SceneMenuMixin):
         effects = [{"type":"audio_stop"}, {"type":"capture_close"},
                    {"type":"lighting_preset", "preset":"BEAR_DIALOGUE" if returning else "ROOT_MENU"}]
         if returning:
-            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору."))
+            effects.append(self._dialogue_prompt("DIALOGUE_RETURN", "Вернулись к разговору. Чтобы вернуться в меню, нажми семь."))
         return self._decision(state, effects, reason, clear_audio=True)
 
     def _information_effect(self, state, kind, *, button_choice=False):
@@ -2023,7 +2023,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 if pending == "bear_dialogue":
                     state.substate = "dialogue_started"
                     state.dialogue_memory.touch(now)
-                    effects.append({"type": "speak", "phrase_id": "PHRASE_094"})
+                    effects.append(self._dialogue_prompt("DIALOGUE_INTRO", "Давай поговорим. Чтобы вернуться в меню, нажми семь."))
                 return self._decision(state, effects, "panel_audio_pending_started", clear_audio=True)
             effects = ([{"type": "support_question", "question": state.support_question_kind or "pain_or_discomfort"}]
                        if state.mode == "wellbeing_check" else [])
@@ -2316,7 +2316,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [], "event_ignored")
             if event.payload.get("playback_lease") and event.payload.get("playback_lease") != state.playback_lease:
                 return self._decision(state, [], "event_ignored")
-            if response_id in {"DIALOGUE_OFFER", "DIALOGUE_RETURN", "DIALOGUE_FINISH"}:
+            if response_id in {"DIALOGUE_INTRO", "DIALOGUE_OFFER", "DIALOGUE_RETURN", "DIALOGUE_FINISH"}:
                 if (not state.active_audio_id or not event.payload.get("playback_lease")
                         or event.payload["playback_lease"] != state.playback_lease):
                     return self._decision(state, [], "dialogue_prompt_stale_audio")
@@ -2853,7 +2853,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     return self._decision(state, [
                         {"type": "lighting_preset", "preset": "BEAR_DIALOGUE"},
                         {"type": "capture_open"},
-                        {"type": "speak", "phrase_id": "PHRASE_094"},
+                        self._dialogue_prompt("DIALOGUE_INTRO", "Давай поговорим. Чтобы вернуться в меню, нажми семь."),
                     ], "voice_open_pending_activity", clear_audio=True)
                 if pending == "wellbeing_check":
                     state.support_question_kind = state.support_question_kind or "pain_or_discomfort"
@@ -3036,7 +3036,7 @@ class CanonicalRuntime(SceneMenuMixin):
                         selection,
                         {"type": "lighting_preset", "preset": "BEAR_DIALOGUE"},
                         {"type": "capture_open"},
-                        {"type": "speak", "phrase_id": "PHRASE_094"},
+                        self._dialogue_prompt("DIALOGUE_INTRO", "Давай поговорим. Чтобы вернуться в меню, нажми семь."),
                     ], "bear_dialogue_started", clear_audio=True)
             if state.mode == "session_closed":
                 return self._decision(state, [], "session_closed")
@@ -3183,7 +3183,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.dialogue_memory.touch(now)
                     effects.extend([
                         {"type": "capture_open"},
-                        {"type": "speak", "phrase_id": "PHRASE_094"},
+                        self._dialogue_prompt("DIALOGUE_INTRO", "Давай поговорим. Чтобы вернуться в меню, нажми семь."),
                     ])
                     return self._decision(state, effects, "bear_dialogue_started", clear_audio=True)
                 return self._decision(state, effects, "button_mode")
