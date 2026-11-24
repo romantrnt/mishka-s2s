@@ -131,6 +131,12 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
         return target == "root_menu"
     if event_type == "AudioCompleted" and current == "story_resume_announcement" and target == "personal_story_playing":
         return True
+    if event_type == 'AudioFailed' and current in {'story_pause_announcement', 'story_resume_announcement'}:
+        return target == 'story_paused'
+    if (current == 'story_paused' and target in {'fixed_story_playing', 'personal_story_playing'}
+            and event_type in {'ButtonPressed', 'VoiceIntentReady'}):
+        return (event_type == 'ButtonPressed' or
+                (event_type == 'VoiceIntentReady' and intent in {'continue', 'resume', 'resume_story'}))
     if event_type == "ButtonPressed" and current == "personal_story_playing" and target == "story_pause_announcement":
         return True
     if event_type == "InteractionIdleExpired":
@@ -162,7 +168,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current == "exhibition_menu_repeat_prompt" and target == "exhibition_menu_repeat_listen")
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target == "fixed_story_choice_wave")
             or (current == "story_pause_announcement" and target in {"story_paused", "fixed_story_choice_wave"})
-            or (current == "story_resume_announcement" and target in {"fixed_story_playing", "fixed_story_choice_wave"})
+            or (current == "story_resume_announcement" and target in {"fixed_story_playing", "fixed_story_choice_wave", "story_paused"})
         )
     if event_type == "ExhibitionMenuWaveComplete":
         return current == "exhibition_menu_wave" and target in {"exhibition_menu_repeat_prompt", "menu_ready"}

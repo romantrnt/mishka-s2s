@@ -1295,7 +1295,8 @@ function renderStoryStatus(state) {
   const last = [...(state.results || [])].reverse().find(item => /story|fixed_story|audio/i.test(String(item.reason || '') + JSON.stringify(item.result || {})));
   const checkpoint = canonical.dialogue_memory?.story_checkpoint;
   if ($('story-id')) $('story-id').textContent = storyId;
-  if ($('story-playback')) $('story-playback').textContent = mode === 'playing' ? 'playing' : mode === 'paused' ? 'paused · resume available' : mode;
+  const checkpointPending = paused && Array.isArray(canonical.expected_inputs) && !canonical.expected_inputs.includes('button_6');
+  if ($('story-playback')) $('story-playback').textContent = mode === 'playing' ? 'playing' : mode === 'paused' ? (checkpointPending ? 'paused · checkpoint pending' : 'paused · resume available') : mode;
   if ($('story-last-event')) $('story-last-event').textContent = last?.result?.reason || last?.reason || '—';
   if ($('story-checkpoint')) $('story-checkpoint').textContent = checkpoint ? JSON.stringify(checkpoint) : '—';
   if ($('story-playback-badge')) $('story-playback-badge').textContent = mode.toUpperCase();
@@ -1648,6 +1649,10 @@ function interactionGuide(state, media) {
   }
   if (state?.canonical_state?.public_story_checkpoint_pending) {
     return ['Сказка приостановлена', 'Восстанавливаем место в сказке. Если она не продолжилась, нажми 7 и выбери сказку заново.'];
+  }
+  if (state?.session?.node === 'story_paused' && Array.isArray(state?.canonical_state?.expected_inputs)
+      && !state.canonical_state.expected_inputs.includes('button_6')) {
+    return ['Сказка на паузе', 'Место в сказке ещё не подтверждено. Если продолжить не получилось, нажми 7 и выбери сказку заново.'];
   }
   if (state?.session?.state === 'ENDED' || state?.session?.node === 'session_closed') {
     return state.session?.handset_up

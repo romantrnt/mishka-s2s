@@ -13,5 +13,20 @@ for(const phase of ['accepted','preparing','playing']) {
  context.renderStoryStatus({session:{node:'personal_story_playing'},canonical_state:{story_audio_phase:phase}});
  assert.strictEqual(fields['story-playback-badge'].textContent,phase.toUpperCase());
 }
+for (const confirmed of [false, true]) {
+ const paused={session:{node:'story_paused'},canonical_state:{expected_inputs:confirmed?['button_6','button_7','handset_down']:['button_7','handset_down']}};
+ context.renderStoryStatus(paused);
+ assert.strictEqual(fields['story-playback-badge'].textContent,'PAUSED');
+ assert.strictEqual(fields['story-playback'].textContent,confirmed?'paused · resume available':'paused · checkpoint pending');
+}
+context.interactionActive=()=>true;
+vm.runInContext(source.slice(source.indexOf('function interactionGuide('), source.indexOf('function enqueuePCM(')),context);
+const unknown={session:{node:'story_paused'},canonical_state:{expected_inputs:['button_7','handset_down']}};
+assert(context.interactionGuide(unknown,{})[1].includes('Место в сказке ещё не подтверждено'));
+assert(context.interactionGuide(unknown,{})[1].includes('нажми 7'));
+assert(!context.interactionGuide(unknown,{})[1].includes('6 — продолжить'));
+const confirmed={session:{node:'story_paused'},canonical_state:{expected_inputs:['button_6','button_7','handset_down']}};
+assert(context.interactionGuide(confirmed,{})[1].includes('6 — продолжить сказку; 7 — выйти'));
+assert(!context.interactionGuide(confirmed,{})[1].includes('Дослушай'));
 
 console.log('story status: authored/recorded playback, pause/resume, completion and new-session reset passed');

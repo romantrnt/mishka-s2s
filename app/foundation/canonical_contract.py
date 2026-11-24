@@ -1303,6 +1303,35 @@ class CanonicalRuntime(SceneMenuMixin):
             {"type":"play_fixed_story", "story_id":story_id, "asset":verified['audio_file'], "duration_ms":verified['duration_ms']}],
             'fixed_story_started', clear_audio=True)
 
+    @staticmethod
+    def _confirmed_story_checkpoint(state):
+        checkpoint = state.dialogue_memory.story_checkpoint
+        return bool(state.story_checkpoint_confirmed and isinstance(checkpoint, dict)
+                    and checkpoint.get('story_id') == state.active_story_id
+                    and type(checkpoint.get('offset_ms')) is int and checkpoint['offset_ms'] >= 0)
+
+    def _resume_paused_story(self, state):
+        if state.public_story_checkpoint_pending:
+            return self._decision(state, [], 'public_story_checkpoint_pending')
+        if not self._confirmed_story_checkpoint(state):
+            state.expected_inputs = ['button_7', 'handset_down']
+            return self._decision(state, [], 'story_checkpoint_pending')
+        state.state_version += 1
+        if state.audio_status == 'failed' and state.audio_failure_code == 'story_announcement_unavailable':
+            personal = state.active_story_id == 'PERSONAL_STORY'
+            state.mode = 'personal_story_playing' if personal else 'fixed_story_playing'
+            state.expected_inputs = ['button_6', 'button_7', 'handset_down']
+            play = ({'type': 'play_personal_story', 'content_id': 'PERSONAL_STORY',
+                     'checkpoint': state.dialogue_memory.story_checkpoint} if personal else
+                    {'type': 'story_audio_resume', 'story_id': state.active_story_id,
+                     'checkpoint': state.dialogue_memory.story_checkpoint})
+            return self._decision(state, [{'type': 'lighting_wave_resume'}, play],
+                                  'story_resumed_after_announcement_failure', clear_audio=True)
+        state.mode = 'story_resume_announcement'
+        state.expected_inputs = ['audio_completed', 'button_7', 'handset_down']
+        return self._decision(state, [{'type': 'lighting_wave_resume'}, {'type': 'speak', 'phrase_id': 'PHRASE_064'}],
+                              'story_resume_requested', clear_audio=True)
+
     def _start_game(self, state: CanonicalState, game_id: str, now: float, selection_button: int = 0,
                     *, from_dialogue: bool = False) -> dict[str, Any]:
         from_dialogue = from_dialogue or state.activity_return_mode == "bear_dialogue"
@@ -2271,6 +2300,8 @@ class CanonicalRuntime(SceneMenuMixin):
             state.dialogue_memory.story_checkpoint = {"story_id": state.active_story_id, "offset_ms": max(0, int(event.payload.get("offset_ms", 0)))}
             state.story_checkpoint_confirmed = True
             state.state_version += 1
+            if state.mode == 'story_paused':
+                state.expected_inputs = ['button_6', 'button_7', 'handset_down']
             if state.public_story_checkpoint_pending:
                 state.public_story_checkpoint_pending = False
                 state.expected_inputs = ["button_6", "button_7", "handset_down"]
@@ -2591,18 +2622,36 @@ class CanonicalRuntime(SceneMenuMixin):
             state.expected_inputs = ["speech", "handset_down"]
             state.state_version += 1
             return self._decision(state, [{"type": "capture_open"}], "exhibition_menu_repeat_listen_ready", clear_audio=True)
+        if event.event_type == 'AudioFailed' and state.mode in {'story_pause_announcement', 'story_resume_announcement'}:
+            phrase = 'PHRASE_062' if state.mode == 'story_pause_announcement' else 'PHRASE_064'
+            if (response_id != phrase or state.active_audio_id != phrase
+                    or not event.payload.get('playback_lease')
+                    or event.payload['playback_lease'] != state.playback_lease):
+                return self._decision(state, [], 'story_announcement_failure_stale')
+            state.mode = 'story_paused'
+            state.audio_status, state.audio_failure_code = 'failed', 'story_announcement_unavailable'
+            state.expected_inputs = (['button_6'] if self._confirmed_story_checkpoint(state) else []) + ['button_7', 'handset_down']
+            state.state_version += 1
+            return self._decision(state, [{'type': 'lighting_wave_pause'}],
+                                  'story_announcement_audio_failed', clear_audio=True)
         if event.event_type == "AudioCompleted" and state.mode == "story_pause_announcement":
             if response_id != "PHRASE_062":
                 return self._decision(state, [], "story_pause_announcement_completion_ignored")
             state.mode, state.substate = "story_paused", "story_paused_ready"
-            state.expected_inputs = ["button_6", "button_7", "handset_down"]
+            state.expected_inputs = (['button_6'] if self._confirmed_story_checkpoint(state) else []) + ['button_7', 'handset_down']
             state.state_version += 1
             return self._decision(state, [], "story_pause_announcement_completed", clear_audio=True)
         if event.event_type == "AudioCompleted" and state.mode == "story_resume_announcement":
             if response_id != "PHRASE_064":
                 return self._decision(state, [], "story_resume_announcement_completion_ignored")
+            if not self._confirmed_story_checkpoint(state):
+                state.mode = 'story_paused'
+                state.expected_inputs = ['button_7', 'handset_down']
+                state.state_version += 1
+                return self._decision(state, [{'type': 'lighting_wave_pause'}], 'story_checkpoint_pending', clear_audio=True)
             if state.active_story_id == "PERSONAL_STORY":
                 state.mode = "personal_story_playing"
+                state.expected_inputs = ['button_6', 'button_7', 'handset_down']
                 state.state_version += 1
                 return self._decision(state, [{"type":"play_personal_story", "content_id":"PERSONAL_STORY",
                     "checkpoint":state.dialogue_memory.story_checkpoint}], "personal_story_resumed", clear_audio=True)
@@ -3150,11 +3199,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     return self._request_personal_story(state, theme, button=button,
                         reason="personal_story_requested_by_button")
             if state.mode == "story_paused" and button == 6:
-                if state.public_story_checkpoint_pending:
-                    return self._decision(state, [], "public_story_checkpoint_pending")
-                state.mode, state.substate, state.state_version = "story_resume_announcement", "story_resume_requested", state.state_version + 1
-                state.expected_inputs = ["audio_completed", "button_7", "handset_down"]
-                return self._decision(state, [{"type": "lighting_wave_resume"}, {"type": "speak", "phrase_id": "PHRASE_064"}], "story_resume_requested", clear_audio=True)
+                return self._resume_paused_story(state)
             if state.mode == "game_menu":
                 game_id = self._menu_selection(state, button)
                 return self._start_game(state, game_id, monotonic_now, button)
@@ -3524,10 +3569,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.state_version += 1
                 return self._decision(state, [self._information_effect(state, information)], "typed_info_requested")
             if state.mode == "story_paused" and intent in {"continue", "resume", "resume_story"}:
-                if state.public_story_checkpoint_pending:
-                    return self._decision(state, [], "public_story_checkpoint_pending")
-                state.mode, state.substate, state.state_version = "story_resume_announcement", "story_resume_requested", state.state_version + 1
-                return self._decision(state, [{"type": "lighting_wave_resume"}, {"type": "speak", "phrase_id": "PHRASE_064"}], "story_resume_requested", clear_audio=True)
+                return self._resume_paused_story(state)
             if state.mode == "story_paused" and intent in {"stop", "stop_story", "exit_story"}:
                 return self._activity_back(state, 'story_returned_to_menu')
         if event.event_type == "HardwareReconnected":

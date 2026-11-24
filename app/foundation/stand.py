@@ -3045,6 +3045,17 @@ class HardwareIntegrationStand:
             return [button for button in buttons
                     if type(button) is int and 1 <= button <= 7
                     and f"button_{button}" in state.expected_inputs]
+        if mode in {"fixed_story_playing", "personal_story_playing", "story_speech_analysis",
+                    "story_pause_announcement", "story_paused", "story_resume_announcement"}:
+            state = self.application.canonical_runtime.sessions.get(session.session_id)
+            if state is None or state.mode != mode or state.safety_severity != "none":
+                return []
+            # Help is a priority action in these story modes, independent of
+            # the current audio/checkpoint wait's ordinary expected inputs.
+            return [button for button in range(1, 8)
+                    if (f"button_{button}" in state.expected_inputs
+                        or (button == 5 and mode != "story_speech_analysis"))
+                    and not (button == 5 and mode == "story_speech_analysis")]
         if mode == "wellbeing_check":
             # 1/7 are the explicit no/yes controls; 5 repeats the question.
             return [1, 5, 7]
