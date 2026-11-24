@@ -32,7 +32,7 @@ from .events import EventValidationError, parse_event
 from .domain import EVENT_TYPES, Event, Lifecycle, PlaybackHandle
 from .hardware import (HardwareFrame, PTYUARTSimulator, PosixSerialTransport,
                        SerialHardwareAdapter, decode_frame, encode_frame)
-from .canonical_contract import FixedStoryManifest, canonical_state_nodes
+from .canonical_contract import FixedStoryManifest, canonical_state_nodes, is_information_dialogue
 from .s2s import (AudioChunk, SoundDeviceCaptureController, SoundDevicePlaybackController,
                   AUDIO_FAILURE_STAGES, AUDIO_FAILURE_EXCEPTION_CLASSES, AUDIO_FAILURE_CODES,
                   _AUDIO_OWNER_CANCELLED)
@@ -1353,7 +1353,8 @@ class HardwareIntegrationStand:
             return self.application._personal_story_scope(handle.session_id, owner, playback=True)
         if handle.response_id == "PERSONAL_WELCOME" or handle.response_id in PRIVATE_TYPED_AUDIO_IDS:
             if (handle.response_id in PRIVATE_TYPED_AUDIO_IDS and state.mode != "schedule_weather"
-                    and not (state.mode == 'bear_dialogue' and handle.response_id == 'TYPED_'+str(state.dialogue_information_kind).upper())):
+                    and not (is_information_dialogue(state.mode, state.safety_severity)
+                             and handle.response_id == 'TYPED_'+str(state.dialogue_information_kind).upper())):
                 return False
             capability = "personalize" if handle.response_id in {"PERSONAL_WELCOME", 'TYPED_CARD_DOCTORS'} else "schedule"
             return bool(identity_binding and all(identity_binding)
@@ -1375,7 +1376,7 @@ class HardwareIntegrationStand:
                 and lease.get('_catalogue_choice_descriptor') == state.scene_menu_descriptor)
         if handle.response_id in MENU_PCM_MODES:
             return state.mode == MENU_PCM_MODES[handle.response_id]
-        return (state.mode == "schedule_weather" or (state.mode == 'bear_dialogue'
+        return (state.mode == "schedule_weather" or (is_information_dialogue(state.mode, state.safety_severity)
             and handle.response_id == 'TYPED_'+str(state.dialogue_information_kind).upper()))
 
     def _personal_story_checkpoint_current(self, handle, story_owner, hid_generation) -> bool:

@@ -12,7 +12,7 @@ from typing import Any, Mapping, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from app.foundation.canonical_contract import STATE_NAMES
+from app.foundation.canonical_contract import STATE_NAMES, is_information_dialogue
 from app.foundation.game_engine import IMMERSIVE_GAME_SPECS
 
 
@@ -47,10 +47,10 @@ GRAPH_POLICY_VERSION = "canonical-product-policy-v3"
 # These are capabilities, not I/O implementations. The application layer
 # remains the only owner allowed to call providers, audio, LEDs or storage.
 TOOL_CAPABILITY_POLICY: dict[str, dict[str, Any]] = {
-    "date": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": False},
-    "weather": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": False},
-    "schedule": {"states": frozenset({"schedule_weather", "bear_dialogue"}), "profile_required": True},
-    'card_doctors': {'states':frozenset({'schedule_weather','bear_dialogue'}), 'profile_required':True},
+    "date": {"states": frozenset({"schedule_weather", "bear_dialogue", "support_intake"}), "profile_required": False},
+    "weather": {"states": frozenset({"schedule_weather", "bear_dialogue", "support_intake"}), "profile_required": False},
+    "schedule": {"states": frozenset({"schedule_weather", "bear_dialogue", "support_intake"}), "profile_required": True},
+    'card_doctors': {'states':frozenset({'schedule_weather','bear_dialogue','support_intake'}), 'profile_required':True},
 }
 MODEL_ACTION_POLICY: dict[str, Any] = {
     "led": {"patterns": frozenset({"calm", "attention", "off"}), "states": frozenset(STATE_NAMES - {"safety_stop"})},
@@ -423,12 +423,14 @@ class CanonicalLangGraphAuthorizer:
             "policy_version": GRAPH_POLICY_VERSION,
         }
 
-    def authorize_tool(self, current_mode: str | None, tool: str, *, profile_status: str = "anonymous") -> dict[str, Any]:
+    def authorize_tool(self, current_mode: str | None, tool: str, *, profile_status: str = "anonymous",
+                       safety_severity: str | None = None) -> dict[str, Any]:
         current = str(current_mode or "idle")
         name = str(tool or "")
         policy = TOOL_CAPABILITY_POLICY.get(name)
         allowed = bool(policy and current in policy["states"] and
-                       (not policy["profile_required"] or profile_status == "identified"))
+                       (not policy["profile_required"] or profile_status == "identified")
+                       and (current != "support_intake" or is_information_dialogue(current, safety_severity)))
         return {"ok": allowed, "reason": "tool_allowed" if allowed else "tool_capability_rejected",
                 "tool": name, "provider_boundary": "application_owned", "policy_version": GRAPH_POLICY_VERSION}
 

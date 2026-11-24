@@ -27,7 +27,7 @@ from .config import settings_from_compat_env
 from .identity import IdentityDecision, IdentityValidationError, validate_identity_decision
 from .input_safety import InputSafetyGate
 from .lifecycle import RuntimeBusyError
-from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest
+from .canonical_contract import CanonicalEvent, CanonicalRuntime, FixedStoryManifest, is_information_dialogue
 from .system_prompt import build_system_prompt
 from .private_welcome import PrivateWelcomeMixin
 from .owned_speech import OwnedSpeechMixin, TYPED_AUDIO_IDS, MENU_AUDIO_IDS
@@ -3334,7 +3334,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         return stale_result()
                     tool_auth = self.transition_authorizer.authorize_tool(
                         snapshot.get("mode"), tool_name,
-                        profile_status=str(snapshot.get("profile_status") or "anonymous"))
+                        profile_status=str(snapshot.get("profile_status") or "anonymous"),
+                        safety_severity=snapshot.get("safety_severity"))
                     effect["tool_authorization"] = dict(tool_auth)
                     if not tool_auth.get("ok"):
                         unavailable_reason = "typed_information_blocked_by_policy"
@@ -3361,7 +3362,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         weather_scope=request_scope)
                     def audio_current():
                         return bool(still_current() and state_owner.interaction_open
-                            and (state_owner.mode == "schedule_weather" or (state_owner.mode == 'bear_dialogue'
+                            and (state_owner.mode == "schedule_weather" or (is_information_dialogue(
+                                state_owner.mode, state_owner.safety_severity)
                                 and state_owner.dialogue_information_kind == tool_kind))
                             and state_owner.playback_lease == effect.get("playback_lease")
                             and (not private_capability or self._identity_scope_live(event.session_id,private_capability)))

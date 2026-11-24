@@ -34,6 +34,11 @@ BUTTON_MODES = {
     4: "support_intake", 5: "wellbeing_check", 6: "bear_dialogue",
     7: "schedule_weather",
 }
+def is_information_dialogue(mode: str | None, safety_severity: str | None) -> bool:
+    """Only ordinary dialogue may own a sourced factual response."""
+    return mode in {'bear_dialogue', 'support_intake'} and safety_severity == 'none'
+
+
 LIGHTING_ELEMENT_IDS = tuple(range(18))
 SILENT_HOLD_WAVE_ORDER = (6, 7, 5, 4, 3, 2, 1)
 SILENT_HOLD_STEP_SECONDS = 5.0 / len(SILENT_HOLD_WAVE_ORDER)
@@ -1290,7 +1295,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.pending_tool = kind
             return {'type': 'visual', 'view': 'information_audio_required'}
         state.pending_tool = None
-        if state.mode == 'bear_dialogue':
+        if is_information_dialogue(state.mode, state.safety_severity):
             state.dialogue_information_kind = kind
         return {'type':'typed_info_request', 'kind':kind}
 
@@ -1606,7 +1611,7 @@ class CanonicalRuntime(SceneMenuMixin):
                 "story_speech_analysis", "story_pause_announcement", "story_paused", "story_resume_announcement",
                 "fixed_story_choice_wave", "personal_story_theme", "personal_story_generating", "personal_story_validating", "personal_story_playing"} or not state.interaction_open or state.safety_severity != "none"):
             state.activity_return_mode = None
-        if state.mode != "bear_dialogue" or state.safety_severity != "none":
+        if not is_information_dialogue(state.mode, state.safety_severity):
             state.dialogue_information_kind = None
         if state.mode not in {"personal_story_generating", "personal_story_validating", "personal_story_playing",
                               "story_pause_announcement", "story_paused", "story_resume_announcement"}:
@@ -2296,7 +2301,8 @@ class CanonicalRuntime(SceneMenuMixin):
                 return self._decision(state, [{'type':'speak','phrase_id':'PHRASE_104'}],
                                       'word_game_retry', clear_audio=True)
             if (event.payload.get("reason") == "typed_information_unavailable"
-                    and state.mode in {"schedule_weather", "bear_dialogue"} and state.interaction_open):
+                    and (state.mode == "schedule_weather" or is_information_dialogue(state.mode, state.safety_severity))
+                    and state.interaction_open):
                 state.state_version += 1
                 phrase = "PHRASE_101" if event.payload.get("kind") in {"what_next", "where_now", 'card_doctors'} else "PHRASE_100"
                 return self._decision(state, [{"type": "audio_stop"}, {"type": "speak", "phrase_id": phrase}],
@@ -2518,7 +2524,8 @@ class CanonicalRuntime(SceneMenuMixin):
                 and (response_id.startswith("TYPED_") or response_id in {"PHRASE_100", "PHRASE_101"})):
             state.state_version += 1
             return self._decision(state, [], "typed_information_finished", clear_audio=True)
-        if (event.event_type in {'AudioCompleted', 'AudioFailed'} and state.mode == 'bear_dialogue'
+        if (event.event_type in {'AudioCompleted', 'AudioFailed'}
+                and is_information_dialogue(state.mode, state.safety_severity)
                 and state.dialogue_information_kind and response_id in {
                     'TYPED_'+state.dialogue_information_kind.upper(), 'PHRASE_100', 'PHRASE_101'}):
             state.dialogue_information_kind = None
@@ -3582,11 +3589,9 @@ class CanonicalRuntime(SceneMenuMixin):
                 state.dialogue_memory.bounded_turns.append({"kind": "name", "value": name})
                 state.dialogue_memory.touch(now)
                 return self._start_exhibition_age(state, "exhibition_age_question_started")
-            if state.mode in {"support_intake", "wellbeing_check"}:
+            if state.mode == "wellbeing_check" or (state.mode == "support_intake"
+                    and not is_information_dialogue(state.mode, state.safety_severity)):
                 state.state_version += 1
-                if state.mode == "support_intake" and state.safety_severity == "none":
-                    state.dialogue_memory.touch(now)
-                    return self._decision(state, [{"type": "bounded_dialogue_turn", "intent": intent}], "support_dialogue_turn")
                 return self._decision(state, [{"type": "support_response", "kind": intent}], "support_response")
             if state.mode == "personal_story_theme":
                 if state.scene_menu_phase != "ready" or not getattr(self, 'personal_story_capable', False):
@@ -3595,10 +3600,11 @@ class CanonicalRuntime(SceneMenuMixin):
                 if selected is None:
                     return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_075"}], "story_choice_unrecognized")
                 return self._request_personal_story(state, intent)
-            if state.mode == "bear_dialogue":
+            if is_information_dialogue(state.mode, state.safety_severity):
                 pending_information = state.dialogue_information_kind is not None
                 state.dialogue_information_kind = None
-                state.dialogue_memory.bounded_turns.append({"intent": intent})
+                if state.mode == "bear_dialogue":
+                    state.dialogue_memory.bounded_turns.append({"intent": intent})
                 state.dialogue_memory.touch(now)
                 state.state_version += 1
                 # A model action is not the authority for real-world facts.
@@ -3609,7 +3615,9 @@ class CanonicalRuntime(SceneMenuMixin):
                     return self._decision(state, [{'type':'audio_stop'}, {'type':'capture_close'},
                         self._information_effect(state, information)], 'typed_info_requested', clear_audio=True)
                 return self._decision(state, ([{'type':'audio_stop'}, {'type':'capture_close'}] if pending_information else [])
-                    + [{"type": "bounded_dialogue_turn", "intent": intent}], "dialogue_turn", clear_audio=pending_information)
+                    + [{"type": "bounded_dialogue_turn", "intent": intent}],
+                    "support_dialogue_turn" if state.mode == "support_intake" else "dialogue_turn",
+                    clear_audio=pending_information)
             if state.mode == "schedule_weather":
                 from .canonical_services import day_information_intent
                 information = day_information_intent(transient_text or "")
