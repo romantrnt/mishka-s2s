@@ -3056,6 +3056,15 @@ class HardwareIntegrationStand:
                     if (f"button_{button}" in state.expected_inputs
                         or (button == 5 and mode != "story_speech_analysis"))
                     and not (button == 5 and mode == "story_speech_analysis")]
+        if mode in {"bear_dialogue", "support_intake"}:
+            state = self.application.canonical_runtime.sessions.get(session.session_id)
+            if state is None or state.mode != mode or state.safety_severity == "urgent":
+                return []
+            # The invitation consumes button presses before priority help.
+            # Consent becomes available only after its owned audio terminates.
+            if mode == "bear_dialogue" and state.pending_game_offer:
+                return ([1, 7] if state.game_offer_ready and not state.active_audio_id else [7])
+            return [5, 7]
         if mode == "wellbeing_check":
             # 1/7 are the explicit no/yes controls; 5 repeats the question.
             return [1, 5, 7]
