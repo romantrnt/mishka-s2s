@@ -2277,7 +2277,7 @@ class SoundDevicePlaybackController:
                 self._stream = None
 
     async def play(self, audio):
-        await self._play_guarded(audio)
+        return await self._play_guarded(audio)
 
     async def play_owned_pcm(self, audio, owner_current, *, start_position_samples=None, on_started=None):
         # A resumed RAM story binds its offset to this request, not a mutable
@@ -2719,6 +2719,12 @@ class AudioSynthesisQueue:
         if callable(self.first_pcm_hook):
             self.first_pcm_hook()
 
+    @staticmethod
+    def _check_playback_result(result, cancelled):
+        # Legacy adapters return None; an explicit partial write is not success.
+        if isinstance(result, PCMPlaybackResult) and not result.completed and not cancelled():
+            raise RuntimeError("local playback incomplete")
+
     async def start(self,session_id,token):
         if self.worker is not None and not self.worker.done():
             raise RuntimeError("audio synthesis queue already running")
@@ -3100,10 +3106,11 @@ class AudioSynthesisQueue:
 
                     self.playback.active_token = token
                     started = time.perf_counter()
-                    await asyncio.wait_for(
+                    result = await asyncio.wait_for(
                         self.playback.play_stream(_native_chunks(), on_chunk=_on_chunk),
                         self.config.playback_timeout_s,
                     )
+                    self._check_playback_result(result, cancelled)
                     self.metrics.observe("playback", started)
                     self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
                     if cancelled():
@@ -3144,7 +3151,8 @@ class AudioSynthesisQueue:
                             ownership.active_audio_bytes = audio.size_bytes
                         started = time.perf_counter()
                         self._notify_first_pcm(audio)
-                        await asyncio.wait_for(self.playback.play(audio), self.config.playback_timeout_s)
+                        result = await asyncio.wait_for(self.playback.play(audio), self.config.playback_timeout_s)
+                        self._check_playback_result(result, cancelled)
                         self.metrics.observe("playback", started)
                         self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
                         if cancelled():
@@ -3230,10 +3238,11 @@ class AudioSynthesisQueue:
 
                             self.playback.active_token = token
                             pb_started = time.perf_counter()
-                            await asyncio.wait_for(
+                            result = await asyncio.wait_for(
                                 self.playback.play_stream(_pre_chunks(), on_chunk=_on_pre_chunk),
                                 self.config.playback_timeout_s,
                             )
+                            self._check_playback_result(result, cancelled)
                             self.metrics.observe("playback", pb_started)
                             self.metrics.observe_voice_stage(session_id, "playback", pb_started, generation_id=self.trace_generation_id)
                             if cancelled():
@@ -3277,7 +3286,8 @@ class AudioSynthesisQueue:
                                         self.metrics.mark_playback_start(session_id)
                                     playback_started = True
                                 self._notify_first_pcm(sub_audio)
-                                await asyncio.wait_for(self.playback.play(sub_audio), self.config.playback_timeout_s)
+                                result = await asyncio.wait_for(self.playback.play(sub_audio), self.config.playback_timeout_s)
+                                self._check_playback_result(result, cancelled)
                                 sub_idx += 1
                     finally:
                         if not pre_task.done():
@@ -3347,7 +3357,9 @@ class AudioSynthesisQueue:
                         self.metrics.mark_playback_start(session_id)
                     playback_started=True
                     self._notify_first_pcm(audio)
-                    await asyncio.wait_for(self.playback.play(audio),self.config.playback_timeout_s); self.metrics.observe(stage,started); self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
+                    result = await asyncio.wait_for(self.playback.play(audio),self.config.playback_timeout_s)
+                    self._check_playback_result(result, cancelled)
+                    self.metrics.observe(stage,started); self.metrics.observe_voice_stage(session_id, "playback", started, generation_id=self.trace_generation_id)
                     if cancelled():
                         self._transition(chunk_index,"cancelled")
                         self.metrics.event("playback_cancelled", chunk_index=chunk_index, token=token)
