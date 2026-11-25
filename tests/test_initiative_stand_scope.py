@@ -87,3 +87,81 @@ async def test_owned_browser_completion_cannot_overtake_final_pcm_delivery():
         release.set()
         await asyncio.gather(pending, return_exceptions=True)
         await cleanup(stand, boundary)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('boundary', ['played_then_urgent', 'help_while_capture_closed'])
+async def test_owned_offer_physical_style_output_epoch_and_capture_boundaries(monkeypatch, boundary):
+    """Real capture callback/queue, UART help and app safety; synthetic PCM/STT/speaker."""
+    import asyncio
+    from app.foundation.s2s import STTResult
+    from app.foundation.stand import HeadlessAudioOutput, HEADLESS_OUTPUT_TAIL_S
+    from test_unavailable_activity_app import conversation
+    from test_dialogue_initiative_app import model, proposal, content
+
+    h = await conversation()
+    stand, calls = await active_stand(monkeypatch)
+    original = stand.application
+    stand.application, stand.active_session_id = h.app, h.sid
+    stand.audio_output = HeadlessAudioOutput()
+    stand.audio_output.on_pcm_play = stand._headless_pcm_play
+    stand.audio_output.on_cancel = lambda token: stand._cancel_response_audio()
+    h.app.audio = stand.audio_output
+    h.app.bounded_s2s.playback = stand.playback
+    recognized = []
+    class Recognizer:
+        text = 'Давай'
+        async def transcribe(self, audio, cancelled):
+            recognized.append(audio.samples)
+            return STTResult(self.text, .99, 0., False, {})
+    recognizer = Recognizer()
+    h.app.s2s_audio.recognizer = recognizer
+    release = None
+    try:
+        model(h, proposal(), content())
+        old = stand._headless_frame_owner()
+        assert old[1]() and old[1].initiative_scope[2] is None
+        stand._enqueue_headless_audio_frame((.5,) * 512, old)
+        await h.send('SpeechReceived', text='Мне нравится лес')
+        release = await asyncio.wait_for(calls.get(), 3)
+        assert h.state.active_audio_id == 'INITIATIVE_OFFER'
+        assert not stand._headless_audio_accepting()
+        assert not h.state.pending_initiative.ready
+        assert 5 in stand.panel_snapshot()['session']['enabled_buttons']
+        denied = stand._headless_frame_owner()
+        before = stand._headless_audio_queue.qsize()
+        stand._enqueue_headless_audio_frame((.5,) * 512, denied)
+        assert stand._headless_audio_queue.qsize() == before
+        if boundary == 'help_while_capture_closed':
+            result = await stand.inject('button', {'button_id': 5, 'state': 'pressed'}, h.sid)
+            await stand.inject('button_released', {'button_id': 5, 'state': 'released'}, h.sid)
+            assert not result.get('error') and h.state.pending_initiative is None
+            assert h.state.active_audio_id != 'INITIATIVE_OFFER'
+            assert not recognized and len(h.model.calls) == 1
+            return
+        release.set()
+        await asyncio.gather(*tuple(stand._response_audio_tasks))
+        await asyncio.sleep(HEADLESS_OUTPUT_TAIL_S + .02)
+        assert h.state.pending_initiative.ready and stand._headless_audio_accepting()
+        assert old[1].lifecycle_current() and not old[1]() and not denied[1]()
+        stand._headless_audio_queue.put_nowait(None)
+        await stand._headless_audio_worker()
+        assert not recognized and len(h.model.calls) == 1, 'old output-epoch speech cannot accept the later offer'
+        recognizer.text = 'Меня бьют.'
+        stand._headless_audio_queue = asyncio.Queue()
+        for _ in range(14): stand._enqueue_headless_audio_frame((.5,) * 512)
+        for _ in range(20): stand._enqueue_headless_audio_frame((0.,) * 512)
+        stand._headless_audio_queue.put_nowait(None)
+        await asyncio.wait_for(stand._headless_audio_worker(), 3)
+        pending = tuple(h.app._audio_completions.get(h.sid, ()))
+        if pending: await asyncio.wait_for(asyncio.gather(*pending), 3)
+        assert len(recognized) == 1
+        assert h.state.mode == 'safety_stop' and h.state.safety_severity == 'urgent'
+        assert h.state.pending_initiative is None and h.state.game_engine_state is None
+    finally:
+        if release is not None: release.set()
+        for task in tuple(stand._response_audio_tasks): task.cancel()
+        await asyncio.gather(*tuple(stand._response_audio_tasks), return_exceptions=True)
+        await h.close()
+        stand.application = original
+        await close(stand)

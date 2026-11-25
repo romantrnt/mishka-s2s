@@ -1392,8 +1392,12 @@ class HardwareIntegrationStand:
             return (state.mode == "bear_dialogue" and state.pending_game_offer is not None
                     and not state.game_offer_ready)
         if handle.response_id == "INITIATIVE_OFFER":
-            return (state.mode == "bear_dialogue" and state.safety_severity == "none"
-                    and "button_1" not in state.expected_inputs)
+            offer = getattr(state, "pending_initiative", None)
+            scope = getattr(self.application, "_dialogue_initiative_scope", lambda _sid: None)(handle.session_id)
+            return bool(state.mode == "bear_dialogue" and state.safety_severity == "none"
+                        and offer is not None and not offer.ready and scope
+                        and scope[2:] == (offer.nonce, "offer", False)
+                        and "button_1" not in state.expected_inputs)
         if handle.response_id == "ACTIVITY_UNAVAILABLE":
             return state.mode == "bear_dialogue" and state.safety_severity == "none"
         if handle.response_id == "DIALOGUE_INTRO":
