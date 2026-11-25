@@ -218,7 +218,7 @@ async def test_actual_app_failed_question_keeps_nonverbal_choice(phrase):
             await h.release(7)
         if phrase == 'PHRASE_075':
             await h.complete()
-            await h.send('SpeechReceived', text='4–5')
+            await h.send('SpeechReceived', text='не уверен')
         assert h.state.active_audio_id == phrase
         result = await h.complete(failed=True)
         assert h.state.active_audio_id is None and h.sid not in h.app._active_audio
