@@ -47,6 +47,16 @@ def test_repeated_wrong_word_gives_valid_required_letter_example_and_valid_move_
     accepted=play(word,state,'6-7',hint_level=second.hint_level)
     assert accepted.accepted and accepted.hint_level==0 and spelling(word) in accepted.state.used
 
+def test_repeat_first_gives_required_letter_then_example_without_consuming_move():
+    state=WordState(('кот','тигр'),'р')
+    first=play('кот',state,'6-7')
+    assert 'уже было' in first.text and 'букву Р' in first.text and 'Например' not in first.text
+    second=play('кот',first.state,'6-7',hint_level=first.hint_level)
+    assert not first.accepted and not second.accepted and first.state is second.state is state
+    example=example_for(state,'6-7')
+    assert 'Например' in second.text and example in second.text
+    assert play(example,second.state,'6-7',hint_level=second.hint_level).accepted
+
 def test_offered_example_can_become_a_real_child_move():
     state=WordState();hint=play('Помоги',state,'4-5',hint_level=1)
     word=example_for(state,'4-5')
