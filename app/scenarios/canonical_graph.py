@@ -152,6 +152,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
         return current == "story_paused" and target == "fixed_story_playing"
     if event_type == "ExhibitionOnboardingComplete":
         return current == "exhibition_onboarding_complete" and target == "exhibition_menu_tutorial_buttons"
+    if event_type in {"AudioCompleted", "AudioFailed"} and current == "bear_dialogue" and target == "game_menu":
+        return True
     if event_type in {"AudioCompleted", "AudioFailed"} and current == "voice_welcome" and target == "root_menu":
         return True
     if event_type == "AudioCompleted":

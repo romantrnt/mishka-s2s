@@ -2223,12 +2223,27 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         self.canonical_runtime.day_menu_items = lambda sid: day_menu_items(self,sid)
         if _action_guard is not None and not _action_guard():
             return self._identity_result(event.session_id, "stale_session_generation")
+        activity_notice_choice_authorized = False
+        if (current is not None and event.event_type in {"AudioCompleted", "AudioFailed"}
+                and current.active_audio_id == "ACTIVITY_UNAVAILABLE"
+                and payload.get("response_id", payload.get("content_id")) == "ACTIVITY_UNAVAILABLE"
+                and payload.get("playback_lease") == current.playback_lease):
+            notice_context = self.conversation_contexts.get(event.session_id)
+            pending_notice = getattr(notice_context, "_pending_activity_notice", None)
+            if (pending_notice and pending_notice["state"] is current
+                    and pending_notice["epoch"] == self._session_epochs.get(event.session_id, 0)
+                    and pending_notice.get("lease") == current.playback_lease):
+                from .activity_requests import activity_request_matches
+                receipt = pending_notice["receipt"]
+                activity_notice_choice_authorized = activity_request_matches(
+                    receipt, receipt.utterance, pending_notice["action"], notice_context)
         decision = self.canonical_runtime.handle(CanonicalEvent(
             event_type=event_type, session_id=event.session_id, sequence=event.sequence,
             state_version=state_version, source=event.source, payload=payload,
             correlation_id=event.correlation_id, timestamp=event.timestamp, monotonic_timestamp=accepted_monotonic,
         ), profile, transient_text=transient_text,
            stt_busy_authorized=_stt_busy_authorized,
+           activity_notice_choice_authorized=activity_notice_choice_authorized,
            _voice_admission=voice_admission,
            private_welcome_ready=private_welcome_ready,
            personal_welcome_answer_verified=personal_welcome_answer_verified,
@@ -2340,6 +2355,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 and (next_owner is None or next_owner.mode != "game_active"
                      or next_owner.active_game_id != "word_game")):
             self._drop_dialogue_context(event.session_id)
+        pending_notice = getattr(game_context, "_pending_activity_notice", None)
+        if pending_notice is not None:
+            if (next_owner is pending_notice["state"] and next_owner.mode == "bear_dialogue"
+                    and next_owner.activity_notice_target == "games"
+                    and next_owner.active_audio_id == "ACTIVITY_UNAVAILABLE"
+                    and pending_notice["epoch"] == self._session_epochs.get(event.session_id, 0)):
+                pending_notice.setdefault("lease", next_owner.playback_lease)
+            else:
+                del game_context._pending_activity_notice
         self._transition_dialogue_memory(
             event.session_id, event.event_type, previous_state,
             self.canonical_runtime.sessions.get(event.session_id),
@@ -2958,7 +2982,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              resolution="dialogue_prompt_unavailable")
                 else:
                     try:
-                        if effect["content_id"] in {"DIALOGUE_INTRO", "DIALOGUE_RETURN"}:
+                        if effect["content_id"] in {"DIALOGUE_INTRO", "DIALOGUE_RETURN", "ACTIVITY_UNAVAILABLE"}:
                             await self._set_dialogue_lighting_phase(event.session_id, "output", current=prompt_current)
                             if not prompt_current():
                                 return stale_result()
@@ -3332,9 +3356,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             if not ordinary_dialogue or exit_requested:
                                 fallback_reason = "dialogue_exit"
                         from .activity_requests import activity_target, activity_request_matches
-                        if any(activity_target(action) is not None and not activity_request_matches(
+                        if any(activity_target(action) is None or not activity_request_matches(
                                 getattr(turn, "activity_request", None), transient_text, action, turn_context)
-                               for action in turn.actions):
+                               for action in turn.actions if action.value in {"offer_game", "open_catalog", "play_story"}):
                             fallback_reason = "activity_request_unverified"
                         effect["resolution"] = ("bounded_dialogue_completed" if fallback_reason is None
                                                 else "bounded_dialogue_fallback")
@@ -3359,9 +3383,15 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                     if conversational_information_intent(transient_text or '') != target:
                                         fallback_reason = 'model_action_rejected'
                                 if fallback_reason is None:
+                                    receipt = getattr(turn, "activity_request", None)
+                                    notice_code = (getattr(receipt, "notice_code", None)
+                                        if action == "open_catalog" and target == "games" else None)
+                                    if notice_code == "riddles_unavailable":
+                                        turn_context._pending_activity_notice = {"receipt": receipt, "action": request,
+                                            "state": state_owner, "epoch": self._session_epochs.get(event.session_id, 0)}
                                     followup = await self._receive_canonical_event(self._internal_followup(event,
                                         'DialogueFallback', 'bounded_catalogue', {'reason':'catalogue_request',
-                                            'action':action, 'target':target}, 'catalogue-request'),
+                                            'action':action, 'target':target, 'notice_code':notice_code}, 'catalogue-request'),
                                         dialogue_fallback_authorized=True,
                                         _weather_scope=weather_scope if action == 'request_information' and target == 'weather' else None,
                                         _weather_origin_current=still_current)
@@ -3390,6 +3420,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         effect["resolution"] = "bounded_dialogue_fallback"
                         effect["fallback_reason"] = type(exc).__name__
                         fallback_reason = "provider_or_validation_failure"
+                if fallback_reason == "unsupported_activity_offer" and still_current() and snapshot.get("mode") == "bear_dialogue":
+                    followup = await self._receive_canonical_event(self._internal_followup(
+                        event, "DialogueFallback", "bounded_activity_notice", {"reason": fallback_reason},
+                        "activity-notice"), dialogue_fallback_authorized=True)
+                    return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
                 if fallback_reason is not None and still_current():
                     fallback = await self._receive_canonical_event(self._internal_followup(
                         event, "DialogueFallback",
