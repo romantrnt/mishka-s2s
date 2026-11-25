@@ -412,3 +412,22 @@ async def test_rejected_action_repair_cannot_speak_hidden_unowned_proposal(struc
         assert result.fallback_reason=="provider_or_validation_failure" and not tts.texts and not e.playback.played
         assert len(m.calls)==2 and not result.actions and c.initiative is None
     finally:await e.cancel_session(c.session_id)
+
+
+@pytest.mark.parametrize("text,expected",[("Открой игру загадки","riddles_unavailable"),
+    ("Не открой игру загадки",None),("Мама сказала открой игру загадки",None),
+    ("Мама сказала «открой игру загадки»",None)])
+def test_open_separate_unavailable_game_keeps_current_request_attribution(text,expected):
+    from app.foundation.activity_requests import unavailable_game_request
+    assert unavailable_game_request(text)==expected
+
+
+@pytest.mark.asyncio
+async def test_open_separate_unavailable_game_uses_real_request_receipt():
+    e,c,m,tts=engine(structured=True);e.activity_request_gate,requests=classified()
+    try:
+        result=await e.run_text_turn("Открой игру загадки",c)
+        assert [a.value for a in result.actions]==["open_catalog"]
+        assert result.activity_request.notice_code=="riddles_unavailable"
+        assert requests and not m.calls and not tts.texts
+    finally:await e.cancel_session(c.session_id)
