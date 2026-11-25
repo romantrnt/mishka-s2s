@@ -1770,6 +1770,8 @@ function interactionGuide(state, media) {
     return ['Расскажи Мишке', text + ' 7 — вернуться в меню.'];
   }
   if (node === 'bear_dialogue') {
+    if (state.simulator?.prompt?.phrase_id === 'INITIATIVE_OFFER')
+      return ['Мишка предлагает', 'Дослушай Мишку. 7 — продолжить разговор; 5 — помощь.'];
     if (state.simulator?.prompt?.phrase_id === 'ACTIVITY_UNAVAILABLE')
       return ['Мишка объясняет', 'Дослушай Мишку. 7 — остаться в разговоре; 5 — помощь.'];
     const offered = {free_lights: 'Живой свет', quiz: 'Вопросы Мишки', repeat_pattern: 'Повтори огоньки',
@@ -1777,6 +1779,8 @@ function interactionGuide(state, media) {
     if (offered) return ['Поиграем в «' + offered + '»?', state.canonical_state.game_offer_ready
       ? '1 — начать; 7 — продолжить разговор. Можно сказать «да» или «нет».'
       : 'Дослушай предложение Мишки. 7 — продолжить разговор.'];
+    if (state.canonical_state?.expected_inputs?.includes('button_1'))
+      return ['Начнём?', '1 — начать; 7 — продолжить разговор; 5 — помощь. Можно сказать «да» или «нет».'];
     const text = media.pending
       ? 'Разреши микрофон в окне браузера. Или напиши Мишке в «Инструментах».'
       : !media.microphone
