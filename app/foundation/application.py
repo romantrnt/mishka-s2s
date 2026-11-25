@@ -1316,7 +1316,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    self.runtime_status["idle_monitor_error"] = f"{type(exc).__name__}: {str(exc)[:160]}"
+                    self.runtime_status["idle_monitor_error"] = type(exc).__name__
                 await asyncio.sleep(interval)
 
         self._idle_monitor_task = asyncio.create_task(monitor(), name="mishka-idle-session-monitor")
@@ -1391,7 +1391,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             event = {"at_monotonic": now, "condition": "watchdog_check_exception",
                      "session_id": None, "generation": state.get("generation"),
                      "action": "observe", "outcome": "check_failed",
-                     "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+                     "error": type(exc).__name__,
                      "lifecycle_state": state.get("state")}
             self._watchdog_record(event)
             if lifecycle is not None and hasattr(lifecycle, "observe_noncritical"):
@@ -1427,7 +1427,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     action, outcome = "observe", "noncritical"
                     logger.warning("watchdog observed noncritical condition=%s key=%s", condition, key)
             except Exception as exc:
-                error = f"{type(exc).__name__}: {str(exc)[:160]}"
+                error = type(exc).__name__
                 action, outcome = "observe", "cleanup_failed"
                 if lifecycle is not None:
                     lifecycle.observe_noncritical("watchdog_cleanup_failed", {"condition": condition, "session_id": session_id, "error": error})
@@ -1454,7 +1454,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        "session_id": None, "generation": state.get("generation"),
                                        "action": "observe", "outcome": "loop_survived",
                                        "lifecycle_state": state.get("state"),
-                                       "error": f"{type(exc).__name__}: {str(exc)[:160]}"})
+                                       "error": type(exc).__name__})
             await asyncio.sleep(self.watchdog_interval_seconds)
 
     def resource_snapshot(self) -> dict[str, Any]:
@@ -1688,8 +1688,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 await self._fire_game_timer(session_id, scope)
             except asyncio.CancelledError:
                 return
-            except Exception:
-                logger.exception("game timer failed")
+            except Exception as exc:
+                logger.error("game timer failed type=%s", type(exc).__name__)
             finally:
                 if self._game_timer_tasks.get(session_id) is asyncio.current_task():
                     self._game_timer_tasks.pop(session_id, None)
@@ -1750,8 +1750,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 await self._fire_silent_hold_tick(session_id, scope)
             except asyncio.CancelledError:
                 return
-            except Exception:
-                logger.exception("silent hold timer failed")
+            except Exception as exc:
+                logger.error("silent hold timer failed type=%s", type(exc).__name__)
             finally:
                 if tasks.get(session_id) is asyncio.current_task():
                     tasks.pop(session_id, None)
@@ -1812,8 +1812,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             await self._fire_exhibition_welcome(session_id, deadline, epoch=epoch)
         except asyncio.CancelledError:
             return
-        except Exception:
-            logger.exception("exhibition welcome timer failed", extra={"session_id": session_id})
+        except Exception as exc:
+            logger.error("exhibition welcome timer failed type=%s", type(exc).__name__)
         finally:
             if self._welcome_timers.get(session_id) is asyncio.current_task():
                 self._welcome_timers.pop(session_id, None)
@@ -3297,12 +3297,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         effect["audio_failure_type"] = type(exc).__name__
                         self.record_audio_diagnostic("audio_dispatch_failed", phrase_id=phrase_id,
                                                      content_id=phrase_id, asset_ref=effect.get("asset_ref"),
-                                                     exception_type=type(exc).__name__, detail=str(exc)[:200],
+                                                     exception_type=type(exc).__name__, detail=type(exc).__name__,
                                                      session_id=event.session_id)
                         audio_failure = {"response_id": phrase_id, "token": record.cancellation_token,
                                      "playback_lease": effect.get("playback_lease"),
                                          "error_code": "audio_dispatch_failed", "detail": type(exc).__name__}
-                        logger.exception("canonical phrase dispatch failed", extra={"phrase_id": phrase_id, "session_id": event.session_id})
+                        logger.error("canonical phrase dispatch failed type=%s", type(exc).__name__)
                     else:
                         _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=True)
                         if phrase_id == "PHRASE_008" and snapshot.get("mode") in {
@@ -3336,7 +3336,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         _set_audio_effect_status(effect, asset_status=str(asset.get("status") or "approved"), queued=False, resolution="audio_dispatch_failed")
                         self.record_audio_diagnostic("audio_dispatch_failed", phrase_id=phrase, content_id=phrase,
                                                      asset_ref=diagnosis.get("asset_ref"), exception_type=type(exc).__name__,
-                                                     detail=str(exc)[:200], session_id=event.session_id)
+                                                     detail=type(exc).__name__, session_id=event.session_id)
                         audio_failure = {"response_id": phrase, "token": record.cancellation_token,
                                          "error_code": "audio_dispatch_failed", "detail": type(exc).__name__}
                     else:
@@ -3566,8 +3566,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             "state": snapshot.get("mode"), "canonical_state": state_owner.snapshot(), "outputs": effects})
                         if inspect.isawaitable(update):
                             await update
-                    except Exception:
-                        logger.exception("personal story state update hook failed", extra={"session_id": event.session_id})
+                    except Exception as exc:
+                        logger.error("personal story state update hook failed type=%s", type(exc).__name__)
                 if not still_current():
                     return stale_result()
                 owner = await self._prepare_personal_story(event.session_id, effect.get("brief") or {}, record.cancellation_token)
@@ -3801,8 +3801,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 update = hook(event.session_id, {"reason": decision["reason"], "state": final_state.get("mode"), "canonical_state": final_state, "outputs": effects})
                 if inspect.isawaitable(update):
                     await update
-            except Exception:
-                logger.exception("canonical state update hook failed", extra={"session_id": event.session_id})
+            except Exception as exc:
+                logger.error("canonical state update hook failed type=%s", type(exc).__name__)
         if not exhibition_reset and not still_current():
             return stale_result()
         if self.optional_identity and self._identity_scope_live(event.session_id):
@@ -4558,7 +4558,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 "audio_update_hook_error", session_id=session_id,
                 generation=generation, correlation_id=correlation_id,
                 operation="audio_update_hook", exception_type=type(exc).__name__,
-                exception_class=type(exc).__name__, reason=str(exc),
+                exception_class=type(exc).__name__, reason=type(exc).__name__,
                 cleanup_completed=True, **hook_details,
             )
             if mandatory:

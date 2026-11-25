@@ -372,7 +372,7 @@ class S2SRuntimeManager:
                     if self.settings.rvc_fallback_mode == "fail_closed":
                         raise
                     converted = audio
-                    reason = f"{type(exc).__name__}: {str(exc)[:160]}"
+                    reason = type(exc).__name__
                     logger.warning("RVC warmup unavailable; continuing with clean Silero audio: %s", reason)
                     self.engine.metrics.observe("warmup_rvc_v2", rvc_started, success=False)
                     stages["rvc_v2"] = {

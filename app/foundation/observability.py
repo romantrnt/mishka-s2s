@@ -70,7 +70,7 @@ class Metrics:
                 if "ollama" in name.lower(): ollama = {"rss_bytes": self.metric(proc.info["memory_info"].rss), "pid": proc.pid}; break
         except Exception as exc:
             self.observation_errors.append({"source": "ollama_rss", "error": type(exc).__name__})
-            logger.warning("optional Ollama RSS probe failed; continuing without it: %s", exc)
+            logger.warning("optional Ollama RSS probe failed; continuing without it: %s", type(exc).__name__)
         return {"rss_bytes": rss_current, "rss_current_bytes": rss_current, "rss_peak_bytes": rss_peak, "cgroup": cgroup, "gpu": gpu, "ollama": ollama}
     def observe_resources(self, resources):
         self.active_sessions = int(resources.get("active_sessions", self.active_sessions)); self.active_tasks = int(resources.get("active_tasks", self.active_tasks))
