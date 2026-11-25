@@ -88,10 +88,13 @@ async def test_window_timeout_after_first_native_pcm_does_not_replay_or_exit(mon
         supports_dialogue_json = True
         calls = 0
         closed = False
+        def __init__(self):
+            self.entered = asyncio.Event()
         async def stream_dialogue(self, messages, request_id, cancelled, *, response_schema):
             self.calls += 1
             try:
                 yield '{"type":"say","text":"Я слушаю тебя. '
+                self.entered.set()
                 await asyncio.Event().wait()
             finally:
                 self.closed = True
@@ -99,19 +102,29 @@ async def test_window_timeout_after_first_native_pcm_does_not_replay_or_exit(mon
     try:
         quick_public_audio(h)
         await h.send('SpeechReceived', text='У меня есть кот.')
+        model, tts, playback = PartialJSON(), RecordingNativeTTS(), Playback()
+        engine = h.app.bounded_s2s
+        class CompletedJSON:
+            supports_dialogue_json = True
+            async def stream_dialogue(self, *_args, **_kwargs):
+                yield '{"type":"say","text":"Я слушаю тебя."}'
+        engine.llm, engine.tts, engine.voice, engine.playback = CompletedJSON(), tts, Voice(), playback
+        monkeypatch.setenv('MISHKA_STREAM_FIRST_JSON_CHUNK', '1')
+        await h.send('SpeechReceived', text='Давай поговорим о котах.')
+        assert playback.first.is_set() and tts.texts == ['Я слушаю тебя.'] and playback.records
+        first_records = tuple(playback.records)
+        playback.first.clear()
         context = h.app.conversation_contexts[h.state.session_id]
         context.max_duration_seconds = .5
         context.started_at = time.monotonic()
-        model, tts, playback = PartialJSON(), RecordingNativeTTS(), Playback()
-        engine = h.app.bounded_s2s
-        engine.llm, engine.tts, engine.voice, engine.playback = model, tts, Voice(), playback
-        monkeypatch.setenv('MISHKA_STREAM_FIRST_JSON_CHUNK', '1')
+        engine.llm = model
         pending = asyncio.create_task(h.send('SpeechReceived', text='Расскажи о котах.'))
-        await asyncio.wait_for(playback.first.wait(), .4)
+        await asyncio.wait_for(model.entered.wait(), .4)
         assert not pending.done() and tts.texts == ['Я слушаю тебя.']
+        assert not playback.first.is_set() and tuple(playback.records) == first_records
         result = await asyncio.wait_for(pending, 2)
         assert model.calls == 1 and model.closed and h.state.mode == 'bear_dialogue'
-        assert tts.texts == ['Я слушаю тебя.'] and len(playback.records) == 1
+        assert tts.texts == ['Я слушаю тебя.'] and tuple(playback.records) == first_records
         assert any(x.get('fallback_reason') == 'turn_timeout' for x in result['outputs'])
         assert any(x.get('phrase_id') == 'PHRASE_104' for x in result['outputs'])
         assert not any(x.get('phrase_id') == 'PHRASE_095' for x in result['outputs'])

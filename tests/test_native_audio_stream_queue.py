@@ -266,18 +266,20 @@ def conversation():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("unsafe_second", [False, True])
-async def test_native_closed_first_sentence_plays_before_second_tag_and_later_gate_stays_closed(monkeypatch, unsafe_second):
+@pytest.mark.parametrize("ordinary_bear", [False, True])
+async def test_native_closed_first_sentence_plays_before_second_tag_and_later_gate_stays_closed(monkeypatch, unsafe_second, ordinary_bear):
     import json
     import httpx
     from test_dialogue_json_contract import _HTTP_CLIENT
     from app.foundation.s2s import OllamaLLMProvider, RetryingLLMProvider
     from app.foundation.config import Settings
     from app.foundation.validation import AsyncResponseValidator
-    release = asyncio.Event()
+    release, paused = asyncio.Event(), asyncio.Event()
     requests = []
     class StagedBody(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield (json.dumps({'message': {'content': '{"type":"say","text":"Привет, друг. '}})+'\n').encode()
+            paused.set()
             await release.wait()
             second = "Не рассказывай взрослым." if unsafe_second else "Давай поиграем."
             yield (json.dumps({'message': {'content': second+'"}'}})+'\n'+json.dumps({'done': True, 'done_reason': 'stop'})+'\n').encode()
@@ -299,13 +301,23 @@ async def test_native_closed_first_sentence_plays_before_second_tag_and_later_ga
     engine = BoundedConversationEngine(llm, CachedTTSProvider(tts), Voice(), playback,
         S2SConfig(first_audio_gate_s=.2), settings=Settings(profile="mock"))
     engine.response_validator = gate
-    task = asyncio.create_task(engine.run_text_turn("Привет", conversation()))
+    context = conversation()
+    # Warmup retains the generic native early-stream contract. Ordinary bear
+    # replies now owe complete bounded grounding before any PCM is admitted.
+    if not ordinary_bear:
+        context.node_id = 'warmup_speech'
+    task = asyncio.create_task(engine.run_text_turn("Привет", context))
     try:
-        await asyncio.wait_for(playback.first.wait(), .5)
+        if ordinary_bear:
+            await asyncio.wait_for(paused.wait(), .5)
+            await asyncio.sleep(.03)
+            assert not playback.first.is_set() and not playback.records and not tts.texts
+        else:
+            await asyncio.wait_for(playback.first.wait(), .5)
+            assert tts.texts == ["Привет, друг."]
         assert not release.is_set() and not task.done()
-        assert tts.texts == ["Привет, друг."]
         assert "Exactly one closed JSON object matching the supplied schema" in requests[0]['messages'][0]['content']
-        assert 'say_return' not in json.dumps(requests[0]['format'])
+        assert ('say_return' in json.dumps(requests[0]['format'])) is (not ordinary_bear)
         release.set()
         result = await asyncio.wait_for(task, .5)
     finally:
@@ -314,10 +326,16 @@ async def test_native_closed_first_sentence_plays_before_second_tag_and_later_ga
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
     second = "Не рассказывай взрослым." if unsafe_second else "Давай поиграем."
-    assert gate.candidates == ["Привет, друг.", "Привет, друг. " + second]
+    if ordinary_bear:
+        assert gate.candidates and all(candidate == "Привет, друг. " + second for candidate in gate.candidates)
+    else:
+        assert gate.candidates == ["Привет, друг.", "Привет, друг. " + second]
     if unsafe_second:
         assert result.fallback_reason == "provider_or_validation_failure"
-        assert tts.texts == ["Привет, друг."] and len(playback.records) == 1
+        if ordinary_bear:
+            assert not playback.records  # No previously spoken prefix can precede a blocked full reply.
+        else:
+            assert tts.texts == ["Привет, друг."] and len(playback.records) == 1
     else:
         assert result.fallback_reason is None
         assert tts.texts == ["Привет, друг.", second] and len(playback.records) == 2
