@@ -1825,6 +1825,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        identity_current=None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None,
                                        _name_requires_confirmation: bool = False,
+                                       _stt_busy_authorized: bool = False,
                                        _weather_scope: str | None = None, _weather_origin_current=None,
                                        _story_checkpoint_guard=None,
                                        session_action_authorized: bool = False, _action_guard=None) -> dict[str, Any]:
@@ -1866,6 +1867,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
                 _name_requires_confirmation=_name_requires_confirmation,
+                _stt_busy_authorized=_stt_busy_authorized,
                 _weather_scope=_weather_scope,
                 _story_checkpoint_guard=_story_checkpoint_guard,
                 _safety_guidance=safety_guidance,
@@ -1905,6 +1907,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              identity_current=None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
                                              _name_requires_confirmation: bool = False,
+                                             _stt_busy_authorized: bool = False,
                                              _weather_scope: str | None = None,
                                              _story_checkpoint_guard=None,
                                              _safety_guidance: dict,
@@ -2205,6 +2208,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             correlation_id=event.correlation_id, timestamp=event.timestamp, monotonic_timestamp=accepted_monotonic,
         ), profile, transient_text=transient_text,
            name_requires_confirmation=_name_requires_confirmation,
+           stt_busy_authorized=_stt_busy_authorized,
            _voice_admission=voice_admission,
            private_welcome_ready=private_welcome_ready,
            personal_welcome_answer_verified=personal_welcome_answer_verified,
@@ -3914,6 +3918,27 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         turn_limit = POLICIES.get(profile_context.age_band, POLICIES["3-5"]).dialogue_turn_limit
         return ConversationContext(session_id, "canonical_product", node_id, allowed_topics, ("diagnosis", "medicine", "secret", "personal_data"), turn_limit, 120, 2, profile=profile_context, system_prompt=prompt)
 
+    async def _canonical_stt_busy(self, session_id, sequence, *, ingress_guard=None, barge_in=False):
+        # Capacity is a system result, never a fabricated transcript/classifier retry.
+        if ingress_guard is not None and not ingress_guard():
+            return self._identity_result(session_id, "stale_session_generation")
+        record = self.sessions.get(session_id)
+        state = self.canonical_runtime.sessions.get(session_id)
+        if record is None or state is None or not state.interaction_open:
+            return self._identity_result(session_id, "stale_session_generation")
+        if state.mode in {"exhibition_name_capture", "exhibition_age_selection"}:
+            result = await self._receive_canonical_event(Event("VoiceIntentReady", session_id, sequence,
+                self.now(), "uart_audio", {"intent": "input_busy", "safety_severity": "none"},
+                f"{record.correlation_id}:busy:{sequence}"),
+                _stt_busy_authorized=True, _action_guard=ingress_guard)
+            if result.get("reason") == "stale_session_generation":
+                return result
+        else:
+            result = self._result(record, [], "stt_busy")
+        result["outputs"] = [*(result.get("outputs") or []), {"action": "audio_retry", "reason": "stt_busy"}]
+        result.update(reason="audio_retry", audio_status="stt_busy", pending=False, barge_in=barge_in)
+        return result
+
     async def _complete_canonical_audio_turn(self, session_id: str, sequence: int, pending: asyncio.Task[Any], epoch: int, correlation_id: str, *, _ingress_guard=None, _game_audio_wait=None) -> None:
         try:
             try:
@@ -3923,6 +3948,12 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             await self.expire_identity_leases()
             session = self.sessions.get(session_id)
             if session is None or session.state == Lifecycle.ENDED or self._session_epochs.get(session_id, 0) != epoch or session.correlation_id != correlation_id:
+                return
+            if audio_result.ingress_status == "stt_busy":
+                payload = await self._canonical_stt_busy(session_id, sequence,
+                    ingress_guard=_ingress_guard, barge_in=audio_result.barge_in)
+                if payload.get("reason") != "stale_session_generation" and self._session_epochs.get(session_id, 0) == epoch:
+                    await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
                 return
             if audio_result.stt is None or not audio_result.stt.text.strip():
                 if audio_result.barge_in:
@@ -4038,6 +4069,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 completion.add_done_callback(lambda _done, wait=audio_wait: self._finish_game_audio_wait(wait))
                 self.sessions.save(session)
                 return {**self._result(session, barge_outputs, "audio_processing"), "audio_status": "processing", "pending": True, "barge_in": audio_result.barge_in}
+            if audio_result.ingress_status == "stt_busy":
+                return await self._canonical_stt_busy(session_id, sequence,
+                    ingress_guard=_ingress_guard, barge_in=audio_result.barge_in)
             if audio_result.stt is not None and audio_result.stt.text.strip():
                 logger.info(
                     "speech_received chars=%d conf=%.2f mode=%s",

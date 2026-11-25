@@ -279,6 +279,7 @@ class CanonicalState:
     name_confirmation_attempts: int = field(default=0, repr=False)
     reported_age: float | None = field(default=None, repr=False)
     age_clarification_issued: bool = field(default=False, repr=False)
+    stt_busy_notified: bool = field(default=False, repr=False)
     menu_tutorial_step: int = 0
     menu_tutorial_phase: str = "idle"
     menu_tutorial_audio_complete: bool = False
@@ -387,7 +388,7 @@ class CanonicalState:
             value.pop(private_key, None)
         # Profile display fields and schedule links stay inside the protected profile boundary.
         value.pop("display_name", None)
-        for private_key in ("pending_name", "name_confirmation_ready", "name_confirmation_attempts", "reported_age", "age_clarification_issued"):
+        for private_key in ("pending_name", "name_confirmation_ready", "name_confirmation_attempts", "reported_age", "age_clarification_issued", "stt_busy_notified"):
             value.pop(private_key, None)
         value.pop("interests", None)
         value.pop("active_trigger_topics", None)
@@ -1150,7 +1151,7 @@ class CanonicalRuntime(SceneMenuMixin):
         ], reason, clear_audio=True)
 
     def _start_exhibition_age(self, state: CanonicalState, reason: str) -> dict[str, Any]:
-        state.age_clarification_issued = False
+        state.age_clarification_issued = state.stt_busy_notified = False
         state.mode = "exhibition_age_prompt"
         state.expected_inputs = [*(f"button_{button}" for button in range(1, 8)), "audio_completed", "handset_down"]
         state.state_version += 1
@@ -1207,7 +1208,7 @@ class CanonicalRuntime(SceneMenuMixin):
                      "age_band", "age_band_source", "age_years", "age_policy", "profile_data_incomplete",
                      "current_date", "accessibility_policy", "interests", "active_trigger_topics", "acquaintance_kind",
                      "personal_story_selection", "personal_story_seed", "schedule_ref", "onboarding_name_collected", "pending_name", "name_confirmation_ready",
-                     "name_confirmation_attempts", "reported_age", "age_clarification_issued"):
+                     "name_confirmation_attempts", "reported_age", "age_clarification_issued", "stt_busy_notified"):
             setattr(state, name, getattr(fresh, name))
         state.history_tail.clear()
         state.dialogue_memory.clear()
@@ -1228,7 +1229,7 @@ class CanonicalRuntime(SceneMenuMixin):
             "age_policy", "profile_data_incomplete", "current_date",
             "accessibility_policy", "interests", "active_trigger_topics", "acquaintance_kind",
             "personal_story_selection", "personal_story_seed", "schedule_ref", "onboarding_name_collected",
-            "pending_name", "name_confirmation_ready", "name_confirmation_attempts", "reported_age", "age_clarification_issued",
+            "pending_name", "name_confirmation_ready", "name_confirmation_attempts", "reported_age", "age_clarification_issued", "stt_busy_notified",
         ):
             setattr(state, name, getattr(fresh, name))
         state.story_menu_hint_seen = state.story_menu_hint_active = False
@@ -1767,6 +1768,8 @@ class CanonicalRuntime(SceneMenuMixin):
 
     def _decision(self, state: CanonicalState, effects: list[dict[str, Any]], reason: str, *,
                   reset_session: bool = False, clear_audio: bool = False) -> dict[str, Any]:
+        if state.mode not in {"exhibition_name_capture", "exhibition_age_selection"} or not state.interaction_open or state.safety_severity != "none":
+            state.stt_busy_notified = False
         if state.mode not in {"exhibition_age_prompt", "exhibition_age_hint", "exhibition_age_selection"} or not state.interaction_open or state.safety_severity != "none":
             state.age_clarification_issued = False
         if state.mode != "exhibition_name_capture" or not state.interaction_open or state.safety_severity != "none":
@@ -1888,6 +1891,7 @@ class CanonicalRuntime(SceneMenuMixin):
     def handle(self, event: CanonicalEvent, profile: Mapping[str, Any] | None = None, *,
                transient_text: str | None = None,
                name_requires_confirmation: bool = False,
+               stt_busy_authorized: bool = False,
                _voice_admission: _VoiceAdmission | None = None,
                dialogue_fallback_authorized: bool = False,
                personal_story_authorized: bool = False,
@@ -1913,6 +1917,8 @@ class CanonicalRuntime(SceneMenuMixin):
             self.sessions[event.session_id] = state
         # Authority is an out-of-band server argument, never event.source or
         # client-controlled payload. Untrusted resolve does not consume sequence.
+        if event.event_type == "VoiceIntentReady" and event.payload.get("intent") == "input_busy" and not stt_busy_authorized:
+            return self._session_action_noop(state, "stt_busy_untrusted")
         if event.event_type in {"SessionStarted", "SessionAudioEnabled", "InterviewSkipped"} and not session_action_authorized:
             return self._session_action_noop(state, "session_action_untrusted")
         if event.event_type in {"ClientProfileReady", "ClientProfileCleared", "IdentityReadyExpired", "IdentityAuthorizationExpired"} and not identity_event_authorized:
@@ -2595,6 +2601,17 @@ class CanonicalRuntime(SceneMenuMixin):
                     return self._decision(state, [{"type": "speak", "phrase_id": "PHRASE_107"}],
                         "exhibition_age_acknowledged", clear_audio=True)
                 return self._decision(state, [], "onboarding_prompt_stale_audio")
+            if (self.exhibition_mode and state.mode in {"exhibition_name_capture", "exhibition_age_selection"}
+                    and response_id == "STT_BUSY"):
+                if (state.active_audio_id != response_id or not state.playback_lease
+                        or event.payload.get("playback_lease") != state.playback_lease):
+                    return self._decision(state, [], "stt_busy_stale_audio")
+                state.audio_status = "failed" if event.event_type == "AudioFailed" else "finished"
+                state.expected_inputs = ([*(f"button_{button}" for button in range(1, 8))]
+                    if state.mode == "exhibition_age_selection" else
+                    (["button_1", "button_5", "button_7"] if state.pending_name and state.name_confirmation_ready else ["button_5", "button_7"])) + ["speech", "handset_down"]
+                state.state_version += 1
+                return self._decision(state, [{"type": "capture_open"}], "stt_busy_retry_ready", clear_audio=True)
             if (self.exhibition_mode and state.mode == "exhibition_age_selection" and response_id == "AGE_CLARIFY"):
                 if (state.active_audio_id != response_id or not state.playback_lease
                         or event.payload.get("playback_lease") != state.playback_lease):
@@ -3608,6 +3625,18 @@ class CanonicalRuntime(SceneMenuMixin):
             if severity == "urgent":
                 return self._enter_local_safety(state, severity="urgent", reason="urgent_safety")
             intent = str(event.payload.get("intent", "free_speech"))
+            if intent == "input_busy":
+                if state.mode not in {"exhibition_name_capture", "exhibition_age_selection"} or not state.interaction_open or state.safety_severity != "none":
+                    return self._session_action_noop(state, "stt_busy")
+                if state.stt_busy_notified or state.active_audio_id:
+                    return self._session_action_noop(state, "stt_busy")
+                state.stt_busy_notified = True
+                state.state_version += 1
+                return self._decision(state, [{"type": "capture_close"},
+                    self._dialogue_prompt("STT_BUSY", "Мне нужна секундочка. Можно нажать кнопку или сказать ещё раз чуть позже.")],
+                    "stt_busy", clear_audio=True)
+            if transient_text:
+                state.stt_busy_notified = False
             if intent == "input_retry":
                 if state.mode == "personal_welcome_listen" and state.audio_status == "failed":
                     return self._decision(state, [], "personal_welcome_audio_failed")
