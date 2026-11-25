@@ -161,7 +161,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current == "exhibition_name_question" and target == "exhibition_name_capture")
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
             or (current == "exhibition_menu_repeat_listen" and target in {"exhibition_menu_repeat_listen", "exhibition_menu_replay_buttons", "menu_ready"})
-            or (current == "exhibition_age_prompt" and target == "exhibition_age_hint")
+            or (current == "exhibition_age_prompt" and target in {"exhibition_age_hint", "exhibition_age_selection"})
             or (current == "exhibition_age_hint" and target == "exhibition_age_selection")
             or (current == "exhibition_age_complete" and target == "exhibition_onboarding_complete")
             or (current == "exhibition_menu_tutorial_intro" and target == "exhibition_menu_tutorial_prompt")
@@ -176,6 +176,8 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
         return target == "exhibition_age_selection"
     if event_type == "AudioFailed" and current == "exhibition_name_question":
         return target == "exhibition_name_capture"
+    if event_type == "AudioFailed" and current == "exhibition_name_capture":
+        return target == "exhibition_age_prompt"
     if event_type == "ExhibitionMenuWaveComplete":
         return current == "exhibition_menu_wave" and target in {"exhibition_menu_repeat_prompt", "menu_ready"}
     if event_type == "StoryChoiceWaveComplete":

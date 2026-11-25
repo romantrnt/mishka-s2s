@@ -145,6 +145,8 @@ def test_failed_age_audio_leaves_a_visual_age_choice(phase):
     h.send('ButtonReleased', {'button_id': 7})
     if phase == 'hint':
         h.complete()
+        h.send('VoiceIntentReady', {'intent':'free_speech','safety_severity':'none'})
+        assert h.state.active_audio_id == 'PHRASE_075'
     result = h.complete(failed=True)
     assert result['reason'] == 'exhibition_age_audio_failed'
     assert h.state.mode == 'exhibition_age_selection' and h.state.age_years is None
@@ -216,6 +218,7 @@ async def test_actual_app_failed_question_keeps_nonverbal_choice(phrase):
             await h.release(7)
         if phrase == 'PHRASE_075':
             await h.complete()
+            await h.send('SpeechReceived', text='4–5')
         assert h.state.active_audio_id == phrase
         result = await h.complete(failed=True)
         assert h.state.active_audio_id is None and h.sid not in h.app._active_audio
@@ -294,7 +297,6 @@ async def test_actual_app_delayed_name_classification_cannot_answer_age():
         await h.button(7)
         await h.release(7)
         await h.complete()
-        await h.complete()
         version = h.state.state_version
         release.set()
         assert (await pending)['reason'] == 'stale_session_generation'
@@ -347,7 +349,6 @@ async def test_finished_name_stt_cannot_answer_age_after_skip(text, severity, ex
         assert (await h.button(7))['reason'] == 'exhibition_name_skipped_to_age'
         await h.send('ButtonReleased', {'button_id': 7})
         await h.complete()
-        await h.complete()
         version = h.state.state_version
         await h.finish_completion()
         assert h.classifications == [text], 'same-visit speech still receives mandatory safety classification'
@@ -375,7 +376,6 @@ async def test_first_name_speech_buffer_cannot_reappear_as_an_age_answer():
         assert origin is not None and origin() and origin.lifecycle_current()
         await h.button(7)
         await h.send('ButtonReleased', {'button_id': 7})
-        await h.complete()
         await h.complete()
         assert not origin() and origin.lifecycle_current()
         assert h.app.s2s_audio.ingress.get(h.sid) is not pipeline

@@ -30,7 +30,6 @@ async def test_queued_name_frame_is_revoked_but_fresh_age_frame_is_dispatched():
         assert (await h.button(7))["reason"] == "exhibition_name_skipped_to_age"
         await h.send("ButtonReleased", {"button_id": 7})
         await h.complete()
-        await h.complete()
         assert h.state.mode == "exhibition_age_selection" and h.state.age_years is None
         assert not old_owner[1]() and old_owner[1].lifecycle_current()
 

@@ -36,10 +36,8 @@ def to_age_selection(runtime, name="Меня зовут Аня"):
     )
     assert accepted["reason"] == "exhibition_age_question_started"
     state = runtime.sessions["gr03"]
-    hint = runtime.handle(ce("AudioCompleted", 7, state.state_version, "audio", {"response_id": "PHRASE_108"}))
-    assert hint["reason"] == "exhibition_age_hint_started"
-    state = runtime.sessions["gr03"]
-    result = runtime.handle(ce("AudioCompleted", 8, state.state_version, "audio", {"response_id": "PHRASE_075"}))
+    result = runtime.handle(ce("AudioCompleted", 7, state.state_version, "audio", {
+        "response_id": "PHRASE_108", "playback_lease": state.playback_lease}))
     assert result["reason"] == "exhibition_age_selection_started"
     return runtime
 
@@ -150,7 +148,7 @@ def test_webpanel_audio_completion_uses_current_canonical_path():
     asyncio.run(run())
 
 
-def test_age_hint_completion_starts_real_stand_age_digit_wave():
+def test_age_question_completion_starts_real_stand_age_digit_wave():
     from app.foundation.stand import HardwareIntegrationStand, UARTLEDController
 
     async def run():
@@ -188,8 +186,7 @@ def test_age_hint_completion_starts_real_stand_age_digit_wave():
             await complete("PHRASE_099")
             result = await send("SpeechReceived", text="Меня зовут Аня")
             assert result["reason"] == "exhibition_age_question_started"
-            assert (await complete("PHRASE_108"))["reason"] == "exhibition_age_hint_started"
-            result = await complete("PHRASE_075")
+            result = await complete("PHRASE_108")
             assert result["reason"] == "exhibition_age_selection_started"
             assert app.canonical_runtime.sessions[sid].mode == "exhibition_age_selection"
             assert app.led.effect_snapshot()["effect"] == "wave"

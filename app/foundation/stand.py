@@ -996,6 +996,11 @@ class HardwareIntegrationStand:
                      and time.monotonic() >= self._headless_output_resume_at))
             and bool(state and state.audio_open)
             and not getattr(state, "interaction_idle", False)
+            # Canonical reserves this owned lease before private synthesis starts.
+            # An obsolete application playback record cannot close a fresh listener.
+            and not (state.mode in {"exhibition_name_capture", "exhibition_age_selection"}
+                     and state.active_audio_id in {"NAME_BUTTON_HINT", "NAME_CONFIRMATION", "PHRASE_074", "PHRASE_075"}
+                     and state.playback_lease)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
                  or catalogue
@@ -1353,6 +1358,12 @@ class HardwareIntegrationStand:
         if handle.response_id == "PERSONAL_STORY":
             owner = self.application._personal_stories.get(handle.session_id)
             return self.application._personal_story_scope(handle.session_id, owner, playback=True)
+        if handle.response_id == "NAME_CONFIRMATION":
+            return (state.mode == "exhibition_name_capture" and bool(state.pending_name)
+                    and not state.name_confirmation_ready and state.safety_severity == "none")
+        if handle.response_id == "AGE_ACCEPTED":
+            return (state.mode == "exhibition_age_complete" and state.reported_age is not None
+                    and state.safety_severity == "none")
         if handle.response_id == "NAME_BUTTON_HINT":
             return state.mode == "exhibition_name_capture" and state.safety_severity == "none"
         if handle.response_id == "PERSONAL_WELCOME" or handle.response_id in PRIVATE_TYPED_AUDIO_IDS:

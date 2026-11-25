@@ -166,10 +166,9 @@ def test_current_exhibition_onboarding_contract_reaches_age_completion():
     age = runtime.handle(event("VoiceIntentReady", 7, state.state_version, "speech"), transient_text="Меня зовут Аня")
     assert [x["phrase_id"] for x in age["effects"] if x["type"] == "speak"] == ["PHRASE_108"]
     state = runtime.sessions["current-onboarding"]
-    hint = runtime.handle(event("AudioCompleted", 8, state.state_version, "audio", {"response_id": "PHRASE_108"}))
-    assert [x["phrase_id"] for x in hint["effects"] if x["type"] == "speak"] == ["PHRASE_075"]
-    state = runtime.sessions["current-onboarding"]
-    digits = runtime.handle(event("AudioCompleted", 9, state.state_version, "audio", {"response_id": "PHRASE_075"}))
+    digits = runtime.handle(event("AudioCompleted", 8, state.state_version, "audio", {
+        "response_id": "PHRASE_108", "playback_lease": state.playback_lease}))
+    assert not any(x["type"] == "speak" for x in digits["effects"])
     assert digits["state"]["mode"] == "exhibition_age_selection"
     assert any(x.get("pattern") == "age_digits_wave" for x in digits["effects"] if x["type"] == "lighting_wave_intent")
     state = runtime.sessions["current-onboarding"]
