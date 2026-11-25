@@ -6,7 +6,6 @@ import asyncio
 import re
 import stat
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_PORT = 8000
@@ -14,28 +13,19 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 class StandAccessLogRedactionFilter(logging.Filter):
-    """Redact auth query values before Uvicorn formats access records."""
+    """Keep request method/status and exception class, never private targets/bodies."""
 
-    _AUTH_QUERY_KEYS = frozenset({"token", "access_token", "stand_token"})
+    _REQUEST_TARGET = re.compile(
+        r'''((?:^|[\s"'])(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE|WebSocket)\s+)'''
+        r'''(?:https?://|wss?://|/)\S+''', re.IGNORECASE)
 
     @classmethod
     def _redact_text(cls, value):
-        if not isinstance(value, str) or "?" not in value:
+        if not isinstance(value, str):
             return value
-        # Uvicorn formats an access request as a request-line rather than a
-        # bare URL in some HTTP/WebSocket paths. Redact the value before any
-        # formatter sees that request-line.
-        pattern = re.compile(r"([?&](?:token|access_token|stand_token)=)[^&\s]+", re.IGNORECASE)
-        value = pattern.sub(r"\1<redacted>", value)
-        parts = urlsplit(value)
-        pairs = parse_qsl(parts.query, keep_blank_values=True)
-        if not any(key.lower() in cls._AUTH_QUERY_KEYS for key, _ in pairs):
-            return value
-        sanitized = [
-            (key, "<redacted>" if key.lower() in cls._AUTH_QUERY_KEYS else item)
-            for key, item in pairs
-        ]
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(sanitized), parts.fragment))
+        if value.startswith("/") or value.lower().startswith(("http://", "https://", "ws://", "wss://")):
+            return "<redacted>"
+        return cls._REQUEST_TARGET.sub(r"\1<redacted>", value)
 
     def filter(self, record):
         if isinstance(record.msg, str):
@@ -47,6 +37,11 @@ class StandAccessLogRedactionFilter(logging.Filter):
             record.args = [self._redact_text(value) for value in args]
         elif isinstance(args, dict):
             record.args = {key: self._redact_text(value) for key, value in args.items()}
+        if record.exc_info or record.exc_text:
+            exception_class = type(record.exc_info[1]).__name__ if record.exc_info else "unknown"
+            record.msg = f"{record.msg} exception_class={exception_class}"
+            record.exc_info = record.exc_text = None
+        record.stack_info = None
         return True
 
 def _resolve_env_file():

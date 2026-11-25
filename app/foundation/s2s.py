@@ -1048,8 +1048,8 @@ class FasterWhisperRecognizer:
             raise
         except Exception as exc:
             logger.warning(
-                "faster_whisper_transcribe_failed type=%s error=%s samples=%d duration_ms=%.1f",
-                type(exc).__name__, str(exc)[:240], len(audio.samples), len(audio.samples) * 1000 / audio.sample_rate,
+                "faster_whisper_transcribe_failed type=%s samples=%d duration_ms=%.1f",
+                type(exc).__name__, len(audio.samples), len(audio.samples) * 1000 / audio.sample_rate,
             )
             raise RuntimeError("faster-whisper transcription failed") from exc
         if cancelled(): raise asyncio.CancelledError
