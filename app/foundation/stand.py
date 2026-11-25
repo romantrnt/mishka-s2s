@@ -3172,6 +3172,10 @@ class HardwareIntegrationStand:
             state = self.application.canonical_runtime.sessions.get(session.session_id)
             if state is None or state.mode != mode or state.safety_severity == "urgent":
                 return []
+            if mode == "bear_dialogue" and state.pending_initiative:
+                return [button for button in (1, 5, 7)
+                        if f"button_{button}" in state.expected_inputs
+                        and (button != 1 or not state.active_audio_id)]
             # The invitation consumes button presses before priority help.
             # Consent becomes available only after its owned audio terminates.
             if mode == "bear_dialogue" and state.pending_game_offer:

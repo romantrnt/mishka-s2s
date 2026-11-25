@@ -143,6 +143,7 @@ async def test_owned_offer_physical_style_output_epoch_and_capture_boundaries(mo
         await asyncio.gather(*tuple(stand._response_audio_tasks))
         await asyncio.sleep(HEADLESS_OUTPUT_TAIL_S + .02)
         assert h.state.pending_initiative.ready and stand._headless_audio_accepting()
+        assert set(stand.panel_snapshot()['session']['enabled_buttons']) == {1, 5, 7}
         assert old[1].lifecycle_current() and not old[1]() and not denied[1]()
         stand._headless_audio_queue.put_nowait(None)
         await stand._headless_audio_worker()
