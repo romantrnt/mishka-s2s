@@ -86,6 +86,7 @@ def _silero_loader(settings: Settings):
     def probability(samples, sample_rate):
         tensor=torch.tensor(samples,dtype=torch.float32,device=device)
         return float(model(tensor,sample_rate).item())
+    probability.reset_states = model.reset_states
     return probability
 
 

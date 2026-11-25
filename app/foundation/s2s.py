@@ -756,13 +756,42 @@ class EnergyVADAdapter:
 
 class SileroVADAdapter:
     """Lazy adapter around an injected Silero callable; importing never loads torch."""
-    def __init__(self, model_loader: Callable[[], Callable[[tuple[float, ...], int], float]] | None = None): self.model_loader=model_loader; self._model: Callable[[tuple[float, ...], int], float] | None=None
+    def __init__(self, model_loader: Callable[[], Callable[[tuple[float, ...], int], float]] | None = None):
+        self.model_loader=model_loader; self._model: Callable[[tuple[float, ...], int], float] | None=None
+        self._capture_owner = None
+        self._capture_needs_reset = False
+
+    def _reset_model_state(self):
+        if self._model is None:
+            self._capture_needs_reset = True
+            return
+        reset = getattr(self._model, 'reset_states', None)
+        if callable(reset):
+            reset()
+        self._capture_needs_reset = False
+
+    def acquire_capture(self, owner):
+        if self._capture_owner is owner:
+            return
+        if self._capture_owner is not None:
+            raise RuntimeError('VAD capture is owned by another ingress')
+        self._reset_model_state()
+        self._capture_owner = owner
+
+    def release_capture(self, owner):
+        if self._capture_owner is not owner:
+            return
+        self._capture_owner = None
+        self._reset_model_state()
+
     def speech_probability(self, samples, sample_rate):
         if self._model is None:
             if self.model_loader is None: raise RuntimeError("Silero model is not configured")
             self._model=self.model_loader()
         model=self._model
         if model is None: raise RuntimeError("Silero model failed to initialize")
+        if self._capture_needs_reset:
+            self._reset_model_state()
         return float(model(samples, sample_rate))
 
     def readiness(self) -> dict[str, Any]:
@@ -798,7 +827,14 @@ class AudioIngressPipeline:
         self._speech_confirmed = False
         # Monotonic so confirmation survives an utterance ending in the same feed.
         self.speech_confirmations = 0
+        self._vad_capture_owner = object()
+        self._capture_closed = False
     def feed(self, samples: tuple[float, ...], token: int) -> tuple[str, AudioChunk | None]:
+        if self._capture_closed:
+            raise RuntimeError('audio capture is closed')
+        acquire = getattr(self.vad, 'acquire_capture', None)
+        if callable(acquire):
+            acquire(self._vad_capture_owner)
         self._vad_pending.extend(samples)
         if len(self._vad_pending) < 512:
             return "collecting", None
@@ -849,6 +885,15 @@ class AudioIngressPipeline:
             return "speech_end", chunk
         return "collecting", None
     def reset(self): self.active=False; self.silence_ms=0; self._speech_samples=0; self._silence_samples=0; self._speech_confirmed=False; self.buffer.clear(); self._vad_pending.clear(); self._pre_roll.clear(); self._canonical_private_owner = None; self._canonical_private_stale_samples = 0; self._canonical_private_replacement_owner = None
+
+    def close_capture(self):
+        if self._capture_closed:
+            return
+        self._capture_closed = True
+        self.reset()
+        release = getattr(self.vad, 'release_capture', None)
+        if callable(release):
+            release(self._vad_capture_owner)
 
 
 class MockSpeechRecognizer:
@@ -3641,17 +3686,23 @@ class LocalS2SPipeline:
                 await asyncio.shield(pending)
         await self._cancel_conversation_owner(session_id, conversation, scope, current)
 
-    def close_capture(self, session_id: str) -> None:
+    def close_capture(self, session_id: str, *, expected_ingress=None) -> None:
         """Revoke captured PCM synchronously before provider cleanup can yield."""
+        if expected_ingress is not None and self.ingress.get(session_id) is not expected_ingress:
+            return
         self.generations[session_id] = self.generations.get(session_id, 0) + 1
         pipeline = self.ingress.pop(session_id, None)
         if pipeline is not None:
-            pipeline.reset()
+            pipeline.close_capture()
 
     async def cancel_session(self, session_id: str, *, ownership_guard=None) -> None:
         if ownership_guard is not None and not ownership_guard():
             return
-        self.close_capture(session_id)
+        failure = None
+        try:
+            self.close_capture(session_id)
+        except Exception as exc:
+            failure = exc
         generation = self.generations[session_id]
         conversation = self.conversation
         capture_scope = getattr(conversation, "_capture_cancel_scope", None)
@@ -3665,14 +3716,22 @@ class LocalS2SPipeline:
         if pending is not None and not pending.done() and pending is not asyncio.current_task():
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await pending
-        await self._cancel_conversation_owner(session_id, conversation, scope, current)
+                try:
+                    await pending
+                except Exception as exc:
+                    failure = failure or exc
+        try:
+            await self._cancel_conversation_owner(session_id, conversation, scope, current)
+        except Exception as exc:
+            failure = failure or exc
         # A terminal session must not retain a generation tombstone.  New
         # input starts a fresh generation; stale completions are already
         # cancelled/awaited above.
         if (self.generations.get(session_id) == generation
                 and session_id not in self.ingress and session_id not in self.pending_tasks):
             self.generations.pop(session_id, None)
+        if failure is not None:
+            raise failure
 
 class BoundedConversationEngine:
     @property
