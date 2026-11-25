@@ -192,6 +192,7 @@ async def test_catalogue_exception_cannot_bypass_output_safety(mutation):
                 {'content_id':'MENU_FIXED_STORY'},'token',lambda:True)
             assert audio is None
         else:
+            await h.button(2)
             await h.release(2)
             assert h.state.scene_menu_phase=='ready'
             assert h.state.scene_menu_answers['fixed_story_menu']=='failed'
