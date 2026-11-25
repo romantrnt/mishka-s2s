@@ -999,7 +999,7 @@ class HardwareIntegrationStand:
             # Canonical reserves this owned lease before private synthesis starts.
             # An obsolete application playback record cannot close a fresh listener.
             and not (state.mode in {"exhibition_name_capture", "exhibition_age_selection"}
-                     and state.active_audio_id in {"NAME_BUTTON_HINT", "NAME_CONFIRMATION", "AGE_CLARIFY", "PHRASE_074", "PHRASE_075"}
+                     and state.active_audio_id in {"NAME_BUTTON_HINT", "NAME_CONFIRMATION", "AGE_CLARIFY", "STT_BUSY", "PHRASE_074", "PHRASE_075"}
                      and state.playback_lease)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
@@ -1366,6 +1366,8 @@ class HardwareIntegrationStand:
                     and state.safety_severity == "none")
         if handle.response_id == "AGE_CLARIFY":
             return state.mode == "exhibition_age_selection" and state.safety_severity == "none"
+        if handle.response_id == "STT_BUSY":
+            return state.mode in {"exhibition_name_capture", "exhibition_age_selection"} and state.safety_severity == "none"
         if handle.response_id == "NAME_BUTTON_HINT":
             return state.mode == "exhibition_name_capture" and state.safety_severity == "none"
         if handle.response_id == "PERSONAL_WELCOME" or handle.response_id in PRIVATE_TYPED_AUDIO_IDS:
