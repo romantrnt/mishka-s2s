@@ -146,7 +146,7 @@ async def test_onboarding_output_closes_native_capture_and_only_fresh_post_termi
             before=stand._headless_frame_owner()
             assert before[1]()
             stand._enqueue_headless_audio_frame((.1,.2),before)
-            await speech(h,'typed' if kind=='age_fallback' else 'recognized_pcm','4–5' if kind=='age_fallback' else 'Ома')
+            await speech(h,'typed' if kind=='age_fallback' else 'recognized_pcm','не уверен' if kind=='age_fallback' else 'Ома')
         assert h.state.active_audio_id=={'name_hint':'NAME_BUTTON_HINT','name_confirmation':'NAME_CONFIRMATION','age_fallback':'PHRASE_075'}[kind]
         assert not stand._interaction_audio_accepting()
         assert not stand._headless_audio_accepting()

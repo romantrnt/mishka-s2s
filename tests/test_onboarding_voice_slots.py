@@ -123,9 +123,9 @@ async def test_ambiguous_age_uses_neutral_button_fallback_and_keeps_same_visit(r
         await age_entry(h)
         owner=h.state
         result=await speech(h,route,'4–5')
-        assert result['reason']=='exhibition_age_unrecognized'
+        assert result['reason']=='exhibition_age_clarification_started'
         assert h.state is owner and h.state.age_years is None
-        assert h.state.active_audio_id=='PHRASE_075'
+        assert h.state.active_audio_id=='AGE_CLARIFY'
         assert 'PHRASE_074' not in str(result['outputs'])
         assert (await h.button(4))['reason']=='exhibition_age_selected'
         assert h.state.age_years==4
