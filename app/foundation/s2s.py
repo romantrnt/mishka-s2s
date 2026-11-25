@@ -2396,12 +2396,24 @@ class SoundDevicePlaybackController:
         async with self._close_lock:
             if self._stream is not stream:
                 return
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(stream.stop if drain else stream.abort)
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(stream.close)
-            if self._stream is stream:
-                self._stream = None
+            try:
+                try:
+                    if drain:
+                        # A failed drain cannot certify that the final PCM was played.
+                        await self._run_io(stream.stop)
+                    else:
+                        with contextlib.suppress(Exception):
+                            await self._run_io(stream.abort)
+                finally:
+                    # Retain native I/O ownership through cancellation, then close.
+                    with contextlib.suppress(Exception):
+                        await self._run_io(stream.close)
+            except BaseException:
+                self.last_playback_completed = False
+                raise
+            finally:
+                if self._stream is stream:
+                    self._stream = None
 
     async def play(self, audio):
         return await self._play_guarded(audio)
