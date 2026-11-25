@@ -51,6 +51,45 @@ No cloud sync or subjective voice acceptance is asserted.
 
 ## Name and attention-call changes
 
-Implementation, final regression and independent review receipts are appended
-only after the candidate is frozen. Baseline causal failures and intermediate
-fixtures remain preserved in the same Obsidian field-feedback directory.
+Name-slot baseline: four actual typed/native-PCM-fixture paths demonstrated
+incorrect automatic commitment of “На” and an imperative after a naming prefix.
+Negative grammatical ambiguity now uses the existing single owned confirmation;
+explicit strong naming cues, short/rare/unknown names and dictionary homographs
+remain available. Dictionary membership is not an admission requirement. No
+ASR threshold, age policy, profile accessibility setting or Max data changed.
+Optional morphology absence has a bounded grammatical fallback. Clarification
+keeps existing voice/button correction, skip, help, lighting and End ownership.
+
+Attention baseline: two actual bear-entry scripted-provider cases allowed a
+reintroduction into TTS despite an already played owned introduction and empty
+first-model-turn history. Complete attention calls now carry a continuation
+requirement in the generator and the same mandatory output validator. A rejected
+candidate gets at most one repair of the same input, then existing safe fallback;
+a healthy acknowledgement still uses one provider and validator turn. Explicit
+greetings and real End/Start remain legitimate. Attention preserves heard active
+inline content/answer while never reviving offered consent. Four held-abort
+cases exposed an engine shared-context stale restoration boundary; token and
+captured owner are checked before restoration/repair and after queue completion.
+The APP already guards detached context commits: no live corruption is claimed.
+
+Final joined source `1419a9f862499609a5b963844da957b591e9c610`: **119 passed in
+63.14 seconds**, no Torch/model loads, working tree clean, eleven production/test
+file hashes identical before and after. Checks: new name/attention modules plus
+existing dialogue-initiative, private-PCM and cancelled-WebSocket cleanup tests.
+The Stand HTTP reconnect, real canonical resume path, End/Start and synthetic
+native CRC/STT fixtures exercise the normal application entry. Fixtures do not
+establish the original field ASR transcript, actual LLM adherence or acoustics.
+Independent final review read the exact diff/callers, author and joined logs,
+11/11 source hashes and 36/36 voice artifacts: no remaining actionable findings.
+
+Causal REDs and intermediate failed fixtures remain preserved, including a
+corrected dictionary homograph assertion and an incorrect await of synchronous
+fixture disconnect. The full project suite, live ASR/LLM/audio and physical tube
+acceptance were not run. There is no deployment in this follow-up.
+
+Next acoustic step: isolate the pinned compatible Vox runtime and render the
+available adult original's exact greeting text; compare loudness-matched adult,
+raw native output and the normal final software path, timestamp synthesis and
+first playback separately, then capture the tube only in an allowed safe window.
+Inspect raw speaker/articulation before considering a justified reference/model
+change. The current offline montages are audition drafts, not a voice fix.
