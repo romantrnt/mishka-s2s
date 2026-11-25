@@ -1787,6 +1787,10 @@ function interactionGuide(state, media) {
     return ['Поговорим', (media.audioRetry ? audioRetryText(media.audioRetryReason) + ' ' : '') + text + ' 7 — вернуться в меню.'];
   }
   if (node === 'exhibition_name_capture') {
+    if (state.simulator?.prompt?.phrase_id === 'NAME_CONFIRMATION')
+      return ['Проверим имя', 'Дослушай Мишку. 7 — пропустить; 5 — помощь.'];
+    if (state.canonical_state?.expected_inputs?.includes('button_1'))
+      return ['Верно услышал имя?', '1 — верно; 7 — пропустить; 5 — помощь. Можно сказать «да» или назвать имя ещё раз.'];
     const text = media.microphoneAccepting
       ? 'Назови имя или нажми 7, чтобы пропустить.'
       : 'Имя необязательно. Нажми 7, чтобы пропустить.';
