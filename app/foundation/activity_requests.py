@@ -50,12 +50,13 @@ def unsupported_game_offer(text):
         about = terms and (re.search(r"\bчто\s+такое\b", clause, re.I) or all(
             re.search(r"\b(?:про|об?)\s*$", clause[:term.start()], re.I) for term in terms))
         if terms and not about:
-            offer = re.search(r"\b(?:давай|поиграем|сыграем|хочешь|загадаю|я\s+(?:могу|умею|буду))\b", clause, re.I)
+            offer = re.search(r"\b(?:давай|поиграем|сыграем|хочешь|предлагаю|загадаю|задам|я\s+(?:могу|умею|буду))\b", clause, re.I)
             inherited = re.fullmatch(r"\s*(?:давай\s+)?(?:поиграем|сыграем|играть|поиграть|хочешь\s+поиграть)\s*", previous, re.I)
+            elliptical = re.fullmatch(r"\s*(?:а\s+)?может[, ]+\s*(?:в\s+)?" + _RIDDLES.pattern + r"\s*", clause, re.I)
             if ((offer and not _REPORTED.search(clause[:offer.start()])
                  and not re.search(r"\bне\s*$", clause[:offer.start()], re.I)
                  and not re.match(r"\s+не\b", clause[offer.end():], re.I))
-                    or (not offer and inherited and re.match(r"\s*(?:в\s+)?загад", clause, re.I))):
+                    or elliptical or (not offer and inherited and re.match(r"\s*(?:в\s+)?загад", clause, re.I))):
                 return True
         previous = clause
     return False
