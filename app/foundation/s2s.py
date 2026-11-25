@@ -3910,7 +3910,7 @@ class BoundedConversationEngine:
             return TurnResult((), (), True, reason)
 
     async def _run_text_turn(self,text,context,*,trace_generation_id=None,activities_allowed=True,
-                             expected_repair_token=None, initiative_input_scope=None, initiative_button_nonce=None):
+                             expected_repair_token=None, initiative_input_scope=None, initiative_button_nonce=None, inline_stop=False):
         text=self.normalizer.normalize(text)
         if len(text)>self.config.max_input_chars: return TurnResult((),(),True,"oversized_input")
         safety=self.input_safety.check(text)
@@ -3924,6 +3924,7 @@ class BoundedConversationEngine:
                 return TurnResult((), (), True, "bounded_limit")
         inline_kind = inline_request(text) if context.node_id == "bear_dialogue" and not getattr(context, "_game_id", None) else None
         previous_initiative = context.initiative
+        inline_stop = inline_stop or initiative_continuation_requested(text, context)
         if (previous_initiative is not None and initiative_agreed(text, previous_initiative)
                 and (not previous_initiative.ready or initiative_input_scope != previous_initiative.nonce)
                 and initiative_button_nonce != previous_initiative.nonce):
@@ -3996,7 +3997,8 @@ class BoundedConversationEngine:
         structured = getattr(self.llm, "supports_dialogue_json", False) is True
         response_contract = DialogueResponseContract.from_context(context)
         ordinary_dialogue = context.node_id in {"bear_dialogue", "support_intake"} and not getattr(context, "_game_id", None)
-        return_allowed = not ordinary_dialogue or dialogue_exit_requested(text)
+        initiative_semantics = context.node_id == "bear_dialogue" and not getattr(context, "_game_id", None)
+        return_allowed = not ordinary_dialogue or (dialogue_exit_requested(text) and not inline_stop)
         response_contract = replace(response_contract, allow_return=return_allowed)
         # Vet the complete bounded bear reply before an early JSON prefix can promise an unavailable activity.
         defer_legacy_speech = ordinary_dialogue and not return_allowed and (not structured or context.node_id == "bear_dialogue")
@@ -4133,7 +4135,7 @@ class BoundedConversationEngine:
                     if len(full_candidate.split()) > age_words:
                         raise ValueError("age_word_budget_exceeded")
                     validation_started = time.perf_counter()
-                    options = {"spoken_requirement": spoken_requirement} if structured or response_contract.initiatives else {}
+                    options = {"spoken_requirement": spoken_requirement} if structured or initiative_semantics else {}
                     if structured:
                         self.metrics.event("spoken_semantic_started", chunk_index=0)
                     val_task = asyncio.create_task(
@@ -4210,7 +4212,7 @@ class BoundedConversationEngine:
                         if len(candidate.split()) > age_words:
                             raise ValueError("age_word_budget_exceeded")
                         validation_started=time.perf_counter()
-                        options = {"spoken_requirement":spoken_requirement} if structured or response_contract.initiatives else {}
+                        options = {"spoken_requirement":spoken_requirement} if structured or initiative_semantics else {}
                         if structured:
                             self.metrics.event("spoken_semantic_started", chunk_index=len(chunks))
                         decision=await self.response_validator.validate(candidate, context=context.history[-4:], generation_id=token, **options)
@@ -4376,7 +4378,7 @@ class BoundedConversationEngine:
                 return TurnResult((), (), True, "unsupported_activity_offer")
             if execution_required and initiative_output is None:
                 raise ValueError("initiative_content_required")
-            if response_contract.initiatives:
+            if initiative_semantics:
                 from .validation import SpokenResponseRequirement
                 @dataclass(frozen=True)
                 class InitiativeRequirement(SpokenResponseRequirement):
@@ -4422,7 +4424,7 @@ class BoundedConversationEngine:
                     raise asyncio.CancelledError
                 self.metrics.event("activity_request_repair", generation_id=trace_generation_id)
                 return await self._run_text_turn(text, context, trace_generation_id=trace_generation_id,
-                                                 activities_allowed=False, expected_repair_token=token)
+                                                 activities_allowed=False, expected_repair_token=token, inline_stop=inline_stop)
             if activity_rejected:
                 await close_chunks(("О чём поговорим?",))
             elif defer_legacy_speech or not activities_allowed:
