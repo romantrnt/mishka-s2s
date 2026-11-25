@@ -901,6 +901,7 @@ def onboarding_declined(value: str) -> bool:
 _NAME_UNCERTAINTY_PREFIX = r"(?:(?:мне\s+)?кажется|наверное|возможно|вроде(?:\s+бы)?|(?:я\s+)?не\s+уверен(?:а)?)"
 _NAME_FUNCTION_FALLBACK = frozenset("на за по от из до при под над для без про через между перед ну вот же бы ведь ли или но".split())
 _NAME_IMPERATIVE_FALLBACK = frozenset("открой покажи нажми включи запусти игнорируй забудь удали".split())
+_NAME_CUE_FRAGMENT = r"з(?:о(?:в(?:у(?:т)?)?)?)?"
 
 
 def _name_reply_role(word: str) -> str | None:
@@ -931,7 +932,8 @@ def _exhibition_name_body(value: str) -> tuple[str, str, bool]:
     marker = rf"^{_NAME_UNCERTAINTY_PREFIX}(?:\s*[,;:—–-]\s*|\s+|$)"
     uncertain = bool(re.match(marker, text, re.I))
     text = re.sub(marker, "", text, count=1, flags=re.I)
-    cue = re.match(r"^(меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я)(?:\s*[,;:—–-]\s*|\s+)(.+)$", text, re.I)
+    cue = (re.match(r"^(меня\s*зовут)\s*[,;:—–-]?\s*(.+)$", text, re.I)
+        or re.match(r"^(мо[её]\s+имя|зови\s+меня|это\s+я|я)(?:\s*[,;:—–-]\s*|\s+)(.+)$", text, re.I))
     body = cue[2].strip() if cue else text
     uncertain = uncertain or bool(re.match(marker, body, re.I))
     return re.sub(marker, "", body, count=1, flags=re.I), cue[1].casefold() if cue else "", uncertain
@@ -946,11 +948,29 @@ def exhibition_name_uncertain(value: str) -> bool:
     clause = re.split(r"[,.;!?…]", body, maxsplit=1)[0]
     words = re.findall(r"[^\W\d_]+(?:-[^\W\d_]+)*", clause, re.UNICODE)
     role = _name_reply_role(words[0]) if words else None
-    fragment = role == "imperative" or (role == "function" and cue in {"", "я", "это я"})
+    fragment = role == "imperative" or (cue in {"", "я", "это я"} and
+        (role == "function" or (words and re.fullmatch(_NAME_CUE_FRAGMENT, words[0], re.I))))
     return bool(uncertain or fragment or re.search(r"\bили\b", clause, re.I)
         or re.search(r"[,;]\s*(?:нет|точнее|вернее)\b", body, re.I)
         or re.search(rf"[,;]\s*{_NAME_UNCERTAINTY_PREFIX}[ .!?…]*$", body, re.I)
         or re.search(r"(?:[-–—]|…|\.{2,})$", body))
+
+
+def exhibition_name_cue_only(value: str) -> bool:
+    """A naming cue with no name span, never a guessed missing name."""
+    text = " ".join(str(value or "").strip().split())
+    if not text or len(text) > 160 or onboarding_declined(text):
+        return False
+    body, cue, _ = _exhibition_name_body(text)
+    body = body.strip(" .!?…,:;—–-")
+    if cue:
+        return not body or bool(re.fullmatch(r"зовут|зови|меня|имя|мо[её]|я", body, re.I))
+    if re.fullmatch(r"зо(?:в(?:у)?)?", body, re.I):
+        return False  # A bare cue prefix can also be a name; ask once, never reject it.
+    if re.match(r"^меня\s*з", body, re.I):
+        return True
+    return bool(re.fullmatch(rf"(?:меня(?:\s*{_NAME_CUE_FRAGMENT})?|{_NAME_CUE_FRAGMENT}"
+        r"|мо[её](?:\s+имя)?|имя|зови(?:\s+меня)?|это\s+я|я)", body, re.I))
 
 
 def exhibition_name_correction(value: str) -> str | None:
@@ -976,6 +996,8 @@ def normalize_exhibition_name(value: str) -> str | None:
     """
     text = " ".join(str(value or "").strip().split())
     if not text or len(text) > 160 or onboarding_declined(text):
+        return None
+    if exhibition_name_cue_only(text):
         return None
     candidate, cue, _ = _exhibition_name_body(text)
     candidate = re.split(r"[,.;!?…]", candidate, maxsplit=1)[0].strip(" -—:;")
@@ -1209,7 +1231,8 @@ class CanonicalRuntime(SceneMenuMixin):
         self._store_exhibition_name(state, name, now)
         return self._start_exhibition_age(state, "exhibition_age_question_started")
 
-    def _exhibition_name_hint(self, state: CanonicalState, reason: str) -> dict[str, Any]:
+    def _exhibition_name_hint(self, state: CanonicalState, reason: str,
+                              text="Имя можно не говорить. Чтобы пропустить, нажми семь.") -> dict[str, Any]:
         state.mode = "exhibition_name_capture"
         state.expected_inputs = ["speech", "button_5", "button_7", "audio_completed", "handset_down"]
         state.state_version += 1
@@ -1217,7 +1240,7 @@ class CanonicalRuntime(SceneMenuMixin):
             {"type": "audio_stop"}, {"type": "capture_close"},
             {"type": "lighting_dark"},
             {"type": "lighting", "elements": list(BUTTON_WAVE_ELEMENTS[5] + BUTTON_WAVE_ELEMENTS[7]), "state": 1},
-            self._dialogue_prompt("NAME_BUTTON_HINT", "Имя можно не говорить. Чтобы пропустить, нажми семь."),
+            self._dialogue_prompt("NAME_BUTTON_HINT", text),
             {"type": "exhibition_onboarding_step", "step": "name_capture"},
         ], reason, clear_audio=True)
 
@@ -4063,6 +4086,12 @@ class CanonicalRuntime(SceneMenuMixin):
                         return self._decision(state, [{"type": "capture_open"}], "exhibition_name_correction_requested", clear_audio=True)
                 name = normalize_exhibition_name(transient_text or "")
                 if name is None:
+                    if state.name_confirmation_attempts >= 1:
+                        return self._start_exhibition_age(state, "exhibition_name_skipped_to_age")
+                    if exhibition_name_cue_only(transient_text or ""):
+                        state.name_confirmation_attempts += 1
+                        return self._exhibition_name_hint(state, "exhibition_name_fragment_clarification",
+                            "Назови только имя. Можно пропустить — семь.")
                     mic_unavailable = bool(event.payload.get("mic_unavailable"))
                     if not mic_unavailable and state.voice_retry_count < 2:
                         state.voice_retry_count += 1
