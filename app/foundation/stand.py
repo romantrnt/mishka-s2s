@@ -833,6 +833,7 @@ class HardwareIntegrationStand:
         self._closed = False
         self._browser_pcm_binding = None
         self._browser_pcm_playback = None
+        self._browser_pcm_delivered = None
         self._browser_capture_owners = {}
         self._revoked_button_owners = set()
         self._audio_event_sequence = 0
@@ -1066,7 +1067,6 @@ class HardwareIntegrationStand:
         lease = self.application._active_audio.get(sid)
         catalogue_scope = self.application._catalogue_voice_scope(sid)
         initiative_scope = owner_current.initiative_scope
-        initiative_scope_now = getattr(self.application, "_dialogue_initiative_scope", lambda _sid: None)
         private_phase = (node in {"personal_welcome_listen","fixed_story_menu","game_menu","personal_story_theme","schedule_weather",
                                   "exhibition_name_capture", "exhibition_age_selection"}
                          or bool(lease and lease.get("content_id") == "PERSONAL_WELCOME"))
@@ -1077,7 +1077,6 @@ class HardwareIntegrationStand:
             current = runtime.sessions.get(sid) if runtime is not None else None
             return (accepting and owner_current() and self._headless_audio_accepting()
                     and (not turn_taking or getattr(self, "_headless_output_epoch", 0) == output_epoch)
-                    and initiative_scope_now(sid) == initiative_scope
                     and (catalogue_scope is None or self.application._catalogue_voice_scope(sid) == catalogue_scope)
                     and (not private_phase or catalogue_scope is not None or (
                         getattr(record, "current_node", None) == node
@@ -1480,7 +1479,7 @@ class HardwareIntegrationStand:
             self._play_browser_pcm_stream(handle, stream_aiter, saved[1], identity_binding, on_cue=on_cue),
             operation="browser_private_pcm_stream", session_id=handle.session_id)
 
-    def _browser_pcm_callback_current(self, payload) -> bool:
+    def _browser_pcm_callback_current(self, payload, *, require_delivered=False) -> bool:
         from .owned_speech import OWNED_PCM_IDS
         if self.hardware_mode == "physical" or payload.get("response_id") not in OWNED_PCM_IDS:
             return True
@@ -1492,6 +1491,7 @@ class HardwareIntegrationStand:
                     "playback_id": handle.playback_id, "playback_lease": handle.playback_lease,
                     "generation": handle.generation, "token": handle.token}
         return bool(all(payload.get(key) == value for key, value in identity.items())
+                    and (not require_delivered or self._browser_pcm_delivered is saved)
                     and self.hub.owner_binding_current(binding)
                     and (handle.response_id != "PERSONAL_STORY" or self.application._personal_stories.get(handle.session_id) is story_owner)
                     and self._pcm_owner_current(handle, identity_binding))
@@ -1518,6 +1518,7 @@ class HardwareIntegrationStand:
                 return
             self._response_audio_tasks.add(task)
             self._browser_pcm_playback = (handle, binding, identity_binding, story_owner)
+            self._browser_pcm_delivered = None
             self.playback.active_token = handle.token
             transport_generation = self.playback._generation
             playback = {"session_id": handle.session_id, "response_id": handle.response_id,
@@ -1544,6 +1545,8 @@ class HardwareIntegrationStand:
                     "data_b64": base64.b64encode(pcm).decode("ascii"),
                 }, binding, current):
                     return
+            if current() and transport_generation == self.playback._generation:
+                self._browser_pcm_delivered = self._browser_pcm_playback
             # Delivery is not playback completion. Only the browser's final
             # source.onended may submit the immutable AudioCompleted identity.
         except asyncio.CancelledError:
@@ -1587,6 +1590,7 @@ class HardwareIntegrationStand:
                 return
             self._response_audio_tasks.add(task)
             self._browser_pcm_playback = (handle, binding, identity_binding, story_owner)
+            self._browser_pcm_delivered = None
             self.playback.active_token = handle.token
             transport_generation = self.playback._generation
             playback = {"session_id": handle.session_id, "response_id": handle.response_id,
@@ -1637,7 +1641,7 @@ class HardwareIntegrationStand:
             if not sent_any:
                 raise RuntimeError("empty_game_prompt_stream")
             if current() and transport_generation == self.playback._generation:
-                await self.hub.send_private({
+                delivered = await self.hub.send_private({
                     "type": "audio_pcm_output", "private": True, "playback": playback,
                     "sample_rate": last_rate, "token": handle.token,
                     "session_id": handle.session_id, "generation": transport_generation,
@@ -1646,6 +1650,8 @@ class HardwareIntegrationStand:
                     **story_position,
                     "data_b64": base64.b64encode(b"\x00\x00").decode("ascii"),
                 }, binding, current)
+                if delivered and current() and transport_generation == self.playback._generation:
+                    self._browser_pcm_delivered = self._browser_pcm_playback
         except asyncio.CancelledError:
             for ct in cue_tasks:
                 ct.cancel()
@@ -4243,7 +4249,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                 or generation is None
                 or status not in {"queued", "playing", "paused", "finished", "cancelled", "failed", "unavailable"}):
             return JSONResponse({"error": {"code": "validation_error", "message": "playback identity and valid audio status are required"}}, status_code=422)
-        if not stand._browser_pcm_callback_current(payload):
+        if not stand._browser_pcm_callback_current(payload, require_delivered=status == "finished"):
             return {"response_id": response_id, "reason": "stale_audio_lifecycle"}
         projected = stand.application._mark_audio_effect_lifecycle(
             response_id, status, session_id=sid, generation=generation,
@@ -4405,7 +4411,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
         if (not sid or not response_id or not playback_id or callback_token is None
                 or playback_lease is None or generation is None):
             return JSONResponse({"error": {"code": "validation_error", "message": "complete playback identity is required"}}, status_code=422)
-        if not stand._browser_pcm_callback_current(payload):
+        if not stand._browser_pcm_callback_current(payload, require_delivered=True):
             return {"reason": "stale_private_pcm_callback"}
         stand._audio_event_sequence += 1
         result = await stand.application.receive_async(
