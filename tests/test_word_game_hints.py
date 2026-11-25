@@ -57,6 +57,13 @@ def test_repeat_first_gives_required_letter_then_example_without_consuming_move(
     assert 'Например' in second.text and example in second.text
     assert play(example,second.state,'6-7',hint_level=second.hint_level).accepted
 
+def test_first_chain_category_uses_child_friendly_copy_without_restricting_nouns():
+    for reason in (None,'repeat'):
+        text,_=hint_for(WordState(),'6-7',reason=reason)
+        assert 'существительн' not in text and 'предмета, животного или растения' in text
+        assert 'Например' not in text
+    assert play('музыка',WordState(),'6-7').accepted
+
 def test_offered_example_can_become_a_real_child_move():
     state=WordState();hint=play('Помоги',state,'4-5',hint_level=1)
     word=example_for(state,'4-5')
