@@ -42,7 +42,7 @@ def hint_for(state, band: str, level: int = 0, *, reason: str | None = None) -> 
     elif reason == 'repeat':
         required = (state.pending or state).required
         text = (f'Это слово уже было. Вспомни слово на букву {required.upper()}.' if chain and required
-                else 'Это слово уже было. Вспомни другое существительное.' if chain
+                else 'Это слово уже было. Вспомни название предмета, животного или растения.' if chain
                 else 'Это слово уже было. Вспомни другое животное.' if band != '1-3'
                 else 'Это слово уже было. Вспомни животное или еду.')
     elif chain and (state.pending or state).required:
@@ -51,7 +51,7 @@ def hint_for(state, band: str, level: int = 0, *, reason: str | None = None) -> 
     elif band == '1-3':
         text = 'Вспомни знакомое животное или еду.'
     elif chain:
-        text = 'Вспомни обычное существительное, например животное или предмет.'
+        text = 'Вспомни название предмета, животного или растения.'
     else:
         text = 'Вспомни знакомое домашнее или лесное животное.'
     return text, min(2, level + 1)
