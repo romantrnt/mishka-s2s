@@ -177,7 +177,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
     if event_type == "AudioFailed" and current == "exhibition_name_question":
         return target == "exhibition_name_capture"
     if event_type == "AudioFailed" and current == "exhibition_name_capture":
-        return target == "exhibition_age_prompt"
+        return target in {"exhibition_age_prompt", "exhibition_age_selection"}
     if event_type == "ExhibitionMenuWaveComplete":
         return current == "exhibition_menu_wave" and target in {"exhibition_menu_repeat_prompt", "menu_ready"}
     if event_type == "StoryChoiceWaveComplete":
@@ -238,7 +238,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current == "wellbeing_check" and target in {"support_intake", "safety_stop", "root_menu"})
             or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
             or (current in {"exhibition_age_prompt", "exhibition_age_hint"} and target == "exhibition_age_complete")
-            or (current in {"exhibition_name_question", "exhibition_name_capture"} and target in {"exhibition_name_capture", "exhibition_age_prompt"})
+            or (current in {"exhibition_name_question", "exhibition_name_capture"} and target in {"exhibition_name_capture", "exhibition_age_prompt", "exhibition_age_selection"})
             or (current in {
                 "exhibition_menu_tutorial_intro", "exhibition_menu_tutorial_prompt",
                 "exhibition_menu_tutorial_buttons", "exhibition_menu_wave",
@@ -277,9 +277,9 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
             or (current in {"fixed_story_playing", "story_speech_analysis"}
                 and target in {"story_pause_announcement", "fixed_story_choice_wave"})
             or (current == "story_paused" and target in {"story_resume_announcement", "root_menu"})
-            or (current == "exhibition_name_capture" and target == "exhibition_age_prompt")
+            or (current == "exhibition_name_capture" and target in {"exhibition_age_prompt", "exhibition_age_selection"})
             or (current == "exhibition_name_capture" and target == "exhibition_name_capture")
-            or (current == "exhibition_age_selection" and target == "exhibition_age_complete")
+            or (current == "exhibition_age_selection" and target in {"exhibition_age_complete", "exhibition_name_capture"})
             or (current == "exhibition_menu_repeat_listen" and target in {"exhibition_menu_repeat_listen", "exhibition_menu_replay_buttons", "menu_ready"})
             or (current in {"fixed_story_playing", "story_speech_analysis"} and target in {"story_paused", "story_speech_analysis"})
             or (current == "story_speech_analysis" and target == "support_intake")

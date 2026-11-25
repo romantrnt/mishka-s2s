@@ -39,12 +39,12 @@ async def test_real_age_entry_accepts_plain_existing_integer_answer(route, text,
 
 
 @pytest.mark.asyncio
-async def test_confidently_wrong_name_asr_stays_provisional_in_all_consumers():
+async def test_explicitly_uncertain_name_stays_provisional_in_all_consumers():
     h = ChildHarness()
     try:
         await h.name(); await h.complete()  # Complete owned NAME_BUTTON_HINT.
         assert h.state.mode == 'exhibition_name_capture'
-        result = await speech(h, 'recognized_pcm', 'Ома', .99)  # Synthetic Рома→Ома substitution.
+        result = await speech(h, 'recognized_pcm', 'Кажется, Ома', .99)  # Observable uncertainty, not score-only.
         assert h.state.display_name is None, result
         assert not h.state.onboarding_name_collected
         assert h.state.mode == 'exhibition_name_capture'
@@ -150,7 +150,7 @@ async def test_asr_name_requires_current_question_terminal_and_explicit_new_answ
     h=ChildHarness()
     try:
         await h.name();await h.complete()
-        await speech(h,'recognized_pcm','Ома',.99)
+        await speech(h,'recognized_pcm','Кажется, Ома',.99)
         assert_provisional(h,'Ома')
         assert h.state.active_audio_id=='NAME_CONFIRMATION'
         assert 'Ома?' in h.render.texts[-1]
@@ -179,39 +179,31 @@ async def test_asr_name_requires_current_question_terminal_and_explicit_new_answ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('correction',['Нет, меня зовут Рома','Нет, я Рома'])
-async def test_confidently_wrong_asr_can_be_explicitly_corrected_without_committing_wrong_name(correction):
+async def test_clear_replacement_commits_after_an_explicitly_uncertain_candidate(correction):
     h=ChildHarness()
     try:
         await h.name();await h.complete()
-        await speech(h,'recognized_pcm','Ома',.99);await h.complete()
+        await speech(h,'recognized_pcm','Кажется, Ома',.99);await h.complete()
         await speech(h,'recognized_pcm',correction,.99)
-        assert_provisional(h,'Рома')
-        assert h.state.name_confirmation_attempts==2
-        await h.complete();await speech(h,'recognized_pcm','Да')
-        assert h.state.display_name=='Рома'
+        assert h.state.display_name=='Рома' and h.state.pending_name is None
+        assert h.state.mode=='exhibition_age_prompt'
         assert h.state.dialogue_memory.bounded_turns==[{'kind':'name','value':'Рома'}]
         assert 'Ома' not in h.app._bounded_dialogue_context(h.sid).system_prompt
     finally:
         await h.close()
-
 
 @pytest.mark.asyncio
 async def test_name_retries_are_bounded_and_refusal_stays_optional():
     h=ChildHarness()
     try:
         await h.name();await h.complete()
-        await speech(h,'recognized_pcm','Ома');await h.complete()
-        await speech(h,'recognized_pcm','Нет')
-        assert h.state.display_name is None and h.state.pending_name is None
-        await h.complete()
-        await speech(h,'recognized_pcm','Рома');await h.complete()
-        await speech(h,'recognized_pcm','Меня зовут Саша')
+        await speech(h,'recognized_pcm','Кажется, Ома');await h.complete()
+        await speech(h,'recognized_pcm','Кажется, Рома')
         assert h.state.mode=='exhibition_age_prompt'
         assert h.state.display_name is None and h.state.pending_name is None
         assert not h.state.dialogue_memory.bounded_turns
     finally:
         await h.close()
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('ending',['skip','help','hangup','end','refusal','urgent'])
@@ -219,7 +211,7 @@ async def test_pending_name_is_cleared_by_navigation_and_never_reappears(ending)
     h=ChildHarness()
     try:
         await h.name();await h.complete()
-        await speech(h,'recognized_pcm','Ома')
+        await speech(h,'recognized_pcm','Кажется, Ома')
         old=dict(h.app._active_audio[h.sid])
         original_state=h.state
         if ending=='skip':await h.button(7)

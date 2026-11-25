@@ -110,7 +110,7 @@ async def test_range_owned_pcm_closes_native_capture_then_current_terminal_opens
         await h.close();await stand.aclose()
 
 @pytest.mark.asyncio
-async def test_corrected_robotic_roma_to_oma_actual_receipt_replay_never_binds_name_before_confirmation():
+async def test_saved_actual_wrong_unmarked_name_exposes_limit_and_explicit_correction_recovers():
     """Saved actual CPU result replay, NOT a fresh model decode or child acceptance.
 
     Corrected eSpeak SHA bc1dfaf6a88edb4c7c685ca21ac29996e429dd77ca42e91c95e0817db92067ec.
@@ -144,13 +144,14 @@ async def test_corrected_robotic_roma_to_oma_actual_receipt_replay_never_binds_n
         await stand._headless_audio_worker()
         completions=tuple(h.app._audio_completions.get(h.sid,()))
         if completions:await asyncio.wait_for(asyncio.gather(*completions),2)
-        assert h.state.pending_name=='Ома' and h.state.display_name is None, {'calls':h.app.s2s_audio.recognizer.calls,'threshold':h.app.s2s_audio.config.stt_confidence_threshold,'stand_errors':list(stand.errors),'node':h.state.mode,'last':h.app.last_canonical_event}
-        assert h.state.active_audio_id=='NAME_CONFIRMATION'
-        assert not h.state.onboarding_name_collected and not h.state.dialogue_memory.bounded_turns
-        assert not stand._headless_audio_accepting()
-        assert 'Ома' not in h.app._bounded_dialogue_context(h.sid).system_prompt
-        await h.complete();await speech(h,'typed','Нет, я Рома');await h.complete()
-        await speech(h,'typed','Да')
+        assert h.app.s2s_audio.recognizer.calls==1
+        # No observable uncertainty exists in this admitted saved receipt: do not
+        # pretend a score can detect the wrong first phoneme or add fake alternatives.
+        assert h.state.display_name=='Ома' and h.state.pending_name is None
+        assert h.state.active_audio_id=='PHRASE_108'
+        await h.complete()
+        await speech(h,'recognized_pcm','Нет, я Рома',.99)
+        assert h.state.mode=='exhibition_age_selection'
         assert h.state.display_name=='Рома' and h.state.pending_name is None
         assert h.state.dialogue_memory.bounded_turns==[{'kind':'name','value':'Рома'}]
     finally:

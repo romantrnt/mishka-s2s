@@ -47,7 +47,7 @@ async def test_typed_busy_has_one_owned_system_message_and_preserves_private_cho
         assert h.render.texts.count(BUSY_TEXT)==1 and h.state.active_audio_id is None
         h.app.s2s_audio.recognizer=MockSpeechRecognizer('Мне шесть годиков' if phase=='age' else 'Рома',.99)
         await audio(h,pending)
-        assert (h.state.age_years==6 if phase=='age' else h.state.pending_name=='Рома')
+        assert (h.state.age_years==6 if phase=='age' else h.state.display_name=='Рома')
     finally:await h.close()
 
 @pytest.mark.asyncio

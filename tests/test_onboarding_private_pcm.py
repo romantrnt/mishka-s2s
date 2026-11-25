@@ -31,7 +31,7 @@ async def test_private_slot_pcm_has_current_owner_no_shared_cache_or_journal(tmp
         h.app.bounded_s2s.tts=cache
         journal_before=deepcopy(journal._sessions)
         cache_before=deepcopy(cache.cache)
-        await speech(h,'recognized_pcm','Ома' if kind=='name' else '4.5')
+        await speech(h,'recognized_pcm','Кажется, Ома' if kind=='name' else '4.5')
         assert journal._sessions==journal_before and cache.cache==cache_before
         assert not list(tmp_path.rglob('*.jsonl'))
         stand.application=h.app;stand.active_session_id=h.sid
@@ -73,7 +73,7 @@ async def test_late_private_slot_render_after_end_cannot_play_into_new_visit(kin
             await age_entry(h)
         h.render.entered.clear();h.render.block=asyncio.Event()
         played_before=len(h.played)
-        pending=asyncio.create_task(speech(h,'recognized_pcm','Ома' if kind=='name' else '4.5'))
+        pending=asyncio.create_task(speech(h,'recognized_pcm','Кажется, Ома' if kind=='name' else '4.5'))
         await asyncio.wait_for(h.render.entered.wait(),2)
         await h.app.session_action(h.sid,'end',ownership_guard=lambda:True)
         h.render.block.set();await pending
@@ -114,7 +114,7 @@ async def test_failed_name_confirmation_clears_candidate_and_keeps_real_age_fall
     try:
         await h.name();await h.complete()
         if failure=='validator_denied':h.app.bounded_s2s.response_validator=Blocked()
-        await speech(h,'recognized_pcm','Ома')
+        await speech(h,'recognized_pcm','Кажется, Ома')
         if failure=='playback_failed':await h.complete(failed=True)
         else:assert checked and 'Ома?' in checked[0]
         assert h.state.mode=='exhibition_age_prompt'
@@ -146,7 +146,7 @@ async def test_onboarding_output_closes_native_capture_and_only_fresh_post_termi
             before=stand._headless_frame_owner()
             assert before[1]()
             stand._enqueue_headless_audio_frame((.1,.2),before)
-            await speech(h,'typed' if kind=='age_fallback' else 'recognized_pcm','не уверен' if kind=='age_fallback' else 'Ома')
+            await speech(h,'typed' if kind=='age_fallback' else 'recognized_pcm','не уверен' if kind=='age_fallback' else 'Кажется, Ома')
         assert h.state.active_audio_id=={'name_hint':'NAME_BUTTON_HINT','name_confirmation':'NAME_CONFIRMATION','age_fallback':'PHRASE_075'}[kind]
         assert not stand._interaction_audio_accepting()
         assert not stand._headless_audio_accepting()
@@ -191,7 +191,7 @@ async def test_onboarding_capture_is_closed_during_synthesis_before_app_playback
         if kind=='name_confirmation':await h.complete()
         stand.application=h.app;stand.active_session_id=h.sid;stand.hardware_mode='physical'
         h.render.entered.clear();h.render.block=asyncio.Event()
-        pending=asyncio.create_task(h.complete() if kind=='name_hint' else speech(h,'recognized_pcm','Ома'))
+        pending=asyncio.create_task(h.complete() if kind=='name_hint' else speech(h,'recognized_pcm','Кажется, Ома'))
         await asyncio.wait_for(h.render.entered.wait(),2)
         assert h.state.active_audio_id==('NAME_BUTTON_HINT' if kind=='name_hint' else 'NAME_CONFIRMATION')
         assert h.state.playback_lease and h.sid not in h.app._active_audio

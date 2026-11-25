@@ -277,6 +277,7 @@ class CanonicalState:
     pending_name: str | None = field(default=None, repr=False)
     name_confirmation_ready: bool = field(default=False, repr=False)
     name_confirmation_attempts: int = field(default=0, repr=False)
+    name_confirmation_return_to_age: bool = field(default=False, repr=False)
     reported_age: float | None = field(default=None, repr=False)
     age_clarification_issued: bool = field(default=False, repr=False)
     stt_busy_notified: bool = field(default=False, repr=False)
@@ -388,7 +389,7 @@ class CanonicalState:
             value.pop(private_key, None)
         # Profile display fields and schedule links stay inside the protected profile boundary.
         value.pop("display_name", None)
-        for private_key in ("pending_name", "name_confirmation_ready", "name_confirmation_attempts", "reported_age", "age_clarification_issued", "stt_busy_notified"):
+        for private_key in ("pending_name", "name_confirmation_ready", "name_confirmation_attempts", "name_confirmation_return_to_age", "reported_age", "age_clarification_issued", "stt_busy_notified"):
             value.pop(private_key, None)
         value.pop("interests", None)
         value.pop("active_trigger_topics", None)
@@ -862,8 +863,8 @@ def _strip_explicit_name_reply_prefix(text: str) -> str:
     # discard a discourse prefix before an explicit naming cue, never infer
     # a name from an arbitrary trailing clause.
     return re.sub(
-        r"^(?:нет|да|спасибо)(?:\s*[,;:—–-]\s*|\s+)"
-        r"(?=(?:меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я(?!\s+не\b))\s+)",
+        r"^(?:нет|да|спасибо|точнее|поправлю)(?:\s*[,;:—–-]\s*|\s+)"
+        r"(?=(?:меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я(?![\s,;:—–-]+не\b))(?:\s*[,;:—–-]\s*|\s+))",
         "", text, count=1, flags=re.IGNORECASE,
     )
 
@@ -894,6 +895,50 @@ def onboarding_declined(value: str) -> bool:
         r"|пропусти(?:м)?(?: пожалуйста)?|неважно)", first))
 
 
+_NAME_UNCERTAINTY_PREFIX = r"(?:(?:мне\s+)?кажется|наверное|возможно|вроде(?:\s+бы)?|(?:я\s+)?не\s+уверен(?:а)?)"
+
+
+def _exhibition_name_body(value: str) -> tuple[str, bool, bool]:
+    text = _strip_explicit_name_reply_prefix(" ".join(str(value or "").strip().split()))
+    text = re.sub(
+        r"^(?:(?:привет|приветик|здравствуй(?:те)?|хай|алло|"
+        r"добр(?:ое|ый)\s+(?:утро|день|вечер)|мишка|медведь|медвежонок|"
+        r"ну|ээ+|эм+)(?:\s*[,;:—–-]\s*|\s+))+", "", text, flags=re.I).strip()
+    marker = rf"^{_NAME_UNCERTAINTY_PREFIX}(?:\s*[,;:—–-]\s*|\s+|$)"
+    uncertain = bool(re.match(marker, text, re.I))
+    text = re.sub(marker, "", text, count=1, flags=re.I)
+    cue = re.match(r"^(?:меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я)(?:\s*[,;:—–-]\s*|\s+)(.+)$", text, re.I)
+    body = cue[1].strip() if cue else text
+    uncertain = uncertain or bool(re.match(marker, body, re.I))
+    return re.sub(marker, "", body, count=1, flags=re.I), bool(cue), uncertain
+
+
+def exhibition_name_uncertain(value: str) -> bool:
+    """Only observable name-reply content; ASR score is not identity confidence."""
+    text = " ".join(str(value or "").strip().split())
+    if not text or len(text) > 160:
+        return False
+    body, _, uncertain = _exhibition_name_body(text)
+    clause = re.split(r"[,.;!?…]", body, maxsplit=1)[0]
+    return bool(uncertain or re.search(r"\bили\b", clause, re.I)
+        or re.search(r"[,;]\s*(?:нет|точнее|вернее)\b", body, re.I)
+        or re.search(rf"[,;]\s*{_NAME_UNCERTAINTY_PREFIX}[ .!?…]*$", body, re.I)
+        or re.search(r"(?:[-–—]|…|\.{2,})$", body))
+
+
+def exhibition_name_correction(value: str) -> str | None:
+    """An explicit name correction, never an ordinary answer to the age question."""
+    text = " ".join(str(value or "").strip().split())
+    match = re.match(r"^(?:нет|неа|точнее|поправлю)(?:\s*[,;:—–-]\s*|\s+)"
+        r"((?:меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я)(?:\s*[,;:—–-]\s*|\s+).+)$", text, re.I)
+    if not match:
+        return None
+    body = match[1]
+    if re.match(r"^я(?:\s|[,;:—–-])", body, re.I) and normalize_exhibition_age(re.sub(r"^я(?:\s*[,;:—–-]\s*|\s+)", "", body, count=1, flags=re.I)) is not None:
+        return None
+    return body
+
+
 def normalize_exhibition_name(value: str) -> str | None:
     """Extract a spoken name from a short answer.
 
@@ -905,29 +950,13 @@ def normalize_exhibition_name(value: str) -> str | None:
     text = " ".join(str(value or "").strip().split())
     if not text or len(text) > 160 or onboarding_declined(text):
         return None
-    text = _strip_explicit_name_reply_prefix(text)
-    text = re.sub(
-        r"^(?:(?:привет|приветик|здравствуй(?:те)?|хай|алло|"
-        r"добр(?:ое|ый)\s+(?:утро|день|вечер)|мишка|медведь|медвежонок|"
-        r"ну|ээ+|эм+)(?:\s*[,;:—–-]\s*|\s+))+",
-        "", text, flags=re.IGNORECASE,
-    ).strip()
-    if not text:
-        return None
-    # Stop at normal sentence punctuation so a natural answer such as
-    # ``меня зовут Вася, мне семь`` cannot absorb the second clause.
-    text = re.split(r"[,.;!?…]", text, maxsplit=1)[0].strip(" -—:;")
-    cue = re.match(
-        r"^(?:меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я)\s+(.+)$",
-        text,
-        flags=re.IGNORECASE,
-    )
-    candidate = cue.group(1).strip() if cue else text
+    candidate, cue, _ = _exhibition_name_body(text)
+    candidate = re.split(r"[,.;!?…]", candidate, maxsplit=1)[0].strip(" -—:;")
     stopwords = {
         "меня", "зовут", "моё", "мое", "имя", "я", "это", "и", "мне",
         "лет", "года", "год", "летний", "летняя",
         "привет", "приветик", "здравствуй", "здравствуйте", "хай", "алло",
-        "хорошо", "окей", "да", "нет", "спасибо", "пожалуйста",
+        "хорошо", "окей", "да", "нет", "не", "спасибо", "пожалуйста",
     }
     if not cue:
         stopwords |= {"мишка", "медведь", "медвежонок"}
@@ -943,7 +972,7 @@ def normalize_exhibition_name(value: str) -> str | None:
         selected.append(part)
     if not selected:
         return None
-    name = " ".join(selected)
+    name = selected[0]  # Onboarding needs a first name, never surname/extra tokens.
     if not re.fullmatch(r"[^\W\d_]+(?:[ '-][^\W\d_]+){0,2}", name, flags=re.UNICODE):
         return None
     return name[:1].upper() + name[1:]
@@ -1124,11 +1153,21 @@ class CanonicalRuntime(SceneMenuMixin):
         state.state_version += 1
         state.expected_inputs = ["button_5", "button_7", "audio_completed", "handset_down"]
         # Only the private renderer reads the candidate; no name in effect receipts.
-        return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"},
-            {"type": "dialogue_prompt", "content_id": "NAME_CONFIRMATION"},
-            {"type": "lighting_dark"}], "exhibition_name_confirmation_started", clear_audio=True)
+        return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_close"}, {"type": "lighting_dark"},
+            {"type": "dialogue_prompt", "content_id": "NAME_CONFIRMATION"}],
+            "exhibition_name_confirmation_started", clear_audio=True)
 
-    def _commit_exhibition_name(self, state, name, now):
+    @staticmethod
+    def _clear_onboarding_name(state):
+        if state.profile_status != "identified":
+            state.display_name = None
+            state.grammatical_gender = "neutral"
+        state.onboarding_name_collected = False
+        state.dialogue_memory.bounded_turns[:] = [turn for turn in state.dialogue_memory.bounded_turns
+            if not (isinstance(turn, Mapping) and turn.get("kind") == "name")]
+
+    def _store_exhibition_name(self, state, name, now):
+        self._clear_onboarding_name(state)
         state.voice_retry_count = 0
         if state.profile_status != "identified":
             state.display_name = name
@@ -1136,6 +1175,9 @@ class CanonicalRuntime(SceneMenuMixin):
         state.onboarding_name_collected = True
         state.dialogue_memory.bounded_turns.append({"kind": "name", "value": name})
         state.dialogue_memory.touch(now)
+
+    def _commit_exhibition_name(self, state, name, now):
+        self._store_exhibition_name(state, name, now)
         return self._start_exhibition_age(state, "exhibition_age_question_started")
 
     def _exhibition_name_hint(self, state: CanonicalState, reason: str) -> dict[str, Any]:
@@ -1151,6 +1193,13 @@ class CanonicalRuntime(SceneMenuMixin):
         ], reason, clear_audio=True)
 
     def _start_exhibition_age(self, state: CanonicalState, reason: str) -> dict[str, Any]:
+        if state.name_confirmation_return_to_age:
+            state.mode = "exhibition_age_selection"
+            state.expected_inputs = [*(f"button_{button}" for button in range(1, 8)), "speech", "handset_down"]
+            state.state_version += 1
+            return self._decision(state, [{"type": "audio_stop"}, {"type": "capture_open"},
+                {"type": "lighting_wave_intent", "pattern": "age_digits_wave", "groups": "digits", "source": "canonical"}],
+                "exhibition_name_corrected" if reason == "exhibition_age_question_started" else reason, clear_audio=True)
         state.age_clarification_issued = state.stt_busy_notified = False
         state.mode = "exhibition_age_prompt"
         state.expected_inputs = [*(f"button_{button}" for button in range(1, 8)), "audio_completed", "handset_down"]
@@ -1208,7 +1257,7 @@ class CanonicalRuntime(SceneMenuMixin):
                      "age_band", "age_band_source", "age_years", "age_policy", "profile_data_incomplete",
                      "current_date", "accessibility_policy", "interests", "active_trigger_topics", "acquaintance_kind",
                      "personal_story_selection", "personal_story_seed", "schedule_ref", "onboarding_name_collected", "pending_name", "name_confirmation_ready",
-                     "name_confirmation_attempts", "reported_age", "age_clarification_issued", "stt_busy_notified"):
+                     "name_confirmation_attempts", "name_confirmation_return_to_age", "reported_age", "age_clarification_issued", "stt_busy_notified"):
             setattr(state, name, getattr(fresh, name))
         state.history_tail.clear()
         state.dialogue_memory.clear()
@@ -1229,7 +1278,7 @@ class CanonicalRuntime(SceneMenuMixin):
             "age_policy", "profile_data_incomplete", "current_date",
             "accessibility_policy", "interests", "active_trigger_topics", "acquaintance_kind",
             "personal_story_selection", "personal_story_seed", "schedule_ref", "onboarding_name_collected",
-            "pending_name", "name_confirmation_ready", "name_confirmation_attempts", "reported_age", "age_clarification_issued", "stt_busy_notified",
+            "pending_name", "name_confirmation_ready", "name_confirmation_attempts", "name_confirmation_return_to_age", "reported_age", "age_clarification_issued", "stt_busy_notified",
         ):
             setattr(state, name, getattr(fresh, name))
         state.story_menu_hint_seen = state.story_menu_hint_active = False
@@ -1776,6 +1825,7 @@ class CanonicalRuntime(SceneMenuMixin):
             state.pending_name = None
             state.name_confirmation_ready = False
             state.name_confirmation_attempts = 0
+            state.name_confirmation_return_to_age = False
         if (state.mode not in {"game_menu", "game_active", "fixed_story_menu", "fixed_story_playing",
                 "story_speech_analysis", "story_pause_announcement", "story_paused", "story_resume_announcement",
                 "fixed_story_choice_wave", "personal_story_theme", "personal_story_generating", "personal_story_validating", "personal_story_playing"} or not state.interaction_open or state.safety_severity != "none"):
@@ -1890,7 +1940,6 @@ class CanonicalRuntime(SceneMenuMixin):
 
     def handle(self, event: CanonicalEvent, profile: Mapping[str, Any] | None = None, *,
                transient_text: str | None = None,
-               name_requires_confirmation: bool = False,
                stt_busy_authorized: bool = False,
                _voice_admission: _VoiceAdmission | None = None,
                dialogue_fallback_authorized: bool = False,
@@ -2594,7 +2643,7 @@ class CanonicalRuntime(SceneMenuMixin):
                     state.name_confirmation_ready = True
                     state.expected_inputs = ["speech", "button_1", "button_5", "button_7", "handset_down"]
                     state.state_version += 1
-                    return self._decision(state, [{"type": "capture_open"}, {"type": "lighting", "elements": list(BUTTON_WAVE_ELEMENTS[1] + BUTTON_WAVE_ELEMENTS[7]), "state": 1}],
+                    return self._decision(state, [{"type": "capture_open"}],
                         "exhibition_name_confirmation_ready", clear_audio=True)
                 if response_id == "AGE_ACCEPTED" and state.mode == "exhibition_age_complete":
                     state.state_version += 1
@@ -3812,6 +3861,18 @@ class CanonicalRuntime(SceneMenuMixin):
             if self.exhibition_mode and state.mode == "exhibition_age_selection":
                 if state.active_audio_id == "AGE_CLARIFY":
                     return self._session_action_noop(state, "exhibition_age_clarification_waiting")
+                correction = exhibition_name_correction(transient_text or "")
+                if correction and state.age_years is None and not state.active_audio_id:
+                    corrected_name = normalize_exhibition_name(correction)
+                    if corrected_name:
+                        self._clear_onboarding_name(state)
+                        if exhibition_name_uncertain(correction):
+                            state.mode = "exhibition_name_capture"
+                            state.name_confirmation_return_to_age = True
+                            return self._confirm_exhibition_name(state, corrected_name, now)
+                        self._store_exhibition_name(state, corrected_name, now)
+                        state.state_version += 1
+                        return self._decision(state, [{"type": "capture_open"}], "exhibition_name_corrected")
                 age_years = normalize_exhibition_age(transient_text or "")
                 if age_years is None and exhibition_age_is_range(transient_text or ""):
                     state.expected_inputs = [*(f"button_{button}" for button in range(1, 8)), "speech", "handset_down"]
@@ -3872,9 +3933,9 @@ class CanonicalRuntime(SceneMenuMixin):
                     if answer in {"нет", "неа"}:
                         state.pending_name = None
                         state.name_confirmation_ready = False
-                        return self._exhibition_name_hint(state, "exhibition_name_correction_requested")
-                    if state.name_confirmation_attempts >= 2:
-                        return self._start_exhibition_age(state, "exhibition_name_skipped_to_age")
+                        state.expected_inputs = ["speech", "button_5", "button_7", "handset_down"]
+                        state.state_version += 1
+                        return self._decision(state, [{"type": "capture_open"}], "exhibition_name_correction_requested", clear_audio=True)
                 name = normalize_exhibition_name(transient_text or "")
                 if name is None:
                     mic_unavailable = bool(event.payload.get("mic_unavailable"))
@@ -3888,8 +3949,8 @@ class CanonicalRuntime(SceneMenuMixin):
                         ], "exhibition_name_unrecognized")
                     state.voice_retry_count = 0
                     return self._start_exhibition_age(state, "exhibition_name_skipped_to_age")
-                if name_requires_confirmation or state.pending_name or state.name_confirmation_attempts:
-                    if state.name_confirmation_attempts >= 2:
+                if exhibition_name_uncertain(transient_text or ""):
+                    if state.name_confirmation_attempts >= 1:
                         return self._start_exhibition_age(state, "exhibition_name_skipped_to_age")
                     return self._confirm_exhibition_name(state, name, now)
                 return self._commit_exhibition_name(state, name, now)
