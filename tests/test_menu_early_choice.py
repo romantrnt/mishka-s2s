@@ -100,9 +100,10 @@ def test_held_origin_cannot_reenter_after_another_key_returns_to_root():
 
 @pytest.mark.parametrize('button', range(1, 8))
 def test_key_already_held_before_the_tutorial_needs_a_new_physical_edge(button):
-    runtime, send = setup('exhibition_menu_tutorial_buttons')
+    runtime, send = setup('exhibition_onboarding_complete')
     state = runtime.sessions['early-choice']
-    state.accepted_buttons_down = [button]
+    send('ButtonPressed', {'button_id': button})
+    send('ExhibitionOnboardingComplete')
     repeated = send('ButtonPressed', {'button_id': button})
     assert not repeated['effects'] and state.mode == 'exhibition_menu_tutorial_buttons'
     send('ButtonReleased', {'button_id': button})
