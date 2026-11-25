@@ -1824,6 +1824,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        identity_profile: dict[str, Any] | None = None,
                                        identity_current=None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None,
+                                       _name_requires_confirmation: bool = False,
                                        _weather_scope: str | None = None, _weather_origin_current=None,
                                        _story_checkpoint_guard=None,
                                        session_action_authorized: bool = False, _action_guard=None) -> dict[str, Any]:
@@ -1864,6 +1865,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 identity_current=identity_current,
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
+                _name_requires_confirmation=_name_requires_confirmation,
                 _weather_scope=_weather_scope,
                 _story_checkpoint_guard=_story_checkpoint_guard,
                 _safety_guidance=safety_guidance,
@@ -1902,6 +1904,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              identity_profile: dict[str, Any] | None = None,
                                              identity_current=None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
+                                             _name_requires_confirmation: bool = False,
                                              _weather_scope: str | None = None,
                                              _story_checkpoint_guard=None,
                                              _safety_guidance: dict,
@@ -2201,6 +2204,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             state_version=state_version, source=event.source, payload=payload,
             correlation_id=event.correlation_id, timestamp=event.timestamp, monotonic_timestamp=accepted_monotonic,
         ), profile, transient_text=transient_text,
+           name_requires_confirmation=_name_requires_confirmation,
            _voice_admission=voice_admission,
            private_welcome_ready=private_welcome_ready,
            personal_welcome_answer_verified=personal_welcome_answer_verified,
@@ -2897,9 +2901,21 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                                              record.cancellation_token, prompt_current)
                 if not prompt_current():
                     return stale_result()
+                # Private onboarding slots never enter effect receipts/public diagnostics.
+                prompt_text = effect.get("text", "")
+                if effect["content_id"] == "NAME_CONFIRMATION":
+                    candidate = state_owner.pending_name
+                    if not candidate or state_owner.mode != "exhibition_name_capture":
+                        return stale_result()
+                    prompt_text = f"Я верно услышал: {candidate}? Скажи да или нажми один, поправь меня или пропусти — семь."
+                elif effect["content_id"] == "AGE_ACCEPTED":
+                    from .canonical_contract import exhibition_age_words
+                    if state_owner.reported_age is None or state_owner.mode != "exhibition_age_complete":
+                        return stale_result()
+                    prompt_text = f"Тебе {exhibition_age_words(state_owner.reported_age)}. Спасибо!"
                 rendered = None
                 if streamed is None:
-                    rendered = await self._render_typed_audio(event.session_id, effect["text"], effect,
+                    rendered = await self._render_typed_audio(event.session_id, prompt_text, effect,
                                                              record.cancellation_token, prompt_current)
                 if not prompt_current():
                     return stale_result()
@@ -3919,6 +3935,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 audio_result.stt.text,
                 _speech_ingress_guard=_ingress_guard,
                 _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard),
+                _name_requires_confirmation=True,
             )
             if payload.get("reason") != "stale_session_generation" and self._session_epochs.get(session_id, 0) == epoch:
                 await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
@@ -4028,7 +4045,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     float(getattr(audio_result.stt, "confidence", 0.0) or 0.0),
                     getattr(active, "mode", None),
                 )
-                result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result), "_name_confident": (not self._untrusted_stt(audio_result) and audio_result.stt.confidence >= 0.75)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard))
+                result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result), "_name_confident": (not self._untrusted_stt(audio_result) and audio_result.stt.confidence >= 0.75)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard), _name_requires_confirmation=True)
                 result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
                 return result
             if _ingress_guard is not None and not _ingress_guard():
