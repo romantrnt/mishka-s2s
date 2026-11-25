@@ -87,7 +87,8 @@ async def test_open_dialogue_still_requires_output_semantic_validation():
     app, llm = await setup_dialogue()
     calls = []
     class Deny:
-        async def validate(self, text, context=()):
+        async def validate(self, text, context=(), *, spoken_requirement=None):
+            assert spoken_requirement is not None
             calls.append(text)
             return ValidationDecision("block", False, "synthetic_unsafe", 1.0, "test")
     app.bounded_s2s.response_validator.mini = Deny()

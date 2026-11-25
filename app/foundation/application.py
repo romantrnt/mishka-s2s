@@ -37,6 +37,7 @@ from .game_presentation import GamePresentationMixin, game_light_commands
 from app.scenarios.canonical_graph import CanonicalLangGraphAuthorizer
 
 logger = logging.getLogger("mishka.application")
+INITIATIVE_CONTROLS = 'Скажи «да» или нажми один. Семь — продолжить разговор.'
 
 # PHRASE_008 is one approved 18.406 s WAV. These offsets are the measured
 # starts of each spoken digit and its following action phrase in that file.
@@ -716,6 +717,30 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         advance = getattr(self.led, "advance_effects", None)
         if callable(advance):
             advance(self.monotonic_now(), force=True)
+        return lighting
+
+    def _dialogue_initiative_scope(self, session_id):
+        state = self.canonical_runtime.sessions.get(session_id)
+        if state is None or state.mode != "bear_dialogue" or not state.interaction_open or state.safety_severity != "none":
+            return None
+        initiative = getattr(self.conversation_contexts.get(session_id), "initiative", None)
+        return (id(state), self._session_epochs.get(session_id, 0),
+            getattr(initiative, "nonce", None), getattr(initiative, "phase", None),
+            bool(getattr(initiative, "ready", False)))
+
+    def _set_initiative_lighting(self, session_id, phase, *, current):
+        state = self.canonical_runtime.sessions.get(session_id)
+        if not current() or state is None or state.mode != "bear_dialogue" or not state.pending_initiative:
+            return None
+        buttons = (1, 5, 7) if state.pending_initiative.ready else (5, 7)
+        breathing = getattr(self.led, "start_breathing", None)
+        if not callable(breathing):
+            return None
+        lighting = dict(breathing(now=self.monotonic_now(), phase=phase,
+            elements=(BUTTON_FILL_ELEMENTS[1 if state.pending_initiative.ready else 7],),
+            base_elements=tuple(BUTTON_DIGIT_ELEMENTS[button][1] for button in buttons)))
+        advance = getattr(self.led, "advance_effects", None)
+        if callable(advance): advance(self.monotonic_now(), force=True)
         return lighting
 
     async def _set_dialogue_lighting_phase(self, session_id: str, phase: str, *, current=None) -> dict[str, Any] | None:
@@ -1849,6 +1874,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        identity_current=None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None,
                                        _stt_busy_authorized: bool = False,
+                                       _initiative_offer=None, _initiative_execution=None,
                                        _weather_scope: str | None = None, _weather_origin_current=None,
                                        _story_checkpoint_guard=None,
                                        session_action_authorized: bool = False, _action_guard=None) -> dict[str, Any]:
@@ -1890,6 +1916,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
                 _stt_busy_authorized=_stt_busy_authorized,
+                _initiative_offer=_initiative_offer, _initiative_execution=_initiative_execution,
                 _weather_scope=_weather_scope,
                 _story_checkpoint_guard=_story_checkpoint_guard,
                 _safety_guidance=safety_guidance,
@@ -1929,6 +1956,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              identity_current=None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
                                              _stt_busy_authorized: bool = False,
+                                             _initiative_offer=None, _initiative_execution=None,
                                              _weather_scope: str | None = None,
                                              _story_checkpoint_guard=None,
                                              _safety_guidance: dict,
@@ -2069,6 +2097,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         personal_welcome_answer_verified = False
         game_confirmation_authorized = False
         catalogue_descriptor = None
+        initiative_input_scope = None
         weather_scope = _weather_scope
         if event.event_type == "SpeechReceived":
             if _speech_lifecycle_guard is not None and not _speech_lifecycle_guard():
@@ -2080,9 +2109,18 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if rejected:
                 return self._identity_result(event.session_id, rejected)
             text = transient_text or ""
+            admitted_initiative_scope = getattr(_speech_ingress_guard, "initiative_scope",
+                self._dialogue_initiative_scope(event.session_id))
+            if admitted_initiative_scope and (admitted_initiative_scope[-1] or admitted_initiative_scope[3] == "active"):
+                initiative_input_scope = admitted_initiative_scope[2]
             admitted_offer = ((current.game_offer_id, current.game_offer_ready)
                               if current is not None and current.pending_game_offer else None)
             parsed_intent = classify_intent(text)
+            inline_initiative = getattr(self.conversation_contexts.get(event.session_id), "initiative", None)
+            if (inline_initiative is not None and inline_initiative.kind in {"riddle", "joke", "wordplay"}
+                    and inline_initiative.phase == "active"):
+                from .word_game_hints import local_hint_request
+                if local_hint_request(text): parsed_intent = "free_speech"
             if current is not None and current.mode == "game_active" and current.active_game_id == "word_game":
                 from .word_game_hints import local_hint_request
                 if local_hint_request(text):
@@ -2127,7 +2165,8 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             current = self.canonical_runtime.sessions.get(event.session_id)
             if current is None or current.interaction_open != admitted_handset:
                 return self._identity_result(event.session_id, "stale_session_generation")
-            stale_speech_phase = (_speech_ingress_guard is not None and not _speech_ingress_guard())
+            stale_speech_phase = ((_speech_ingress_guard is not None and not _speech_ingress_guard())
+                or self._dialogue_initiative_scope(event.session_id) != admitted_initiative_scope)
             same_game_scope = (admitted_game_scope is not None
                 and self._game_voice_scope(event.session_id) == admitted_game_scope)
             same_catalogue_scope = (admitted_catalogue_scope is not None
@@ -2153,6 +2192,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if uncertain_stt and safety.severity == "none" and not explicit_help_request:
                 return {**self._identity_result(event.session_id, "audio_retry"),
                         "outputs": [{"action": "audio_retry", "reason": "stt_low_confidence"}]}
+            if (safety.verified and safety.severity == "none" and not explicit_help_request
+                    and current.pending_initiative and not current.pending_initiative.ready):
+                from .activity_requests import initiative_agreed
+                if initiative_agreed(text, current.pending_initiative):
+                    return self._identity_result(event.session_id, "initiative_offer_waiting")
             intent = parsed_intent
             if uncertain_stt or not safety.verified or stale_speech_phase:
                 # Possible danger is still escalated, without treating the
@@ -2244,6 +2288,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         ), profile, transient_text=transient_text,
            stt_busy_authorized=_stt_busy_authorized,
            activity_notice_choice_authorized=activity_notice_choice_authorized,
+           initiative_offer=_initiative_offer, initiative_execution=_initiative_execution,
            _voice_admission=voice_admission,
            private_welcome_ready=private_welcome_ready,
            personal_welcome_answer_verified=personal_welcome_answer_verified,
@@ -2364,6 +2409,19 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 pending_notice.setdefault("lease", next_owner.playback_lease)
             else:
                 del game_context._pending_activity_notice
+        if getattr(game_context, "initiative", None) is not None:
+            if (next_owner is None or next_owner.mode != "bear_dialogue" or not next_owner.interaction_open
+                    or next_owner.safety_severity != "none" or identity_cleanup
+                    or decision["reason"] in {"initiative_declined", "initiative_offer_failed", "game_offered"}
+                    or (getattr(previous_state, "pending_initiative", None) is not None
+                        and not previous_state.pending_initiative.ready and decision["reason"] == "dialogue_turn")):
+                game_context.initiative = None
+                game_context.__dict__.pop("_initiative_consumed_nonce", None)
+            elif decision["reason"] == "initiative_offer_ready":
+                game_context.initiative = next_owner.pending_initiative
+                if game_context.history and not game_context.history[-1][1]:
+                    game_context.history[-1] = (game_context.history[-1][0],
+                        game_context.initiative.text + " " + INITIATIVE_CONTROLS)
         self._transition_dialogue_memory(
             event.session_id, event.event_type, previous_state,
             self.canonical_runtime.sessions.get(event.session_id),
@@ -2959,7 +3017,14 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     return stale_result()
                 # Private onboarding slots never enter effect receipts/public diagnostics.
                 prompt_text = effect.get("text", "")
-                if effect["content_id"] == "NAME_CONFIRMATION":
+                if effect["content_id"] == "INITIATIVE_OFFER":
+                    offer = state_owner.pending_initiative
+                    context = self.conversation_contexts.get(event.session_id)
+                    from .activity_requests import initiative_offer_matches
+                    if offer is None or not initiative_offer_matches(offer, context):
+                        return stale_result()
+                    prompt_text = offer.text + " " + INITIATIVE_CONTROLS
+                elif effect["content_id"] == "NAME_CONFIRMATION":
                     candidate = state_owner.pending_name
                     if not candidate or state_owner.mode != "exhibition_name_capture":
                         return stale_result()
@@ -2994,6 +3059,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             lighting = self._set_name_confirmation_lighting(event.session_id, "output", current=prompt_current)
                             if lighting is not None:
                                 effect["lighting_effect"] = lighting
+                        elif effect["content_id"] == "INITIATIVE_OFFER":
+                            lighting = self._set_initiative_lighting(event.session_id, "output", current=prompt_current)
+                            if lighting is not None: effect["lighting_effect"] = lighting
                     except Exception:
                         audio_failure = {"response_id": effect["content_id"],
                             "playback_lease": effect["playback_lease"], "error_code": "dialogue_prompt_dispatch_failed"}
@@ -3048,6 +3116,11 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         effect["resolution"] = "support_entry_" + phase
                         continue
                 if preset == "BEAR_DIALOGUE" and snapshot.get("mode") == "bear_dialogue" and callable(start_breathing):
+                    if state_owner.pending_initiative:
+                        lighting = self._set_initiative_lighting(event.session_id, "listening", current=still_current)
+                        if lighting is not None:
+                            effect["lighting_effect"] = lighting
+                            continue
                     phase = ("preparing" if state_owner.active_audio_id in {"DIALOGUE_INTRO", "DIALOGUE_RETURN"}
                              else "listening")
                     lighting = await self._set_dialogue_lighting_phase(event.session_id, phase)
@@ -3277,11 +3350,14 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     audio_failure = {"response_id": phrase, "token": record.cancellation_token,
                                      "error_code": str(diagnosis.get("code") or "content_unavailable")[:80]}
             elif kind == "bounded_dialogue_turn":
+                initiative_button_nonce = (previous_state.pending_initiative.nonce
+                    if decision["reason"] == "initiative_accepted" and event.event_type == "ButtonPressed"
+                    and previous_state is not None and previous_state.pending_initiative else None)
                 game_run_id = (getattr(state_owner.game_engine_state, "run_id", None)
                                if effect.get("game_id") == "word_game" else None)
                 effect["response_policy"] = "bounded_validated_dialogue"
                 fallback_reason = None
-                if not voice_open or not (transient_text or "").strip():
+                if not voice_open or (not (transient_text or "").strip() and initiative_button_nonce is None):
                     effect["resolution"] = "bounded_dialogue_unavailable_visual_only"
                 elif self.bounded_s2s is None:
                     effect["resolution"] = "bounded_dialogue_unavailable_visual_only"
@@ -3293,16 +3369,30 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             return stale_result()
                         live_context = self._bounded_dialogue_context(event.session_id, game_id=effect.get("game_id"))
                         turn_context = copy.deepcopy(live_context)
+                        def reserve_initiative(nonce):
+                            initiative = getattr(live_context, "initiative", None)
+                            if (still_current() and self.conversation_contexts.get(event.session_id) is live_context
+                                    and initiative is not None and initiative.nonce == nonce):
+                                live_context.initiative = None
+                        turn_context._initiative_reserve = reserve_initiative
                         from .s2s import TurnResult, dialogue_exit_requested, time as dialogue_clock
                         ordinary_dialogue = (not effect.get("game_id")
                             and turn_context.node_id in {"bear_dialogue", "support_intake"})
-                        exit_requested = ordinary_dialogue and dialogue_exit_requested(transient_text)
+                        inline_continuation = False
+                        if ordinary_dialogue and getattr(turn_context, "initiative", None) is not None:
+                            from .activity_requests import initiative_continuation_requested
+                            inline_continuation = initiative_continuation_requested(transient_text or "", turn_context)
+                        exit_requested = ordinary_dialogue and not inline_continuation and dialogue_exit_requested(transient_text)
                         if ordinary_dialogue and (turn_context.turns >= turn_context.max_turns
                                 or dialogue_clock.monotonic() - turn_context.started_at >= turn_context.max_duration_seconds):
                             # Renew only this detached generation window, never
                             # the session/idle owner or retained bounded history.
                             turn_context.turns = 0
                             turn_context.started_at = dialogue_clock.monotonic()
+                            expired_initiative = getattr(turn_context, "initiative", None)
+                            if expired_initiative is not None:
+                                reserve_initiative(expired_initiative.nonce)
+                                turn_context.initiative = None
                         if effect.get("game_id") == "word_game":
                             def reserve_word(word_state):
                                 # Reserve an emitted word across barge-in; stale generations cannot write it.
@@ -3328,7 +3418,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                     return stale_result()
                                 turn = TurnResult((), (), True)
                             else:
-                                turn = await self.bounded_s2s.run_text_turn(str(transient_text), turn_context)
+                                options = ({"initiative_input_scope": initiative_input_scope,
+                                    "initiative_button_nonce": initiative_button_nonce}
+                                    if ordinary_dialogue and (initiative_input_scope is not None or initiative_button_nonce is not None) else {})
+                                turn = await self.bounded_s2s.run_text_turn(transient_text or "", turn_context, **options)
                         finally:
                             if lighting_owner is not None and self._support_lighting_owners.get(event.session_id) is lighting_owner:
                                 self._support_lighting_owners.pop(event.session_id, None)
@@ -3344,8 +3437,23 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         if effect.get("game_id") == "word_game" and turn.fallback_reason:
                             turn_context._word_state = live_context._word_state
                         turn_context.__dict__.pop("_word_reserve", None)
+                        turn_context.__dict__.pop("_initiative_reserve", None)
                         self.conversation_contexts[event.session_id] = turn_context
                         fallback_reason = turn.fallback_reason
+                        if fallback_reason == "initiative_not_current":
+                            effect["resolution"] = "initiative_not_current"
+                            fallback_reason = None
+                            await self._set_dialogue_lighting_phase(event.session_id, "listening", current=still_current)
+                        offer = getattr(turn, "initiative_offer", None)
+                        if offer is not None and ordinary_dialogue:
+                            from .activity_requests import initiative_offer_matches
+                            if not initiative_offer_matches(offer, turn_context):
+                                fallback_reason = "activity_request_unverified"
+                            else:
+                                followup = await self._receive_canonical_event(self._internal_followup(event,
+                                    "DialogueFallback", "bounded_initiative", {"reason": "initiative_offer"}, "initiative-offer"),
+                                    dialogue_fallback_authorized=True, _initiative_offer=offer)
+                                return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
                         if ordinary_dialogue and fallback_reason == "bounded_limit":
                             # A window that expires during output is not a user
                             # exit. Do not replay a possibly partly heard answer.
@@ -3357,7 +3465,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                 fallback_reason = "dialogue_exit"
                         from .activity_requests import activity_target, activity_request_matches
                         if any(activity_target(action) is None or not activity_request_matches(
-                                getattr(turn, "activity_request", None), transient_text, action, turn_context)
+                                getattr(turn, "activity_request", None), transient_text or "", action, turn_context)
                                for action in turn.actions if action.value in {"offer_game", "open_catalog", "play_story"}):
                             fallback_reason = "activity_request_unverified"
                         effect["resolution"] = ("bounded_dialogue_completed" if fallback_reason is None
@@ -3374,9 +3482,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                 action = request.value
                                 if action == 'play_story':
                                     from .menu_content import catalogue_choice
+                                    from .activity_requests import InitiativeConsentReceipt
                                     chosen = catalogue_choice(transient_text, 'fixed_story_menu', state_owner.age_band,
                                         stories=self.canonical_runtime.stories)
-                                    if chosen != target:
+                                    if chosen != target and not isinstance(getattr(turn, "activity_request", None), InitiativeConsentReceipt):
                                         action, target = 'open_catalog', 'stories'
                                 if action == 'request_information':
                                     from .canonical_services import conversational_information_intent
@@ -3399,6 +3508,13 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         if (fallback_reason is None and snapshot.get("mode") == "bear_dialogue" and len(offers) == 1
                                 and not turn.chunks and self.transition_authorizer.authorize_model_action(
                                     "bear_dialogue", "offer_game", offers[0].params.get("game_id", ""))["ok"]):
+                            from .activity_requests import InitiativeConsentReceipt
+                            if isinstance(getattr(turn, "activity_request", None), InitiativeConsentReceipt):
+                                followup = await self._receive_canonical_event(self._internal_followup(event,
+                                    "DialogueFallback", "bounded_initiative_execute", {"reason": "initiative_execute"}, "initiative-execute"),
+                                    dialogue_fallback_authorized=True,
+                                    _initiative_execution=("game", offers[0].params["game_id"]))
+                                return {**followup, "outputs": [effect, *(followup.get("outputs") or [])]}
                             followup = await self._receive_canonical_event(self._internal_followup(
                                 event, "DialogueFallback",
                                 "bounded_game_offer", {"reason": "game_offer", "game_id": offers[0].params["game_id"]},
@@ -4093,7 +4209,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 pipeline._canonical_private_owner = (_ingress_guard
                     if state is not None and state.mode in {"personal_welcome_listen", "game_active", 'game_menu', 'fixed_story_menu',
                                                            'exhibition_menu_repeat_listen', 'wellbeing_check',
-                                                           'exhibition_name_capture', 'exhibition_age_selection'} else None)
+                                                           'exhibition_name_capture', 'exhibition_age_selection', 'bear_dialogue'} else None)
         async def no_llm_turn(_text: str, _generation: int):
             return TurnResult((), (), False, None)
         with self._game_audio_wait(session_id, pipeline, utterance_guard) as audio_wait:
@@ -4101,7 +4217,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             if (isinstance(self.s2s_audio, LocalS2SPipeline)
                     and getattr(pipeline, "_canonical_private_owner", None) is utterance_guard
                     and audio_result.ingress_status == "collecting"):
-                if not pipeline.active and utterance_guard is not None and not utterance_guard():
+                initiative_stale = (utterance_guard is not None and
+                    getattr(utterance_guard, "initiative_scope", None) != self._dialogue_initiative_scope(session_id))
+                if not pipeline.active and utterance_guard is not None and (not utterance_guard() or initiative_stale):
                     # Low-VAD pre-roll can contain speech: keep its provenance until
                     # normal bounded rolling has certainly displaced every old sample.
                     replacement = getattr(pipeline, "_canonical_private_replacement_owner", None)
@@ -4191,6 +4309,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
         conversation_scene = ((id(state), state.mode) if state is not None and state.mode in
                               {'bear_dialogue','support_intake','schedule_weather'} else None)
         transport_guard = _ingress_guard
+        initiative_scope = getattr(transport_guard, "initiative_scope", self._dialogue_initiative_scope(session_id))
         phase_guard = lambda: (transport_guard()
             and (conversation_scene is None or ((id(self.canonical_runtime.sessions.get(session_id)),
                 getattr(self.canonical_runtime.sessions.get(session_id), 'mode', None)) == conversation_scene))
@@ -4212,6 +4331,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 and self._game_speech_check_owner(session_id) == game_owner
                 and self._game_voice_scope(session_id) == game_scope)))
         phase_guard.lifecycle_current = getattr(transport_guard, "lifecycle_current", transport_guard)
+        phase_guard.initiative_scope = initiative_scope
         if wellbeing_phase and state.safety_severity == 'none':
             phase_guard.wellbeing_question = wellbeing_question
         if catalogue_scope is not None:

@@ -55,6 +55,16 @@ async def test_game_invitation_exposes_consent_only_after_its_owned_terminal(tmp
         h.stand._audio_event_sequence += 1
         await h.app.receive_async(Event(terminal, 'stand', h.stand._audio_event_sequence,
             h.app.now(), 'synthetic_pcm_port', {**owner, 'response_id': owner['content_id']}))
+        if terminal == 'AudioFailed':
+            assert not h.state.game_offer_ready and not h.state.pending_game_offer and not h.state.active_audio_id
+            assert_buttons(h, [5, 7])
+            if answer == 1:
+                await h.harness.speech_result('Да')
+            await h.key(answer)
+            assert h.state.active_game_id is None and not h.app._game_callers
+            await h.simulator.action({'action': 'reset'})
+            assert h.stand.panel_snapshot()['canonical_state'].get('mode') != 'bear_dialogue'
+            return
         assert h.state.game_offer_ready and not h.state.active_audio_id
         assert_buttons(h, [1, 7])
         await h.key(answer)

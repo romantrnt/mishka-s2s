@@ -106,7 +106,7 @@ def _is_explicitly_allowed(current: str, target: str, event_type: str, *,
                       "story_pause_announcement","story_paused","story_resume_announcement","fixed_story_choice_wave"}
     if target == 'bear_dialogue' and current in activity_modes:
         return event_type in {'ButtonPressed','ButtonReleased','ButtonLongHeld','VoiceIntentReady','DialogueFallback','AudioCompleted','AudioFailed'}
-    if current == 'bear_dialogue' and event_type == 'DialogueFallback' and target in {'game_menu','fixed_story_menu','fixed_story_playing'}:
+    if current == 'bear_dialogue' and event_type == 'DialogueFallback' and target in {'game_menu','game_active','fixed_story_menu','fixed_story_playing'}:
         return True
     if current in {'game_menu','fixed_story_menu'} and event_type == 'VoiceIntentReady':
         if safety_level == 'urgent' or intent == SAFETY_POLICY['help_intent']:
