@@ -2056,6 +2056,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             admitted_offer = ((current.game_offer_id, current.game_offer_ready)
                               if current is not None and current.pending_game_offer else None)
             parsed_intent = classify_intent(text)
+            if current is not None and current.mode == "game_active" and current.active_game_id == "word_game":
+                from .word_game_hints import local_hint_request
+                if local_hint_request(text):
+                    parsed_intent = "free_speech"
             explicit_help_request = parsed_intent == "help_request"
             admitted_handset = current.interaction_open if current is not None else False
             epoch = self._session_epochs.get(event.session_id, 0)
@@ -2837,6 +2841,13 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                         and state_owner.mode == "game_active"
                         and state_owner.active_game_id == effect.get("game_id")
                         and state_owner.playback_lease == effect.get("playback_lease"))
+                hint_context = None
+                if (event.event_type == "GameTimer" and decision["reason"] == "game_wait_hint"
+                        and effect.get("game_id") == "word_game"):
+                    from .word_game_hints import hint_for
+                    hint_context = self._bounded_dialogue_context(event.session_id, game_id="word_game")
+                    effect["prompt"], next_hint_level = hint_for(hint_context._word_state, state_owner.age_band,
+                        getattr(hint_context, "_word_hint_level", 0))
                 if getattr(self.audio, "private_pcm_supported", False) and hasattr(self.audio, "play_pcm_stream_owned"):
                     try:
                         ok = await self._stream_game_prompt(event.session_id, effect, record.cancellation_token, game_current)
@@ -2867,6 +2878,9 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             audio_failure = {"response_id": effect["content_id"],
                                 "playback_lease": effect["playback_lease"], "error_code": "game_prompt_dispatch_failed"}
                             _set_audio_effect_status(effect, asset_status="approved", queued=False, resolution="game_prompt_dispatch_failed")
+                if (hint_context is not None and effect.get("audio_queued") and game_current()
+                        and self.conversation_contexts.get(event.session_id) is hint_context):
+                    hint_context._word_hint_level = next_hint_level
             elif kind == "game_started":
                 if (getattr(self.audio, "private_pcm_supported", False)
                         and hasattr(self.audio, "play_pcm_stream_owned")
@@ -3218,6 +3232,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                 # Reserve an emitted word across barge-in; stale generations cannot write it.
                                 if still_current() and self.conversation_contexts.get(event.session_id) is live_context:
                                     live_context._word_state = replace(live_context._word_state, pending=word_state)
+                                    live_context._word_hint_level = 0
                             turn_context._word_reserve = reserve_word
                         journal_visit = None if effect.get("game_id") == "word_game" else self._journal_visit(event.session_id)
                         if journal_visit is not None:
