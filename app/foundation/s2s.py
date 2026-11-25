@@ -3620,6 +3620,8 @@ class LocalS2SPipeline:
 
     async def cancel_output(self, session_id: str, *, ownership_guard=None) -> None:
         """Cancel response work without discarding the currently collecting utterance."""
+        if ownership_guard is not None and not ownership_guard():
+            return
         self.generations[session_id] = self.generations.get(session_id, 0) + 1
         generation, pipeline = self.generations[session_id], self.ingress.get(session_id)
         conversation = self.conversation
@@ -3647,6 +3649,8 @@ class LocalS2SPipeline:
             pipeline.reset()
 
     async def cancel_session(self, session_id: str, *, ownership_guard=None) -> None:
+        if ownership_guard is not None and not ownership_guard():
+            return
         self.close_capture(session_id)
         generation = self.generations[session_id]
         conversation = self.conversation
