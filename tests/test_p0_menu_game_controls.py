@@ -148,8 +148,11 @@ def test_game_ack_fix_does_not_change_story_or_onboarding_release():
         app, _, _, _ = build_application(settings=Settings(profile="mock", runtime_mode="exhibition"))
         for sid, mode in (("story-release", "fixed_story_playing"),
                           ("onboarding-release", "exhibition_age_selection")):
-            app.canonical_runtime.sessions[sid] = CanonicalState(sid, mode=mode, handset="up")
-            result = await app.receive_async(_event("ButtonReleased", sid, 1, {"button_id": 6}))
+            state = CanonicalState(sid, mode="exhibition_onboarding_complete", handset="up")
+            app.canonical_runtime.sessions[sid] = state
+            await app.receive_async(_event("ButtonPressed", sid, 1, {"button_id": 6}))
+            state.mode = mode
+            result = await app.receive_async(_event("ButtonReleased", sid, 2, {"button_id": 6}))
             assert result["canonical_state"]["mode"] == mode
             assert result["reason"] == "button_edge_ack"
             assert result["canonical_state"]["substate"] == "button_edge_ack"
