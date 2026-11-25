@@ -1001,6 +1001,8 @@ class HardwareIntegrationStand:
             and not (state.mode in {"exhibition_name_capture", "exhibition_age_selection"}
                      and state.active_audio_id in {"NAME_BUTTON_HINT", "NAME_CONFIRMATION", "AGE_CLARIFY", "STT_BUSY", "PHRASE_074", "PHRASE_075"}
                      and state.playback_lease)
+            and not (state.mode == "bear_dialogue" and state.active_audio_id == "ACTIVITY_UNAVAILABLE"
+                     and state.playback_lease)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
                  or catalogue
@@ -1382,6 +1384,8 @@ class HardwareIntegrationStand:
         if handle.response_id == "DIALOGUE_OFFER":
             return (state.mode == "bear_dialogue" and state.pending_game_offer is not None
                     and not state.game_offer_ready)
+        if handle.response_id == "ACTIVITY_UNAVAILABLE":
+            return state.mode == "bear_dialogue" and state.safety_severity == "none"
         if handle.response_id == "DIALOGUE_INTRO":
             return state.mode == "bear_dialogue" or (state.mode == "support_intake"
                 and is_information_dialogue(state.mode, state.safety_severity))
