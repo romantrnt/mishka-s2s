@@ -207,3 +207,30 @@ async def test_unavailable_target_never_skips_receipt_authorization(monkeypatch,
         assert result.chunks == ('Я слушаю тебя.',)
     finally:
         await e.cancel_session(context.session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('text', [
+    'Предлагаю поотгадывать загадки.', 'Я задам тебе загадку.', 'Может, загадки?',
+])
+async def test_additional_owned_riddle_proposals_never_reach_tts(monkeypatch, text):
+    monkeypatch.setenv('MISHKA_STREAM_FIRST_JSON_CHUNK', '1')
+    e, context, model, tts = engine(json.dumps({'type': 'say', 'text': text}), structured=True)
+    e.activity_request_gate, requests = classified()
+    try:
+        result = await e.run_text_turn('Мне нравится лес', context)
+        assert result.fallback_reason == 'unsupported_activity_offer'
+        assert not result.actions and result.activity_request is None
+        assert not tts.texts and not e.playback.played
+    finally:
+        await e.cancel_session(context.session_id)
+
+
+@pytest.mark.parametrize('text', [
+    'Не предлагаю играть в загадки.', 'Я не задам тебе загадку.',
+    'Может, поговорим о загадках?', 'Может, ты любишь загадки?',
+    'Мама сказала: «Может, загадки?»',
+])
+def test_additional_proposal_forms_keep_negation_and_discussion(text):
+    from app.foundation.activity_requests import unsupported_game_offer
+    assert not unsupported_game_offer(text)
