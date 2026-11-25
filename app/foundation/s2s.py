@@ -858,6 +858,10 @@ class MockSpeechRecognizer:
         return STTResult(self.text, self.confidence, (time.perf_counter()-started)*1000, self.confidence < .5, {"samples":len(audio.samples)})
 
 
+class SpeechRecognizerBusyError(RuntimeError):
+    """Native recognition capacity is occupied; no decoding was attempted."""
+
+
 class FasterWhisperRecognizer:
     _MAX_NATIVE_JOBS = 2
 
@@ -869,7 +873,7 @@ class FasterWhisperRecognizer:
     async def _run_native(self, call):
         # Preserve two concurrent recognitions; abandoned native jobs still own their slots.
         if sum(not task.done() for task in self._native_tasks) >= self._MAX_NATIVE_JOBS:
-            raise RuntimeError("faster-whisper native workers are busy")
+            raise SpeechRecognizerBusyError("faster-whisper native workers are busy")
         task = asyncio.create_task(asyncio.to_thread(call), name="mishka-whisper-native")
         self._native_tasks.add(task)
 
@@ -924,6 +928,8 @@ class FasterWhisperRecognizer:
             await self._ensure_model()
         except asyncio.CancelledError:
             raise
+        except SpeechRecognizerBusyError:
+            raise
         except Exception as exc:
             raise RuntimeError("faster-whisper model unavailable") from exc
         started=time.perf_counter()
@@ -976,6 +982,8 @@ class FasterWhisperRecognizer:
         try:
             text,confidence=await asyncio.wait_for(self._run_native(run), self.config.stt_timeout_s)
         except asyncio.CancelledError:
+            raise
+        except SpeechRecognizerBusyError:
             raise
         except Exception as exc:
             logger.warning(
@@ -3513,6 +3521,11 @@ class LocalS2SPipeline:
             self.conversation.metrics.mark_voice(session_id, "stt_result", generation_id=generation)
         except asyncio.CancelledError:
             raise
+        except SpeechRecognizerBusyError:
+            self.conversation.metrics.observe("stt",started,False)
+            self.conversation.metrics.observe_voice_stage(session_id, "stt", started, False, generation_id=generation)
+            self.conversation.metrics.finish_voice_turn(session_id, "stt_busy", generation_id=generation)
+            return AudioTurnResult("stt_busy", turn=TurnResult((), (), True, "stt_busy"), barge_in=barge_in)
         except (TimeoutError, RuntimeError, ValueError, OSError, IndexError):
             self.conversation.metrics.observe("stt",started,False)
             self.conversation.metrics.observe_voice_stage(session_id, "stt", started, False, generation_id=generation)
