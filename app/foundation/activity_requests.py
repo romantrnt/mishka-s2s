@@ -22,7 +22,7 @@ _CATALOGUE_QUESTION = re.compile(
     r"\bкакие\b(?=[^.!?]{0,80}\b(?:игры|сказки)\b)(?=[^.!?]{0,80}\b(?:есть|доступны|можно)\b)|"
     r"\bво что\s+(?:можно\s+)?поиграть\b|\bчто\s+можно\s+послушать\b", re.I)
 _RIDDLES = re.compile(r"\b(?:загад(?:к[а-яё]*|ок|очк[а-яё]*)|riddles?)\b", re.I)
-_BARE_AGREEMENT = re.compile(r"(?:ну\s+)?(?:да|ага|угу|конечно|хорошо|ладно|давай|согласен|согласна)(?:,?\s+пожалуйста)?[.!?…]*", re.I)
+_BARE_AGREEMENT = re.compile(r"(?:ну\s+)?(?:да|ага|угу|конечно|хорошо|ладно|давай|согласен|согласна|(?:я )?не против)(?:,?\s+пожалуйста)?[.!?…]*", re.I)
 
 
 def riddles_unavailable():
@@ -62,7 +62,7 @@ def inline_request(text):
     for clause in re.split(r"[.!?;,]+|\b(?:но|зато)\b", plain, flags=re.I):
         if _REPORTED.search(clause) or re.search(r"\bне\b", clause, re.I):
             continue
-        if not re.search(r"\b(?:хочу|давай|загадай|расскажи|пошути|сыграем|поиграем)\b", clause, re.I):
+        if not re.search(r"\b(?:хочу|давай|загадай|расскажи|пошути|сыграем|поиграем|можешь\s+(?:загадать|рассказать|пошутить))\b", clause, re.I):
             continue
         for kind, pattern in _INLINE.items():
             term = re.search(r"\b(?:" + pattern + r")\b", clause, re.I)
@@ -71,8 +71,12 @@ def inline_request(text):
     return None
 
 
-def initiative_agreed(text):
-    return bool(_BARE_AGREEMENT.fullmatch(normalized_request(text)))
+def initiative_agreed(text, offer=None):
+    value = normalized_request(text)
+    if _BARE_AGREEMENT.fullmatch(value):
+        return True
+    pattern = _INLINE.get(getattr(offer, "kind", None))
+    return bool(pattern and re.fullmatch(r"(?:я\s+)?не против\s+(?:" + pattern + r")[.!?…]*", value, re.I))
 
 
 def initiative_declined(text):
@@ -143,7 +147,7 @@ class InitiativeConsentReceipt:
 
 def consume_initiative(text, context, *, expected_nonce=None, button_nonce=None):
     offer = getattr(context, "initiative", None)
-    voice = initiative_agreed(text)
+    voice = initiative_agreed(text, offer)
     if not (isinstance(offer, DialogueInitiative) and offer.phase == "offer" and offer.ready
             and offer.turn == context.turns and context.node_id == "bear_dialogue"
             and ((button_nonce == offer.nonce and not text) or (voice and expected_nonce == offer.nonce))):

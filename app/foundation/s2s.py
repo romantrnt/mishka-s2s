@@ -3924,7 +3924,7 @@ class BoundedConversationEngine:
                 return TurnResult((), (), True, "bounded_limit")
         inline_kind = inline_request(text) if context.node_id == "bear_dialogue" and not getattr(context, "_game_id", None) else None
         previous_initiative = context.initiative
-        if (previous_initiative is not None and initiative_agreed(text)
+        if (previous_initiative is not None and initiative_agreed(text, previous_initiative)
                 and (not previous_initiative.ready or initiative_input_scope != previous_initiative.nonce)
                 and initiative_button_nonce != previous_initiative.nonce):
             return TurnResult((), (), False, "initiative_not_current")
@@ -4133,7 +4133,7 @@ class BoundedConversationEngine:
                     if len(full_candidate.split()) > age_words:
                         raise ValueError("age_word_budget_exceeded")
                     validation_started = time.perf_counter()
-                    options = {"spoken_requirement": spoken_requirement} if structured else {}
+                    options = {"spoken_requirement": spoken_requirement} if structured or response_contract.initiatives else {}
                     if structured:
                         self.metrics.event("spoken_semantic_started", chunk_index=0)
                     val_task = asyncio.create_task(
@@ -4210,7 +4210,7 @@ class BoundedConversationEngine:
                         if len(candidate.split()) > age_words:
                             raise ValueError("age_word_budget_exceeded")
                         validation_started=time.perf_counter()
-                        options = {"spoken_requirement":spoken_requirement} if structured else {}
+                        options = {"spoken_requirement":spoken_requirement} if structured or response_contract.initiatives else {}
                         if structured:
                             self.metrics.event("spoken_semantic_started", chunk_index=len(chunks))
                         decision=await self.response_validator.validate(candidate, context=context.history[-4:], generation_id=token, **options)
