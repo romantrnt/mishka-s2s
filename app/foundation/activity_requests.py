@@ -21,6 +21,44 @@ _REQUEST_HEAD = re.compile(
 _CATALOGUE_QUESTION = re.compile(
     r"\bкакие\b(?=[^.!?]{0,80}\b(?:игры|сказки)\b)(?=[^.!?]{0,80}\b(?:есть|доступны|можно)\b)|"
     r"\bво что\s+(?:можно\s+)?поиграть\b|\bчто\s+можно\s+послушать\b", re.I)
+_RIDDLES = re.compile(r"\b(?:загад(?:к[а-яё]*|ок|очк[а-яё]*)|riddles?)\b", re.I)
+_BARE_AGREEMENT = re.compile(r"(?:ну\s+)?(?:да|ага|угу|конечно|хорошо|ладно|давай|согласен|согласна)(?:,?\s+пожалуйста)?[.!?…]*", re.I)
+
+
+def riddles_unavailable():
+    return not any(game.available and (game.game_id in {"riddle", "riddles"} or _RIDDLES.search(game.display_title)) for game in IMMERSIVE_GAME_SPECS)
+
+
+def unavailable_game_request(text):
+    """One known unsupported request; ordinary mentions keep their meaning."""
+    if not riddles_unavailable():
+        return None
+    named = _QUOTED.sub(lambda m: m.group()[1:-1] if _RIDDLES.fullmatch(m.group()[1:-1]) else " ", text)
+    for clause in current_request_evidence(named, "open_catalog"):
+        if (_RIDDLES.search(clause) and not re.search(r"\bне\b|\b(?:про|об?|насч[её]т)\s+загад", clause, re.I)):
+            return "riddles_unavailable"
+    return None
+
+
+def unsupported_game_offer(text):
+    if not riddles_unavailable():
+        return False
+    plain = _QUOTED.sub(lambda m: m.group()[1:-1] if _RIDDLES.fullmatch(m.group()[1:-1]) else " ", text)
+    previous = ""
+    for clause in re.split(r"[.!?;]+|,\s*(?:но|а|зато)\b", plain, flags=re.I):
+        terms = list(_RIDDLES.finditer(clause))
+        about = terms and (re.search(r"\bчто\s+такое\b", clause, re.I) or all(
+            re.search(r"\b(?:про|об?)\s*$", clause[:term.start()], re.I) for term in terms))
+        if terms and not about:
+            offer = re.search(r"\b(?:давай|поиграем|сыграем|хочешь|загадаю|я\s+(?:могу|умею|буду))\b", clause, re.I)
+            inherited = re.fullmatch(r"\s*(?:давай\s+)?(?:поиграем|сыграем|играть|поиграть|хочешь\s+поиграть)\s*", previous, re.I)
+            if ((offer and not _REPORTED.search(clause[:offer.start()])
+                 and not re.search(r"\bне\s*$", clause[:offer.start()], re.I)
+                 and not re.match(r"\s+не\b", clause[offer.end():], re.I))
+                    or (not offer and inherited and re.match(r"\s*(?:в\s+)?загад", clause, re.I))):
+                return True
+        previous = clause
+    return False
 
 
 def _own_request_heads(text):
@@ -134,11 +172,13 @@ def named_game_candidate(text):
 
 def activity_target(action):
     if action.value == "offer_game":
-        game = next((game for game in IMMERSIVE_GAME_SPECS if game.game_id == action.params.get("game_id")), None)
+        game = next((game for game in IMMERSIVE_GAME_SPECS if game.available and game.game_id == action.params.get("game_id")), None)
         if game is not None:
             return game.game_id, game.display_title, GAME_ALIASES.get(game.game_id, ())
     if action.value == "open_catalog" and action.params.get("catalog") in {"games", "stories"}:
         target = action.params["catalog"]
+        if target == "games" and not any(game.available for game in IMMERSIVE_GAME_SPECS):
+            return None
         return target, "каталог игр" if target == "games" else "каталог сказок", ()
     if action.value == "play_story" and action.params.get("story_id") in STORY_TITLES:
         target = action.params["story_id"]
@@ -153,11 +193,14 @@ class ActivityRequestReceipt:
     action: str
     target: str
     context: object = field(repr=False, compare=False)
+    notice_code: str | None = None
 
     def matches(self, text, action, context):
         target = activity_target(action)
         return bool(target and self.context is context and self.utterance == normalized_request(text)
-                    and self.action == action.value and self.target == target[0])
+                    and self.action == action.value and self.target == target[0]
+                    and (self.notice_code is None or (self.notice_code == "riddles_unavailable"
+                         and self.action == "open_catalog" and self.target == "games" and riddles_unavailable())))
 
 
 class OllamaActivityRequestClassifier:
@@ -233,16 +276,17 @@ class ActivityRequestGate:
 
     async def authorize(self, text, action, context):
         target = activity_target(action)
-        if target is None or self.classifier is None:
+        if target is None or self.classifier is None or _BARE_AGREEMENT.fullmatch(normalized_request(text)):
             return None
         try:
             allowed = await asyncio.wait_for(
                 self.classifier.classify(normalized_request(text), action.value, target), self.timeout_s)
         except Exception:
             return None
-        if allowed is not True:
+        if allowed is not True or activity_target(action) != target:
             return None
-        return ActivityRequestReceipt(normalized_request(text), action.value, target[0], context)
+        notice = unavailable_game_request(text) if action.value == "open_catalog" and target[0] == "games" else None
+        return ActivityRequestReceipt(normalized_request(text), action.value, target[0], context, notice)
 
 
 def activity_request_matches(receipt, text, action, context):
