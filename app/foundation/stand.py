@@ -1510,6 +1510,36 @@ class HardwareIntegrationStand:
                     and (handle.response_id != "PERSONAL_STORY" or self.application._personal_stories.get(handle.session_id) is story_owner)
                     and self._pcm_owner_current(handle, identity_binding))
 
+    async def _cleanup_interrupted_browser_offer(self, saved):
+        if self._closed or saved is None:
+            return False
+        handle, binding, identity_binding, _story_owner = saved
+        if handle.response_id != "INITIATIVE_OFFER" or self.hub.owner_binding_current(binding):
+            return False
+        app = self.application
+        lease = app._active_audio.get(handle.session_id)
+        def owned():
+            return (lease is not None and app._active_audio.get(handle.session_id) is lease
+                    and self._pcm_owner_current(handle, identity_binding))
+        if not owned():
+            return False
+        self._audio_event_sequence += 1
+        result = await app._receive_canonical_event(Event("AudioFailed", handle.session_id,
+            self._audio_event_sequence, time.time(), "browser_offer_interrupted", {
+                "response_id": handle.response_id, "token": handle.token,
+                "generation": handle.generation, "playback_id": handle.playback_id,
+                "playback_lease": handle.playback_lease, "error_code": "private_pcm_interrupted",
+            }, "interrupted-offer:" + handle.playback_id), _action_guard=owned)
+        if result.get("reason") != "initiative_offer_failed":
+            return False
+        if app._active_audio.get(handle.session_id) is lease:
+            app._cancel_audio_timeout(handle.session_id)
+            lease["status"] = "failed"
+            app._active_audio.pop(handle.session_id, None)
+        self._collect_events()
+        await self.hub.publish({"type": "stand_state", "state": self.panel_snapshot()})
+        return True
+
     async def _play_browser_pcm_audio(self, handle, audio, binding, identity_binding, story_owner=None):
         task = asyncio.current_task()
         def current():
@@ -1577,6 +1607,7 @@ class HardwareIntegrationStand:
         finally:
             self._response_audio_tasks.discard(task)
             audio = None
+            await self._cleanup_interrupted_browser_offer((handle, binding, identity_binding, story_owner))
 
     async def _play_browser_pcm_stream(self, handle, stream_aiter, binding, identity_binding, *, on_cue=None):
         from .private_welcome import valid_pcm
@@ -4710,6 +4741,7 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
             runtime = stand.application.canonical_runtime
             if any(runtime.owned_button_gestures(sid, button_owner) for sid in runtime.sessions):
                 stand._revoked_button_owners.add(button_owner)
+            saved_playback = stand._browser_pcm_playback
             stand.hub.disconnect(websocket)
             # Starlette may already have cancelled the enclosing AnyIO scope.
             with anyio.CancelScope(shield=True):
@@ -4766,6 +4798,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                     finally:
                         if stand._browser_capture_owners.get(sid) is owned:
                             stand._browser_capture_owners.pop(sid, None)
+                if saved_playback is not None and saved_playback[1][0] is websocket:
+                    await stand._cleanup_interrupted_browser_offer(saved_playback)
                 # WebPanel is an observer. Its disconnect is not a physical
                 # handset-down event and must never reset the exhibition session.
                 # Per-connection audio ingress tasks are cancelled above; the
