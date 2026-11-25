@@ -68,6 +68,7 @@ async def test_synthetic_legacy_mechanic_uses_real_application_output(game):
         await send('ButtonReleased', 1)
         # These retained mechanics are not public menu choices. Seed only
         # their pure engine after real admission to exercise the effect bridge.
+        await send('ButtonPressed', 1)
         state.active_game_id = game
         state.game_engine_state = start(game, sequence=0, now=float(seq), selection_button=0,
             held_buttons=tuple(state.accepted_buttons_down), immersive=False)
