@@ -13,10 +13,10 @@ async def test_explicit_unavailable_riddles_uses_authorized_chooser_without_fake
     e, context, model, tts = engine(json.dumps({'type': 'say', 'text': 'Давай загадки. Я начну.'}), structured=True)
     e.activity_request_gate, requests = classified()
     try:
-        result = await e.run_text_turn('Давай загадки', context)
+        result = await e.run_text_turn('Запусти игру загадки', context)
         assert [(a.value, a.params) for a in result.actions] == [('open_catalog', {'catalog': 'games'})]
         assert result.activity_request.notice_code == 'riddles_unavailable'
-        assert activity_request_matches(result.activity_request, 'Давай загадки', result.actions[0], context)
+        assert activity_request_matches(result.activity_request, 'Запусти игру загадки', result.actions[0], context)
         assert not result.chunks and not tts.texts and not e.playback.played
         assert len(requests) == 1 and context.turns == 0
     finally:
@@ -31,10 +31,10 @@ async def test_split_structured_model_proposal_cannot_emit_prefix_before_groundi
     e.activity_request_gate, requests = classified()
     entered, release = asyncio.Event(), asyncio.Event()
     async def split(_messages, _request, cancelled, **_kwargs):
-        yield '<say>Давай поиграем.</say>' if wire == 'xml' else '{"type":"say","text":"Давай поиграем. '
+        yield '<say>Открываю игру.</say>' if wire == 'xml' else '{"type":"say","text":"Открываю игру. '
         entered.set()
         await release.wait()
-        yield '<say>В загадки?</say>' if wire == 'xml' else 'В загадки?"}'
+        yield '<say>С загадками?</say>' if wire == 'xml' else 'С загадками?"}'
     if wire == 'xml':
         model.stream = split
     else:
@@ -88,7 +88,7 @@ async def test_discussion_quotes_and_negation_do_not_navigate(text):
 
 @pytest.mark.asyncio
 async def test_generic_child_play_request_gets_real_receipt_but_never_model_riddle_pcm():
-    e, context, model, tts = engine(json.dumps({'type': 'say', 'text': 'Поиграем в загадки?'}), structured=True)
+    e, context, model, tts = engine(json.dumps({'type': 'say', 'text': 'Запускаю игру загадки.'}), structured=True)
     e.activity_request_gate, requests = classified()
     try:
         result = await e.run_text_turn('Давай поиграем', context)
@@ -105,7 +105,7 @@ async def test_classifier_denial_never_gets_replaced_by_a_local_receipt():
     e, context, model, tts = engine(json.dumps({'type': 'say', 'text': 'Я слушаю тебя.'}), structured=True)
     e.activity_request_gate, requests = classified('block')
     try:
-        result = await e.run_text_turn('Хочу загадку', context)
+        result = await e.run_text_turn('Запусти игру загадки', context)
         assert not result.actions and result.activity_request is None
         assert len(requests) == 1
     finally:
@@ -124,7 +124,7 @@ def test_availability_and_notice_receipt_follow_the_actual_catalogue(monkeypatch
     monkeypatch.setattr(requests, 'IMMERSIVE_GAME_SPECS', (*requests.IMMERSIVE_GAME_SPECS,
         GameSpec(game_id, title, 'FIXTURE', 'voice')))
     assert requests.unavailable_game_request('Хочу загадки') is None
-    assert not requests.unsupported_game_offer('Поиграем в загадки?')
+    assert not requests.unsupported_game_offer('Запускаю игру загадки.')
     assert not receipt.matches('Хочу загадки', action, context)
 
 
@@ -141,9 +141,9 @@ def test_harmless_riddle_output_is_not_a_capability_promise(text):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('text', [
-    'Я не умею петь. Давай поиграем в загадки!',
-    'Я не умею петь, давай поиграем в загадки!',
-    'Я не умею петь, но давай поиграем в загадки!',
+    'Я не умею петь. Запускаю игру загадки!',
+    'Я не умею петь, запускаю игру загадки!',
+    'Я не умею петь, но запускаю игру загадки!',
 ])
 async def test_unrelated_negative_clause_cannot_hide_later_unavailable_offer(text):
     e, context, model, tts = engine(json.dumps({'type': 'say', 'text': text}), structured=True)
@@ -163,12 +163,12 @@ async def test_buffered_proposal_is_discarded_on_cancel_failure_or_late_bad_fram
     e, context, model, tts = engine(structured=True)
     entered, release = asyncio.Event(), asyncio.Event()
     async def split(*_args, **_kwargs):
-        yield '{"type":"say","text":"Давай поиграем. '
+        yield '{"type":"say","text":"Открываю игру. '
         entered.set()
         await release.wait()
         if ending == 'failure':
             raise RuntimeError('synthetic interrupted model')
-        yield 'В загадки?"} []'
+        yield 'С загадками?"} []'
     model.stream_dialogue = split
     task = asyncio.create_task(e.run_text_turn('Мне нравится лес', context))
     try:
@@ -211,9 +211,9 @@ async def test_unavailable_target_never_skips_receipt_authorization(monkeypatch,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('text', [
-    'Предлагаю поотгадывать загадки.', 'Я задам тебе загадку.', 'Может, загадки?',
+    'Запускаю игру загадки.', 'Открываю режим загадок.', 'Включаю игру загадки.',
 ])
-async def test_additional_owned_riddle_proposals_never_reach_tts(monkeypatch, text):
+async def test_separate_unavailable_launch_claims_never_reach_tts(monkeypatch, text):
     monkeypatch.setenv('MISHKA_STREAM_FIRST_JSON_CHUNK', '1')
     e, context, model, tts = engine(json.dumps({'type': 'say', 'text': text}), structured=True)
     e.activity_request_gate, requests = classified()
