@@ -311,3 +311,53 @@ async def test_removed_verified_story_catalogue_revokes_ready_consent():
         result=await e.run_text_turn("Да",c,initiative_input_scope=nonce)
         assert not result.actions and result.activity_request is None and c.initiative is None
     finally:await e.cancel_session(c.session_id)
+
+
+@pytest.mark.asyncio
+async def test_polite_current_riddle_request_executes_directly():
+    e,c,m,tts=engine(wire("Зимой и летом одним цветом. Что это?",phase="active",answer="Ёлка"),structured=True)
+    try:
+        result=await e.run_text_turn("Можешь загадать загадку?",c)
+        assert result.fallback_reason is None and result.chunks and c.initiative.phase=="active"
+        assert not result.actions and len(m.calls)==1 and tts.texts
+    finally:await e.cancel_session(c.session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current",[True,False])
+async def test_named_not_opposed_agreement_requires_current_played_offer(current):
+    answers=([wire("Хочешь загадку?")] if current else [])+[wire("Зимой и летом одним цветом. Что это?",phase="active",answer="Ёлка")]
+    e,c,m,tts=engine(*answers,structured=True)
+    try:
+        nonce=None
+        if current:
+            await e.run_text_turn("Мне нравится лес",c);nonce=played(c)
+        result=await e.run_text_turn("Я не против загадки",c,initiative_input_scope=nonce)
+        assert bool(result.chunks)==current and bool(tts.texts)==current
+        assert (result.fallback_reason is None)==current and not result.actions
+    finally:await e.cancel_session(c.session_id)
+
+
+@pytest.mark.parametrize("text",["Что такое загадка?","Мама сказала можешь загадать загадку", "Можешь не загадывать загадку?"])
+def test_polite_head_keeps_discussion_report_and_negation_nonexecuting(text):
+    from app.foundation.activity_requests import inline_request
+    assert inline_request(text) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active",[False,True])
+async def test_legacy_bear_speech_keeps_same_mandatory_initiative_requirement(active):
+    from app.foundation.validation import ValidationDecision
+    reply=('<say>Зимой и летом одним цветом. Что это?</say><action type="dialogue_initiative" kind="riddle" target="riddle" phase="active" answer="Ёлка"/>' if active else '<say>Динозавры были разными.</say>')
+    e,c,m,tts=engine(reply);seen=[]
+    class Recorder:
+        timeout_s=.2
+        async def validate(self,text,context=(),generation_id=None,*,spoken_requirement=None):
+            seen.append(spoken_requirement)
+            return ValidationDecision("allow",True,"fixture",1.,"fixture")
+    e.response_validator=Recorder()
+    try:
+        result=await e.run_text_turn("Давай загадки" if active else "Мне нравятся динозавры",c)
+        assert result.chunks and seen and all(requirement is not None for requirement in seen)
+        assert all("Trusted initiative contract" in requirement.instruction() for requirement in seen)
+    finally:await e.cancel_session(c.session_id)
