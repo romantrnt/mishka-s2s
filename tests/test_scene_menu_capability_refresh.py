@@ -21,12 +21,16 @@ async def weather_page(h):
 async def test_changed_spoken_slot_requires_new_narration_not_second_fresh_press(outcome):
     h=Harness('1-3')
     try:
+        if outcome=='onhook':
+            h.state.handset='down'
+            owner=h.state
+            started=await h.app.session_action(h.sid,'start',ownership_guard=lambda:h.state is owner)
+            assert started['reason']=='panel_silent_session_started'
+            assert h.state.interaction_route=='panel' and h.state.silent_mode
         service=await weather_page(h)
         count=len(h.render.texts)
         service.weather_provider=None
         if outcome=='unwired':h.app.audio.private_pcm_supported=False
-        if outcome=='onhook':
-            h.state.handset='down';h.app.sessions.get(h.sid).handset_up=False
         await h.button(1);await h.release(1)
         assert h.state.scene_menu_refresh_required
         assert h.state.scene_menu_descriptor['items'][0]['id']=='date'
@@ -45,6 +49,9 @@ async def test_changed_spoken_slot_requires_new_narration_not_second_fresh_press
             await h.button(1);await h.release(1)
             assert not any(x.response_id=='TYPED_DATE' for x in h.played)
         if outcome=='onhook':
+            enabled=await h.app.session_action(h.sid,'enable_audio',
+                ownership_guard=lambda:h.state is owner,state_version=h.state.state_version)
+            assert enabled['reason']=='panel_audio_enabled'
             await h.send('HandsetLifted')
             assert h.state.scene_menu_phase=='narrating'
             await h.complete()
