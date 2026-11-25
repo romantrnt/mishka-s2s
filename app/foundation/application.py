@@ -694,6 +694,30 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                      f"{origin}:{suffix}", self.monotonic_now())
 
 
+    def _set_name_confirmation_lighting(self, session_id, phase, *, current):
+        state = self.canonical_runtime.sessions.get(session_id)
+        if (not current() or state is None or state.mode != "exhibition_name_capture"
+                or not state.interaction_open or state.safety_severity != "none"):
+            return None
+        if phase == "output":
+            if state.active_audio_id != "NAME_CONFIRMATION" or not state.pending_name:
+                return None
+            buttons, fill = (5, 7), 7
+        else:
+            if state.active_audio_id or "speech" not in state.expected_inputs:
+                return None
+            buttons = tuple(button for button in (1, 5, 7) if f"button_{button}" in state.expected_inputs)
+            fill = 1 if 1 in buttons else 7
+        breathing = getattr(self.led, "start_breathing", None)
+        if not callable(breathing):
+            return None
+        lighting = dict(breathing(now=self.monotonic_now(), elements=(BUTTON_FILL_ELEMENTS[fill],),
+            base_elements=tuple(BUTTON_DIGIT_ELEMENTS[button][1] for button in buttons), phase=phase))
+        advance = getattr(self.led, "advance_effects", None)
+        if callable(advance):
+            advance(self.monotonic_now(), force=True)
+        return lighting
+
     async def _set_dialogue_lighting_phase(self, session_id: str, phase: str, *, current=None) -> dict[str, Any] | None:
         """Drive the dialogue LED frame from the actual bounded-runtime phase.
 
@@ -1824,7 +1848,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                        identity_profile: dict[str, Any] | None = None,
                                        identity_current=None,
                                        _speech_ingress_guard=None, _speech_lifecycle_guard=None,
-                                       _name_requires_confirmation: bool = False,
                                        _stt_busy_authorized: bool = False,
                                        _weather_scope: str | None = None, _weather_origin_current=None,
                                        _story_checkpoint_guard=None,
@@ -1866,7 +1889,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 identity_current=identity_current,
                 _speech_ingress_guard=_speech_ingress_guard,
                 _speech_lifecycle_guard=_speech_lifecycle_guard,
-                _name_requires_confirmation=_name_requires_confirmation,
                 _stt_busy_authorized=_stt_busy_authorized,
                 _weather_scope=_weather_scope,
                 _story_checkpoint_guard=_story_checkpoint_guard,
@@ -1906,7 +1928,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                                              identity_profile: dict[str, Any] | None = None,
                                              identity_current=None,
                                              _speech_ingress_guard=None, _speech_lifecycle_guard=None,
-                                             _name_requires_confirmation: bool = False,
                                              _stt_busy_authorized: bool = False,
                                              _weather_scope: str | None = None,
                                              _story_checkpoint_guard=None,
@@ -2207,7 +2228,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             state_version=state_version, source=event.source, payload=payload,
             correlation_id=event.correlation_id, timestamp=event.timestamp, monotonic_timestamp=accepted_monotonic,
         ), profile, transient_text=transient_text,
-           name_requires_confirmation=_name_requires_confirmation,
            stt_busy_authorized=_stt_busy_authorized,
            _voice_admission=voice_admission,
            private_welcome_ready=private_welcome_ready,
@@ -2325,6 +2345,14 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
             self.canonical_runtime.sessions.get(event.session_id),
             takes_ownership=takes_ownership, exhibition_reset=exhibition_reset,
         )
+        if (game_context is not None and previous_state is not None and next_owner is not None
+                and previous_state.mode in {"exhibition_name_capture", "exhibition_age_selection"}
+                and next_owner.mode in {"exhibition_name_capture", "exhibition_age_prompt", "exhibition_age_selection"}
+                and (previous_state.display_name != next_owner.display_name
+                     or previous_state.onboarding_name_collected != next_owner.onboarding_name_collected)):
+            # Refresh just the onboarding identity view, preserving committed turns/budget.
+            fresh_name_context = self._canonical_audio_context(event.session_id)
+            game_context.profile, game_context.system_prompt = fresh_name_context.profile, fresh_name_context.system_prompt
         if exhibition_reset or (session_action_authorized and event.event_type == "SessionCancel"):
             self._session_reset_waiters[event.session_id] = (
                 asyncio.current_task(), asyncio.get_running_loop().create_future()
@@ -2938,6 +2966,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                             self._play_typed_audio(event.session_id, rendered, effect, record.cancellation_token)
                         _set_audio_effect_status(effect, asset_status="approved", queued=True,
                                                  resolution="dialogue_prompt_pcm_queued")
+                        if effect["content_id"] == "NAME_CONFIRMATION":
+                            lighting = self._set_name_confirmation_lighting(event.session_id, "output", current=prompt_current)
+                            if lighting is not None:
+                                effect["lighting_effect"] = lighting
                     except Exception:
                         audio_failure = {"response_id": effect["content_id"],
                             "playback_lease": effect["playback_lease"], "error_code": "dialogue_prompt_dispatch_failed"}
@@ -3441,6 +3473,10 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     decision["reason"] = fallback.get("reason")
                     snapshot = self.canonical_runtime.sessions[event.session_id].snapshot()
             elif kind in {"capture_open", "capture_close", "audio_stop"}:
+                if kind == "capture_open":
+                    lighting = self._set_name_confirmation_lighting(event.session_id, "listening", current=still_current)
+                    if lighting is not None:
+                        effect["lighting_effect"] = lighting
                 if local_safety_batch and kind == "capture_close":
                     effect["cleanup"] = dict(reset_sync_results["capture"])
                     effect["resolution"] = "local_capture_closed"
@@ -3966,7 +4002,6 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                 audio_result.stt.text,
                 _speech_ingress_guard=_ingress_guard,
                 _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard),
-                _name_requires_confirmation=True,
             )
             if payload.get("reason") != "stale_session_generation" and self._session_epochs.get(session_id, 0) == epoch:
                 await self._invoke_audio_update_hook(session_id, payload, generation=epoch, correlation_id=correlation_id)
@@ -4079,7 +4114,7 @@ class ScenarioApplication(EngagementIdleMixin, PrivateWelcomeMixin, OwnedSpeechM
                     float(getattr(audio_result.stt, "confidence", 0.0) or 0.0),
                     getattr(active, "mode", None),
                 )
-                result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result), "_name_confident": (not self._untrusted_stt(audio_result) and audio_result.stt.confidence >= 0.75)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard), _name_requires_confirmation=True)
+                result = await self._receive_canonical_event(Event("SpeechReceived", session_id, sequence, self.now(), "uart_audio", {"length": len(audio_result.stt.text), "_stt_untrusted": self._untrusted_stt(audio_result), "_name_confident": (not self._untrusted_stt(audio_result) and audio_result.stt.confidence >= 0.75)}, f"{session.correlation_id}:audio:{sequence}"), audio_result.stt.text, _speech_ingress_guard=_ingress_guard, _speech_lifecycle_guard=getattr(_ingress_guard, "lifecycle_current", _ingress_guard))
                 result["audio_status"] = audio_result.ingress_status; result["pending"] = False; result["barge_in"] = audio_result.barge_in
                 return result
             if _ingress_guard is not None and not _ingress_guard():
