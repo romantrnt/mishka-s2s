@@ -361,3 +361,54 @@ async def test_legacy_bear_speech_keeps_same_mandatory_initiative_requirement(ac
         assert result.chunks and seen and all(requirement is not None for requirement in seen)
         assert all("Trusted initiative contract" in requirement.instruction() for requirement in seen)
     finally:await e.cancel_session(c.session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured",[False,True])
+async def test_active_stop_keeps_complete_bear_grounding_before_any_prefix_pcm(monkeypatch,structured):
+    from app.foundation.validation import ValidationDecision
+    monkeypatch.setenv("MISHKA_STREAM_FIRST_JSON_CHUNK","1")
+    e,c,m,tts=engine(wire("Зимой и летом одним цветом. Что это?",phase="active",answer="Ёлка"),structured=True)
+    entered=asyncio.Event();release=asyncio.Event()
+    class SemanticFixture:
+        async def validate(self,text,context=(),*,spoken_requirement=None):
+            scoped=spoken_requirement and "Trusted initiative contract" in spoken_requirement.instruction()
+            block=scoped and "Хочешь шутку?" in text
+            return ValidationDecision("block" if block else "allow",not block,"fixture",1.,"fixture")
+    try:
+        await e.run_text_turn("Давай загадки",c);nonce=c.initiative.nonce;tts.texts.clear();e.playback.played.clear()
+        e.response_validator.mini=SemanticFixture()
+        m.supports_dialogue_json=structured
+        async def held(*_args,**_kwargs):
+            yield '{"type":"say","text":"Хочешь шутку? ' if structured else '<say>Хочешь шутку?</say>'
+            entered.set();await release.wait()
+            yield 'Поговорим?"}' if structured else '<say>Поговорим?</say>'
+        if structured:m.stream_dialogue=held
+        else:m.stream=held
+        task=asyncio.create_task(e.run_text_turn("Стоп",c,initiative_input_scope=nonce))
+        await entered.wait();await asyncio.sleep(.03)
+        assert not tts.texts and not e.playback.played
+        release.set();result=await task
+        assert result.fallback_reason=="provider_or_validation_failure" and c.initiative is None
+        assert not tts.texts and not e.playback.played
+    finally:
+        release.set();await e.cancel_session(c.session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured",[False,True])
+async def test_rejected_action_repair_cannot_speak_hidden_unowned_proposal(structured):
+    from app.foundation.validation import ValidationDecision
+    action=json.dumps({"type":"open_catalog","catalog":"games"}) if structured else '<action type="open_catalog" catalog="games"/>'
+    reply=json.dumps({"type":"say","text":"Хочешь загадку?"}) if structured else '<say>Хочешь загадку?</say>'
+    e,c,m,tts=engine(action,reply,structured=structured);e.activity_request_gate,requests=classified()
+    class SemanticFixture:
+        async def validate(self,text,context=(),*,spoken_requirement=None):
+            scoped=spoken_requirement and "Trusted initiative contract" in spoken_requirement.instruction()
+            return ValidationDecision("block" if scoped else "allow",not scoped,"fixture_unowned_offer",1.,"fixture")
+    e.response_validator.mini=SemanticFixture()
+    try:
+        result=await e.run_text_turn("Да",c)
+        assert result.fallback_reason=="provider_or_validation_failure" and not tts.texts and not e.playback.played
+        assert len(m.calls)==2 and not result.actions and c.initiative is None
+    finally:await e.cancel_session(c.session_id)
