@@ -1,6 +1,7 @@
 """Canonical system prompt and typed LLM response-plan boundary."""
 from __future__ import annotations
 import json
+import re
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 from .age_policy import profile_context, trusted_canonical_age
@@ -8,6 +9,25 @@ from .canonical_contract import GAME_MEMORY_EXIT_REASONS, GAME_MEMORY_MAX_ROUNDS
 from .game_engine import AVAILABLE_GAME_SPECS, IMMERSIVE_GAME_SPECS
 
 MISHKA_SYSTEM_PROMPT_VERSION = "avatar-v3-local-safety"
+
+ATTENTION_CONTINUATION = (
+    " ATTENTION_CONTINUATION: текущая реплика — обращение или проверка связи в уже открытом разговоре. "
+    "Коротко и естественно подтверди, что ты слышишь собеседника; при наличии темы можешь мягко вернуться к ней. "
+    "Не начинай заново приветствие, самопредставление, знакомство, опрос имени или возраста, меню или список возможностей. "
+    "Пустая короткая история не означает новый визит. Это правило только для текущего обращения: "
+    "явное приветствие, содержательный вопрос и настоящий новый визит обрабатываются по своему смыслу. "
+)
+
+
+def attention_request(text):
+    """Only complete direct attention calls, never a name inside a content request."""
+    value = " ".join(str(text or "").casefold().replace("ё", "е").split())
+    if any(mark in value for mark in ('"', "'", '«', '»', '“', '”', '‘', '’', '`')):
+        return False
+    name = r"(?:мишка|здоровяк)"
+    address = rf"(?:(?:эй|алло)[,!?]?\s+)?{name}"
+    check = r"(?:ты\s+)?(?:(?:тут|здесь|на месте)|(?:меня\s+)?(?:слышишь|слушаешь))"
+    return bool(re.fullmatch(rf"(?:{address}|(?:{name}[,!?]?\s+)?{check}(?:[,!?]?\s+{name})?)[.!?…]*", value))
 
 JSON_WIRE_INSTRUCTION = """- Верни ровно один завершённый JSON-объект по схеме текущего запроса, без markdown,
   анализа, тегов, пояснений, дополнительных полей или текста вокруг объекта.
@@ -78,6 +98,11 @@ MISHKA_SYSTEM_PROMPT = """Ты — Мишка, также Здоровяк: тё
   «получилось», «я вижу», «давай ещё раз».
 - Перечисляй варианты естественно, без лишних номеров и повторов слова «кнопка»,
   если номер не нужен для нажатия.
+- В открытом разговоре обращение по имени и проверка «ты тут?» — просьба откликнуться,
+  а не новое знакомство. Ответь коротко по текущему смыслу; не повторяй полное
+  приветствие, самопредставление, вопросы имени/возраста или список возможностей.
+  Само имя внутри содержательного вопроса не превращает вопрос в проверку связи.
+  На явное приветствие отвечать приветствием можно; настоящий новый визит начинает приложение.
 - Не задавай несколько вопросов подряд. Инициируй следующий шаг только если его
   разрешает текущий сценарий; после реплики жди действие или ответ.
 

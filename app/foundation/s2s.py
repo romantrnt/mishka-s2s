@@ -3910,8 +3910,11 @@ class BoundedConversationEngine:
             return TurnResult((), (), True, reason)
 
     async def _run_text_turn(self,text,context,*,trace_generation_id=None,activities_allowed=True,
-                             expected_repair_token=None, initiative_input_scope=None, initiative_button_nonce=None, inline_stop=False):
+                             expected_repair_token=None, initiative_input_scope=None, initiative_button_nonce=None, inline_stop=False, attention_repair=False):
         text=self.normalizer.normalize(text)
+        turn_owner = getattr(context, "_owner", None)
+        from .system_prompt import attention_request, ATTENTION_CONTINUATION
+        attention_turn = context.node_id == "bear_dialogue" and not getattr(context, "_game_id", None) and attention_request(text)
         if len(text)>self.config.max_input_chars: return TurnResult((),(),True,"oversized_input")
         safety=self.input_safety.check(text)
         if safety!="allow": return TurnResult((),(),True,"safety_signal" if safety=="signal" else "blocked_input")
@@ -3953,7 +3956,7 @@ class BoundedConversationEngine:
             current_inline = None
         elif consent is None and not current_inline:
             context.initiative = None  # The next unrelated turn or competing question expires the proposal.
-        execution_kind = inline_kind or (current_inline.kind if current_inline else None)
+        execution_kind = inline_kind or (current_inline.kind if current_inline and not attention_turn else None)
         execution_required = inline_kind is not None
         if current_inline:
             context.initiative = None
@@ -4058,11 +4061,18 @@ class BoundedConversationEngine:
             "do not ask consent again or promise to start later. A hint uses the current content and answer, not a new riddle. "
             "An answer request reveals that answer and completes it. Decline/stop cancels only this initiative and continues ordinary conversation. "
             "A bare agreement without a current consumed proposal never authorizes executing an initiative. ")
+        if attention_turn:
+            output_format += ATTENTION_CONTINUATION
         native_streaming = _native_audio_stream_method(turn_tts) is not None
         profile_context=context.profile.prompt_fields()
         history=self._bound_history(context.history)
         messages=[{"role":"system","content":policy+f" Scenario={context.scenario_id}/{context.node_id}. Profile={profile_context}. History={history}\nNON_NEGOTIABLE_RUNTIME_OUTPUT: "+output_format},{"role":"user","content":text}]
-        if not activities_allowed:
+        if attention_repair:
+            messages[0]["content"] += (
+                " The previous candidate restarted a greeting or otherwise failed the response contract. "
+                "Answer this SAME attention call naturally and briefly, keeping the current conversation. "
+                "Do not reintroduce yourself, restart onboarding or emit any activity/navigation action. SPEECH_FORM only.")
+        elif not activities_allowed:
             messages[0]["content"] += (
                 " The proposed activity action was not supported by the current utterance. "
                 "Answer this SAME original utterance with ordinary speech, using its actual topic. "
@@ -4397,7 +4407,7 @@ class BoundedConversationEngine:
                             "Active/complete text must actually deliver the declared age-appropriate riddle/joke/shortwordplay, "
                             "or a relevant answer/hint to CURRENT_INITIATIVE_DATA, not another promise or consent question. "
                             "For a riddle verify its private answer against the spoken riddle; a hint must not silently change either. "
-                            "A refusal must not be replaced by another activity. Safety and Russian speech quality remain mandatory.")
+                            "A refusal must not be replaced by another activity. Safety and Russian speech quality remain mandatory.") + (ATTENTION_CONTINUATION if attention_turn else "")
                 spoken_requirement = InitiativeRequirement(context.profile.age_band, context.node_id)
             if initiative_output is not None and initiative_output.params["phase"] == "offer":
                 options = {"spoken_requirement":spoken_requirement}
@@ -4436,6 +4446,8 @@ class BoundedConversationEngine:
             self.metrics.observe_voice_stage(context.session_id, "llm", generation_started, generation_id=trace_generation_id)
             llm_completed=True
             await queue.finish()
+            if self.cancel.cancelled(context.session_id, token) or getattr(context, "_owner", None) != turn_owner:
+                raise asyncio.CancelledError
             self.metrics.observe_voice_stage(context.session_id, "queue", queue_started, generation_id=trace_generation_id)
             # A proposal is navigation, not a spoken conversational answer.
             control_offer = not chunks and len(actions) == 1 and actions[0].value in {"offer_game", "open_catalog", "play_story", "request_information"}
@@ -4444,6 +4456,8 @@ class BoundedConversationEngine:
                     current_inline.nonce if current_inline else uuid.uuid4().hex, context.turns + 1,
                     current_inline.text if current_inline else raw_spoken, initiative_output.params["answer"], True)
                     if initiative_output.params["phase"] == "active" else None)
+            if attention_turn and current_inline and initiative_output is None:
+                context.initiative = replace(current_inline, turn=context.turns + 1)
             if word_turn is not None:
                 context._word_hint_level = word_turn.hint_level
             if word_turn is not None and word_turn.accepted:
@@ -4470,6 +4484,17 @@ class BoundedConversationEngine:
                 timeout_ms=round(exc.timeout_ms, 2) if exc.timeout_ms is not None else None,
             )
             await queue.abort(context.session_id, invalidate=False)
+            if self.cancel.cancelled(context.session_id, token) or getattr(context, "_owner", None) != turn_owner:
+                raise asyncio.CancelledError
+            if attention_turn and current_inline and context.initiative is None:
+                context.initiative = current_inline  # Preserve heard active content, never an offered consent.
+            if attention_turn and expected_repair_token is None:
+                if self.cancel.cancelled(context.session_id, token):
+                    raise asyncio.CancelledError
+                self.metrics.event("attention_response_repair", generation_id=trace_generation_id)
+                return await self._run_text_turn(text, context, trace_generation_id=trace_generation_id,
+                    activities_allowed=False, expected_repair_token=token, inline_stop=inline_stop, attention_repair=True,
+                    initiative_input_scope=initiative_input_scope, initiative_button_nonce=initiative_button_nonce)
             self.metrics.finish_voice_turn(context.session_id, "provider_or_validation_failure", generation_id=trace_generation_id)
             return TurnResult((),(),True,"provider_or_validation_failure")
         except ValueError as exc:
