@@ -221,3 +221,51 @@ async def test_game_menu_and_quiz_prompt_reach_browser_pcm_and_complete():
         assert not any(x["type"] == "audio_pcm_output" for x in observer.messages)
     finally:
         await cleanup(stand, boundary)
+
+
+@pytest.mark.asyncio
+async def test_fresh_typed_lease_recovers_after_reconnect_without_rebinding_old_pcm():
+    from app.foundation.domain import PlaybackHandle
+    api, stand, boundary, render, clock, writer, observer = await setup_browser()
+    try:
+        await welcome(stand, clock)
+        old_welcome = next(x['playback'] for x in writer.messages if x['type'] == 'audio_pcm_output')
+        sid = stand.active_session_id
+        state = stand.application.canonical_runtime.sessions[sid]
+        state.mode = stand.application.sessions.get(sid).current_node = 'bear_dialogue'
+        def install(lease, token):
+            state.active_audio_id, state.playback_lease = 'DIALOGUE_INTRO', lease
+            handle = PlaybackHandle(sid, stand.application._session_epochs.get(sid, 0),
+                                    'play:' + lease, lease, 'DIALOGUE_INTRO', token)
+            stand.application._active_audio[sid] = dict(content_id=handle.response_id,
+                generation=handle.generation, token=token, playback_id=handle.playback_id,
+                playback_lease=lease)
+            return handle, AudioChunk((.1,) * 9000, 24000, token, sid)
+        old, audio = install('typed-old', 77)
+        old_audio = audio
+        assert stand.audio_output.private_pcm_supported
+        def disconnect():
+            writer.on_pcm = None
+            stand.hub.disconnect(writer)
+        writer.on_pcm = disconnect
+        stand._browser_pcm_play(old, audio)
+        await drain(stand)
+        replacement = Socket()
+        assert await stand.hub.connect(replacement)
+        assert not stand.audio_output.private_pcm_supported, 'an old typed lease cannot retarget the new writer'
+        assert not stand._browser_pcm_callback_current(old_welcome)
+        assert not replacement.messages
+        fresh, audio = install('typed-fresh', 78)
+        assert stand.audio_output.private_pcm_supported, 'a fresh current question must recover without a new visit'
+        stand._browser_pcm_play(fresh, audio)
+        await drain(stand)
+        frames = [x for x in replacement.messages if x['type'] == 'audio_pcm_output']
+        assert frames and frames[-1]['final']
+        assert all(x['playback']['playback_lease'] == 'typed-fresh' for x in frames)
+        assert stand._browser_pcm_callback_current(frames[-1]['playback'], require_delivered=True)
+        assert not stand._browser_pcm_callback_current({**frames[-1]['playback'], 'playback_lease': 'typed-old'})
+        with pytest.raises(RuntimeError, match='private_pcm_invalid_owner'):
+            stand._browser_pcm_play(old, old_audio)
+        assert not any(x['type'] == 'audio_pcm_output' for x in observer.messages)
+    finally:
+        await cleanup(stand, boundary)

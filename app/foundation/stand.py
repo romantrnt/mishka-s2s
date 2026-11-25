@@ -1439,7 +1439,11 @@ class HardwareIntegrationStand:
         app = getattr(self, "application", None)
         if app is None or self._closed:
             return False
+        from .owned_speech import TYPED_AUDIO_IDS
         scope = (self.active_session_id, app._session_epochs.get(self.active_session_id, 0))
+        state = app.canonical_runtime.sessions.get(self.active_session_id)
+        if state is not None and state.active_audio_id in TYPED_AUDIO_IDS and state.playback_lease:
+            scope += (state.playback_lease,)
         saved = self._browser_pcm_binding
         if saved is None or saved[0] != scope:
             binding = self.hub.owner_binding()
@@ -1447,18 +1451,21 @@ class HardwareIntegrationStand:
                 return False
             self._browser_pcm_binding = (scope, binding)
             saved = self._browser_pcm_binding
-        # Reconnecting cannot claim a previous session's prepared greeting.
+        # A fresh typed lease may recover; reconnecting cannot retarget prepared PCM.
         return self.hub.owner_binding_current(saved[1])
 
     def _browser_pcm_play(self, handle: PlaybackHandle, audio: AudioChunk) -> None:
-        from .owned_speech import OWNED_PCM_IDS
+        from .owned_speech import OWNED_PCM_IDS, TYPED_AUDIO_IDS
         from .private_welcome import valid_pcm
         saved = self._browser_pcm_binding
+        scope = (handle.session_id, handle.generation)
+        if handle.response_id in TYPED_AUDIO_IDS:
+            scope += (handle.playback_lease,)
         if (handle.response_id not in OWNED_PCM_IDS or not valid_pcm(audio)
                 or not 8000 <= audio.sample_rate <= 96000
                 or len(audio.samples) > 300 * audio.sample_rate
                 or audio.token != handle.token or audio.session_id != handle.session_id
-                or saved is None or saved[0] != (handle.session_id, handle.generation)
+                or saved is None or saved[0] != scope
                 or not self.hub.owner_binding_current(saved[1])):
             raise RuntimeError("private_pcm_invalid_owner")
         state = self.application.canonical_runtime.sessions.get(handle.session_id)
@@ -1471,10 +1478,13 @@ class HardwareIntegrationStand:
             operation="browser_private_pcm", session_id=handle.session_id)
 
     def _browser_pcm_stream_play(self, handle: PlaybackHandle, stream_aiter, *, on_cue=None) -> None:
-        from .owned_speech import OWNED_PCM_IDS
+        from .owned_speech import OWNED_PCM_IDS, TYPED_AUDIO_IDS
         saved = self._browser_pcm_binding
+        scope = (handle.session_id, handle.generation)
+        if handle.response_id in TYPED_AUDIO_IDS:
+            scope += (handle.playback_lease,)
         if (handle.response_id not in OWNED_PCM_IDS or saved is None
-                or saved[0] != (handle.session_id, handle.generation)
+                or saved[0] != scope
                 or not self.hub.owner_binding_current(saved[1])):
             raise RuntimeError("private_pcm_invalid_owner")
         state = self.application.canonical_runtime.sessions.get(handle.session_id)
