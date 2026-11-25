@@ -40,7 +40,9 @@ def hint_for(state, band: str, level: int = 0, *, reason: str | None = None) -> 
         text = (f'Например, {example}. Теперь твоя очередь.' if example
                 else 'Не могу проверить пример, для выхода держи семь.')
     elif reason == 'repeat':
-        text = ('Это слово уже было, назови другое.' if chain
+        required = (state.pending or state).required
+        text = (f'Это слово уже было. Вспомни слово на букву {required.upper()}.' if chain and required
+                else 'Это слово уже было. Вспомни другое существительное.' if chain
                 else 'Это слово уже было. Вспомни другое животное.' if band != '1-3'
                 else 'Это слово уже было. Вспомни животное или еду.')
     elif chain and (state.pending or state).required:
