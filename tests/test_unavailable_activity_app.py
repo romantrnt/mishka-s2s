@@ -1,4 +1,4 @@
-"""Actual app/menu/game ownership; provider and semantic classifier labels are fixtures."""
+"""Separate unavailable game launches; conversational riddles are covered by initiative tests. All providers/labels are fixtures."""
 import asyncio
 from copy import copy
 from dataclasses import replace
@@ -24,16 +24,16 @@ async def test_explicit_unavailable_request_has_owned_honest_notice_before_real_
         h.app._load_game_asset=lambda phrase_id,token: AudioChunk((.1,)*2400,24000,token)
         context=h.app.conversation_contexts[h.sid]
         history,turns,started=list(context.history),context.turns,context.started_at
-        await h.send('SpeechReceived',text='Давай загадки')
+        await h.send('SpeechReceived',text='Запусти игру загадки')
         assert h.state.active_audio_id=='ACTIVITY_UNAVAILABLE'
         assert h.state.mode=='bear_dialogue' and h.state.game_engine_state is None
-        assert any('Загадки пока недоступны' in text for text in h.render.texts)
+        assert any('Такой отдельной игры пока нет' in text for text in h.render.texts)
         await h.key(1)
         assert h.state.mode=='bear_dialogue' and h.state.active_audio_id=='ACTIVITY_UNAVAILABLE'
         await h.terminal()
         assert h.state.mode=='game_menu' and h.state.activity_return_mode=='bear_dialogue'
         caller=h.app._game_callers[h.sid]['context']
-        assert caller.history==[*history,('Давай загадки','')]
+        assert caller.history==[*history,('Запусти игру загадки','')]
         assert caller.turns==turns and caller.started_at==started
         assert not hasattr(caller,'_pending_activity_notice')
         assert h.state.active_audio_id=='PHRASE_019'
@@ -48,7 +48,7 @@ async def test_explicit_unavailable_request_has_owned_honest_notice_before_real_
         assert h.state.game_audio_stage=='playing'
         await h.key(7,duration=6.)
         assert h.state.mode=='bear_dialogue' and h.app.conversation_contexts[h.sid] is caller
-        assert caller.history==[*history,('Давай загадки','')] and caller.turns==turns
+        assert caller.history==[*history,('Запусти игру загадки','')] and caller.turns==turns
         await h.terminal()
         h.model.answers.append('<say>Можно нарисовать коту усы.</say>')
         await h.send('SpeechReceived',text='Что ещё нарисовать коту?')
@@ -60,11 +60,11 @@ async def test_explicit_unavailable_request_has_owned_honest_notice_before_real_
 async def test_notice_terminal_requires_current_lease_and_opens_authorized_chooser_once(terminal):
     h=await conversation()
     try:
-        result=await h.send('SpeechReceived',text='Давай загадки')
+        result=await h.send('SpeechReceived',text='Запусти игру загадки')
         owner=dict(h.app._active_audio[h.sid]);version=h.state.state_version
         public=json.dumps(result,ensure_ascii=False)
         assert 'activity_notice_target' not in public and '_pending_activity_notice' not in public
-        assert 'Давай загадки' not in public
+        assert 'Запусти игру загадки' not in public
         await h.terminal(terminal,{**owner,'playback_lease':'wrong-lease'})
         assert h.state.state_version==version and h.state.active_audio_id=='ACTIVITY_UNAVAILABLE'
         await h.terminal(terminal,owner)
@@ -79,14 +79,14 @@ async def test_notice_terminal_requires_current_lease_and_opens_authorized_choos
 async def test_cancel_notice_keeps_dialogue_and_next_request_has_a_fresh_lease():
     h=await conversation()
     try:
-        await h.send('SpeechReceived',text='Давай загадки')
+        await h.send('SpeechReceived',text='Запусти игру загадки')
         old=dict(h.app._active_audio[h.sid]);context=h.app.conversation_contexts[h.sid]
         assert (await h.key(7))[0]['reason']=='activity_notice_cancelled'
         assert h.state.mode=='bear_dialogue' and h.state.active_audio_id is None
         assert h.app.runtime_status['dialogue_lighting_phase']=='listening'
         assert h.state.activity_notice_target is None and not hasattr(context,'_pending_activity_notice')
         assert h.app.conversation_contexts[h.sid] is context
-        await h.send('SpeechReceived',text='Хочу поиграть в загадки')
+        await h.send('SpeechReceived',text='Открой игру загадки')
         current=dict(h.app._active_audio[h.sid])
         assert current['playback_lease']!=old['playback_lease']
         assert (await h.terminal(owner=old))['reason']=='stale_audio_callback'
@@ -100,7 +100,7 @@ async def test_cancel_notice_keeps_dialogue_and_next_request_has_a_fresh_lease()
 async def test_notice_priority_cancel_and_new_visit_cannot_reopen_old_chooser(ending):
     h=await conversation()
     try:
-        await h.send('SpeechReceived',text='Давай загадки')
+        await h.send('SpeechReceived',text='Запусти игру загадки')
         old=dict(h.app._active_audio[h.sid]);context=h.app.conversation_contexts[h.sid]
         if ending=='help':await h.key(5)
         elif ending=='end':await h.app.session_action(h.sid,'end',ownership_guard=lambda:True)
@@ -124,7 +124,7 @@ async def test_notice_rechecks_authority_until_the_first_actual_chooser(monkeypa
     from app.foundation import activity_requests
     h=await conversation()
     try:
-        await h.send('SpeechReceived',text='Давай загадки')
+        await h.send('SpeechReceived',text='Запусти игру загадки')
         if revocation=='context':
             h.app.conversation_contexts[h.sid]=copy(h.app.conversation_contexts[h.sid])
         else:
@@ -146,7 +146,7 @@ async def test_unavailable_request_supersedes_a_ready_supported_offer_without_ph
         assert h.state.pending_game_offer=='quiz'
         offer=dict(h.app._active_audio[h.sid]);await h.terminal()
         assert h.state.game_offer_ready
-        await h.send('SpeechReceived',text='Давай загадки')
+        await h.send('SpeechReceived',text='Запусти игру загадки')
         assert h.state.active_audio_id=='ACTIVITY_UNAVAILABLE'
         assert h.state.pending_game_offer is None and h.state.game_offer_id is None and not h.state.game_offer_ready
         await h.key(7)
@@ -172,7 +172,7 @@ async def test_native_notice_gate_rejects_old_pcm_then_accepts_fresh_voice_after
     try:
         stand.application=h.app;stand.active_session_id=h.sid
         h.app.s2s_audio.recognizer=Recognizer()
-        h.model.answers.append('<say>Давай поиграем в загадки?</say>')
+        h.model.answers.append('<say>Запускаю игру загадки.</say>')
         await h.send('SpeechReceived',text='Расскажу про лес')
         assert h.state.active_audio_id=='ACTIVITY_UNAVAILABLE'
         assert h.app.runtime_status['dialogue_lighting_phase']=='output'
@@ -212,7 +212,7 @@ async def test_notice_synthesis_window_closes_capture_and_end_revokes_late_pcm()
     class LateVoice:
         async def synthesize(self,text,token,cancelled):
             audio=await h.render.synthesize(text,token,cancelled)
-            if 'Загадки пока недоступны' in text:
+            if 'Такой отдельной игры пока нет' in text:
                 entered.set()
                 try:await release.wait()
                 except asyncio.CancelledError:await release.wait()
@@ -220,7 +220,7 @@ async def test_notice_synthesis_window_closes_capture_and_end_revokes_late_pcm()
     try:
         stand.application=h.app;stand.active_session_id=h.sid
         h.app.bounded_s2s.tts=LateVoice()
-        pending=asyncio.create_task(h.send('SpeechReceived',text='Давай загадки'))
+        pending=asyncio.create_task(h.send('SpeechReceived',text='Запусти игру загадки'))
         await asyncio.wait_for(entered.wait(),2)
         assert h.state.active_audio_id=='ACTIVITY_UNAVAILABLE' and h.sid not in h.app._active_audio
         assert not stand._headless_audio_accepting()
@@ -243,30 +243,30 @@ async def test_notice_output_is_validated_and_denial_keeps_a_real_button_chooser
     class BlockedNotice:
         async def validate(self,text):
             checked.append(text)
-            if text.startswith('Загадки пока недоступны'):
+            if text.startswith('Такой отдельной игры пока нет'):
                 return ValidationDecision('block',False,'fixture',1.,'fixture')
             return await validator.validate(text)
         async def validate_trusted(self,text):return await validator.validate_trusted(text)
     try:
         before=len(h.render.texts)
         h.app.bounded_s2s.response_validator=BlockedNotice()
-        await h.send('SpeechReceived',text='Давай загадки')
-        assert checked==['Загадки пока недоступны. Можно выбрать другую игру.']
-        assert not any('Загадки пока недоступны' in text for text in h.render.texts[before:])
+        await h.send('SpeechReceived',text='Запусти игру загадки')
+        assert checked==['Такой отдельной игры пока нет. Можно выбрать другую игру.']
+        assert not any('Такой отдельной игры пока нет' in text for text in h.render.texts[before:])
         assert h.state.mode=='game_menu' and h.state.game_engine_state is None
         assert 1 in h.state.scene_menu_descriptor['buttons']
         assert h.state.activity_notice_target is None
     finally:await h.close()
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('text',['Я не хочу загадки','Мама сказала: «Давай загадки»','Что такое загадки?'])
+@pytest.mark.parametrize('text',['Я не хочу загадки','Мама сказала: «Запусти игру загадки»','Что такое загадки?'])
 async def test_discussion_negation_or_quotation_is_not_a_child_activity_request(text):
     h=await conversation()
     try:
         await h.send('SpeechReceived',text=text)
         assert h.state.mode=='bear_dialogue' and h.state.activity_notice_target is None
         assert h.state.pending_game_offer is None and h.state.game_engine_state is None
-        assert not any('Загадки пока недоступны' in text for text in h.render.texts)
+        assert not any('Такой отдельной игры пока нет' in text for text in h.render.texts)
     finally:await h.close()
 
 @pytest.mark.asyncio
@@ -287,7 +287,7 @@ async def test_unsolicited_unsupported_model_offer_stays_same_conversation_witho
     try:
         before=h.app.conversation_contexts[h.sid]
         history,turns,started=list(before.history),before.turns,before.started_at
-        h.model.answers.append('<say>Давай поиграем в загадки?</say>')
+        h.model.answers.append('<say>Запускаю игру загадки.</say>')
         await h.send('SpeechReceived',text='Мне нравится лес')
         assert h.state.active_audio_id=='ACTIVITY_UNAVAILABLE'
         assert h.state.mode=='bear_dialogue' and h.state.pending_game_offer is None
