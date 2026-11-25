@@ -1770,6 +1770,8 @@ function interactionGuide(state, media) {
     return ['Расскажи Мишке', text + ' 7 — вернуться в меню.'];
   }
   if (node === 'bear_dialogue') {
+    if (state.simulator?.prompt?.phrase_id === 'ACTIVITY_UNAVAILABLE')
+      return ['Мишка объясняет', 'Дослушай Мишку. 7 — остаться в разговоре; 5 — помощь.'];
     const offered = {free_lights: 'Живой свет', quiz: 'Вопросы Мишки', repeat_pattern: 'Повтори огоньки',
       odd_one_out: 'Выбери лишнее', word_game: 'Игра в слова'}[state.canonical_state?.pending_game_offer];
     if (offered) return ['Поиграем в «' + offered + '»?', state.canonical_state.game_offer_ready

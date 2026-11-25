@@ -1,0 +1,17 @@
+'use strict';
+const assert=require('assert'),fs=require('fs'),vm=require('vm');
+const source=fs.readFileSync('app/foundation/console/console.js','utf8');
+const context=vm.createContext({interactionActive:()=>true});
+vm.runInContext(source.slice(source.indexOf('function interactionGuide('),source.indexOf('function updateGuide(')),context);
+const state={session:{state:'ACTIVE',node:'bear_dialogue'},simulator:{microphone:{eligible:true},prompt:{phrase_id:'ACTIVITY_UNAVAILABLE'}},canonical_state:{}};
+const notice=context.interactionGuide(state,{});
+assert.match(notice[1],/Дослушай/);
+assert.match(notice[1],/7 — остаться в разговоре/,'seven cancels only this owned notice');
+assert.match(notice[1],/5 — помощь/);
+assert.doesNotMatch(notice[1],/7 — вернуться в меню/);
+delete state.simulator.prompt;
+assert.match(context.interactionGuide(state,{})[1],/7 — вернуться в меню/,'the ordinary dialogue mapping resumes after terminal');
+state.session.node='game_menu';
+state.canonical_state.scene_menu_descriptor={scene:'game_menu',items:[{slot:1,title:'Живой свет'}],buttons:[1,7]};
+assert.match(context.interactionGuide(state,{})[1],/1 — Живой свет/,'the real chooser retains its committed catalogue mapping');
+console.log('owned activity notice cancellation, terminal dialogue and catalogue controls passed');
