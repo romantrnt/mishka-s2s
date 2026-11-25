@@ -38,6 +38,7 @@ async def test_fixed_story_queued_pause_uses_request_offset_not_previous_owner(m
             streams.append(self)
         def start(self): pass
         def write(self, values): writes.append((self.index, len(values)))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream, __spec__=__import__("importlib.machinery", fromlist=["ModuleSpec"]).ModuleSpec("sounddevice", None), query_devices=lambda *args: {"max_output_channels": 1}))

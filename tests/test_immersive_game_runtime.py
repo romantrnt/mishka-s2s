@@ -247,6 +247,7 @@ async def test_native_start_callback_follows_stream_start_and_owner(monkeypatch,
             if mode == "failed": raise OSError("synthetic")
             if mode == "revoked": owner[0] = False
         def write(self, values): order.append("write")
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream, query_devices=lambda *_: {'max_output_channels': 1}))
@@ -312,6 +313,7 @@ async def test_turntaking_native_wrapper_forwards_start_callback(monkeypatch):
         def __init__(self, **kwargs): pass
         def start(self): order.append("stream")
         def write(self, values): order.append("write")
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules,"sounddevice",SimpleNamespace(OutputStream=Stream, query_devices=lambda *_: {'max_output_channels': 1}))

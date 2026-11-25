@@ -35,6 +35,7 @@ async def test_native_stream_pause_resume_uses_written_frames_and_new_lease(monk
         def __init__(self, **kwargs):self.index=len(streams);streams.append(self)
         def start(self):pass
         def write(self, values):writes.append((self.index,len(values)))
+        def stop(self): self.drained = True
         def abort(self):pass
         def close(self):pass
     monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream,query_devices=lambda *_:{'max_output_channels':1},__spec__=ModuleSpec('sounddevice',None)))

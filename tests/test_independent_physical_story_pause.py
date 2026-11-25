@@ -36,6 +36,7 @@ async def test_actual_native_pause_retains_nonzero_checkpoint_and_resumes_from_i
             streams.append(self)
         def start(self): pass
         def write(self, values): writes.append((self.index, len(values)))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream, query_devices=lambda *_: {'max_output_channels': 1}))
