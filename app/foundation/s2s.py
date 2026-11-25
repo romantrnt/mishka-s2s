@@ -23,7 +23,8 @@ import time
 import uuid
 import wave
 from .activity_requests import (ActivityRequestGate, ActivityRequestReceipt,
-                                OllamaActivityRequestClassifier, activity_target, named_game_candidate)
+                                OllamaActivityRequestClassifier, activity_target, named_game_candidate,
+                                unavailable_game_request, unsupported_game_offer, riddles_unavailable)
 from .spoken_numbers import sentence_matches
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable
@@ -3873,9 +3874,8 @@ class BoundedConversationEngine:
         ordinary_dialogue = context.node_id in {"bear_dialogue", "support_intake"} and not getattr(context, "_game_id", None)
         return_allowed = not ordinary_dialogue or dialogue_exit_requested(text)
         response_contract = replace(response_contract, allow_return=return_allowed)
-        # Legacy XML puts actions after a closed say; vet that action set
-        # before any speech can cross PCM. JSON say keeps its existing path.
-        defer_legacy_speech = ordinary_dialogue and not structured and not return_allowed
+        # Vet the complete bounded bear reply before an early JSON prefix can promise an unavailable activity.
+        defer_legacy_speech = ordinary_dialogue and not return_allowed and (not structured or context.node_id == "bear_dialogue")
         if not activities_allowed:
             response_contract = DialogueResponseContract(response_contract.max_words, response_contract.young,
                                                          False, response_contract.story_ids, speech_only=True, allow_return=False)
@@ -4145,7 +4145,11 @@ class BoundedConversationEngine:
                         raise ValueError("game_offer_mixed_or_out_of_context")
                     if activity_rejected or any(action.value in {"offer_game", "open_catalog", "play_story", "request_information"} for action in actions):
                         raise ValueError("game_offer_mixed_actions")
-                    if activity_target(item) is not None:
+                    target = activity_target(item)
+                    if item.value in {"offer_game", "open_catalog", "play_story"} and target is None:
+                        activity_rejected = True
+                        return
+                    if target is not None:
                         if activities_allowed:
                             activity_started = time.perf_counter()
                             activity_receipt = await self.activity_request_gate.authorize(text, item, context)
@@ -4157,8 +4161,11 @@ class BoundedConversationEngine:
                             activity_rejected = True
                             return
                     actions.append(item)
+            unavailable = unavailable_game_request(text) if activities_allowed and context.node_id == "bear_dialogue" else None
             candidate = named_game_candidate(text) if activities_allowed and context.node_id == "bear_dialogue" else None
-            if candidate is not None:
+            if unavailable:
+                await handle(ParsedOutput("action", "open_catalog", {"catalog": "games"}))
+            elif candidate is not None:
                 await handle(ParsedOutput("action", "offer_game", {"game_id": candidate}))
             else:
                 consume_provider = (_DialogueJSONBridge(provider, response_contract, self.consumer.max_chars,
@@ -4187,6 +4194,17 @@ class BoundedConversationEngine:
                         failure_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await failure_task
+            if context.node_id == "bear_dialogue" and not getattr(context, "_game_id", None) and unsupported_game_offer(raw_spoken):
+                await queue.abort(context.session_id, invalidate=False)
+                action = ParsedOutput("action", "open_catalog", {"catalog": "games"})
+                receipt = await self.activity_request_gate.authorize(text, action, context) if activities_allowed else None
+                if self.cancel.cancelled(context.session_id, token):
+                    raise asyncio.CancelledError
+                if receipt is not None and riddles_unavailable():
+                    self.metrics.finish_voice_turn(context.session_id, "completed", generation_id=trace_generation_id)
+                    return TurnResult((), (action,), False, activity_request=replace(receipt, notice_code="riddles_unavailable"))
+                self.metrics.finish_voice_turn(context.session_id, "unsupported_activity_offer", generation_id=trace_generation_id)
+                return TurnResult((), (), True, "unsupported_activity_offer")
             if not activity_rejected:
                 if defer_legacy_speech or not activities_allowed:
                     deferred_chunks.extend(chunker.flush())
