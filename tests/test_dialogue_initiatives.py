@@ -288,3 +288,26 @@ async def test_decline_or_competing_question_cannot_arm_new_proposal(text,reply)
         result=await e.run_text_turn(text,c)
         assert result.fallback_reason=="provider_or_validation_failure" and not tts.texts and c.initiative is None
     finally:await e.cancel_session(c.session_id)
+
+
+@pytest.mark.asyncio
+async def test_empty_verified_story_catalogue_cannot_prepare_owned_offer():
+    e,c,m,tts=engine(wire("Хочешь выбрать сказку?",kind="story",target="stories"),structured=True)
+    try:
+        result=await e.run_text_turn("Мне нравится лес",c)
+        assert result.fallback_reason=="provider_or_validation_failure"
+        assert result.initiative_offer is None and c.initiative is None and not tts.texts and not e.playback.played
+    finally:await e.cancel_session(c.session_id)
+
+
+@pytest.mark.asyncio
+async def test_removed_verified_story_catalogue_revokes_ready_consent():
+    e,c,m,tts=engine(wire("Хочешь выбрать сказку?",kind="story",target="stories"),
+        json.dumps({"type":"say","text":"Можем продолжить разговор."}),structured=True)
+    c.verified_story_ids=("fixed_aibolit_v1",)
+    try:
+        await e.run_text_turn("Мне нравится лес",c);nonce=played(c)
+        c.verified_story_ids=()
+        result=await e.run_text_turn("Да",c,initiative_input_scope=nonce)
+        assert not result.actions and result.activity_request is None and c.initiative is None
+    finally:await e.cancel_session(c.session_id)

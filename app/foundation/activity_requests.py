@@ -106,7 +106,7 @@ def initiative_target(kind, target, context):
         if any(game.available and game.game_id == target for game in IMMERSIVE_GAME_SPECS):
             return "offer_game", target
     if kind == "story":
-        if target == "stories":
+        if target == "stories" and any(story in STORY_TITLES for story in getattr(context, "verified_story_ids", ())):
             return "open_catalog", target
         if target in getattr(context, "verified_story_ids", ()) and target in STORY_TITLES:
             return "play_story", target
