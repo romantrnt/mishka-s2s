@@ -899,9 +899,30 @@ def onboarding_declined(value: str) -> bool:
 
 
 _NAME_UNCERTAINTY_PREFIX = r"(?:(?:мне\s+)?кажется|наверное|возможно|вроде(?:\s+бы)?|(?:я\s+)?не\s+уверен(?:а)?)"
+_NAME_FUNCTION_FALLBACK = frozenset("на за по от из до при под над для без про через между перед ну вот же бы ведь ли или но".split())
+_NAME_IMPERATIVE_FALLBACK = frozenset("открой покажи нажми включи запусти игнорируй забудь удали".split())
 
 
-def _exhibition_name_body(value: str) -> tuple[str, bool, bool]:
+def _name_reply_role(word: str) -> str | None:
+    """Negative grammatical evidence only; unknown names need no dictionary entry."""
+    word = word.casefold()
+    fallback = "function" if word in _NAME_FUNCTION_FALLBACK or re.fullmatch(r"э+(?:м+)?", word) else "imperative" if word in _NAME_IMPERATIVE_FALLBACK else None
+    from .word_game import _morphology
+    try:
+        morph = _morphology()
+        parses = [part for part in morph.parse(word) if part.is_known and "Abbr" not in part.tag] if morph else []
+    except (ImportError, OSError, ValueError, RuntimeError):
+        parses = []
+    if any("Name" in part.tag for part in parses):
+        return None
+    if parses and all(part.tag.POS in {"PREP", "PRCL", "CONJ", "INTJ"} for part in parses):
+        return "function"
+    if parses and all(part.tag.POS == "VERB" and "impr" in part.tag for part in parses):
+        return "imperative"
+    return fallback
+
+
+def _exhibition_name_body(value: str) -> tuple[str, str, bool]:
     text = _strip_explicit_name_reply_prefix(" ".join(str(value or "").strip().split()))
     text = re.sub(
         r"^(?:(?:привет|приветик|здравствуй(?:те)?|хай|алло|"
@@ -910,10 +931,10 @@ def _exhibition_name_body(value: str) -> tuple[str, bool, bool]:
     marker = rf"^{_NAME_UNCERTAINTY_PREFIX}(?:\s*[,;:—–-]\s*|\s+|$)"
     uncertain = bool(re.match(marker, text, re.I))
     text = re.sub(marker, "", text, count=1, flags=re.I)
-    cue = re.match(r"^(?:меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я)(?:\s*[,;:—–-]\s*|\s+)(.+)$", text, re.I)
-    body = cue[1].strip() if cue else text
+    cue = re.match(r"^(меня\s+зовут|мо[её]\s+имя|зови\s+меня|это\s+я|я)(?:\s*[,;:—–-]\s*|\s+)(.+)$", text, re.I)
+    body = cue[2].strip() if cue else text
     uncertain = uncertain or bool(re.match(marker, body, re.I))
-    return re.sub(marker, "", body, count=1, flags=re.I), bool(cue), uncertain
+    return re.sub(marker, "", body, count=1, flags=re.I), cue[1].casefold() if cue else "", uncertain
 
 
 def exhibition_name_uncertain(value: str) -> bool:
@@ -921,9 +942,12 @@ def exhibition_name_uncertain(value: str) -> bool:
     text = " ".join(str(value or "").strip().split())
     if not text or len(text) > 160:
         return False
-    body, _, uncertain = _exhibition_name_body(text)
+    body, cue, uncertain = _exhibition_name_body(text)
     clause = re.split(r"[,.;!?…]", body, maxsplit=1)[0]
-    return bool(uncertain or re.search(r"\bили\b", clause, re.I)
+    words = re.findall(r"[^\W\d_]+(?:-[^\W\d_]+)*", clause, re.UNICODE)
+    role = _name_reply_role(words[0]) if words else None
+    fragment = role == "imperative" or (role == "function" and cue in {"", "я", "это я"})
+    return bool(uncertain or fragment or re.search(r"\bили\b", clause, re.I)
         or re.search(r"[,;]\s*(?:нет|точнее|вернее)\b", body, re.I)
         or re.search(rf"[,;]\s*{_NAME_UNCERTAINTY_PREFIX}[ .!?…]*$", body, re.I)
         or re.search(r"(?:[-–—]|…|\.{2,})$", body))
@@ -965,6 +989,8 @@ def normalize_exhibition_name(value: str) -> str | None:
         stopwords |= {"мишка", "медведь", "медвежонок"}
     parts = re.findall(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё-]*", candidate)
     if not parts:
+        return None
+    if len(parts) > 1 and _name_reply_role(parts[0]) == "imperative":
         return None
     selected: list[str] = []
     for part in parts[:3]:
