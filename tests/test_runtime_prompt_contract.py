@@ -36,7 +36,8 @@ async def young_guest(app):
         await done()
     await send('SpeechReceived', text='Меня зовут Аня')
     await done()
-    await done()
+    assert app.canonical_runtime.sessions[sid].mode == 'exhibition_age_selection'
+    assert app.canonical_runtime.sessions[sid].active_audio_id is None
     await key(2)
     await done()
     await send('ExhibitionOnboardingComplete', {'token':app.sessions.get(sid).cancellation_token})
