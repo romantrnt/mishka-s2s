@@ -30,12 +30,12 @@ def riddles_unavailable():
 
 
 def unavailable_game_request(text):
-    """One known unsupported request; ordinary mentions keep their meaning."""
+    """Conversation content needs no catalogue; a separate unavailable launch does."""
     if not riddles_unavailable():
         return None
-    named = _QUOTED.sub(lambda m: m.group()[1:-1] if _RIDDLES.fullmatch(m.group()[1:-1]) else " ", text)
-    for clause in current_request_evidence(named, "open_catalog"):
-        if (_RIDDLES.search(clause) and not re.search(r"\bне\b|\b(?:про|об?|насч[её]т)\s+загад", clause, re.I)):
+    for clause in current_request_evidence(text, "open_catalog"):
+        if (_RIDDLES.search(clause) and re.search(r"\b(?:запусти|открой|включи)\w*\b", clause, re.I)
+                and not re.search(r"\bне\b", clause, re.I)):
             return "riddles_unavailable"
     return None
 
@@ -43,23 +43,120 @@ def unavailable_game_request(text):
 def unsupported_game_offer(text):
     if not riddles_unavailable():
         return False
-    plain = _QUOTED.sub(lambda m: m.group()[1:-1] if _RIDDLES.fullmatch(m.group()[1:-1]) else " ", text)
-    previous = ""
-    for clause in re.split(r"[.!?;]+|,\s*(?:но|а|зато)\b", plain, flags=re.I):
-        terms = list(_RIDDLES.finditer(clause))
-        about = terms and (re.search(r"\bчто\s+такое\b", clause, re.I) or all(
-            re.search(r"\b(?:про|об?)\s*$", clause[:term.start()], re.I) for term in terms))
-        if terms and not about:
-            offer = re.search(r"\b(?:давай|поиграем|сыграем|хочешь|предлагаю|загадаю|задам|я\s+(?:могу|умею|буду))\b", clause, re.I)
-            inherited = re.fullmatch(r"\s*(?:давай\s+)?(?:поиграем|сыграем|играть|поиграть|хочешь\s+поиграть)\s*", previous, re.I)
-            elliptical = re.fullmatch(r"\s*(?:а\s+)?может[, ]+\s*(?:в\s+)?" + _RIDDLES.pattern + r"\s*", clause, re.I)
-            if ((offer and not _REPORTED.search(clause[:offer.start()])
-                 and not re.search(r"\bне\s*$", clause[:offer.start()], re.I)
-                 and not re.match(r"\s+не\b", clause[offer.end():], re.I))
-                    or elliptical or (not offer and inherited and re.match(r"\s*(?:в\s+)?загад", clause, re.I))):
-                return True
-        previous = clause
+    previous_launch = False
+    for clause in re.split(r"[.!?;]+|,\s*(?:но|а|зато|(?=запускаю|открываю|включаю))\b", _QUOTED.sub(" ", text), flags=re.I):
+        launch = bool(re.search(r"\b(?:запускаю|открываю|включаю)\b", clause, re.I)
+                      and not re.search(r"\bне\b", clause, re.I) and not _REPORTED.search(clause))
+        if _RIDDLES.search(clause) and (launch or previous_launch):
+            return True
+        previous_launch = launch
     return False
+
+
+_INLINE = {"riddle": r"загад(?:к[а-яё]*|ок|очк[а-яё]*)", "joke": r"шутк[а-яё]*|анекдот[а-яё]*",
+           "wordplay": r"словесн[а-яё]*\s+(?:игр[а-яё]*|забав[а-яё]*)"}
+
+
+def inline_request(text):
+    plain = _QUOTED.sub(" ", str(text))
+    for clause in re.split(r"[.!?;,]+|\b(?:но|зато)\b", plain, flags=re.I):
+        if _REPORTED.search(clause) or re.search(r"\bне\b", clause, re.I):
+            continue
+        if not re.search(r"\b(?:хочу|давай|загадай|расскажи|пошути|сыграем|поиграем)\b", clause, re.I):
+            continue
+        for kind, pattern in _INLINE.items():
+            term = re.search(r"\b(?:" + pattern + r")\b", clause, re.I)
+            if term and not re.search(r"\b(?:про|об?|что такое)\s*$", clause[:term.start()], re.I):
+                return kind
+    return None
+
+
+def initiative_agreed(text):
+    return bool(_BARE_AGREEMENT.fullmatch(normalized_request(text)))
+
+
+def initiative_declined(text):
+    return bool(re.fullmatch(r"(?:нет(?:,? спасибо)?|не хочу(?: (?:это|играть|загадки|шутку|сказку))?|не надо|не сейчас|стоп|хватит(?: загадок|шуток|играть)?|давай потом)[.!?…]*",
+                             normalized_request(text), re.I))
+
+
+def initiative_continuation_requested(text, context):
+    value = getattr(context, "initiative", None)
+    return bool(value and value.kind in _INLINE and initiative_declined(text))
+
+
+@dataclass(frozen=True)
+class DialogueInitiative:
+    kind: str
+    target: str
+    phase: str
+    nonce: str
+    turn: int
+    text: str = field(repr=False)
+    answer: str = field(default="", repr=False)
+    ready: bool = False
+
+
+def initiative_target(kind, target, context):
+    if kind in _INLINE and target == kind:
+        return "inline", target
+    if kind == "game":
+        if target == "games" and any(game.available for game in IMMERSIVE_GAME_SPECS):
+            return "open_catalog", target
+        if any(game.available and game.game_id == target for game in IMMERSIVE_GAME_SPECS):
+            return "offer_game", target
+    if kind == "story":
+        if target == "stories":
+            return "open_catalog", target
+        if target in getattr(context, "verified_story_ids", ()) and target in STORY_TITLES:
+            return "play_story", target
+    return None
+
+
+def initiative_offer_matches(offer, context):
+    current = getattr(context, "initiative", None)
+    return bool(isinstance(offer, DialogueInitiative) and isinstance(current, DialogueInitiative)
+                and current.nonce == offer.nonce and offer.phase == "offer" and not offer.ready and not current.ready
+                and offer.turn == context.turns and context.node_id == "bear_dialogue"
+                and initiative_target(offer.kind, offer.target, context))
+
+
+@dataclass(frozen=True)
+class InitiativeConsentReceipt:
+    utterance: str = field(repr=False)
+    action: str
+    target: str
+    context: object = field(repr=False, compare=False)
+    nonce: str
+    source: str
+    turn: int
+
+    def matches(self, text, action, context):
+        target = activity_target(action)
+        return bool(self.context is context and self.utterance == normalized_request(text)
+                    and self.source in {"voice", "button"} and self.action == action.value
+                    and target and target[0] == self.target and self.turn == context.turns
+                    and getattr(context, "_initiative_consumed_nonce", None) == self.nonce
+                    and ((self.source == "voice" and _BARE_AGREEMENT.fullmatch(self.utterance))
+                         or (self.source == "button" and not self.utterance)))
+
+
+def consume_initiative(text, context, *, expected_nonce=None, button_nonce=None):
+    offer = getattr(context, "initiative", None)
+    voice = initiative_agreed(text)
+    if not (isinstance(offer, DialogueInitiative) and offer.phase == "offer" and offer.ready
+            and offer.turn == context.turns and context.node_id == "bear_dialogue"
+            and ((button_nonce == offer.nonce and not text) or (voice and expected_nonce == offer.nonce))):
+        return None
+    if not initiative_target(offer.kind, offer.target, context):
+        context.initiative = None
+        return None
+    reserve = getattr(context, "_initiative_reserve", None)
+    if callable(reserve):
+        reserve(offer.nonce)
+    context.initiative = None  # Revoke before the first provider/validator await.
+    context._initiative_consumed_nonce = offer.nonce
+    return offer
 
 
 def _own_request_heads(text):
@@ -291,4 +388,4 @@ class ActivityRequestGate:
 
 
 def activity_request_matches(receipt, text, action, context):
-    return isinstance(receipt, ActivityRequestReceipt) and receipt.matches(text, action, context)
+    return isinstance(receipt, (ActivityRequestReceipt, InitiativeConsentReceipt)) and receipt.matches(text, action, context)
