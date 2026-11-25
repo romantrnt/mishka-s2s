@@ -1001,7 +1001,7 @@ class HardwareIntegrationStand:
             and not (state.mode in {"exhibition_name_capture", "exhibition_age_selection"}
                      and state.active_audio_id in {"NAME_BUTTON_HINT", "NAME_CONFIRMATION", "AGE_CLARIFY", "STT_BUSY", "PHRASE_074", "PHRASE_075"}
                      and state.playback_lease)
-            and not (state.mode == "bear_dialogue" and state.active_audio_id == "ACTIVITY_UNAVAILABLE"
+            and not (state.mode == "bear_dialogue" and state.active_audio_id in {"ACTIVITY_UNAVAILABLE", "INITIATIVE_OFFER"}
                      and state.playback_lease)
             and getattr(session, "current_node", None) in HEADLESS_AUDIO_NODES
             and (getattr(session, "current_node", None) not in {"fixed_story_menu","game_menu","personal_story_theme","schedule_weather"}
@@ -1045,6 +1045,10 @@ class HardwareIntegrationStand:
                         and not self._physical_output_faulted()
                         and getattr(self.application.canonical_runtime.sessions.get(sid), "handset", None) == "up"
                         and bool(record and record.handset_up))))
+        # Keep lifecycle authority separate: stale consent must not hide urgent speech.
+        scope = getattr(self.application, "_dialogue_initiative_scope", lambda _sid: None)
+        current.initiative_scope = scope(sid)
+        current.lifecycle_current = current
         return current
 
     def _headless_frame_owner(self):
@@ -1061,6 +1065,8 @@ class HardwareIntegrationStand:
         version = getattr(state, "state_version", None)
         lease = self.application._active_audio.get(sid)
         catalogue_scope = self.application._catalogue_voice_scope(sid)
+        initiative_scope = owner_current.initiative_scope
+        initiative_scope_now = getattr(self.application, "_dialogue_initiative_scope", lambda _sid: None)
         private_phase = (node in {"personal_welcome_listen","fixed_story_menu","game_menu","personal_story_theme","schedule_weather",
                                   "exhibition_name_capture", "exhibition_age_selection"}
                          or bool(lease and lease.get("content_id") == "PERSONAL_WELCOME"))
@@ -1071,6 +1077,7 @@ class HardwareIntegrationStand:
             current = runtime.sessions.get(sid) if runtime is not None else None
             return (accepting and owner_current() and self._headless_audio_accepting()
                     and (not turn_taking or getattr(self, "_headless_output_epoch", 0) == output_epoch)
+                    and initiative_scope_now(sid) == initiative_scope
                     and (catalogue_scope is None or self.application._catalogue_voice_scope(sid) == catalogue_scope)
                     and (not private_phase or catalogue_scope is not None or (
                         getattr(record, "current_node", None) == node
@@ -1080,6 +1087,7 @@ class HardwareIntegrationStand:
                         and self.application._game_voice_scope(sid) == game_scope)))
         # Distinguish a closed listening phase from a revoked physical owner.
         phase_current.lifecycle_current = owner_current
+        phase_current.initiative_scope = initiative_scope
         if catalogue_scope is not None:
             import copy
             phase_current.catalogue_descriptor = copy.deepcopy(state.scene_menu_descriptor)
@@ -1384,6 +1392,9 @@ class HardwareIntegrationStand:
         if handle.response_id == "DIALOGUE_OFFER":
             return (state.mode == "bear_dialogue" and state.pending_game_offer is not None
                     and not state.game_offer_ready)
+        if handle.response_id == "INITIATIVE_OFFER":
+            return (state.mode == "bear_dialogue" and state.safety_severity == "none"
+                    and "button_1" not in state.expected_inputs)
         if handle.response_id == "ACTIVITY_UNAVAILABLE":
             return state.mode == "bear_dialogue" and state.safety_severity == "none"
         if handle.response_id == "DIALOGUE_INTRO":
@@ -2821,6 +2832,10 @@ class HardwareIntegrationStand:
                 prior_guard = _ingress_guard
                 _ingress_guard = lambda: (remote.epoch == remote_epoch and remote.connected
                                           and (prior_guard is None or prior_guard()))
+                _ingress_guard.initiative_scope = getattr(prior_guard, "initiative_scope", None)
+                lifecycle_guard = getattr(prior_guard, "lifecycle_current", prior_guard)
+                _ingress_guard.lifecycle_current = lambda: (remote.epoch == remote_epoch and remote.connected
+                    and (lifecycle_guard is None or lifecycle_guard()))
         if message_type == "audio_pcm":
             _ingress_guard = _ingress_guard or self._audio_owner_guard(sid)
             if not _ingress_guard():
@@ -2910,6 +2925,9 @@ class HardwareIntegrationStand:
                 remote_epoch = remote.epoch
                 audio_guard = ingress_guard
                 ingress_guard = lambda: (remote.epoch == remote_epoch and remote.connected and audio_guard())
+                ingress_guard.initiative_scope = getattr(audio_guard, "initiative_scope", None)
+                ingress_guard.lifecycle_current = lambda: (remote.epoch == remote_epoch and remote.connected
+                    and getattr(audio_guard, "lifecycle_current", audio_guard)())
         started=time.perf_counter()
         try:
             async with self._transport_lock:
@@ -4540,6 +4558,8 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
                 capture_owners[sid] = owned
             def current():
                 return capture_current(sid, owned) and stand.hub.owner_binding_current(binding)
+            current.lifecycle_current = current
+            current.initiative_scope = getattr(session_guard, "initiative_scope", None)
             if current():
                 return await stand.inject_pcm(samples, sample_rate, sid, flush_silence,
                                               wait_for_turn=False, _ingress_guard=current)

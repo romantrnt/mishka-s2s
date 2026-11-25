@@ -1,0 +1,17 @@
+"use strict";
+const assert=require('assert'),fs=require('fs'),vm=require('vm');
+const source=fs.readFileSync('app/foundation/console/console.js','utf8');
+const context=vm.createContext({interactionActive:()=>true});
+vm.runInContext(source.slice(source.indexOf('function interactionGuide('),source.indexOf('function updateGuide(')),context);
+const state={session:{state:'ACTIVE',node:'bear_dialogue'},simulator:{microphone:{eligible:true},prompt:{phrase_id:'INITIATIVE_OFFER'}},canonical_state:{expected_inputs:['button_5','button_7']}};
+let guide=context.interactionGuide(state,{});
+assert.match(guide[1],/Дослушай/);assert.match(guide[1],/7 — продолжить разговор/);assert.match(guide[1],/5 — помощь/);assert.doesNotMatch(guide[1],/1 —|в меню/);
+delete state.simulator.prompt;
+state.canonical_state.expected_inputs=['button_1','button_5','button_7','speech'];
+guide=context.interactionGuide(state,{});
+assert.match(guide[1],/1 — начать/);assert.match(guide[1],/7 — продолжить разговор/);assert.match(guide[1],/5 — помощь/);assert.match(guide[1],/«да»/);
+state.canonical_state.expected_inputs=['button_5','button_7','speech'];
+assert.match(context.interactionGuide(state,{})[1],/7 — вернуться в меню/,'normal conversation returns after fulfillment or expiry');
+state.canonical_state.pending_game_offer='quiz';state.canonical_state.game_offer_ready=true;
+assert.match(context.interactionGuide(state,{})[0],/Вопросы Мишки/,'existing supported offers keep their actual public title');
+console.log('owned initiative offer, nonvoice consent and normal conversation guide passed');
