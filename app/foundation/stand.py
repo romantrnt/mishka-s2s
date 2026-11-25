@@ -4745,61 +4745,63 @@ def create_stand_app(settings: Settings | None = None, *, phone_client=None, sim
             stand.hub.disconnect(websocket)
             # Starlette may already have cancelled the enclosing AnyIO scope.
             with anyio.CancelScope(shield=True):
-                control_task.cancel()
-                await asyncio.gather(control_task, return_exceptions=True)
-                # A cancelled connection can abandon only its own admitted keys.
-                # Always cancel; a normal seven release could complete an exit.
-                for sid in tuple(runtime.sessions):
-                    for button_id, gesture in runtime.owned_button_gestures(sid, button_owner):
-                        stand._physical_sequence += 1
-                        with runtime.button_input_scope(button_owner, gesture):
-                            await stand.application.receive_async(Event('ButtonReleased', sid,
-                                stand._physical_sequence, time.time(), 'browser_button_cleanup',
-                                {'button_id': button_id, 'cancelled': True}))
-                if not any(runtime.owned_button_gestures(sid, button_owner) for sid in runtime.sessions):
-                    stand._revoked_button_owners.discard(button_owner)
-                # Finished collecting tasks no longer exist in audio_tasks, but
-                # their RAM capture still belongs to this write lease.
-                for sid, owned in capture_owners.items():
-                    if capture_current(sid, owned):
-                        stand.application.s2s_audio.close_capture(sid)
-                owned_audio_tasks = tuple(audio_tasks)
-                for task in owned_audio_tasks:
-                    task.cancel()
-                if owned_audio_tasks:
-                    results = await asyncio.gather(*owned_audio_tasks, return_exceptions=True)
-                    failed = [result for result in results
-                              if isinstance(result, BaseException)
-                              and not isinstance(result, asyncio.CancelledError)]
-                    cleanup = {
-                        "session_id": next(iter(session_ids), stand.active_session_id),
-                        "operation": "disconnect",
-                        "task_count": len(owned_audio_tasks),
-                        "cancelled": sum(isinstance(result, asyncio.CancelledError) for result in results),
-                        "completed": sum(not isinstance(result, BaseException) for result in results),
-                        "failed": len(failed),
-                        "timed_out": 0,
-                        "remaining": 0,
-                        "cleanup_completed": True,
-                    }
-                    stand.application._last_audio_cleanup = cleanup
-                    recorder = getattr(stand.application, "_record_audio_completion_diagnostic", None)
-                    if callable(recorder):
-                        for error in failed:
-                            recorder("stand_audio_task_error", session_id=cleanup["session_id"],
-                                     operation="disconnect", exception_type=type(error).__name__)
-                        recorder("stand_audio_cleanup", **cleanup)
-                for sid, owned in capture_owners.items():
-                    try:
+                try:
+                    control_task.cancel()
+                    await asyncio.gather(control_task, return_exceptions=True)
+                    # A cancelled connection can abandon only its own admitted keys.
+                    # Always cancel; a normal seven release could complete an exit.
+                    for sid in tuple(runtime.sessions):
+                        for button_id, gesture in runtime.owned_button_gestures(sid, button_owner):
+                            stand._physical_sequence += 1
+                            with runtime.button_input_scope(button_owner, gesture):
+                                await stand.application.receive_async(Event('ButtonReleased', sid,
+                                    stand._physical_sequence, time.time(), 'browser_button_cleanup',
+                                    {'button_id': button_id, 'cancelled': True}))
+                    if not any(runtime.owned_button_gestures(sid, button_owner) for sid in runtime.sessions):
+                        stand._revoked_button_owners.discard(button_owner)
+                    # Finished collecting tasks no longer exist in audio_tasks, but
+                    # their RAM capture still belongs to this write lease.
+                    for sid, owned in capture_owners.items():
                         if capture_current(sid, owned):
-                            await stand.application._cancel_audio_owner(
-                                stand.application.s2s_audio, sid, operation="browser_capture_disconnect",
-                                ownership_guard=lambda sid=sid, owned=owned: capture_current(sid, owned))
-                    finally:
-                        if stand._browser_capture_owners.get(sid) is owned:
-                            stand._browser_capture_owners.pop(sid, None)
-                if saved_playback is not None and saved_playback[1][0] is websocket:
-                    await stand._cleanup_interrupted_browser_offer(saved_playback)
+                            stand.application.s2s_audio.close_capture(sid)
+                    owned_audio_tasks = tuple(audio_tasks)
+                    for task in owned_audio_tasks:
+                        task.cancel()
+                    if owned_audio_tasks:
+                        results = await asyncio.gather(*owned_audio_tasks, return_exceptions=True)
+                        failed = [result for result in results
+                                  if isinstance(result, BaseException)
+                                  and not isinstance(result, asyncio.CancelledError)]
+                        cleanup = {
+                            "session_id": next(iter(session_ids), stand.active_session_id),
+                            "operation": "disconnect",
+                            "task_count": len(owned_audio_tasks),
+                            "cancelled": sum(isinstance(result, asyncio.CancelledError) for result in results),
+                            "completed": sum(not isinstance(result, BaseException) for result in results),
+                            "failed": len(failed),
+                            "timed_out": 0,
+                            "remaining": 0,
+                            "cleanup_completed": True,
+                        }
+                        stand.application._last_audio_cleanup = cleanup
+                        recorder = getattr(stand.application, "_record_audio_completion_diagnostic", None)
+                        if callable(recorder):
+                            for error in failed:
+                                recorder("stand_audio_task_error", session_id=cleanup["session_id"],
+                                         operation="disconnect", exception_type=type(error).__name__)
+                            recorder("stand_audio_cleanup", **cleanup)
+                    for sid, owned in capture_owners.items():
+                        try:
+                            if capture_current(sid, owned):
+                                await stand.application._cancel_audio_owner(
+                                    stand.application.s2s_audio, sid, operation="browser_capture_disconnect",
+                                    ownership_guard=lambda sid=sid, owned=owned: capture_current(sid, owned))
+                        finally:
+                            if stand._browser_capture_owners.get(sid) is owned:
+                                stand._browser_capture_owners.pop(sid, None)
+                finally:
+                    if saved_playback is not None and saved_playback[1][0] is websocket:
+                        await stand._cleanup_interrupted_browser_offer(saved_playback)
                 # WebPanel is an observer. Its disconnect is not a physical
                 # handset-down event and must never reset the exhibition session.
                 # Per-connection audio ingress tasks are cancelled above; the

@@ -114,3 +114,58 @@ async def test_delayed_interruption_cleanup_cannot_change_newer_owner_or_lightin
         release.set()
         if pending: await asyncio.gather(pending, return_exceptions=True)
         await close(h, stand, original)
+
+
+@pytest.mark.asyncio
+async def test_ws_disconnect_disarms_delivered_offer_even_when_capture_cleanup_raises():
+    import base64
+    import struct
+    from app.foundation.stand import create_stand_app
+    from test_browser_capture_lifecycle import Socket as CaptureSocket, until
+
+    h = await conversation()
+    api = create_stand_app(Settings(profile='mock', stand_access_token='capture-lifecycle-test'))
+    api.state.lifecycle.admits_users = lambda: True
+    stand = api.state.stand
+    original = stand.application
+    stand.application, stand.active_session_id = h.app, h.sid
+    h.app.audio = stand.audio_output
+    stand.device_sequence = h.app.sessions.get(h.sid).last_sequence
+    endpoint = next(route.endpoint for route in api.routes if route.path == '/stand/ws')
+    writer = CaptureSocket()
+    task = asyncio.create_task(endpoint(writer))
+    original_close = h.app.s2s_audio.close_capture
+    try:
+        await until(lambda: bool(writer.sent))
+        writer.messages.put_nowait({'type': 'audio_pcm', 'session_id': h.sid,
+            'sample_rate': 16000,
+            'data_b64': base64.b64encode(struct.pack('<512f', *([0.] * 512))).decode()})
+        await until(lambda: h.sid in stand._browser_capture_owners)
+        assert stand._browser_capture_owners[h.sid][1]()
+        model(h, proposal())
+        await h.send('SpeechReceived', text='Мне нравится лес')
+        await drain(stand)
+        saved = stand._browser_pcm_playback
+        epoch = h.app._session_epochs.get(h.sid, 0)
+        assert stand._browser_pcm_delivered is saved and not h.state.pending_initiative.ready
+
+        def failing_close(session_id, **kwargs):
+            original_close(session_id, **kwargs)
+            raise RuntimeError('synthetic_capture_release_failure')
+
+        h.app.s2s_audio.close_capture = failing_close
+        writer.messages.put_nowait(None)
+        with pytest.raises(RuntimeError, match='synthetic_capture_release_failure'):
+            await asyncio.wait_for(task, 3)
+        assert h.state.active_audio_id is None and h.state.pending_initiative is None
+        assert h.app.conversation_contexts[h.sid].initiative is None
+        assert h.sid not in h.app._active_audio and h.sid not in h.app._audio_timeout_tasks
+        assert h.state.mode == 'bear_dialogue' and h.app._session_epochs.get(h.sid, 0) == epoch
+        assert {'speech', 'button_5', 'button_7'} <= set(h.state.expected_inputs)
+        assert not stand._browser_pcm_callback_current(next(value['playback'] for value in writer.sent
+            if value['type'] == 'audio_pcm_output'))
+    finally:
+        h.app.s2s_audio.close_capture = original_close
+        if not task.done(): writer.messages.put_nowait(None)
+        await asyncio.gather(task, return_exceptions=True)
+        await close(h, stand, original)
