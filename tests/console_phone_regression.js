@@ -392,6 +392,7 @@ function snapshotFences(){
   deriveLEDState:()=>({}),normalizeLightingState:()=>({valid:true,state:{}}),renderButtons:()=>{},renderLightingElements:()=>{},renderLiveDialogue:()=>{},speakCommands:value=>speeches.push(value),
  });
  const interactionStart=source.indexOf('function interactionActive(');
+ vm.runInContext(source.slice(source.indexOf('function audioRetryText('),source.indexOf('function outputLiveEntries(')),context);
  if(interactionStart>=0)vm.runInContext(source.slice(interactionStart,source.indexOf('function personalStoryCancelAvailable(',interactionStart)),context);
  const helperStart=source.indexOf('function simulatorSnapshotIsCurrent(');
  const start=helperStart>=0?helperStart:source.indexOf('function render(state)');
@@ -758,9 +759,9 @@ async function onboardingGuidance(){
  dialogue.simulator.microphone.eligible=false;context.window.mishkaPhoneMedia();assertHint(dialoguePaused);
  assert.doesNotMatch(fields['phone-media-status'].textContent,/Мишка слушает/);
  dialogue.simulator.microphone.eligible=true;context.window.mishkaPhoneMedia();assertHint(dialogueAccepting);
- const completion=(reason,sessionId='stand',state=show('bear_dialogue'))=>context.ws.onmessage({data:JSON.stringify({type:'stand_state',state,audio_completion:sessionId===null
-  ? {reason,canonical_state:{mode:state.session.node,state_version:state.simulator.session.state_version,handset:'up'}}
-  : {reason,session_id:sessionId,pending:false}})});
+ const completion=(reason,sessionId='stand',state=show('bear_dialogue'),audioStatus)=>context.ws.onmessage({data:JSON.stringify({type:'stand_state',state,audio_completion:sessionId===null
+  ? {reason,audio_status:audioStatus,canonical_state:{mode:state.session.node,state_version:state.simulator.session.state_version,handset:'up'}}
+  : {reason,audio_status:audioStatus,session_id:sessionId,pending:false}})});
  completion('audio_retry',null);assertHint(retry+dialogueAccepting);
  assert.match(fields['phone-media-status'].textContent,/Мишка не расслышал/,'retry is visible outside the microphone diagnostics');
  context.current.simulator.microphone.eligible=false;context.window.mishkaPhoneMedia();assertHint(retry+dialoguePaused);
@@ -770,6 +771,15 @@ async function onboardingGuidance(){
  assert.strictEqual(fields['phone-instruction'].textContent,'Активная реплика Мишки','retry never replaces an active transcript');
  assert.strictEqual(fields['guide-text'].textContent,retry+dialogueAccepting);
  completion('bounded_s2s_audio',null);assertHint(dialogueAccepting);
+ const busy='Мишка пока занят. Можно нажать кнопку или попробовать ещё раз чуть позже. ';
+ completion('audio_retry',null,show('bear_dialogue'),'stt_busy');assertHint(busy+dialogueAccepting);
+ for(const id of ['phone-media-status','mic-state']){
+  assert.match(fields[id].textContent,/Мишка пока занят/,'current busy is explicit on '+id);
+  assert.doesNotMatch(fields[id].textContent,/не расслыш|не понял|не распозн/i);
+ }
+ completion('audio_retry','other-session',show('bear_dialogue'),'stt_busy');assertHint(busy+dialogueAccepting);
+ completion('bounded_s2s_audio',null);assertHint(dialogueAccepting);
+ assert.doesNotMatch(fields['phone-media-status'].textContent,/занят|не расслыш/,'successful current completion clears busy feedback');
  const successPaused=show('bear_dialogue');successPaused.simulator.microphone.eligible=false;
  completion('bounded_s2s_audio','stand',successPaused);assertHint(dialoguePaused);
  assert.doesNotMatch(fields['mic-state'].textContent,/слушает/,'successful response does not claim a paused microphone is listening');

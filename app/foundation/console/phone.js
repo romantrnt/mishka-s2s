@@ -214,7 +214,7 @@ function mountPhone() {
     $('phone-mic-indicator').textContent=label;$('phone-mic-indicator').dataset.live=String(live);
     const button=$('phone-microphone');button.textContent=live?'Выключить микрофон':media.pending?'Отменить включение':'Включить микрофон';
     button.disabled=!(live||media.pending||canMutate()&&simulator?.microphone?.eligible);
-    $('phone-media-status').textContent=microphoneError|| (media.audioRetry?'Мишка не расслышал. Попробуй ещё раз. ':'')+(live?(media.microphoneAccepting?'● Мишка слушает через микрофон браузера':'Микрофон включён · Мишка пока не принимает речь'):media.pending?'Разрешите микрофон в запросе браузера':simulator?.microphone?.eligible?'Мишка готов слушать · микрофон выключен':media.playing?'Мишка говорит · микрофон выключен':'Микрофон выключен');
+    $('phone-media-status').textContent=microphoneError|| (media.audioRetry?(media.audioRetryMessage||'Мишка не расслышал. Попробуй ещё раз.')+' ':'')+(live?(media.microphoneAccepting?'● Мишка слушает через микрофон браузера':'Микрофон включён · Мишка пока не принимает речь'):media.pending?'Разрешите микрофон в запросе браузера':simulator?.microphone?.eligible?'Мишка готов слушать · микрофон выключен':media.playing?'Мишка говорит · микрофон выключен':'Микрофон выключен');
     $('phone-media-status').dataset.live=String(live);
     const quiet=state?.canonical_state?.silent_mode===true;
     const enabling=sessionPending?.action==='enable_audio';

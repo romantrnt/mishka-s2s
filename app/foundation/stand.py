@@ -75,7 +75,7 @@ _DIALOGUE_FALLBACK_CODES = frozenset({
     "provider_or_validation_failure", "provider_unavailable", "dialogue_exit",
     "bounded_limit", "turn_timeout", "voice_generation_timeout", "tts_queue_overflow",
     "oversized_input", "safety_signal", "blocked_input", "unknown_topic",
-    "stt_failure", "stt_low_confidence", "vad_failure", "audio_too_long",
+    "stt_failure", "stt_busy", "stt_low_confidence", "vad_failure", "audio_too_long",
     "personal_story_unavailable",
 })
 _VALIDATION_SOURCES = frozenset({
@@ -3005,7 +3005,7 @@ class HardwareIntegrationStand:
             # A completed turn changes the scenario node. Stop feeding the
             # remainder of the same upload so it cannot be mistaken for a new
             # turn or overwrite the useful result with a stale tail frame.
-            if isinstance(result,dict) and result.get("reason") in {"bounded_s2s_audio", "quick_reply_audio"}:
+            if isinstance(result,dict) and result.get("reason") in {"bounded_s2s_audio", "quick_reply_audio", "audio_retry"}:
                 turn_completed=True
                 break
         if flush_silence and not turn_completed:
@@ -3016,9 +3016,11 @@ class HardwareIntegrationStand:
                                          "data_b64":base64.b64encode(raw).decode()},sid,wait_for_audio=wait_for_turn, _ingress_guard=_ingress_guard)
                 if not _ingress_guard():
                     return {"reason": "stale_session_generation", "outputs": []}
-                if isinstance(result,dict) and result.get("reason") in {"bounded_s2s_audio","quick_reply_audio","s2s_return"}:
+                if isinstance(result,dict) and result.get("reason") in {"bounded_s2s_audio","quick_reply_audio","s2s_return", "audio_retry"}:
                     turn_completed=True
                     break
+        if wait_for_turn and isinstance(result, dict) and result.get("reason") == "audio_retry":
+            await self._publish_audio_completion(sid, result)
         return result
 
     def _collect_events(self):

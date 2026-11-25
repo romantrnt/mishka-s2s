@@ -458,6 +458,12 @@ function liveTime(at) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+function audioRetryText(reason) {
+  return reason === 'stt_busy'
+    ? 'Мишка пока занят. Можно нажать кнопку или попробовать ещё раз чуть позже.'
+    : 'Мишка не расслышал. Попробуй ещё раз.';
+}
+
 function outputLiveEntries(item) {
   const result = item.result || {};
   const outputs = Array.isArray(result.outputs) ? result.outputs : [];
@@ -466,7 +472,7 @@ function outputLiveEntries(item) {
     if (action === 's2s_text' || action === 's2s_response' || action === 'llm_text') return [{ kind: 'assistant', title: 'МИШКА / LLM', text: 'Ответ подготовлен · текст скрыт', meta: 'STREAM · ' + (result.reason || 'response') + ' · REDACTED', at: item.at }];
     if (action === 'text' && output.text) return [{ kind: 'assistant', title: 'МИШКА / LLM', text: 'Ответ подготовлен · текст скрыт', meta: 'RESPONSE · ' + (result.reason || 'response') + ' · REDACTED', at: item.at }];
     if (action === 's2s_fallback') return [{ kind: 'fallback', title: 'FALLBACK', text: `Безопасный маршрут: ${output.reason || result.reason || 'unknown'}`, meta: 'SAFE ROUTE', at: item.at }];
-    if (action === 'audio_retry') return [{ kind: 'audio', title: 'AUDIO', text: 'Не удалось распознать речь · попробуйте ещё раз', meta: `RETRY · ${output.reason || 'recognition'}`, at: item.at }];
+    if (action === 'audio_retry') return [{ kind: 'audio', title: 'AUDIO', text: audioRetryText(output.reason), meta: `RETRY · ${output.reason || 'recognition'}`, at: item.at }];
     if (action === 'audio_ack') return [{ kind: 'audio', title: 'AUDIO ACK', text: 'Секундочку · быстрый ответ', meta: 'LATENCY ACK', at: item.at }];
     if (action === 'audio') return [{ kind: 'audio', title: 'AUDIO', text: `Реплика ${output.response_id || output.asset_id || '—'}`, meta: 'ALLOWLIST ASSET', at: item.at }];
     if (action === 'game_start' || action === 'game_started') return [{ kind: 'action', title: 'GAME', text: `Игра запущена · ${output.game_id || 'canonical'}`, meta: 'RUNTIME ACTION', at: item.at }];
@@ -779,7 +785,8 @@ function connect() {
           && (!state.simulator || (!suppressPhoneAudio && state.simulator.epoch === current?.simulator?.epoch
             && state.simulator.session.session_id === current?.simulator?.session?.session_id));
         if (completionCurrent) {
-          if (completion.reason === 'audio_retry') audioRetry = {sessionId: completionSessionId, epoch: state.simulator?.epoch, node: state.session.node};
+          if (completion.reason === 'audio_retry') audioRetry = {sessionId: completionSessionId, epoch: state.simulator?.epoch, node: state.session.node,
+            reason: completion.audio_status || completion.outputs?.find(output => output.action === 'audio_retry')?.reason};
           else if (!completion.pending && !completion.error) audioRetry = null;
         }
         try {
@@ -790,7 +797,7 @@ function connect() {
           showError('Invalid stand snapshot: ' + (error.message || error));
         }
         if (mic && completionCurrent && !completion.pending) {
-          $("mic-state").textContent = audioRetry ? "Речь не распознана · попробуйте ещё раз"
+          $("mic-state").textContent = audioRetry ? audioRetryText(audioRetry.reason)
             : microphoneAccepting() ? "Ответ получен · Мишка слушает" : "Ответ получен · приём на паузе";
         }
       }
@@ -1777,7 +1784,7 @@ function interactionGuide(state, media) {
         : media.microphoneAccepting
           ? 'Расскажи Мишке что-нибудь или задай вопрос. Можно написать в «Инструментах».'
           : 'Дослушай Мишку. Потом расскажи что-нибудь или задай вопрос. Можно написать в «Инструментах».';
-    return ['Поговорим', (media.audioRetry ? 'Мишка не расслышал. Попробуй ещё раз. ' : '') + text + ' 7 — вернуться в меню.'];
+    return ['Поговорим', (media.audioRetry ? audioRetryText(media.audioRetryReason) + ' ' : '') + text + ' 7 — вернуться в меню.'];
   }
   if (node === 'exhibition_name_capture') {
     const text = media.microphoneAccepting
@@ -1858,7 +1865,7 @@ function updateGuide(state, contract = validateButtonContract(state.button_contr
     session_closed: ['Сессия завершена', 'Нажмите Reset, чтобы начать следующий тест.']
   };
     const normalizedState = String(state.session.state || '').trim().toUpperCase();
-  const content = interactionGuide(state, {microphone: Boolean(mic), pending: micStarting, microphoneAccepting: microphoneAccepting(), audioRetry: Boolean(audioRetry)})
+  const content = interactionGuide(state, {microphone: Boolean(mic), pending: micStarting, microphoneAccepting: microphoneAccepting(), audioRetry: Boolean(audioRetry), audioRetryReason: audioRetry?.reason})
     || (normalizedState === 'ENDED' ? map.session_closed : ((labels[node] || map[node] || (['NONE', 'IDLE', 'STANDBY'].includes(normalizedState) ? ['Готов к знакомству', 'Поднимите трубку или подайте действие через симулятор.'] : ['Тест продолжается', 'Следуйте текущему состоянию.']))));
   if (normalizedState !== 'ENDED' && node === 'game_active' && state.canonical_state?.substate === 'game_exit_confirmation') {
     content[0] = 'Закончить игру?';
@@ -2454,6 +2461,7 @@ window.MishkaConsole = Object.freeze({
   post, render, unlockAudio, startMic, clearMic, stopMic, interactionGuide, updateGuide, interactionActive, sessionActionIsCurrent,
   cleanup: ({preserveReconnect = false} = {}) => { if (!preserveReconnect) audioReconnectPending = false; suppressPhoneAudio = true; clearMic(); interruptAudioForInput(); },
   media: () => ({ microphone: Boolean(mic), microphoneAccepting: microphoneAccepting(), pending: micStarting, audioReady, audioRetry: Boolean(audioRetry),
+    audioRetryReason: audioRetry?.reason, audioRetryMessage: audioRetry ? audioRetryText(audioRetry.reason) : '',
     connected: ws?.readyState === WebSocket.OPEN, connection: ws, authBlocked,
     inputReady: wsSnapshotReady && !wsReloadRequired && !authBlocked, reloadRequired: wsReloadRequired,
     playing: activeSources.size > 0, pendingPCM: pendingPCM.length,
