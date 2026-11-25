@@ -3895,6 +3895,7 @@ class BoundedConversationEngine:
         if getattr(context, "_game_id", None) == "word_game":
             from .word_game import AuthoredWordTurn, WordState, play
             word_turn = play(text, getattr(context, "_word_state", WordState()), context.profile.age_band,
+                hint_level=getattr(context, '_word_hint_level', 0),
                 final=context.turns + 1 >= context.max_turns,
                 return_to_dialogue=getattr(context, "_word_return_to_dialogue", False))
             provider_source = AuthoredWordTurn(word_turn.text, structured)
@@ -4177,6 +4178,8 @@ class BoundedConversationEngine:
             self.metrics.observe_voice_stage(context.session_id, "queue", queue_started, generation_id=trace_generation_id)
             # A proposal is navigation, not a spoken conversational answer.
             control_offer = not chunks and len(actions) == 1 and actions[0].value in {"offer_game", "open_catalog", "play_story", "request_information"}
+            if word_turn is not None:
+                context._word_hint_level = word_turn.hint_level
             if word_turn is not None and word_turn.accepted:
                 context._word_state = word_turn.state
             context.turns += int(not control_offer and (word_turn is None or word_turn.accepted))
