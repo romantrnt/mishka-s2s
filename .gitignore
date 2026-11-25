@@ -39,3 +39,11 @@ models/
 # The headless RVC runtime is provisioned as a release asset, never committed
 # as a nested development checkout. Keep it on the deployment volume.
 vendor/rvc/
+
+# Generated local deployment metadata; source remains pinned by Git.
+/SOURCE_MANIFEST.json
+/CANDIDATE_BUILD.json
+/ROLLOUT_RECEIPT.json
+/PREFLIGHT_RECEIPT.json
+/physical.pid
+/physical-start.log
