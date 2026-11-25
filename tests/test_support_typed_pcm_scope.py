@@ -56,6 +56,7 @@ async def test_real_native_second_frame_is_revoked_by_actual_same_mode_concern(m
         def __init__(self,**kwargs):pass
         def start(self):pass
         def write(self,chunk):writes.append(len(chunk))
+        def stop(self): self.drained = True
         def abort(self):pass
         def close(self):pass
     monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream,

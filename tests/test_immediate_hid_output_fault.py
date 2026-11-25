@@ -60,6 +60,7 @@ async def test_actual_native_stream_does_not_write_after_hid_fault(monkeypatch):
         def start(self):
             stand._on_hid_error({'kind': 'reader_exception'}, 7)
         def write(self, chunk): writes.append(len(chunk))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream, query_devices=lambda *_: {'max_output_channels': 1}))

@@ -23,6 +23,7 @@ async def setup(monkeypatch):
         def __init__(self, **kwargs): self.index=len(streams); streams.append(self)
         def start(self): pass
         def write(self, values): writes.append((self.index,len(values)))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream, __spec__=ModuleSpec('sounddevice', None), query_devices=lambda *args: {'max_output_channels': 1}))
@@ -130,6 +131,7 @@ async def test_hid_fault_at_native_start_blocks_generated_pcm_before_first_write
         def __init__(self,**kwargs):pass
         def start(self):stand._on_hid_error({'kind':'reader_exception'},7)
         def write(self,values):writes.append(len(values))
+        def stop(self): self.drained = True
         def abort(self):pass
         def close(self):pass
     monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream, __spec__=ModuleSpec('sounddevice', None), query_devices=lambda *args: {'max_output_channels': 1}))

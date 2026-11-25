@@ -13,6 +13,7 @@ def native(monkeypatch):
         def __init__(self, **kwargs): pass
         def start(self): pass
         def write(self, values): writes.append(len(values))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream,
@@ -153,6 +154,7 @@ async def test_native_write_failure_never_returns_completed_result(monkeypatch):
         def write(self, values):
             writes.append(len(values))
             raise OSError('synthetic failure')
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream,

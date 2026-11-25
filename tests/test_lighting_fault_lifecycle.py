@@ -128,6 +128,7 @@ async def test_generic_native_playback_hardware_fence_covers_bounded_dialogue(mo
         def __init__(self,**kwargs):pass
         def start(self):pass
         def write(self,chunk):writes.append(len(chunk))
+        def stop(self): self.drained = True
         def abort(self):pass
         def close(self):pass
     monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(

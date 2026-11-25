@@ -274,6 +274,7 @@ async def test_physical_pcm_rechecks_identity_at_native_boundaries(monkeypatch,b
             if boundary=='stream_start':
                 entered.set(); release.wait(3)
         def write(self,chunk): writes.append(len(chunk))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream,
@@ -320,6 +321,7 @@ async def test_physical_pcm_success_uses_guarded_native_path(monkeypatch):
         def __init__(self,**kwargs): pass
         def start(self): pass
         def write(self,chunk): writes.append(len(chunk))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream,
@@ -365,6 +367,7 @@ async def test_queued_stop_preserves_asset_semantics_but_revokes_private_pcm(mon
         def __init__(self,**kwargs): pass
         def start(self): pass
         def write(self,chunk): writes.append(len(chunk))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules,'sounddevice',SimpleNamespace(OutputStream=Stream,

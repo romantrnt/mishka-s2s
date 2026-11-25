@@ -48,6 +48,7 @@ async def test_physical_asset_retains_owner_through_read_and_native_write(monkey
         def start(self):
             if mutation == 'native_fault': fault()
         def write(self, chunk): writes.append(len(chunk))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
     monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream,

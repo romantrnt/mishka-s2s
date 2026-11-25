@@ -50,6 +50,7 @@ async def test_menu_native_owner_at_physical_boundary(monkeypatch, response, mod
                 entered.set()
                 assert release.wait(3)
         def write(self, chunk): writes.append(len(chunk))
+        def stop(self): self.drained = True
         def abort(self): pass
         def close(self): pass
 
